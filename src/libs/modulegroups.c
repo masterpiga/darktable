@@ -2852,6 +2852,76 @@ static gboolean _scroll_group_buttons(GtkWidget *widget,
   return TRUE;
 }
 
+// module groups page-style action
+
+enum
+{
+  DT_MODULEGROUPS_ELEMENT_ACTIVE = 0,
+  DT_MODULEGROUPS_ELEMENT_QAP,
+};
+
+static const gchar *_action_effect_groups[]
+  = { N_("activate"),
+      N_("next"),
+      N_("previous"),
+      NULL };
+
+static float _action_process_module_groups(gpointer target,
+                                           const dt_action_element_t element,
+                                           const dt_action_effect_t effect,
+                                           const float move_size)
+{
+  dt_lib_module_t *self = darktable.develop->proxy.modulegroups.module;
+  if(!self) return DT_ACTION_NOT_VALID;
+  dt_lib_modulegroups_t *d = self->data;
+
+  if(DT_PERFORM_ACTION(move_size))
+  {
+    switch(effect)
+    {
+    case DT_ACTION_EFFECT_ACTIVATE:
+    {
+      const uint32_t group = element == DT_MODULEGROUPS_ELEMENT_QAP
+                           ? DT_MODULEGROUP_BASICS
+                           : DT_MODULEGROUP_ACTIVE_PIPE;
+      GtkWidget *bt = _buttons_get_from_pos(self, group);
+      if(bt) gtk_button_clicked(GTK_BUTTON(bt));
+      break;
+    }
+    case DT_ACTION_EFFECT_NEXT:
+    case DT_ACTION_EFFECT_PREVIOUS:
+    {
+      const gboolean forward = effect == DT_ACTION_EFFECT_NEXT;
+      GtkWidget *adjacent = d->current == DT_MODULEGROUP_BASICS && !forward
+                          ? d->active_btn
+                          : d->current <= DT_MODULEGROUP_ACTIVE_PIPE && forward
+                          ? d->basic_btn
+                          : _buttons_get_from_pos(self, d->current + (forward ? 1 : -1));
+      if(adjacent) gtk_button_clicked(GTK_BUTTON(adjacent));
+      break;
+    }
+    default:
+      break;
+    }
+  }
+
+  const int c = d->current;
+  return -1 - c + (c == (element == DT_MODULEGROUPS_ELEMENT_QAP
+                         ? DT_MODULEGROUP_BASICS
+                         : DT_MODULEGROUP_ACTIVE_PIPE)
+                   ? DT_VALUE_PATTERN_ACTIVE : 0);
+}
+
+static const dt_action_element_def_t _action_elements_module_groups[]
+  = { { N_("active modules"), _action_effect_groups },
+      { N_("quick access panel"), _action_effect_groups },
+      { NULL } };
+
+static const dt_action_def_t _action_def_module_groups
+  = { N_("module groups"),
+      _action_process_module_groups,
+      _action_elements_module_groups };
+
 void gui_init(dt_lib_module_t *self)
 {
   /* initialize ui widgets */
@@ -2881,8 +2951,6 @@ void gui_init(dt_lib_module_t *self)
   g_signal_connect(d->basic_btn, "toggled", G_CALLBACK(_lib_modulegroups_toggle), self);
   gtk_widget_set_tooltip_text(d->basic_btn, _("quick access panel\n"
                                               "right-click tab icon to add/remove widgets"));
-  dt_action_define(DT_ACTION(self), NULL,
-                   N_("quick access panel"), d->basic_btn, &dt_action_def_toggle);
   gtk_box_pack_start(GTK_BOX(d->hbox_groups), d->basic_btn, TRUE, TRUE, 0);
 
   d->vbox_basic = NULL;
@@ -2895,9 +2963,11 @@ void gui_init(dt_lib_module_t *self)
   g_signal_connect(d->active_btn, "toggled",
                    G_CALLBACK(_lib_modulegroups_toggle), self);
   gtk_widget_set_tooltip_text(d->active_btn, _("show only active modules"));
-  dt_action_define(DT_ACTION(self), NULL, N_("active modules"),
-                   d->active_btn, &dt_action_def_toggle);
   gtk_box_pack_start(GTK_BOX(d->hbox_groups), d->active_btn, TRUE, TRUE, 0);
+
+  // page-style action for cycling module groups
+  dt_action_define(DT_ACTION(self), NULL, N_("module groups"),
+                   d->hbox_groups, &_action_def_module_groups);
 
   // we load now the presets btn
   self->presets_button = dtgtk_button_new(dtgtk_cairo_paint_presets, 0, NULL);

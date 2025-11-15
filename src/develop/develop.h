@@ -511,7 +511,7 @@ void dt_dev_modulegroups_set(dt_develop_t *dev, uint32_t group);
 uint32_t dt_dev_modulegroups_get(dt_develop_t *dev);
 /** get the activated modulegroup */
 uint32_t dt_dev_modulegroups_get_activated(dt_develop_t *dev);
-/** tests for a proper modulgroup being activated */
+/** tests for a proper modulegroup being activated */
 gboolean dt_dev_modulegroups_test_activated(dt_develop_t *dev);
 /** test if iop group flags matches modulegroup */
 gboolean dt_dev_modulegroups_test(dt_develop_t *dev,

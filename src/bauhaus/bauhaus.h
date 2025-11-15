@@ -183,6 +183,7 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 void dt_bauhaus_widget_set_module(GtkWidget *widget,
                                   dt_action_t *module);
 gpointer dt_bauhaus_widget_get_module(GtkWidget *widget);
+
 // attach a custom painted quad to the space at the right side (overwriting the default icon if any):
 void dt_bauhaus_widget_set_quad_paint(GtkWidget *widget,
                                       dt_bauhaus_quad_paint_f f,
@@ -422,6 +423,14 @@ static inline void set_color(cairo_t *cr, GdkRGBA color)
 
 #define DT_IOP_SECTION_FOR_PARAMS_UNWIND(self) \
   while(self && self->actions==DT_ACTION_TYPE_IOP_SECTION) self = (dt_iop_module_t *)self->module
+
+// ensures that when a widget is focused it is not hidden inside a collapsed expander
+// or a non-visible page of a notebook.
+void dt_bauhaus_widget_ensure_visible(GtkWidget *widget, dt_iop_module_t *module);
+
+// stores in result all the focused bauhaus widgets nested inside widget.
+int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result);
+
 
 G_END_DECLS
 
