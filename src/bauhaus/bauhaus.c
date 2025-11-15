@@ -4039,6 +4039,95 @@ static float _action_process_focus_button(gpointer widget,
   return DT_ACTION_NOT_VALID;
 }
 
+void dt_bauhaus_widget_ensure_visible(GtkWidget *widget, dt_iop_module_t *module)
+{
+    GtkWidget *current = widget;
+    GtkWidget *parent = NULL;
+
+    while (current) {
+        parent = gtk_widget_get_parent(current);
+        // Stop going up when we hit the module boundary.
+        if (parent == (GtkWidget*)module) {
+            break;
+        }
+        if (DTGTK_IS_EXPANDER(parent))
+        {
+          dtgtk_expander_set_expanded(DTGTK_EXPANDER(parent), TRUE);
+        }
+        else if (GTK_IS_NOTEBOOK(parent))
+        {
+            GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+            gint page_num = gtk_notebook_page_num(notebook, current);
+            if (page_num != -1) {
+                gtk_notebook_set_current_page(notebook, page_num);
+            }
+        }
+        current = parent;
+        // Keep going up in case this is nested into multiple expanders/notebooks.
+    }
+}
+
+// returns true if widget is in a collapsed expander or non visible notebook page.
+static inline bool _is_in_hidden_container(GtkWidget *widget)
+{
+  GtkWidget *current = widget;
+  while (current)
+  {
+    GtkWidget *parent = gtk_widget_get_parent(current);
+    if (DTGTK_IS_EXPANDER(parent))
+    {
+      if (!dtgtk_expander_get_expanded(DTGTK_EXPANDER(parent)))
+      {
+        return TRUE;
+      }
+    }
+    if (GTK_IS_NOTEBOOK(parent))
+    {
+      GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+      gint page_num = gtk_notebook_page_num(notebook, current);
+      gint current_page = gtk_notebook_get_current_page(notebook);
+      if (page_num != current_page) {
+        return TRUE;
+      }
+    }
+    current = gtk_widget_get_parent(current);
+  }
+  return FALSE;
+}
+
+static inline bool _is_cycleable_widget(GtkWidget *widget)
+{
+  return 
+    DT_IS_BAUHAUS_WIDGET(widget) &&
+    gtk_widget_get_can_focus(widget) &&
+    (gtk_widget_is_visible(widget) ||
+     (gtk_widget_get_visible(widget) && _is_in_hidden_container(widget)));
+}
+
+int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result)
+{
+  int num_descendants = 0;
+  if (_is_cycleable_widget(widget))
+  {
+    *result = g_list_append(*result, widget);
+    num_descendants += 1;
+  }
+  if (GTK_IS_STACK(widget))
+  {
+    GtkWidget* visible_child = gtk_stack_get_visible_child(GTK_STACK(widget));
+    num_descendants += dt_bauhaus_widget_get_nested(visible_child, result);
+  }
+  else if (GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (GList *child = children; child; child = g_list_next(child))
+    {
+      num_descendants += dt_bauhaus_widget_get_nested(GTK_WIDGET(child->data), result);
+    }
+  }
+  return num_descendants;
+}
+
 static const dt_action_element_def_t _action_elements_slider[]
   = { { N_("value"), dt_action_effect_value },
       { N_("button"), dt_action_effect_toggle },
