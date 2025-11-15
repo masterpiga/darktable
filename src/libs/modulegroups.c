@@ -145,6 +145,7 @@ typedef struct dt_lib_modulegroups_t
   GtkWidget *mod_vbox_basic;
 
   dt_iop_module_t *force_show_module;
+  GList *search_hidden_widgets;
 } dt_lib_modulegroups_t;
 
 typedef enum dt_lib_modulegroup_iop_visibility_type_t
@@ -806,9 +807,30 @@ static gboolean _is_module_in_history(dt_iop_module_t *module)
   return FALSE;
 }
 
+static inline int search_text_matches_module(const gchar *search_text, dt_iop_module_t *module)
+{
+  return (g_strstr_len(g_utf8_casefold(dt_iop_get_localized_name(module->op), -1), -1,
+                                    g_utf8_casefold(search_text, -1))
+                        != NULL) ||
+                        (g_strstr_len(g_utf8_casefold(dt_iop_get_localized_aliases(module->op), -1), -1,
+                                      g_utf8_casefold(search_text, -1))
+                        != NULL) ||
+                        (g_strstr_len(g_utf8_casefold(module->multi_name, -1), -1,
+                                      g_utf8_casefold(search_text, -1))
+                        != NULL);
+}
+
 static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
+
+  // Restore visibility of widgets hidden by previous search
+  for(GList *l = d->search_hidden_widgets; l; l = l->next)
+  {
+    gtk_widget_set_visible(GTK_WIDGET(l->data), TRUE);
+  }
+  g_list_free_full(d->search_hidden_widgets, g_object_unref);
+  d->search_hidden_widgets = NULL;
 
   // we hide eventual basic panel
   if(d->current == DT_MODULEGROUP_BASICS && !d->basics_show) d->current = DT_MODULEGROUP_ACTIVE_PIPE;
@@ -820,6 +842,22 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
   const gchar *text_entered = (gtk_widget_is_visible(GTK_WIDGET(d->hbox_search_box)))
                                   ? gtk_entry_get_text(GTK_ENTRY(d->text_entry))
                                   : NULL;
+
+  gchar **parts = NULL;
+  gchar *module_query = NULL;
+  gchar *widget_query = NULL;
+  if(text_entered && text_entered[0] != '\0')
+  {
+    if (!dt_conf_key_not_empty("plugins/darkroom/modulegroups_search_separator"))
+      dt_conf_set_string("plugins/darkroom/modulegroups_search_separator", "|");
+    const gchar *separator = dt_conf_get_string_const("plugins/darkroom/modulegroups_search_separator");
+    parts = g_strsplit(text_entered, separator, 2);
+    if(parts)
+    {
+      if(parts[0]) module_query = g_strstrip(parts[0]);
+      if(parts[1]) widget_query = g_strstrip(parts[1]);
+    }
+  }
 
   dt_print(DT_DEBUG_IOPORDER, "[lib_modulegroups_update_iop_visibility] modulegroups");
 
@@ -855,117 +893,146 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
     GtkWidget *w = module->expander;
 
     if(module->enabled)
-    dt_print(DT_DEBUG_IOPORDER, "%20s %d%s",
-      module->op, module->iop_order, (dt_iop_is_hidden(module)) ? ", hidden" : "");
+      dt_print(DT_DEBUG_IOPORDER, "%20s %d%s", module->op, module->iop_order,
+               (dt_iop_is_hidden(module)) ? ", hidden" : "");
 
-      /* skip modules without an gui */
-      if(dt_iop_is_hidden(module)) continue;
+    /* skip modules without an gui */
+    if(dt_iop_is_hidden(module)) continue;
 
-      // do not show non-active modules
-      // we don't want the user to mess with those
-      if(module->iop_order == INT_MAX)
+    // do not show non-active modules
+    // we don't want the user to mess with those
+    if(module->iop_order == INT_MAX)
+    {
+      if(darktable.develop->gui_module == module) dt_iop_request_focus(NULL);
+      if(w) gtk_widget_hide(w);
+      continue;
+    }
+
+    // if we have a module that should be forced shown
+    if(d->force_show_module)
+    {
+      if(d->force_show_module == module && w)
+        gtk_widget_show(w);
+      else
+        gtk_widget_hide(w);
+
+      continue;
+    }
+
+    // if there's some search text show matching modules only
+    if(text_entered && text_entered[0] != '\0')
+    {
+      gboolean module_matches = (!module_query || !*module_query) || search_text_matches_module(module_query, module);
+
+      /* don't show deprecated ones unless they are enabled */
+      if(module->flags() & IOP_FLAGS_DEPRECATED && !(module->enabled))
       {
         if(darktable.develop->gui_module == module) dt_iop_request_focus(NULL);
         if(w) gtk_widget_hide(w);
-        continue;
       }
-
-      // if we have a module that should be forced shown
-      if(d->force_show_module)
+      else if(module_matches)
       {
-        if(d->force_show_module == module && w)
-          gtk_widget_show(w);
-        else
-          gtk_widget_hide(w);
-
-        continue;
-      }
-
-      // if there's some search text show matching modules only
-      if(text_entered && text_entered[0] != '\0')
-      {
-        /* don't show deprecated ones unless they are enabled */
-        if(module->flags() & IOP_FLAGS_DEPRECATED && !(module->enabled))
+        if(widget_query && *widget_query)
         {
-          if(darktable.develop->gui_module == module) dt_iop_request_focus(NULL);
-          if(w) gtk_widget_hide(w);
-        }
-        else
-        {
-           const int is_match = (g_strstr_len(g_utf8_casefold(dt_iop_get_localized_name(module->op), -1), -1,
-                                              g_utf8_casefold(text_entered, -1))
-                                 != NULL) ||
-                                 (g_strstr_len(g_utf8_casefold(dt_iop_get_localized_aliases(module->op), -1), -1,
-                                               g_utf8_casefold(text_entered, -1))
-                                 != NULL) ||
-                                 (g_strstr_len(g_utf8_casefold(module->multi_name, -1), -1,
-                                               g_utf8_casefold(text_entered, -1))
-                                 != NULL);
+          gboolean module_has_matching_widget = FALSE;
+          GList *widgets = NULL;
+          dt_bauhaus_widget_get_nested(module->widget, &widgets);
+          for(GList *iter = widgets; iter; iter = g_list_next(iter))
+          {
+            GtkWidget *widget = iter->data;
+            const gchar *label = dt_bauhaus_widget_get_label(widget);
+            if(label && g_strrstr(g_utf8_casefold(label, -1), g_utf8_casefold(widget_query, -1)))
+            {
+              module_has_matching_widget = TRUE;
+            }
+            else
+            {
+              if(gtk_widget_get_visible(widget))
+              {
+                gtk_widget_set_visible(widget, FALSE);
+                d->search_hidden_widgets = g_list_prepend(d->search_hidden_widgets, g_object_ref(widget));
+              }
+            }
+          }
+          g_list_free(widgets);
 
-
-          if(is_match)
-            gtk_widget_show(w);
+          if(module_has_matching_widget)
+          {
+            if(w) gtk_widget_show(w);
+          }
           else
-            gtk_widget_hide(w);
+          {
+            if(w) gtk_widget_hide(w);
+          }
         }
-        continue;
-      }
-
-      /* lets show/hide modules dependent on current group*/
-      const gboolean show_deprecated =
-        dt_conf_is_equal("plugins/darkroom/modulegroups_preset", _(DEPRECATED_PRESET_NAME));
-      gboolean show_module = TRUE;
-      switch(d->current)
-      {
-        case DT_MODULEGROUP_BASICS:
+        else
         {
-          show_module = FALSE;
+          if(w) gtk_widget_show(w);
         }
-        break;
-
-        case DT_MODULEGROUP_ACTIVE_PIPE:
-        {
-          if(d->full_active)
-            show_module = _is_module_in_history(module);
-          else
-            show_module = module->enabled;
-        }
-        break;
-
-        case DT_MODULEGROUP_NONE:
-        {
-          /* show all except hidden ones */
-          show_module = (((!(module->flags() & IOP_FLAGS_DEPRECATED) || show_deprecated)
-                          && _lib_modulegroups_test_visible(self, module->op))
-                         || module->enabled);
-        }
-        break;
-
-        default:
-        {
-          // show deprecated module in specific group deprecated
-          gtk_widget_set_visible(d->deprecated,
-                                 show_deprecated || d->force_deprecated_message);
-
-          show_module = (_lib_modulegroups_test_internal(self, d->current, module)
-                         && (!(module->flags() & IOP_FLAGS_DEPRECATED)
-                             || module->enabled
-                             || show_deprecated));
-        }
-      }
-
-      if(show_module)
-      {
-        if(darktable.develop->gui_module == module && !module->expanded) dt_iop_request_focus(NULL);
-        if(w) gtk_widget_show(w);
       }
       else
       {
-        if(darktable.develop->gui_module == module) dt_iop_request_focus(NULL);
         if(w) gtk_widget_hide(w);
       }
+      continue;
+    }
 
+    /* lets show/hide modules dependent on current group*/
+    const gboolean show_deprecated =
+        dt_conf_is_equal("plugins/darkroom/modulegroups_preset", _(DEPRECATED_PRESET_NAME));
+    gboolean show_module = TRUE;
+    switch(d->current)
+    {
+      case DT_MODULEGROUP_BASICS:
+      {
+        show_module = FALSE;
+      }
+      break;
+
+      case DT_MODULEGROUP_ACTIVE_PIPE:
+      {
+        if(d->full_active)
+          show_module = _is_module_in_history(module);
+        else
+          show_module = module->enabled;
+      }
+      break;
+
+      case DT_MODULEGROUP_NONE:
+      {
+        /* show all except hidden ones */
+        show_module = (((!(module->flags() & IOP_FLAGS_DEPRECATED) || show_deprecated)
+                        && _lib_modulegroups_test_visible(self, module->op))
+                       || module->enabled);
+      }
+      break;
+
+      default:
+      {
+        // show deprecated module in specific group deprecated
+        gtk_widget_set_visible(d->deprecated, show_deprecated || d->force_deprecated_message);
+
+        show_module = (_lib_modulegroups_test_internal(self, d->current, module)
+                       && (!(module->flags() & IOP_FLAGS_DEPRECATED) || module->enabled || show_deprecated));
+      }
+    }
+
+    if(show_module)
+    {
+      if(darktable.develop->gui_module == module && !module->expanded) dt_iop_request_focus(NULL);
+      if(w)
+      {
+        gtk_widget_show(w);
+      }
+    }
+    else
+    {
+      if(darktable.develop->gui_module == module) dt_iop_request_focus(NULL);
+      if(w) gtk_widget_hide(w);
+    }
   }
+
+  if(parts) g_strfreev(parts);
 
   // we show eventual basic panel but only if no text in the search box
   if(d->current == DT_MODULEGROUP_BASICS && !(text_entered && text_entered[0] != '\0')) _basics_show(self);
@@ -2978,6 +3045,7 @@ void gui_init(dt_lib_module_t *self)
 
 void gui_cleanup(dt_lib_module_t *self)
 {
+  dt_lib_modulegroups_t *d = self->data;
   darktable.develop->proxy.modulegroups.module = NULL;
   darktable.develop->proxy.modulegroups.set = NULL;
   darktable.develop->proxy.modulegroups.get = NULL;
@@ -2986,7 +3054,14 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.modulegroups.test = NULL;
   darktable.develop->proxy.modulegroups.switch_group = NULL;
 
-  g_free(self->data);
+  if(d->search_hidden_widgets)
+  {
+    g_list_free_full(d->search_hidden_widgets, g_object_unref);
+    d->search_hidden_widgets = NULL;
+  }
+
+  g_free(d->edit_preset);
+  g_free(d);
   self->data = NULL;
 }
 

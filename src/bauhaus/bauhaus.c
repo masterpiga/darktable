@@ -4096,7 +4096,8 @@ static inline bool _is_cycleable_widget(GtkWidget *widget)
   return 
     DT_IS_BAUHAUS_WIDGET(widget) &&
     gtk_widget_get_can_focus(widget) &&
-    (gtk_widget_is_visible(widget) || _is_in_hidden_container(widget));
+    (gtk_widget_is_visible(widget) ||
+     (gtk_widget_get_visible(widget) && _is_in_hidden_container(widget)));
 }
 
 int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result)
