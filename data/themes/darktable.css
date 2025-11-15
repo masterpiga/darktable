@@ -149,6 +149,7 @@ Why that? Just because it's a developer choice and most classes use underscore i
 @define-color bauhaus_fg_hover @grey_90;
 @define-color bauhaus_fg_selected @grey_80;
 @define-color bauhaus_fg_insensitive alpha(@fg_color, 0.4);
+@define-color bauhaus_bg_focus shade(@plugin_bg_color, 1.2);
 
 /* GTK Buttons and tabs */
 @define-color button_bg @grey_25;
@@ -899,6 +900,18 @@ menuitem > arrow
 .dt_bauhaus
 {
   margin: 0.2em 0;
+}
+
+.dt_bauhaus:focus,
+#bauhaus-slider:focus
+{
+  background-color: @bauhaus_bg_focus;
+}
+
+#collapsible .dt_bauhaus:focus,
+#collapsible #bauhaus-slider:focus
+{
+  background-color: shade(@collapsible_bg_color, 1.2);
 }
 
 /* and set menuitem related to sort of combobox like metadata presets in import module */

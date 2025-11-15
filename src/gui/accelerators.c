@@ -134,6 +134,12 @@ const gchar *dt_action_effect_value[]
       N_("set"),
       NULL };
 
+const gchar *dt_action_effect_cycle[]
+  = { N_("next"),
+      N_("up"),
+      N_("down"),
+      NULL };
+
 const gchar *dt_action_effect_selection[]
   = { N_("popup"),
       N_("next"),
@@ -3672,7 +3678,20 @@ static gboolean _shortcut_closest_match(GSequenceIter **current,
   if(!s->element) s->element = c->element;
   if(c->instance) s->instance = c->instance;
 
-  if(!s->action) s->action = c->action;
+  if(!s->action)
+  {
+    if(c->action != darktable.control->actions_focused_bh)
+      s->action = c->action;
+    else
+    {
+      GtkWidget *focused_widget =
+        gtk_window_get_focus(GTK_WINDOW(dt_ui_main_window(darktable.gui->ui)));
+      if(DT_IS_BAUHAUS_WIDGET(focused_widget))
+        s->action = dt_action_widget(focused_widget);
+      else
+        s->action = c->action; // no focused bauhaus widget; let the process function decide
+    }
+  }
   if(!*elements) *elements = _action_find_elements(s->action);
 
   if(ELEMENT_IS(value, s, *elements) && c->effect == DT_ACTION_EFFECT_SET)
