@@ -135,19 +135,6 @@ struct _DtBauhausWidget
 
 G_DEFINE_TYPE(DtBauhausWidget, dt_bh, GTK_TYPE_DRAWING_AREA)
 
-enum
-{
-  // Sliders
-  DT_ACTION_ELEMENT_VALUE = 0,
-  DT_ACTION_ELEMENT_BUTTON = 1,
-  DT_ACTION_ELEMENT_FORCE = 2,
-  DT_ACTION_ELEMENT_ZOOM = 3,
-
-  // Combos
-  DT_ACTION_ELEMENT_SELECTION = 0,
-//DT_ACTION_ELEMENT_BUTTON = 1,
-};
-
 static const dt_action_def_t _action_def_slider, _action_def_combo,
                              _action_def_focus_slider, _action_def_focus_combo,
                              _action_def_focus_button, _action_def_focus_slider_or_combo;
@@ -3776,6 +3763,18 @@ static void _action_process_button(GtkWidget *widget,
   gtk_widget_queue_draw(widget);
 }
 
+bool dt_bauhaus_widget_has_quad(GtkWidget *widget)
+{
+  // TODO: Is there a better way to check if there is a quad?
+  return DT_BAUHAUS_WIDGET(widget)->quad_paint;
+}
+
+void dt_bauhaus_button_process_action(GtkWidget *widget,
+                                      const dt_action_effect_t effect)
+{
+    _action_process_button(widget, effect);
+}
+
 static float _action_process_slider(gpointer target,
                                     const dt_action_element_t element,
                                     const dt_action_effect_t effect,
@@ -3886,6 +3885,14 @@ static float _action_process_slider(gpointer target,
       ( d->min == 0 && (d->max == 1 || d->max == 100) ? DT_VALUE_PATTERN_PERCENTAGE : 0 ));
 }
 
+float dt_bauhaus_slider_process_action(gpointer target,
+                                       const dt_action_element_t element,
+                                       const dt_action_effect_t effect,
+                                       float move_size)
+{
+  return _action_process_slider(target, element, effect, move_size);
+}
+
 static gboolean _combobox_idle_value_changed(gpointer widget)
 {
   dt_bauhaus_widget_t *w = (dt_bauhaus_widget_t *)widget;
@@ -3963,6 +3970,15 @@ static float _action_process_combo(gpointer target,
     + (value == effect - DT_ACTION_EFFECT_COMBO_SEPARATOR - 1
        ? DT_VALUE_PATTERN_ACTIVE : 0);
 }
+
+float dt_bauhaus_combobox_process_action(gpointer target,
+                                         const dt_action_element_t element,
+                                         const dt_action_effect_t effect,
+                                         float move_size)
+{
+  return _action_process_combo(target, element, effect, move_size);
+}
+
 
 static gboolean _find_nth_bauhaus(gpointer *w,
                                   int *num,
@@ -4072,6 +4088,7 @@ static float _action_process_focus_button(gpointer widget,
   return DT_ACTION_NOT_VALID;
 }
 
+<<<<<<< HEAD
 void dt_bauhaus_widget_ensure_visible(GtkWidget *widget, dt_iop_module_t *module)
 {
     GtkWidget *current = widget;
@@ -4162,6 +4179,8 @@ int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result)
   return num_descendants;
 }
 
+=======
+>>>>>>> badbc1c787 (Adds an action to cycle through visible modules and widgets and to change their value)
 static const dt_action_element_def_t _action_elements_slider[]
   = { { N_("value"), dt_action_effect_value },
       { N_("button"), dt_action_effect_toggle },

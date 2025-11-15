@@ -95,6 +95,19 @@ typedef enum dt_bauhaus_marker_shape_t
   DT_BAUHAUS_MARKER_BAR,
 } dt_bauhaus_marker_shape_t;
 
+enum
+{
+  // Sliders
+  DT_ACTION_ELEMENT_VALUE = 0,
+  DT_ACTION_ELEMENT_BUTTON = 1,
+  DT_ACTION_ELEMENT_FORCE = 2,
+  DT_ACTION_ELEMENT_ZOOM = 3,
+
+  // Combos
+  DT_ACTION_ELEMENT_SELECTION = 0,
+//DT_ACTION_ELEMENT_BUTTON = 1,
+};
+
 typedef struct dt_bauhaus_popup_t
 {
   GtkWidget *window;
@@ -183,6 +196,8 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 void dt_bauhaus_widget_set_module(GtkWidget *widget,
                                   dt_action_t *module);
 gpointer dt_bauhaus_widget_get_module(GtkWidget *widget);
+
+bool dt_bauhaus_widget_has_quad(GtkWidget *widget);
 
 // attach a custom painted quad to the space at the right side (overwriting the default icon if any):
 void dt_bauhaus_widget_set_quad_paint(GtkWidget *widget,
@@ -326,6 +341,12 @@ void dt_bauhaus_slider_set_curve(GtkWidget *widget,
                                  float (*curve)(float value, dt_bauhaus_curve_t dir));
 void dt_bauhaus_slider_set_log_curve(GtkWidget *widget);
 
+float dt_bauhaus_slider_process_action(gpointer target,
+                                       const dt_action_element_t element,
+                                       const dt_action_effect_t effect,
+                                       float move_size);
+
+
 // combobox:
 GtkWidget *dt_bauhaus_combobox_from_widget(dt_bauhaus_widget_t* widget,
                                            dt_iop_module_t *self);
@@ -421,6 +442,14 @@ void dt_bauhaus_combobox_set_entries_ellipsis(GtkWidget *widget,
                                               PangoEllipsizeMode ellipis);
 PangoEllipsizeMode dt_bauhaus_combobox_get_entries_ellipsis(GtkWidget *widget);
 void dt_bauhaus_combobox_mute_scrolling(GtkWidget *widget);
+
+float dt_bauhaus_combobox_process_action(gpointer target,
+                                         const dt_action_element_t element,
+                                         const dt_action_effect_t effect,
+                                         float move_size);
+
+void dt_bauhaus_button_process_action(GtkWidget *widget,
+                                      const dt_action_effect_t effect);
 
 static inline void set_color(cairo_t *cr, GdkRGBA color)
 {
