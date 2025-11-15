@@ -23,6 +23,7 @@
 #include "control/conf.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
+#include "dtgtk/expander.h"
 #include "gui/accelerators.h"
 #include "gui/color_picker_proxy.h"
 #include "gui/gtk.h"
@@ -133,19 +134,6 @@ struct _DtBauhausWidget
 };
 
 G_DEFINE_TYPE(DtBauhausWidget, dt_bh, GTK_TYPE_DRAWING_AREA)
-
-enum
-{
-  // Sliders
-  DT_ACTION_ELEMENT_VALUE = 0,
-  DT_ACTION_ELEMENT_BUTTON = 1,
-  DT_ACTION_ELEMENT_FORCE = 2,
-  DT_ACTION_ELEMENT_ZOOM = 3,
-
-  // Combos
-  DT_ACTION_ELEMENT_SELECTION = 0,
-//DT_ACTION_ELEMENT_BUTTON = 1,
-};
 
 static const dt_action_def_t _action_def_slider, _action_def_combo,
                              _action_def_focus_slider, _action_def_focus_combo,
@@ -3751,6 +3739,18 @@ static void _action_process_button(GtkWidget *widget,
   gtk_widget_queue_draw(widget);
 }
 
+bool dt_bauhaus_widget_has_quad(GtkWidget *widget)
+{
+  // TODO: Is there a better way to check if there is a quad?
+  return DT_BAUHAUS_WIDGET(widget)->quad_paint;
+}
+
+void dt_bauhaus_button_process_action(GtkWidget *widget,
+                                      const dt_action_effect_t effect)
+{
+    _action_process_button(widget, effect);
+}
+
 static float _action_process_slider(gpointer target,
                                     const dt_action_element_t element,
                                     const dt_action_effect_t effect,
@@ -3861,6 +3861,14 @@ static float _action_process_slider(gpointer target,
       ( d->min == 0 && (d->max == 1 || d->max == 100) ? DT_VALUE_PATTERN_PERCENTAGE : 0 ));
 }
 
+float dt_bauhaus_slider_process_action(gpointer target,
+                                       const dt_action_element_t element,
+                                       const dt_action_effect_t effect,
+                                       float move_size)
+{
+  return _action_process_slider(target, element, effect, move_size);
+}
+
 static gboolean _combobox_idle_value_changed(gpointer widget)
 {
   dt_bauhaus_widget_t *w = (dt_bauhaus_widget_t *)widget;
@@ -3939,6 +3947,15 @@ static float _action_process_combo(gpointer target,
        ? DT_VALUE_PATTERN_ACTIVE : 0);
 }
 
+float dt_bauhaus_combobox_process_action(gpointer target,
+                                         const dt_action_element_t element,
+                                         const dt_action_effect_t effect,
+                                         float move_size)
+{
+  return _action_process_combo(target, element, effect, move_size);
+}
+
+
 static gboolean _find_nth_bauhaus(gpointer *w,
                                   int *num,
                                   const dt_bauhaus_type_t type)
@@ -4016,6 +4033,94 @@ static float _action_process_focus_button(gpointer widget,
     dt_action_widget_toast(&darktable.control->actions_focus,
                            NULL, _("not that many buttons"));
   return DT_ACTION_NOT_VALID;
+}
+
+void dt_bauhaus_widget_ensure_visible(GtkWidget *widget, dt_iop_module_t *module)
+{
+    GtkWidget *current = widget;
+    GtkWidget *parent = NULL;
+
+    while (current) {
+        parent = gtk_widget_get_parent(current);
+        // Stop going up when we hit the module boundary.
+        if (parent == (GtkWidget*)module) {
+            break;
+        }
+        if (DTGTK_IS_EXPANDER(parent))
+        {
+          dtgtk_expander_set_expanded(DTGTK_EXPANDER(parent), TRUE);
+        }
+        else if (GTK_IS_NOTEBOOK(parent))
+        {
+            GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+            gint page_num = gtk_notebook_page_num(notebook, current);
+            if (page_num != -1) {
+                gtk_notebook_set_current_page(notebook, page_num);
+            }
+        }
+        current = parent;
+        // Keep going up in case this is nested into multiple expanders/notebooks.
+    }
+}
+
+// returns true if widget is in a collapsed expander or non visible notebook page.
+static inline bool _is_in_hidden_container(GtkWidget *widget)
+{
+  GtkWidget *current = widget;
+  while (current)
+  {
+    GtkWidget *parent = gtk_widget_get_parent(current);
+    if (DTGTK_IS_EXPANDER(parent))
+    {
+      if (!dtgtk_expander_get_expanded(DTGTK_EXPANDER(parent)))
+      {
+        return TRUE;
+      }
+    }
+    if (GTK_IS_NOTEBOOK(parent))
+    {
+      GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+      gint page_num = gtk_notebook_page_num(notebook, current);
+      gint current_page = gtk_notebook_get_current_page(notebook);
+      if (page_num != current_page) {
+        return TRUE;
+      }
+    }
+    current = gtk_widget_get_parent(current);
+  }
+  return FALSE;
+}
+
+static inline bool _is_cycleable_widget(GtkWidget *widget)
+{
+  return 
+    DT_IS_BAUHAUS_WIDGET(widget) &&
+    gtk_widget_get_can_focus(widget) &&
+    (gtk_widget_is_visible(widget) || _is_in_hidden_container(widget));
+}
+
+int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result)
+{
+  int num_descendants = 0;
+  if (_is_cycleable_widget(widget))
+  {
+    *result = g_list_append(*result, widget);
+    num_descendants += 1;
+  }
+  if (GTK_IS_STACK(widget))
+  {
+    GtkWidget* visible_child = gtk_stack_get_visible_child(GTK_STACK(widget));
+    num_descendants += dt_bauhaus_widget_get_nested(visible_child, result);
+  }
+  else if (GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (GList *child = children; child; child = g_list_next(child))
+    {
+      num_descendants += dt_bauhaus_widget_get_nested(GTK_WIDGET(child->data), result);
+    }
+  }
+  return num_descendants;
 }
 
 static const dt_action_element_def_t _action_elements_slider[]

@@ -3351,6 +3351,14 @@ uint32_t dt_dev_modulegroups_get(dt_develop_t *dev)
   return 0;
 }
 
+uint32_t dt_dev_modulegroups_count(dt_develop_t *dev)
+{
+  if(dev->proxy.modulegroups.module && dev->proxy.modulegroups.count)
+    return dev->proxy.modulegroups.count(dev->proxy.modulegroups.module);
+
+  return 0;
+}
+
 gboolean dt_dev_modulegroups_test_activated(dt_develop_t *dev)
 {
   const uint32_t activated = dt_dev_modulegroups_get_activated(dev);
@@ -3365,6 +3373,7 @@ gboolean dt_dev_modulegroups_test(dt_develop_t *dev,
     return dev->proxy.modulegroups.test(dev->proxy.modulegroups.module, group, module);
   return FALSE;
 }
+
 
 void dt_dev_modulegroups_switch(dt_develop_t *dev, dt_iop_module_t *module)
 {

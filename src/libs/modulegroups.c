@@ -170,6 +170,10 @@ static void _lib_modulegroups_update_visibility_proxy(dt_lib_module_t *self);
   \see dt_dev_modulegroups_get()
 */
 static uint32_t _lib_modulegroups_get(dt_lib_module_t *self);
+/* modulegroups proxy count function.
+   returns the number of groups.
+*/
+static uint32_t _lib_modulegroups_count(dt_lib_module_t *self);
 /* modulegroups proxy test function.
    tests if iop module group flags matches modulegroup.
 */
@@ -1086,6 +1090,12 @@ static uint32_t _lib_modulegroups_get(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
   return d->current;
+}
+
+static uint32_t _lib_modulegroups_count(dt_lib_module_t *self)
+{
+  dt_lib_modulegroups_t *d = self->data;
+  return g_list_length(d->groups);
 }
 
 static dt_lib_modulegroup_iop_visibility_type_t _preset_retrieve_old_search_pref(gchar **ret)
@@ -2954,6 +2964,7 @@ void gui_init(dt_lib_module_t *self)
   darktable.develop->proxy.modulegroups.set = _lib_modulegroups_set;
   darktable.develop->proxy.modulegroups.update_visibility = _lib_modulegroups_update_visibility_proxy;
   darktable.develop->proxy.modulegroups.get = _lib_modulegroups_get;
+  darktable.develop->proxy.modulegroups.count = _lib_modulegroups_count;
   darktable.develop->proxy.modulegroups.get_activated = _lib_modulegroups_get_activated;
   darktable.develop->proxy.modulegroups.test = _lib_modulegroups_test;
   darktable.develop->proxy.modulegroups.switch_group = _lib_modulegroups_switch_group;
@@ -2970,6 +2981,7 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.modulegroups.module = NULL;
   darktable.develop->proxy.modulegroups.set = NULL;
   darktable.develop->proxy.modulegroups.get = NULL;
+  darktable.develop->proxy.modulegroups.count = NULL;
   darktable.develop->proxy.modulegroups.get_activated = NULL;
   darktable.develop->proxy.modulegroups.test = NULL;
   darktable.develop->proxy.modulegroups.switch_group = NULL;

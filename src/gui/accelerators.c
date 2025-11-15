@@ -134,6 +134,12 @@ const gchar *dt_action_effect_value[]
       N_("set"),
       NULL };
 
+const gchar *dt_action_effect_cycle[]
+  = { N_("unused"),
+      N_("up"),
+      N_("down"),
+      NULL };
+
 const gchar *dt_action_effect_selection[]
   = { N_("popup"),
       N_("next"),

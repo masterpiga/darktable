@@ -256,6 +256,8 @@ typedef struct dt_develop_t
                   const uint32_t group);
       /* get current module group */
       uint32_t (*get)(struct dt_lib_module_t *self);
+      /* get number of module groups */
+      uint32_t (*count)(struct dt_lib_module_t *self);
       /* get activated module group */
       uint32_t (*get_activated)(struct dt_lib_module_t *self);
       /* test if iop group flags matches modulegroup */
@@ -501,6 +503,7 @@ void dt_dev_exposure_handle_event(gpointer controller, int n_press, gdouble x, c
  * modulegroups plugin hooks
  */
 /** switch to modulegroup of module */
+
 void dt_dev_modulegroups_switch(dt_develop_t *dev,
                                 struct dt_iop_module_t *module);
 /** update modulegroup visibility */
@@ -509,9 +512,11 @@ void dt_dev_modulegroups_update_visibility(dt_develop_t *dev);
 void dt_dev_modulegroups_set(dt_develop_t *dev, uint32_t group);
 /** get the active modulegroup */
 uint32_t dt_dev_modulegroups_get(dt_develop_t *dev);
+/** get number of module groups */
+uint32_t dt_dev_modulegroups_count(dt_develop_t *dev);
 /** get the activated modulegroup */
 uint32_t dt_dev_modulegroups_get_activated(dt_develop_t *dev);
-/** tests for a proper modulgroup being activated */
+/** tests for a proper modulegroup being activated */
 gboolean dt_dev_modulegroups_test_activated(dt_develop_t *dev);
 /** test if iop group flags matches modulegroup */
 gboolean dt_dev_modulegroups_test(dt_develop_t *dev,
