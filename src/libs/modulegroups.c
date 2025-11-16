@@ -145,6 +145,8 @@ typedef struct dt_lib_modulegroups_t
   GtkWidget *mod_vbox_basic;
 
   dt_iop_module_t *force_show_module;
+  
+  // widgets currently hidden by a widget search operation
   GList *search_hidden_widgets;
 } dt_lib_modulegroups_t;
 
@@ -820,6 +822,24 @@ static inline int search_text_matches_module(const gchar *search_text, dt_iop_mo
                         != NULL);
 }
 
+static void _hide_widget(GtkWidget *widget, GList **hidden_widgets)
+{
+  gtk_widget_set_visible(widget, FALSE);
+  *hidden_widgets = g_list_prepend(*hidden_widgets, g_object_ref(widget));
+}
+
+static void _hide_all_other_containers(GtkWidget *current, GList *containers_to_show, GList **hidden_widgets)
+{
+  if (!GTK_IS_CONTAINER(current))
+    return;
+  if (!g_list_find(containers_to_show, current))
+    _hide_widget(current, hidden_widgets);
+    return;
+  GList *children = gtk_container_get_children(GTK_CONTAINER(current));
+  for (GList *child = children; child; child = g_list_next(child))
+    _hide_all_other_containers(child->data, containers_to_show, hidden_widgets);
+}
+
 static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
@@ -934,7 +954,10 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
       {
         if(widget_query && *widget_query)
         {
+          /* in widget search we want all modules to be expanded */
+          dt_iop_gui_set_expanded(module, TRUE, FALSE);
           gboolean module_has_matching_widget = FALSE;
+          GList *containers_to_show = NULL;
           GList *widgets = NULL;
           dt_bauhaus_widget_get_nested(module->widget, &widgets);
           for(GList *iter = widgets; iter; iter = g_list_next(iter))
@@ -944,16 +967,22 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
             if(label && g_strrstr(g_utf8_casefold(label, -1), g_utf8_casefold(widget_query, -1)))
             {
               module_has_matching_widget = TRUE;
+              GtkWidget* parent = gtk_widget_get_parent(widget);
+              while (parent)
+              {
+                containers_to_show = g_list_prepend(containers_to_show, parent);
+                if (parent == module->widget) break;
+                parent = gtk_widget_get_parent(parent);
+              }
             }
             else
             {
               if(gtk_widget_get_visible(widget))
-              {
-                gtk_widget_set_visible(widget, FALSE);
-                d->search_hidden_widgets = g_list_prepend(d->search_hidden_widgets, g_object_ref(widget));
-              }
+              _hide_widget(widget, &d->search_hidden_widgets);
             }
           }
+          _hide_all_other_containers(module->widget, containers_to_show, &d->search_hidden_widgets);
+          g_list_free(containers_to_show);
           g_list_free(widgets);
 
           if(module_has_matching_widget)
