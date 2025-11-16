@@ -146,6 +146,8 @@ typedef struct dt_lib_modulegroups_t
 
   dt_iop_module_t *force_show_module;
   
+  // true if the user has input a widget search
+  gboolean widget_search;
   // widgets currently hidden by a widget search operation
   GList *search_hidden_widgets;
 } dt_lib_modulegroups_t;
@@ -824,25 +826,59 @@ static inline int search_text_matches_module(const gchar *search_text, dt_iop_mo
 
 static void _hide_widget(GtkWidget *widget, GList **hidden_widgets)
 {
-  gtk_widget_set_visible(widget, FALSE);
   *hidden_widgets = g_list_prepend(*hidden_widgets, g_object_ref(widget));
+  gtk_widget_set_visible(widget, FALSE);
 }
 
-static void _hide_all_other_containers(GtkWidget *current, GList *containers_to_show, GList **hidden_widgets)
+// hides all the widgets and containers that are not listed in widgets to show
+static void _hide_widgets_recursively(GtkWidget *current, GList *widgets_to_show, GList **hidden_widgets)
 {
-  if (!GTK_IS_CONTAINER(current))
+  if(!gtk_widget_get_visible(current))
     return;
-  if (!g_list_find(containers_to_show, current))
+
+  if (GTK_IS_CONTAINER(current))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(current));
+    for (GList *child = children; child; child = g_list_next(child))
+      _hide_widgets_recursively(child->data, widgets_to_show, hidden_widgets);
+  }
+
+  if (!g_list_find(widgets_to_show, current))
     _hide_widget(current, hidden_widgets);
-    return;
-  GList *children = gtk_container_get_children(GTK_CONTAINER(current));
-  for (GList *child = children; child; child = g_list_next(child))
-    _hide_all_other_containers(child->data, containers_to_show, hidden_widgets);
+}
+
+// keep the closest label above this widget, for disambiguation
+static void _include_previous_label(GtkWidget *widget, GList **widgets_to_show)
+{
+  GtkWidget* parent = gtk_widget_get_parent(widget);
+  GList* siblings = gtk_container_get_children(GTK_CONTAINER(parent));
+  for (GList* sibling = g_list_previous(g_list_find(siblings, widget)); sibling; sibling = g_list_previous(sibling))
+  {
+    if (GTK_IS_LABEL(sibling->data) && gtk_widget_get_visible(sibling->data))
+    {
+      *widgets_to_show = g_list_prepend(*widgets_to_show, sibling->data);
+      break;
+    }
+  }
+  g_list_free(siblings);
+}
+
+// keep all the ancestors of this widget
+static void _include_all_ancestors(GtkWidget *widget, dt_iop_module_t *module, GList **widgets_to_show)
+{
+  GtkWidget* parent = gtk_widget_get_parent(widget);
+  while (parent)
+  {
+    *widgets_to_show = g_list_prepend(*widgets_to_show, parent);
+    if (parent == module->widget) break;
+    parent = gtk_widget_get_parent(parent);
+  }
 }
 
 static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
+  d->widget_search = FALSE;
 
   // Restore visibility of widgets hidden by previous search
   for(GList *l = d->search_hidden_widgets; l; l = l->next)
@@ -875,7 +911,11 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
     if(parts)
     {
       if(parts[0]) module_query = g_strstrip(parts[0]);
-      if(parts[1]) widget_query = g_strstrip(parts[1]);
+      if(parts[1])
+      {
+        d->widget_search = TRUE;
+        widget_query = g_strstrip(parts[1]);
+      }
     }
   }
 
@@ -952,12 +992,22 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
       }
       else if(module_matches)
       {
+        if (d->widget_search)
+        {
+          dt_iop_gui_set_expanded(module, TRUE, FALSE);
+        }
+        else
+        {
+          // expand only the focused module
+          if (module == darktable.develop->gui_module)
+            dt_iop_gui_set_expanded(module, TRUE, TRUE);
+        }
+
+        /* in widget search we want all modules to be expanded */
         if(widget_query && *widget_query)
         {
-          /* in widget search we want all modules to be expanded */
-          dt_iop_gui_set_expanded(module, TRUE, FALSE);
           gboolean module_has_matching_widget = FALSE;
-          GList *containers_to_show = NULL;
+          GList *widgets_to_show = NULL;
           GList *widgets = NULL;
           dt_bauhaus_widget_get_nested(module->widget, &widgets);
           for(GList *iter = widgets; iter; iter = g_list_next(iter))
@@ -967,22 +1017,13 @@ static void _lib_modulegroups_update_iop_visibility(dt_lib_module_t *self)
             if(label && g_strrstr(g_utf8_casefold(label, -1), g_utf8_casefold(widget_query, -1)))
             {
               module_has_matching_widget = TRUE;
-              GtkWidget* parent = gtk_widget_get_parent(widget);
-              while (parent)
-              {
-                containers_to_show = g_list_prepend(containers_to_show, parent);
-                if (parent == module->widget) break;
-                parent = gtk_widget_get_parent(parent);
-              }
-            }
-            else
-            {
-              if(gtk_widget_get_visible(widget))
-              _hide_widget(widget, &d->search_hidden_widgets);
+              widgets_to_show = g_list_prepend(widgets_to_show, widget);
+              _include_previous_label(widget, &widgets_to_show);
+              _include_all_ancestors(widget, module, &widgets_to_show);
             }
           }
-          _hide_all_other_containers(module->widget, containers_to_show, &d->search_hidden_widgets);
-          g_list_free(containers_to_show);
+          _hide_widgets_recursively(module->widget, widgets_to_show, &d->search_hidden_widgets);
+          g_list_free(widgets_to_show);
           g_list_free(widgets);
 
           if(module_has_matching_widget)
@@ -1192,6 +1233,12 @@ static uint32_t _lib_modulegroups_count(dt_lib_module_t *self)
 {
   dt_lib_modulegroups_t *d = self->data;
   return g_list_length(d->groups);
+}
+
+static gboolean _lib_modulegroups_has_widget_search(dt_lib_module_t *self)
+{
+  dt_lib_modulegroups_t *d = self->data;
+  return d->widget_search;
 }
 
 static dt_lib_modulegroup_iop_visibility_type_t _preset_retrieve_old_search_pref(gchar **ret)
@@ -3061,6 +3108,7 @@ void gui_init(dt_lib_module_t *self)
   darktable.develop->proxy.modulegroups.update_visibility = _lib_modulegroups_update_visibility_proxy;
   darktable.develop->proxy.modulegroups.get = _lib_modulegroups_get;
   darktable.develop->proxy.modulegroups.count = _lib_modulegroups_count;
+  darktable.develop->proxy.modulegroups.has_widget_search = _lib_modulegroups_has_widget_search;
   darktable.develop->proxy.modulegroups.get_activated = _lib_modulegroups_get_activated;
   darktable.develop->proxy.modulegroups.test = _lib_modulegroups_test;
   darktable.develop->proxy.modulegroups.switch_group = _lib_modulegroups_switch_group;
@@ -3079,6 +3127,7 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.modulegroups.set = NULL;
   darktable.develop->proxy.modulegroups.get = NULL;
   darktable.develop->proxy.modulegroups.count = NULL;
+  darktable.develop->proxy.modulegroups.has_widget_search = NULL;
   darktable.develop->proxy.modulegroups.get_activated = NULL;
   darktable.develop->proxy.modulegroups.test = NULL;
   darktable.develop->proxy.modulegroups.switch_group = NULL;

@@ -2628,7 +2628,8 @@ void _cycle_modules(const gboolean down)
   }
 
   dt_iop_module_t *module_to_focus = (dt_iop_module_t*)next_item->data;
-  dt_iop_gui_set_expanded(module_to_focus, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
+  bool collapse_others = !dt_dev_modulegroups_has_widget_search(darktable.develop) && dt_conf_get_bool("darkroom/ui/single_module");
+  dt_iop_gui_set_expanded(module_to_focus, TRUE, collapse_others);
   const gchar* instance_name = dt_iop_get_instance_name(module_to_focus);
   if(strlen(instance_name) > 0)
     dt_toast_log(N_("focused instance [%s] of module [%s]"),

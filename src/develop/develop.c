@@ -3351,6 +3351,14 @@ uint32_t dt_dev_modulegroups_get(dt_develop_t *dev)
   return 0;
 }
 
+gboolean dt_dev_modulegroups_has_widget_search(dt_develop_t *dev)
+{
+  if(dev->proxy.modulegroups.module && dev->proxy.modulegroups.has_widget_search)
+    return dev->proxy.modulegroups.has_widget_search(dev->proxy.modulegroups.module);
+
+  return FALSE;
+}
+
 uint32_t dt_dev_modulegroups_count(dt_develop_t *dev)
 {
   if(dev->proxy.modulegroups.module && dev->proxy.modulegroups.count)
