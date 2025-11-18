@@ -3891,9 +3891,10 @@ static float _process_action(dt_action_t *action,
     const dt_action_def_t *definition = _action_find_definition(action);
 
     if(definition && definition->process
-        && (action->type < DT_ACTION_TYPE_WIDGET
-            || definition->no_widget
-            || (action_target && !dt_action_widget_invisible(action_target))))
+       && (action->type < DT_ACTION_TYPE_WIDGET || definition->no_widget
+           || (action_target
+               && (!dt_action_widget_invisible(action_target)
+                   || dt_dev_modulegroups_has_widget_search(darktable.develop)))))
     {
       if(DT_PERFORM_ACTION(move_size)
          && (definition->elements[element].effects != dt_action_effect_value
