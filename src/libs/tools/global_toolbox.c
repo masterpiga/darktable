@@ -636,7 +636,7 @@ static void _set_mapping_mode_cursor(GtkWidget *widget)
 
   if(widget && !strcmp(gtk_widget_get_name(widget), "module-header"))
     cursor = gdk_cursor_new_from_name(display, "context-menu");
-  else if(dt_action_widget(darktable.control->mapping_widget)
+  else if(dt_action_widget_walk(darktable.control->mapping_widget)
           && darktable.develop)
   {
     guint size = gdk_display_get_default_cursor_size(display);
