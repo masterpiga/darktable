@@ -231,6 +231,8 @@ GtkWidget *dt_action_entry_new(dt_action_t *ac, const gchar *label, gpointer cal
 
 // find the action a widget is linked to
 dt_action_t *dt_action_widget(GtkWidget *widget);
+// walk up the parent chain to find the nearest ancestor with an action
+dt_action_t *dt_action_widget_walk(GtkWidget *widget);
 
 G_END_DECLS
 

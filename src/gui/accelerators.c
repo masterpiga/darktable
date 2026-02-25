@@ -479,6 +479,17 @@ dt_action_t *dt_action_widget(GtkWidget *widget)
   return widget ? g_object_get_qdata(G_OBJECT(widget), _action_quark) : NULL;
 }
 
+dt_action_t *dt_action_widget_walk(GtkWidget *widget)
+{
+  while(widget)
+  {
+    dt_action_t *ac = dt_action_widget(widget);
+    if(ac) return ac;
+    widget = gtk_widget_get_parent(widget);
+  }
+  return NULL;
+}
+
 static gboolean _is_kp_key(guint keycode)
 {
   return keycode >= GDK_KEY_KP_Space && keycode <= GDK_KEY_KP_Equal;
@@ -3561,7 +3572,7 @@ static dt_action_t _value_action =
 static void _lookup_mapping_widget()
 {
   if(_sc.action) return;
-  _sc.action = dt_action_widget(darktable.control->mapping_widget);
+  _sc.action = dt_action_widget_walk(darktable.control->mapping_widget);
   if(!_sc.action) return;
 
   _sc.instance = 0;
@@ -4545,7 +4556,7 @@ gboolean dt_shortcut_dispatcher(GtkWidget *w,
       && event->button.button == GDK_BUTTON_MIDDLE;
 
     if((middle_click || event->type == GDK_SCROLL)
-       && (s.action || (s.action = dt_action_widget(darktable.control->mapping_widget))))
+       && (s.action || (s.action = dt_action_widget_walk(darktable.control->mapping_widget))))
     {
       int delta;
       if(middle_click || dt_gui_get_scroll_unit_delta(&event->scroll, &delta))
@@ -4605,7 +4616,7 @@ gboolean dt_shortcut_dispatcher(GtkWidget *w,
                          .views = dt_view_get_current() };
     // if no shortcuts at all use this key, ignore it (except when creating a new shortcut)
     // this should avoid wakeup keys etc getting stuck
-    if(!_sc.action && !dt_action_widget(darktable.control->mapping_widget))
+    if(!_sc.action && !dt_action_widget_walk(darktable.control->mapping_widget))
     {
       GSequenceIter *key_only = _shortcut_search(&ko, GINT_TO_POINTER(ko.views));
       dt_shortcut_t *fko = g_sequence_iter_is_end(key_only) ? NULL : g_sequence_get(key_only);
