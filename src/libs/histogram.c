@@ -99,6 +99,10 @@ typedef enum dt_lib_histogram_vectorscope_type_t
   DT_LIB_HISTOGRAM_VECTORSCOPE_N // needs to be the last one
 } dt_lib_histogram_vectorscope_type_t;
 
+static void _lib_histogram_get_harmony(dt_lib_module_t *self, dt_color_harmony_guide_t *guide);
+static void _lib_histogram_set_harmony(dt_lib_module_t *self, const dt_color_harmony_guide_t *guide);
+static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope);
+
 typedef struct dt_lib_histogram_color_harmony_t
 {
   const char *name;
@@ -2508,6 +2512,9 @@ void gui_init(dt_lib_module_t *self)
   // FIXME: do need to pass self, or can wrap a callback as a lambda
   darktable.lib->proxy.histogram.module = self;
   darktable.lib->proxy.histogram.process = dt_lib_histogram_process;
+  darktable.lib->proxy.histogram.get_harmony = _lib_histogram_get_harmony;
+  darktable.lib->proxy.histogram.set_harmony = _lib_histogram_set_harmony;
+  darktable.lib->proxy.histogram.set_scope = _lib_histogram_set_scope;
   darktable.lib->proxy.histogram.is_linear =
     d->histogram_scale == DT_LIB_HISTOGRAM_SCALE_LINEAR;
 
@@ -2758,6 +2765,54 @@ void gui_cleanup(dt_lib_module_t *self)
   g_free(d->ryb2rgb_ypp);
   dt_free_align(self->data);
   self->data = NULL;
+}
+
+static void _lib_histogram_get_harmony(dt_lib_module_t *self, dt_color_harmony_guide_t *guide)
+{
+  if(self && guide)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    memcpy(guide, &d->harmony_guide, sizeof(dt_color_harmony_guide_t));
+  }
+}
+
+static void _lib_histogram_set_harmony(dt_lib_module_t *self, const dt_color_harmony_guide_t *guide)
+{
+  if(self && guide)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    memcpy(&d->harmony_guide, guide, sizeof(dt_color_harmony_guide_t));
+    d->color_harmony_old = d->harmony_guide.type;
+    _color_harmony_button_on(d);
+    _color_harmony_changed_record(d);
+  }
+}
+
+static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope)
+{
+  if(self && scope >= 0 && scope < DT_LIB_HISTOGRAM_SCOPE_N)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    if(d->scope_type == (dt_lib_histogram_scope_type_t)scope) return;
+
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->scope_type_button[d->scope_type]), FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->scope_type_button[scope]), TRUE);
+
+    const dt_lib_histogram_scope_type_t scope_type_old = d->scope_type;
+    d->scope_type = (dt_lib_histogram_scope_type_t)scope;
+
+    const gboolean old_scope_vec =
+      (scope_type_old == DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE
+       || scope_type_old == DT_LIB_HISTOGRAM_SCOPE_SPLIT_WAVEFORM_VECTORSCOPE);
+    const gboolean new_scope_vec =
+      (d->scope_type == DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE
+       || d->scope_type == DT_LIB_HISTOGRAM_SCOPE_SPLIT_WAVEFORM_VECTORSCOPE);
+
+    if(!old_scope_vec && new_scope_vec)
+      d->vectorscope_radius = 0.f;
+
+    _scope_type_changed(d);
+  }
 }
 
 // clang-format off

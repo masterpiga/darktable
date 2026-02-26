@@ -77,9 +77,9 @@ typedef struct dt_lib_t
                       int width, int height,
                       const dt_iop_order_iccprofile_info_t *const profile_info_from,
                       const dt_iop_order_iccprofile_info_t *const profile_info_to);
-      // FIXME: now that PR #5532 is merged, define this as
-      // dt_atomic_int and include "common/atomic.h" and use
-      // dt_atomic_set_int() and dt_atomic_get_int()
+      void (*get_harmony)(struct dt_lib_module_t *self, dt_color_harmony_guide_t *guide);
+      void (*set_harmony)(struct dt_lib_module_t *self, const dt_color_harmony_guide_t *guide);
+      void (*set_scope)(struct dt_lib_module_t *self, int scope);
       gboolean is_linear;
     } histogram;
 
@@ -216,6 +216,15 @@ void dt_lib_colorpicker_set_box_area(dt_lib_t *lib,
 /** set the colorpicker point selection tool and position */
 void dt_lib_colorpicker_set_point(dt_lib_t *lib,
                                   const float pos[2]);
+
+/** get the histogram color harmony */
+void dt_lib_histogram_get_harmony(dt_lib_t *lib, dt_color_harmony_guide_t *guide);
+
+/** set the histogram color harmony */
+void dt_lib_histogram_set_harmony(dt_lib_t *lib, const dt_color_harmony_guide_t *guide);
+
+/** set the histogram scope type */
+void dt_lib_histogram_set_scope(dt_lib_t *lib, int scope);
 
 /* reset color picker pos to default */
 void dt_lib_colorpicker_reset_box_area(dt_pickerbox_t box);

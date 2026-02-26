@@ -1553,6 +1553,24 @@ void dt_lib_colorpicker_setup(dt_lib_t *lib,
   lib->proxy.colorpicker.setup_sample(lib->proxy.colorpicker.module, denoise, pick_output);
 }
 
+void dt_lib_histogram_get_harmony(dt_lib_t *lib, dt_color_harmony_guide_t *guide)
+{
+  if(!lib->proxy.histogram.module || !lib->proxy.histogram.get_harmony) return;
+  lib->proxy.histogram.get_harmony(lib->proxy.histogram.module, guide);
+}
+
+void dt_lib_histogram_set_harmony(dt_lib_t *lib, const dt_color_harmony_guide_t *guide)
+{
+  if(!lib->proxy.histogram.module || !lib->proxy.histogram.set_harmony) return;
+  lib->proxy.histogram.set_harmony(lib->proxy.histogram.module, guide);
+}
+
+void dt_lib_histogram_set_scope(dt_lib_t *lib, int scope)
+{
+  if(!lib->proxy.histogram.module || !lib->proxy.histogram.set_scope) return;
+  lib->proxy.histogram.set_scope(lib->proxy.histogram.module, scope);
+}
+
 dt_lib_module_t *dt_lib_get_module(const char *name)
 {
   /* hide/show modules as last config */
