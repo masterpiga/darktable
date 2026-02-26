@@ -127,6 +127,7 @@ const dt_iop_order_entry_t legacy_order[] = {
   { {33.0f }, "colorbalance", 0},
   { {33.2f }, "colorequal", 0},
   { {33.5f }, "colorbalancergb", 0},
+  { {33.6f }, "colorharmonizer", 0},
   { {34.0f }, "colorize", 0},
   { {35.0f }, "colortransfer", 0},
   { {36.0f }, "colormapping", 0},
@@ -248,6 +249,7 @@ const dt_iop_order_entry_t v30_order[] = {
   { {41.0f }, "colorbalance", 0},    // scene-referred color manipulation
   { {41.2f }, "colorequal", 0},
   { {41.5f }, "colorbalancergb", 0},    // scene-referred color manipulation
+  { {41.6f }, "colorharmonizer", 0},
   { {42.0f }, "rgbcurve", 0},        // really versatile way to edit colour in scene-referred and display-referred workflow
   { {43.0f }, "rgblevels", 0},       // same
   { {44.0f }, "basecurve", 0},       // conversion from scene-referred to display referred, reverse-engineered
@@ -366,6 +368,7 @@ const dt_iop_order_entry_t v50_order[] = {
   { {41.0f }, "colorbalance", 0},    // scene-referred color manipulation
   { {41.2f }, "colorequal", 0},
   { {41.5f }, "colorbalancergb", 0},    // scene-referred color manipulation
+  { {41.6f }, "colorharmonizer", 0},
   { {42.0f }, "rgbcurve", 0},        // really versatile way to edit colour in scene-referred and display-referred workflow
   { {43.0f }, "rgblevels", 0},       // same
   { {44.0f }, "basecurve", 0},       // conversion from scene-referred to display referred, reverse-engineered
@@ -484,6 +487,7 @@ const dt_iop_order_entry_t v30_jpg_order[] = {
   { { 41.0f }, "colorbalance", 0 },    // scene-referred color manipulation
   { { 41.2f }, "colorequal", 0 },
   { { 41.5f }, "colorbalancergb", 0 }, // scene-referred color manipulation
+  { { 41.6f }, "colorharmonizer", 0},
   { { 42.0f }, "rgbcurve", 0 },      // really versatile way to edit colour in scene-referred and display-referred
                                      // workflow
   { { 43.0f }, "rgblevels", 0 },     // same
@@ -506,9 +510,6 @@ const dt_iop_order_entry_t v30_jpg_order[] = {
   { { 55.0f }, "colorcorrection", 0 },  // now that the colours have been damaged by contrast manipulations,
                                         // try to recover them - global adjustment of white balance for shadows and
                                         // highlights
-  { { 56.0f }, "colorcontrast", 0 },    // adjust chrominance globally
-  { { 57.0f }, "velvia", 0 },           // same
-  { { 58.0f }, "vibrance", 0 },         // same, but more subtle
   { { 60.0f }, "colorzones", 0 },       // same, but locally
   { { 61.0f }, "bloom", 0 },            // creative module
   { { 62.0f }, "colorize", 0 },         // creative module
@@ -605,6 +606,7 @@ const dt_iop_order_entry_t v50_jpg_order[] = {
   { { 41.0f }, "colorbalance", 0 },    // scene-referred color manipulation
   { { 41.2f }, "colorequal", 0 },
   { { 41.5f }, "colorbalancergb", 0 }, // scene-referred color manipulation
+  { { 41.6f }, "colorharmonizer", 0},
   { { 42.0f }, "rgbcurve", 0 },      // really versatile way to edit colour in scene-referred and display-referred
                                      // workflow
   { { 43.0f }, "rgblevels", 0 },     // same
@@ -732,6 +734,7 @@ void dt_ioppr_migrate_legacy_iop_order_list(GList *iop_order_list)
   _insert_before(iop_order_list, "filmicrgb", "agx");
   _insert_before(iop_order_list, "colorbalancergb", "colorequal");
   _insert_before(iop_order_list, "highlights", "rasterfile");
+  _insert_before(iop_order_list, "rgbcurve", "colorharmonizer");
 }
 
 static dt_iop_order_t _ioppr_get_default_iop_order_version(const dt_imgid_t imgid)

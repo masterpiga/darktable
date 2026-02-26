@@ -28,6 +28,165 @@
 
 DT_MODULE(1)
 
+typedef enum dt_lib_histogram_highlight_t
+{
+  DT_LIB_HISTOGRAM_HIGHLIGHT_NONE = 0,
+  DT_LIB_HISTOGRAM_HIGHLIGHT_BLACK_POINT,
+  DT_LIB_HISTOGRAM_HIGHLIGHT_EXPOSURE
+} dt_lib_histogram_highlight_t;
+
+typedef enum dt_lib_histogram_scope_type_t
+{
+  DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE = 0,
+  DT_LIB_HISTOGRAM_SCOPE_WAVEFORM,
+  DT_LIB_HISTOGRAM_SCOPE_SPLIT_WAVEFORM_VECTORSCOPE,
+  DT_LIB_HISTOGRAM_SCOPE_PARADE,
+  DT_LIB_HISTOGRAM_SCOPE_HISTOGRAM,
+  DT_LIB_HISTOGRAM_SCOPE_N // needs to be the last one
+} dt_lib_histogram_scope_type_t;
+
+typedef enum dt_lib_histogram_scale_t
+{
+  DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC = 0,
+  DT_LIB_HISTOGRAM_SCALE_LINEAR,
+  DT_LIB_HISTOGRAM_SCALE_N // needs to be the last one
+} dt_lib_histogram_scale_t;
+
+typedef enum dt_lib_histogram_orient_t
+{
+  DT_LIB_HISTOGRAM_ORIENT_HORI = 0,
+  DT_LIB_HISTOGRAM_ORIENT_VERT,
+  DT_LIB_HISTOGRAM_ORIENT_N // needs to be the last one
+} dt_lib_histogram_orient_t;
+
+typedef enum dt_lib_histogram_vectorscope_type_t
+{
+  DT_LIB_HISTOGRAM_VECTORSCOPE_CIELUV = 0,   // CIE 1976 u*v*
+  DT_LIB_HISTOGRAM_VECTORSCOPE_JZAZBZ,
+  DT_LIB_HISTOGRAM_VECTORSCOPE_RYB,
+  DT_LIB_HISTOGRAM_VECTORSCOPE_N // needs to be the last one
+} dt_lib_histogram_vectorscope_type_t;
+
+static void _lib_histogram_get_harmony(dt_lib_module_t *self, dt_color_harmony_guide_t *guide);
+static void _lib_histogram_set_harmony(dt_lib_module_t *self, const dt_color_harmony_guide_t *guide);
+static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope);
+
+typedef struct dt_lib_histogram_color_harmony_t
+{
+  const char *name;
+  const int sectors;      // how many sectors
+  const float angle[4];   // the angle of the sector center, expressed in fractions of a full turn
+  const float length[4];  // the radius of the sector, from 0. to 1., linear scale
+} dt_lib_histogram_color_harmony_t;
+
+dt_lib_histogram_color_harmony_t dt_color_harmonies[DT_COLOR_HARMONY_N] =
+{
+  {N_("none"),                    0                                                              },
+  {N_("monochromatic"),           1, { 0./12.                         }, {0.80                  }},
+  {N_("analogous"),               3, {-1./12., 0./12.,  1./12.        }, {0.50, 0.80, 0.50      }},
+  {N_("analogous complementary"), 4, {-1./12., 0./12.,  1./12., 6./12.}, {0.50, 0.80, 0.50, 0.50}},
+  {N_("complementary"),           2, { 0./12., 6./12                  }, {0.80, 0.50            }},
+  {N_("split complementary"),     3, { 0./12., 5./12.,  7./12.        }, {0.80, 0.50, 0.50      }},
+  {N_("dyad"),                    2, {-1./12., 1./12                  }, {0.80, 0.80            }},
+  {N_("triad"),                   3, { 0./12., 4./12.,  8./12.        }, {0.80, 0.50, 0.50      }},
+  {N_("tetrad"),                  4, {-1./12., 1./12.,  5./12., 7./12.}, {0.80, 0.80, 0.50, 0.50}},
+  {N_("square"),                  4, { 0./12., 3./12.,  6./12., 9./12.}, {0.80, 0.50, 0.50, 0.50}},
+};
+
+// FIXME: are these lists available from the enum/options in darktableconfig.xml?
+const gchar *dt_lib_histogram_scope_type_names[DT_LIB_HISTOGRAM_SCOPE_N] =
+{ N_("vectorscope"),
+  N_("waveform"),
+  N_("waveform/vectorscope"),
+  N_("RGB parade"),
+  N_("histogram")
+};
+
+const gchar *dt_lib_histogram_scale_names[DT_LIB_HISTOGRAM_SCALE_N] =
+  { "logarithmic",
+    "linear"
+  };
+
+const gchar *dt_lib_histogram_orient_names[DT_LIB_HISTOGRAM_ORIENT_N] =
+  { "horizontal",
+    "vertical"
+  };
+
+const gchar *dt_lib_histogram_vectorscope_type_names[DT_LIB_HISTOGRAM_VECTORSCOPE_N] =
+  { "u*v*",
+    "AzBz",
+    "RYB"
+  };
+
+const gchar *dt_lib_histogram_color_harmony_width_names[DT_COLOR_HARMONY_WIDTH_N] =
+  { "normal",
+    "large",
+    "narrow",
+    "line"
+  };
+
+const float dt_lib_histogram_color_harmony_width[DT_COLOR_HARMONY_WIDTH_N] =
+  { 0.5f/12.f, 0.75f/12.f, 0.25f/12.f, 0.0f };
+
+const void *dt_lib_histogram_scope_type_icons[DT_LIB_HISTOGRAM_SCOPE_N] =
+  { dtgtk_cairo_paint_vectorscope,
+    dtgtk_cairo_paint_waveform_scope,
+    dtgtk_cairo_paint_split_waveform_vectorscope,
+    dtgtk_cairo_paint_rgb_parade,
+    dtgtk_cairo_paint_histogram_scope };
+
+typedef struct dt_lib_histogram_t
+{
+  // histogram for display
+  uint32_t *histogram;
+  uint32_t histogram_max;
+  // waveform buffers and dimensions
+  uint8_t *waveform_img[3];           // image per RGB channel
+  int waveform_bins, waveform_tones, waveform_max_bins;
+  // FIXME: make dt_lib_histogram_vectorscope_t for all this data?
+  uint8_t *vectorscope_graph, *vectorscope_bkgd;
+  float vectorscope_pt[2];            // point colorpicker position
+  GSList *vectorscope_samples;        // live samples position
+  int selected_sample;                // position of the selected live sample in the list
+  int vectorscope_diameter_px;
+  float hue_ring[6][VECTORSCOPE_HUES][2] DT_ALIGNED_ARRAY;
+  const dt_iop_order_iccprofile_info_t *hue_ring_prof;
+  dt_lib_histogram_scale_t hue_ring_scale;
+  dt_lib_histogram_vectorscope_type_t hue_ring_colorspace;
+  double vectorscope_radius;
+  dt_pthread_mutex_t lock;
+  GtkWidget *scope_draw;               // GtkDrawingArea -- scope, scale, and draggable overlays
+  GtkWidget *button_box_main;          // GtkBox -- contains scope control buttons
+  GtkWidget *button_box_opt;           // GtkBox -- contains options buttons
+  GtkWidget *button_box_rgb;           // GtkBox -- contains RGB channels buttons
+  GtkWidget *color_harmony_box;        // GtkBox -- contains color harmony buttons
+  GtkWidget *color_harmony_fix;        // GtkFixed -- contains moveable color harmony buttons
+  GtkWidget *scope_type_button
+    [DT_LIB_HISTOGRAM_SCOPE_N];        // Array of GtkToggleButton -- histogram control
+  GtkWidget *hist_scale_button;        // GtkButton -- linear or logarithmic histogram
+  GtkWidget *vec_scale_button;         // GtkButton -- linear or logarithmic vectorscope
+  GtkWidget *scope_orient_button;      // GtkButton -- horizontal or vertical
+  GtkWidget *red_channel_button;       // GtkToggleButton -- enable/disable processing R channel
+  GtkWidget *green_channel_button;     // GtkToggleButton -- enable/disable processing G channel
+  GtkWidget *blue_channel_button;      // GtkToggleButton -- enable/disable processing B channel
+  GtkWidget *colorspace_button;        // GtkButton -- vectorscope colorspace
+  GtkWidget *color_harmony_button
+    [DT_COLOR_HARMONY_N - 1];  // GtkButton -- RYB vectorscope color harmonies
+  // depends on mouse position
+  dt_lib_histogram_highlight_t highlight;
+  // state set by buttons
+  dt_lib_histogram_scope_type_t scope_type;
+  dt_lib_histogram_scale_t histogram_scale;
+  dt_lib_histogram_orient_t scope_orient;
+  dt_lib_histogram_vectorscope_type_t vectorscope_type;
+  dt_lib_histogram_scale_t vectorscope_scale;
+  double vectorscope_angle;
+  gboolean red, green, blue;
+  float *rgb2ryb_ypp;
+  float *ryb2rgb_ypp;
+  dt_color_harmony_type_t color_harmony_old;
+  dt_color_harmony_guide_t harmony_guide;
+} dt_lib_histogram_t;
 static const gchar *rgb_names[DT_SCOPES_RGB_N] =
   { N_("red"),
     N_("green"),
@@ -580,7 +739,12 @@ void gui_init(dt_lib_module_t *self)
   // provide data for a histogram
   // FIXME: do need to pass self, or can wrap a callback as a lambda
   darktable.lib->proxy.histogram.module = self;
-  darktable.lib->proxy.histogram.process = _scope_process;
+  darktable.lib->proxy.histogram.process = dt_lib_histogram_process;
+  darktable.lib->proxy.histogram.get_harmony = _lib_histogram_get_harmony;
+  darktable.lib->proxy.histogram.set_harmony = _lib_histogram_set_harmony;
+  darktable.lib->proxy.histogram.set_scope = _lib_histogram_set_scope;
+  darktable.lib->proxy.histogram.is_linear =
+    d->histogram_scale == DT_LIB_HISTOGRAM_SCALE_LINEAR;
 
   // create widgets
   GtkWidget *overlay = gtk_overlay_new();
@@ -759,6 +923,54 @@ void gui_cleanup(dt_lib_module_t *self)
 
   dt_free_align(self->data);
   self->data = NULL;
+}
+
+static void _lib_histogram_get_harmony(dt_lib_module_t *self, dt_color_harmony_guide_t *guide)
+{
+  if(self && guide)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    memcpy(guide, &d->harmony_guide, sizeof(dt_color_harmony_guide_t));
+  }
+}
+
+static void _lib_histogram_set_harmony(dt_lib_module_t *self, const dt_color_harmony_guide_t *guide)
+{
+  if(self && guide)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    memcpy(&d->harmony_guide, guide, sizeof(dt_color_harmony_guide_t));
+    d->color_harmony_old = d->harmony_guide.type;
+    _color_harmony_button_on(d);
+    _color_harmony_changed_record(d);
+  }
+}
+
+static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope)
+{
+  if(self && scope >= 0 && scope < DT_LIB_HISTOGRAM_SCOPE_N)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    if(d->scope_type == (dt_lib_histogram_scope_type_t)scope) return;
+
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->scope_type_button[d->scope_type]), FALSE);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(d->scope_type_button[scope]), TRUE);
+
+    const dt_lib_histogram_scope_type_t scope_type_old = d->scope_type;
+    d->scope_type = (dt_lib_histogram_scope_type_t)scope;
+
+    const gboolean old_scope_vec =
+      (scope_type_old == DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE
+       || scope_type_old == DT_LIB_HISTOGRAM_SCOPE_SPLIT_WAVEFORM_VECTORSCOPE);
+    const gboolean new_scope_vec =
+      (d->scope_type == DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE
+       || d->scope_type == DT_LIB_HISTOGRAM_SCOPE_SPLIT_WAVEFORM_VECTORSCOPE);
+
+    if(!old_scope_vec && new_scope_vec)
+      d->vectorscope_radius = 0.f;
+
+    _scope_type_changed(d);
+  }
 }
 
 // clang-format off
