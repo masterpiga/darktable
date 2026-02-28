@@ -354,6 +354,299 @@ void lib_histogram_draw_bkgd(const dt_scopes_mode_t *const self,
   cairo_rectangle(cr, 0, 0, width, height);
   set_color(cr, darktable.bauhaus->graph_bg);
   cairo_fill(cr);
+  cairo_pattern_destroy(p);
+
+  // FIXME: the areas to left/right of the scope could have some data
+  // (primaries, whitepoint, scale, etc.)
+  cairo_translate(cr, width / 2., height / 2.);
+  cairo_rotate(cr, d->vectorscope_angle);
+
+  // traditional video editor's vectorscope is oriented with x-axis Y
+  // -> B, y-axis C -> R but CIE 1976 UCS is graphed x-axis as u (G ->
+  // M), y-axis as v (B -> Y), so do that and keep to the proper color
+  // math
+  cairo_scale(cr, 1., -1.);
+
+  // concentric circles as a scale
+  set_color(cr, darktable.bauhaus->graph_grid);
+  cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.));
+  const float grid_radius = d->hue_ring_colorspace == DT_LIB_HISTOGRAM_VECTORSCOPE_CIELUV
+    ? 100. : 0.01;
+  for(int i = 1; i < 1.f + ceilf(vs_radius/grid_radius); i++)
+  {
+    float r = grid_radius * i;
+    if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
+      r = baselog(r, vs_radius);
+    cairo_arc(cr, 0., 0., r * scale, 0., M_PI * 2.);
+    cairo_stroke(cr);
+  }
+
+  // chromaticities for drawing both hue ring and graph
+  cairo_surface_t *bkgd_surface =
+    dt_cairo_image_surface_create_for_data
+    (d->vectorscope_bkgd, CAIRO_FORMAT_RGB24,
+     diam_px, diam_px,
+     cairo_format_stride_for_width(CAIRO_FORMAT_RGB24, diam_px));
+  cairo_pattern_t *bkgd_pat = cairo_pattern_create_for_surface(bkgd_surface);
+  // primary nodes circles may extend to outside of pattern
+  cairo_pattern_set_extend(bkgd_pat, CAIRO_EXTEND_PAD);
+
+  cairo_matrix_t matrix;
+  cairo_matrix_init_translate(&matrix,
+                              0.5*diam_px/darktable.gui->ppd,
+                              0.5*diam_px/darktable.gui->ppd);
+  cairo_matrix_scale(&matrix,
+                     (double)diam_px / min_size / darktable.gui->ppd,
+                     (double)diam_px / min_size / darktable.gui->ppd);
+  cairo_pattern_set_matrix(bkgd_pat, &matrix);
+
+  // FIXME: also add hue rings (monochrome/dotted) for input/work/output profiles
+  // from Sobotka:
+
+  // 1. The input encoding primaries. How dd the image start out life?
+  // What is valid data within that? What is invalid introduced by
+  // error of camera virtual primaries solving or math such as
+  // resampling an image such that negative lobes result?
+  //
+  // 2. The working reference primaries. How did 1. end up in 2.? Are
+  // there negative and therefore nonsensical values in the working
+  // space? Should a gamut mapping pass be applied before work,
+  // between 1. and 2.?
+  //
+  // 3. The output primaries rendition. From a selection of gamut
+  // mappings, is one required between 2. and 3.?"
+
+  // graticule: histogram profile hue ring
+  cairo_set_operator(cr, CAIRO_OPERATOR_ADD);
+  cairo_push_group(cr);
+  cairo_set_source(cr, bkgd_pat);
+  for(int n = 0; n < 6; n++)
+    for(int h=0; h<VECTORSCOPE_HUES; h++)
+    {
+      // note that hue_ring coords are calculated as float but
+      // converted here to double
+      const float x = d->hue_ring[n][h][0];
+      const float y = d->hue_ring[n][h][1];
+      cairo_line_to(cr, x*scale, y*scale);
+    }
+  cairo_close_path(cr);
+  cairo_stroke(cr);
+  cairo_pop_group_to_source(cr);
+  cairo_paint_with_alpha(cr, 0.4);
+
+  // primary/secondary nodes
+  for(int n = 0; n < 6; n++)
+  {
+    const float x = d->hue_ring[n][0][0];
+    const float y = d->hue_ring[n][0][1];
+    cairo_arc(cr, x*scale, y*scale, node_radius, 0., M_PI * 2.);
+    cairo_set_source(cr, bkgd_pat);
+    cairo_fill_preserve(cr);
+    set_color(cr, darktable.bauhaus->graph_grid);
+    cairo_stroke(cr);
+  }
+
+  // vectorscope graph
+  // FIXME: use cairo_pattern_set_filter()?
+  cairo_surface_t *graph_surface =
+    dt_cairo_image_surface_create_for_data
+    (d->vectorscope_graph, CAIRO_FORMAT_A8,
+     diam_px, diam_px,
+     cairo_format_stride_for_width(CAIRO_FORMAT_A8, diam_px));
+  cairo_pattern_t *graph_pat = cairo_pattern_create_for_surface(graph_surface);
+  cairo_pattern_set_matrix(graph_pat, &matrix);
+
+  cairo_set_operator(cr, CAIRO_OPERATOR_ADD);
+
+  const gboolean display_primary_sample =
+    darktable.lib->proxy.colorpicker.restrict_histogram
+    && darktable.lib->proxy.colorpicker.primary_sample->size == DT_LIB_COLORPICKER_SIZE_POINT;
+  const gboolean display_live_samples = d->vectorscope_samples
+    && darktable.lib->proxy.colorpicker.display_samples;
+
+  // we draw the color harmony guidelines
+  const gboolean is_custom_harmony = (d->harmony_guide.custom_n > 0);
+  if(d->vectorscope_type == DT_LIB_HISTOGRAM_VECTORSCOPE_RYB
+     && (d->harmony_guide.type != DT_COLOR_HARMONY_NONE || is_custom_harmony))
+  {
+    cairo_save(cr);
+
+    const float hw = dt_lib_histogram_color_harmony_width[d->harmony_guide.width];
+    cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.));
+
+    if(is_custom_harmony)
+    {
+      // Custom harmony: nodes are at absolute hue positions (normalized turns [0,1)).
+      // Each node gets a fixed-width sector; no rotation offset is applied.
+      const int n = d->harmony_guide.custom_n;
+      for(int i = 0; i < n; i++)
+      {
+        const float center = d->harmony_guide.custom_angles[i] * 2.f * M_PI_F;
+        const float span   = hw * 2.f * M_PI_F;
+        float hr = vs_radius * 0.80f;
+        if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
+          hr = baselog(hr, vs_radius);
+        cairo_arc(cr, 0., 0., hr * scale, center - span, center + span);
+        cairo_line_to(cr, 0., 0.);
+      }
+    }
+    else
+    {
+      // Predefined harmony: sector angles are relative to guide.rotation.
+      const dt_lib_histogram_color_harmony_t hm = dt_color_harmonies[d->harmony_guide.type];
+      for(int i = 0; i < hm.sectors; i++)
+      {
+        float hr = vs_radius * hm.length[i];
+        if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
+          hr = baselog(hr, vs_radius);
+        const float span1 = (i > 0
+                             ? MIN(hw, (hm.angle[i] - hm.angle[i-1]) / 2.f)
+                             : hw); // avoid sectors overlap
+        const float span2 = (i < hm.sectors - 1
+                             ? MIN(hw, (hm.angle[i+1] - hm.angle[i]) / 2.f)
+                             : hw);
+        const float angle1 =
+          (hm.angle[i] - span1) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
+        const float angle2 =
+          (hm.angle[i] + span2) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
+        cairo_arc(cr, 0., 0., hr * scale, angle1, angle2);
+        cairo_line_to(cr, 0., 0.);
+      }
+    }
+
+    cairo_close_path(cr);
+    cairo_set_source(cr, bkgd_pat);
+    set_color(cr, darktable.bauhaus->graph_fg);
+    if(d->harmony_guide.width == DT_COLOR_HARMONY_WIDTH_LINE)
+      cairo_stroke(cr);
+    else
+    {
+      // we dim the histogram graph outside the harmony sectors
+      cairo_stroke_preserve(cr);
+      cairo_push_group(cr);
+      cairo_paint_with_alpha
+        (cr,
+         dt_conf_get_float("plugins/darkroom/histogram/vectorscope/harmony/dim"));
+      cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 1.0);
+      cairo_fill(cr);
+      cairo_pattern_t *harmony_pat = cairo_pop_group(cr);
+
+      cairo_set_source(cr, graph_pat);
+      cairo_push_group(cr);
+      cairo_mask(cr, harmony_pat);
+      cairo_pattern_destroy(harmony_pat);
+      cairo_pattern_destroy(graph_pat);
+      graph_pat = cairo_pop_group(cr);
+    }
+
+    if(gtk_widget_get_visible(d->button_box_main))
+    {
+      // draw information about current selected harmony
+      PangoLayout *layout;
+      PangoRectangle ink;
+      PangoFontDescription *desc =
+        pango_font_description_copy_static(darktable.bauhaus->pango_font_desc);
+      pango_font_description_set_weight(desc, PANGO_WEIGHT_NORMAL);
+      pango_font_description_set_absolute_size(desc, DT_PIXEL_APPLY_DPI(16) * PANGO_SCALE);
+      layout = pango_cairo_create_layout(cr);
+      pango_layout_set_font_description(layout, desc);
+      pango_layout_set_alignment(layout, PANGO_ALIGN_RIGHT);
+
+      gchar *text;
+      if(is_custom_harmony)
+        text = g_strdup(_("custom"));
+      else
+      {
+        const dt_lib_histogram_color_harmony_t hm = dt_color_harmonies[d->harmony_guide.type];
+        text = g_strdup_printf("%d°\n%s", d->harmony_guide.rotation, _(hm.name));
+      }
+
+      set_color(cr, darktable.bauhaus->graph_fg);
+      pango_layout_set_text(layout, text, -1);
+      pango_layout_get_pixel_extents(layout, NULL, &ink);
+      cairo_scale(cr, 1., -1.);
+      cairo_rotate(cr, -d->vectorscope_angle);
+      cairo_move_to(cr,
+                    0.48f * width - ink.width - ink.x,
+                    0.48 * height - ink.height - ink.y);
+      pango_cairo_show_layout(cr, layout);
+      cairo_stroke(cr);
+      pango_font_description_free(desc);
+      g_object_unref(layout);
+      g_free(text);
+    }
+    cairo_restore(cr);
+  }
+
+  if(display_primary_sample || display_live_samples)
+    cairo_push_group(cr);
+  cairo_set_source(cr, bkgd_pat);
+  cairo_mask(cr, graph_pat);
+  cairo_set_operator(cr, CAIRO_OPERATOR_HARD_LIGHT);
+  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
+  cairo_mask(cr, graph_pat);
+
+  cairo_pattern_destroy(bkgd_pat);
+  cairo_surface_destroy(bkgd_surface);
+  cairo_pattern_destroy(graph_pat);
+  cairo_surface_destroy(graph_surface);
+
+  if(display_primary_sample || display_live_samples)
+  {
+    cairo_pop_group_to_source(cr);
+    cairo_paint_with_alpha(cr, 0.5);
+  }
+
+  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
+
+  // overlay central circle
+  set_color(cr, darktable.bauhaus->graph_grid);
+  cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.5));
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, 0., 0., DT_PIXEL_APPLY_DPI(3.), 0., M_PI * 2.);
+  cairo_fill(cr);
+
+  if(display_primary_sample)
+  {
+    // point sample
+    set_color(cr, darktable.bauhaus->graph_fg);
+    cairo_arc(cr, scale*d->vectorscope_pt[0], scale*d->vectorscope_pt[1],
+              DT_PIXEL_APPLY_DPI(3.), 0., M_PI * 2.);
+    cairo_fill(cr);
+  }
+
+   // live samples
+  if(display_live_samples)
+  {
+    GSList *samples = d->vectorscope_samples;
+    const float *sample_xy = NULL;
+    int pos = 0;
+    for( ; samples; samples = g_slist_next(samples))
+    {
+      sample_xy = samples->data;
+      if(pos == d->selected_sample)
+      {
+        set_color(cr, darktable.bauhaus->graph_fg_active);
+        cairo_arc(cr,
+                  scale * sample_xy[0],
+                  scale * sample_xy[1],
+                  DT_PIXEL_APPLY_DPI(6.),
+                  0., M_PI * 2.);
+        cairo_fill(cr);
+      }
+      else
+      {
+        set_color(cr, darktable.bauhaus->graph_fg);
+        cairo_arc(cr,
+                  scale * sample_xy[0],
+                  scale * sample_xy[1],
+                  DT_PIXEL_APPLY_DPI(4.), 0., M_PI * 2.);
+        cairo_stroke(cr);
+      }
+      pos++;
+    }
+  }
+
   cairo_restore(cr);
 }
 
