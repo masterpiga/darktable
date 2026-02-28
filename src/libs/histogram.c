@@ -1361,32 +1361,55 @@ static void _lib_histogram_draw_vectorscope(const dt_lib_histogram_t *d, cairo_t
     && darktable.lib->proxy.colorpicker.display_samples;
 
   // we draw the color harmony guidelines
+  const gboolean is_custom_harmony = (d->harmony_guide.custom_n > 0);
   if(d->vectorscope_type == DT_LIB_HISTOGRAM_VECTORSCOPE_RYB
-     && d->harmony_guide.type != DT_COLOR_HARMONY_NONE)
+     && (d->harmony_guide.type != DT_COLOR_HARMONY_NONE || is_custom_harmony))
   {
     cairo_save(cr);
 
     const float hw = dt_lib_histogram_color_harmony_width[d->harmony_guide.width];
     cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.));
-    const dt_lib_histogram_color_harmony_t hm = dt_color_harmonies[d->harmony_guide.type];
-    for(int i = 0; i < hm.sectors; i++)
+
+    if(is_custom_harmony)
     {
-      float hr = vs_radius * hm.length[i];
-      if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
-        hr = baselog(hr, vs_radius);
-      const float span1 = (i > 0
-                           ? MIN(hw, (hm.angle[i] - hm.angle[i-1]) / 2.f)
-                           : hw); // avoid sectors overlap
-      const float span2 = (i < hm.sectors - 1
-                           ? MIN(hw, (hm.angle[i+1] - hm.angle[i]) / 2.f)
-                           : hw);
-      const float angle1 =
-        (hm.angle[i] - span1) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
-      const float angle2 =
-        (hm.angle[i] + span2) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
-      cairo_arc(cr, 0., 0., hr * scale, angle1, angle2);
-      cairo_line_to(cr, 0., 0.);
+      // Custom harmony: nodes are at absolute hue positions (normalized turns [0,1)).
+      // Each node gets a fixed-width sector; no rotation offset is applied.
+      const int n = d->harmony_guide.custom_n;
+      for(int i = 0; i < n; i++)
+      {
+        const float center = d->harmony_guide.custom_angles[i] * 2.f * M_PI_F;
+        const float span   = hw * 2.f * M_PI_F;
+        float hr = vs_radius * 0.80f;
+        if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
+          hr = baselog(hr, vs_radius);
+        cairo_arc(cr, 0., 0., hr * scale, center - span, center + span);
+        cairo_line_to(cr, 0., 0.);
+      }
     }
+    else
+    {
+      // Predefined harmony: sector angles are relative to guide.rotation.
+      const dt_lib_histogram_color_harmony_t hm = dt_color_harmonies[d->harmony_guide.type];
+      for(int i = 0; i < hm.sectors; i++)
+      {
+        float hr = vs_radius * hm.length[i];
+        if(d->vectorscope_scale == DT_LIB_HISTOGRAM_SCALE_LOGARITHMIC)
+          hr = baselog(hr, vs_radius);
+        const float span1 = (i > 0
+                             ? MIN(hw, (hm.angle[i] - hm.angle[i-1]) / 2.f)
+                             : hw); // avoid sectors overlap
+        const float span2 = (i < hm.sectors - 1
+                             ? MIN(hw, (hm.angle[i+1] - hm.angle[i]) / 2.f)
+                             : hw);
+        const float angle1 =
+          (hm.angle[i] - span1) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
+        const float angle2 =
+          (hm.angle[i] + span2) * 2.f * M_PI_F + deg2radf((float)d->harmony_guide.rotation);
+        cairo_arc(cr, 0., 0., hr * scale, angle1, angle2);
+        cairo_line_to(cr, 0., 0.);
+      }
+    }
+
     cairo_close_path(cr);
     cairo_set_source(cr, bkgd_pat);
     set_color(cr, darktable.bauhaus->graph_fg);
@@ -1425,7 +1448,14 @@ static void _lib_histogram_draw_vectorscope(const dt_lib_histogram_t *d, cairo_t
       pango_layout_set_font_description(layout, desc);
       pango_layout_set_alignment(layout, PANGO_ALIGN_RIGHT);
 
-      gchar *text = g_strdup_printf("%d°\n%s", d->harmony_guide.rotation, _(hm.name));
+      gchar *text;
+      if(is_custom_harmony)
+        text = g_strdup(_("custom"));
+      else
+      {
+        const dt_lib_histogram_color_harmony_t hm = dt_color_harmonies[d->harmony_guide.type];
+        text = g_strdup_printf("%d°\n%s", d->harmony_guide.rotation, _(hm.name));
+      }
 
       set_color(cr, darktable.bauhaus->graph_fg);
       pango_layout_set_text(layout, text, -1);

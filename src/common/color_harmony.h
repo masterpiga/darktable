@@ -51,6 +51,10 @@ typedef struct _color_harmony_t
   dt_color_harmony_type_t type;
   int rotation;
   dt_color_harmony_width_t width;
+  // When custom_n > 0, draw these absolute-angle nodes instead of the type+rotation table.
+  // Angles are normalized turns [0, 1), matching normalized JzCzhz hue.
+  int   custom_n;
+  float custom_angles[4];
 } dt_color_harmony_guide_t;
 
 typedef int32_t dt_harmony_guide_id_t;

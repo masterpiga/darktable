@@ -24,6 +24,8 @@ void dt_color_harmony_init(dt_color_harmony_guide_t *layout)
   layout->type = DT_COLOR_HARMONY_NONE;
   layout->rotation = 0;
   layout->width = DT_COLOR_HARMONY_WIDTH_NORMAL;
+  layout->custom_n = 0;
+  memset(layout->custom_angles, 0, sizeof(layout->custom_angles));
 }
 
 void dt_color_harmony_set(const dt_imgid_t imgid,
@@ -104,6 +106,9 @@ gboolean dt_color_harmony_get(const dt_imgid_t imgid,
     layout->type = sqlite3_column_int(stmt, 0);
     layout->rotation = sqlite3_column_int(stmt, 1);
     layout->width = sqlite3_column_int(stmt, 2);
+    // Custom angles are not persisted — they are set live by the IOP module.
+    layout->custom_n = 0;
+    memset(layout->custom_angles, 0, sizeof(layout->custom_angles));
     return TRUE;
   }
   else
