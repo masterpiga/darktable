@@ -2,7 +2,7 @@
 
 **Group:** color
 **Pipeline position:** linear RGB, scene-referred
-**Internal color space:** JzAzBz / JzCzhz (perceptual)
+**Internal color space:** darktable UCS / JCH (perceptual)
 
 ---
 
@@ -20,36 +20,36 @@ preserved.
 
 ## Color science
 
-### Color space: JzCzhz
+### Color space: darktable UCS JCH
 
-All processing happens in **JzCzhz**, the polar form of the **JzAzBz** perceptual color space
-(Safdar et al., 2017, *Optics Express* 25(13)).
-
-JzAzBz is built on the PQ (SMPTE ST 2084) electro-optical transfer function and is designed to
-be perceptually uniform across the full SDR and HDR luminance range. Its polar decomposition gives:
+All processing happens in **JCH**, the polar form of the **darktable Uniform Color Space 2022**
+(Aurélien Pierre, 2022). darktable UCS was designed specifically for scene-referred color grading:
+it uses a perceptually uniform hue-linear UV* plane derived from CIE xyY chromaticity, without the
+CAM (Color Appearance Model) complexity or absolute-luminance dependence of HDR-targeted spaces. It
+is the same space used by the color balance RGB and color equalizer modules.
 
 | Channel | Symbol | Meaning |
 |---------|--------|---------|
-| Lightness | Jz | Perceptual brightness, ~ 0 (black) to 0.4+ (very bright) |
-| Chroma | Cz | Colorfulness, ~ 0 (gray) to 0.5 (fully saturated) |
-| Hue | hz | Hue angle, normalized to [0, 1] (0° – 360°) |
+| Lightness | J | Normalized perceptual lightness (J = L* / L_white) |
+| Chroma | C | Colorfulness, perceptually weighted |
+| Hue | H | Hue angle in [-π, π] radians; stored as normalized [0, 1) |
 
 The pipeline for each pixel is:
 
 ```
 linear RGB (D50)
   → XYZ D50
-  → XYZ D65          (Bradford chromatic adaptation)
-  → JzAzBz           (PQ non-linearity + matrix)
-  → JzCzhz           (cartesian → polar)
-  [hue modified]
-  → JzAzBz           (polar → cartesian)
+  → XYZ D65          (CAT16 chromatic adaptation)
+  → xyY              (CIE chromaticity + luminance)
+  → darktable UCS JCH (hue-linear UV* plane → polar JCH)
+  [hue H modified]
+  → xyY              (inverse)
   → XYZ D65
   → XYZ D50          (inverse chromatic adaptation)
   → linear RGB (D50)
 ```
 
-Only `hz` is ever modified. `Jz` and `Cz` pass through unchanged.
+Only `H` is ever modified. `J` and `C` pass through unchanged.
 
 ### Hue normalization
 
@@ -81,7 +81,7 @@ node, avoiding the cancellation artefact that occurs in a weighted-average when 
 
 ```
 cutoff        = t³ · 0.3                          t = protect_neutral ∈ [0, 1]
-chroma_weight = Cz / (Cz + cutoff + ε)
+chroma_weight = C / (C + cutoff + ε)
 
 pull    = effect_strength × chroma_weight
 new_hue = h + hue_shift × pull
@@ -123,9 +123,9 @@ Selects the geometric pattern of the target palette. See the table above.
 ### Anchor hue
 The primary hue from which all node positions are derived. Expressed as a normalized value
 displayed in degrees. An eyedropper is available to sample a color directly from the image;
-colors with Cz < 0.005 are rejected as too neutral to yield a meaningful hue angle.
+colors with very low chroma C are rejected as too neutral to yield a meaningful hue angle.
 
-The color swatch strip below the slider shows the actual node colors at a fixed Jz and Cz for
+The color swatch strip below the slider shows the actual node colors at a fixed J and C for
 quick visual feedback.
 
 ### Auto detect
@@ -174,11 +174,11 @@ Scales the standard deviation σ of each node's Gaussian attraction zone. Range:
 Shields low-chroma pixels from correction. The weight for each pixel is:
 
 ```
-chroma_weight = Cz / (Cz + t³ · 0.3)
+chroma_weight = C / (C + t³ · 0.3)
 ```
 
-At Cz = 0 the weight is always zero regardless of the slider: fully achromatic pixels (pure
-grays) are never touched. As Cz grows, the weight approaches 1. The slider sets how aggressively
+At C = 0 the weight is always zero regardless of the slider: fully achromatic pixels (pure
+grays) are never touched. As C grows, the weight approaches 1. The slider sets how aggressively
 low-chroma pixels are exempted: low values protect only near-absolute grays; high values extend
 protection to muted and pastel tones.
 
@@ -240,10 +240,9 @@ The module supports parametric and drawn masking. Common uses:
 - The module operates entirely on hue and introduces **no luminance or chroma change** to any
   pixel. All radiometric accuracy (exposure, tone, saturation) is preserved.
 - OpenCL acceleration is supported; the GPU path is numerically equivalent to the CPU path.
-- Hue is undefined for fully achromatic pixels (Cz = 0). These pixels are unaffected by design:
+- Hue is undefined for fully achromatic pixels (C = 0). These pixels are unaffected by design:
   the chroma weight drives to zero regardless of other settings.
-- The JzAzBz conversion expects absolute luminance in cd/m². Because darktable's pipeline
-  carries scene-referred linear values that are not calibrated to absolute luminance, the space
-  is used in a relative sense. Its perceptual uniformity and hue-angle stability are still
-  superior to HSL or LCh(ab) for this purpose, but behavior at extreme HDR luminance values
-  may differ from the space's theoretical specification.
+- darktable UCS is designed for scene-referred normalized data and does not depend on absolute
+  luminance, making it naturally suited to darktable's pipeline. Its hue axis was explicitly
+  constructed to be perceptually linear (equal angular steps correspond to equal perceived hue
+  differences), which is the key property exploited here.

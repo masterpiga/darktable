@@ -61,18 +61,6 @@ static inline float get_weighted_hue_shift(const float px_hue,
   return max_weight * best_diff;
 }
 
-// JzCzhz -> JzAzBz (inverse of JzAzBz_to_JzCzhz in colorspace.h)
-static inline float4 JzCzhz_to_JzAzBz(const float4 JzCzhz)
-{
-  const float angle = JzCzhz.z * 2.0f * M_PI_F;
-  float4 JzAzBz;
-  JzAzBz.x = JzCzhz.x;
-  JzAzBz.y = JzCzhz.y * cos(angle);
-  JzAzBz.z = JzCzhz.y * sin(angle);
-  JzAzBz.w = JzCzhz.w;
-  return JzAzBz;
-}
-
 kernel void colorharmonizer(read_only image2d_t in,
                             write_only image2d_t out,
                             const int width,
@@ -94,12 +82,14 @@ kernel void colorharmonizer(read_only image2d_t in,
   // 1. Pipeline RGB -> XYZ D65 (premultiplied matrix: D50_to_D65 @ RGB_to_XYZ_D50)
   float4 XYZ_D65 = matrix_product_float4(pix_in, matrix_in);
 
-  // 2. XYZ D65 -> JzAzBz -> JzCzhz
-  float4 JzAzBz = XYZ_to_JzAzBz(XYZ_D65);
-  float4 JzCzhz = JzAzBz_to_JzCzhz(JzAzBz);
+  // 2. XYZ D65 -> xyY -> darktable UCS JCH
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+  float4 xyY = dt_D65_XYZ_to_xyY(XYZ_D65);
+  float4 JCH = xyY_to_dt_UCS_JCH(xyY, L_white);
 
-  const float hue    = JzCzhz.z;
-  const float chroma = JzCzhz.y;
+  // JCH.z is in [-π, π]; normalize to [0, 1) for all internal arithmetic
+  const float hue    = (JCH.z + M_PI_F) / (2.0f * M_PI_F);
+  const float chroma = JCH.y;
 
   // 3. Protect neutrals
   const float t = protect_neutral;
@@ -109,11 +99,11 @@ kernel void colorharmonizer(read_only image2d_t in,
   // 4. Weighted hue shift toward harmony nodes
   const float hue_shift  = get_weighted_hue_shift(hue, nodes, num_nodes, zone_width);
   const float pull_amount = effect_strength * chroma_weight;
-  JzCzhz.z = wrap_hue(hue + hue_shift * pull_amount);
+  JCH.z = wrap_hue(hue + hue_shift * pull_amount) * 2.0f * M_PI_F - M_PI_F;
 
-  // 5. JzCzhz -> JzAzBz -> XYZ D65
-  JzAzBz = JzCzhz_to_JzAzBz(JzCzhz);
-  XYZ_D65 = JzAzBz_2_XYZ(JzAzBz);
+  // 5. UCS JCH -> xyY -> XYZ D65
+  xyY = dt_UCS_JCH_to_xyY(JCH, L_white);
+  XYZ_D65 = dt_xyY_to_XYZ(xyY);
 
   // 6. XYZ D65 -> Pipeline RGB (premultiplied matrix: XYZ_D50_to_RGB @ D65_to_D50)
   float4 pix_out = matrix_product_float4(XYZ_D65, matrix_out);

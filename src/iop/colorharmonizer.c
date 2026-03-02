@@ -97,7 +97,7 @@ const char **description(dt_iop_module_t *self)
      _("harmonize colors toward a selected palette in perceptual space"),
      _("creative color grading"),
      _("linear, RGB, scene-referred"),
-     _("JzAzBz / JzCzhz (perceptual)"),
+     _("darktable UCS / JCH (perceptual)"),
      _("linear, RGB, scene-referred"));
 }
 
@@ -115,7 +115,7 @@ dt_iop_colorspace_type_t default_colorspace(dt_iop_module_t *self,
                                             dt_dev_pixelpipe_t *pipe,
                                             dt_dev_pixelpipe_iop_t *piece)
 {
-  // We work in RGB pipeline, convert internally to JzAzBz.
+  // We work in RGB pipeline, convert internally to darktable UCS.
   return IOP_CS_RGB;
 }
 
@@ -359,6 +359,8 @@ void process(dt_iop_module_t *self,
   const dt_iop_order_iccprofile_info_t *const work_profile = dt_ioppr_get_pipe_work_profile_info(piece->pipe);
   if(!work_profile) return;
 
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+
   DT_OMP_FOR()
   for(int j = 0; j < roi_out->height; j++)
   {
@@ -373,15 +375,16 @@ void process(dt_iop_module_t *self,
       px_rgb[3] = 0.0f;
       dt_apply_transposed_color_matrix(px_rgb, work_profile->matrix_in_transposed, px_xyz);
 
-      // 2. XYZ (D50) -> XYZ (D65) -> JzAzBz -> JzCzhz
-      dt_aligned_pixel_t px_xyz_d65, px_jzazbz, px_jzczhz;
+      // 2. XYZ (D50) -> XYZ (D65) -> xyY -> darktable UCS JCH
+      dt_aligned_pixel_t px_xyz_d65, px_xyY, px_JCH;
       XYZ_D50_to_D65(px_xyz, px_xyz_d65);
-      dt_XYZ_2_JzAzBz(px_xyz_d65, px_jzazbz);
-      dt_JzAzBz_2_JzCzhz(px_jzazbz, px_jzczhz);
+      dt_D65_XYZ_to_xyY(px_xyz_d65, px_xyY);
+      xyY_to_dt_UCS_JCH(px_xyY, L_white, px_JCH);
 
-      // Hue is JzCzhz[2], Chroma is JzCzhz[1]
-      float hue = px_jzczhz[2];
-      float chroma = px_jzczhz[1];
+      // Hue: JCH[2] is in [-π, π]; normalize to [0, 1) for all internal arithmetic
+      // Chroma: JCH[1]
+      float hue = (px_JCH[2] + M_PI_F) / (2.f * M_PI_F);
+      float chroma = px_JCH[1];
 
       // Protect neutrals: reduce effect where chroma is low.
       // Uses a hyperbolic formula (no hard ceiling) with quadratic slider mapping
@@ -397,11 +400,10 @@ void process(dt_iop_module_t *self,
       const float pull_amount = p->effect_strength * chroma_weight;
       float new_hue = wrap_hue(hue + hue_shift * pull_amount);
 
-      px_jzczhz[2] = new_hue;
-
-      // 3. JzCzhz -> JzAzBz -> XYZ (D65) -> XYZ (D50)
-      dt_JzCzhz_2_JzAzBz(px_jzczhz, px_jzazbz);
-      dt_JzAzBz_2_XYZ(px_jzazbz, px_xyz_d65);
+      // 3. UCS JCH -> xyY -> XYZ (D65) -> XYZ (D50)
+      px_JCH[2] = new_hue * 2.f * M_PI_F - M_PI_F;  // [0, 1) -> [-π, π]
+      dt_UCS_JCH_to_xyY(px_JCH, L_white, px_xyY);
+      dt_xyY_to_XYZ(px_xyY, px_xyz_d65);
       XYZ_D65_to_D50(px_xyz_d65, px_xyz);
 
       // 4. XYZ -> Pipeline RGB
@@ -424,18 +426,19 @@ void process(dt_iop_module_t *self,
       const float *src = ((const float *)ivoid) + (size_t)ch * roi_in->width * j;
       for(int i = 0; i < roi_in->width; i++, src += ch)
       {
-        dt_aligned_pixel_t px_h, px_xyz_h, px_xyz_d65_h, px_jzazbz_h, px_jzczhz_h;
+        dt_aligned_pixel_t px_h, px_xyz_h, px_xyz_d65_h, px_xyY_h, px_JCH_h;
         for_each_channel(c) px_h[c] = fmaxf(src[c], 0.0f);
         px_h[3] = 0.0f;
         dt_apply_transposed_color_matrix(px_h, work_profile->matrix_in_transposed, px_xyz_h);
         XYZ_D50_to_D65(px_xyz_h, px_xyz_d65_h);
-        dt_XYZ_2_JzAzBz(px_xyz_d65_h, px_jzazbz_h);
-        dt_JzAzBz_2_JzCzhz(px_jzazbz_h, px_jzczhz_h);
+        dt_D65_XYZ_to_xyY(px_xyz_d65_h, px_xyY_h);
+        xyY_to_dt_UCS_JCH(px_xyY_h, L_white, px_JCH_h);
 
-        const float chroma_h = px_jzczhz_h[1];
+        const float chroma_h = px_JCH_h[1];
         if(chroma_h > 0.01f)
         {
-          const int bin = (int)(px_jzczhz_h[2] * COLORHARMONIZER_HUE_BINS) % COLORHARMONIZER_HUE_BINS;
+          const float hue_h = (px_JCH_h[2] + M_PI_F) / (2.f * M_PI_F);
+          const int bin = (int)(hue_h * COLORHARMONIZER_HUE_BINS) % COLORHARMONIZER_HUE_BINS;
           local_histo[bin] += chroma_h;
         }
       }
@@ -543,98 +546,102 @@ error:
 }
 #endif
 
-#define ANGLE_SHIFT -30.f
-#define CONVENTIONAL_DEG_TO_YRG_RAD(x) (deg2radf(x + ANGLE_SHIFT))
-
-static inline void prepare_RGB_Yrg_matrices(const dt_iop_order_iccprofile_info_t *const profile,
-                                            dt_colormatrix_t input_matrix, dt_colormatrix_t output_matrix)
+// Render a normalized UCS hue value [0,1) to display sRGB.
+// Uses binary search to find the max gamut-valid chroma at a fixed mid-brightness J,
+// so the gradient and swatches show the same hue ordering as the processing pipeline.
+static void _hue_to_srgb(float hue, float *r, float *g, float *b)
 {
-  dt_colormatrix_t temp_matrix;
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+  const float J = 0.65f;                               // ≈ Y=0.29, mid-brightness
+  const float H = hue * 2.f * M_PI_F - M_PI_F;        // [0,1) → [-π, π]
 
-  // Prepare the RGB (D50) -> XYZ D50 -> XYZ D65 -> LMS 2006 matrix
-  dt_colormatrix_mul(temp_matrix, XYZ_D50_to_D65_CAT16, profile->matrix_in);
-  dt_colormatrix_mul(input_matrix, XYZ_D65_to_LMS_2006_D65, temp_matrix);
+  // Binary search for max C that keeps sRGB in [0, 1]
+  float C_lo = 0.f, C_hi = 2.f;
+  for(int iter = 0; iter < 16; iter++)
+  {
+    const float C_mid = (C_lo + C_hi) * 0.5f;
+    dt_aligned_pixel_t JCH = { J, C_mid, H, 0.f };
+    dt_aligned_pixel_t xyY, XYZ_D65, XYZ_D50, sRGB;
+    dt_UCS_JCH_to_xyY(JCH, L_white, xyY);
+    dt_xyY_to_XYZ(xyY, XYZ_D65);
+    XYZ_D65_to_D50(XYZ_D65, XYZ_D50);
+    dt_XYZ_to_sRGB(XYZ_D50, sRGB);
+    if(sRGB[0] >= 0.f && sRGB[1] >= 0.f && sRGB[2] >= 0.f
+       && sRGB[0] <= 1.f && sRGB[1] <= 1.f && sRGB[2] <= 1.f)
+      C_lo = C_mid;
+    else
+      C_hi = C_mid;
+  }
 
-  // Prepare the LMS 2006 -> XYZ D65 -> XYZ D50 -> RGB matrix (D50)
-  dt_colormatrix_mul(temp_matrix, XYZ_D65_to_D50_CAT16, LMS_2006_D65_to_XYZ_D65);
-  dt_colormatrix_mul(output_matrix, profile->matrix_out, temp_matrix);
-}
-
-static void _YchToRGB(dt_aligned_pixel_t *RGB_out, const float chroma, const float hue,
-                      const dt_iop_order_iccprofile_info_t *output_profile,
-                      const dt_colormatrix_t output_matrix_LMS_to_RGB)
-{
-  dt_aligned_pixel_t RGB_linear = { 0.f };
-  dt_aligned_pixel_t Ych;
-  make_Ych(0.75f, chroma, hue, Ych);
-  dt_aligned_pixel_t XYZ_D65 = { 0.f };
-  dt_aligned_pixel_t XYZ_D50 = { 0.f };
-  Ych_to_XYZ(Ych, XYZ_D65);
+  dt_aligned_pixel_t JCH = { J, C_lo * 0.85f, H, 0.f };
+  dt_aligned_pixel_t xyY, XYZ_D65, XYZ_D50, sRGB;
+  dt_UCS_JCH_to_xyY(JCH, L_white, xyY);
+  dt_xyY_to_XYZ(xyY, XYZ_D65);
   XYZ_D65_to_D50(XYZ_D65, XYZ_D50);
-  dt_apply_transposed_color_matrix(XYZ_D50, output_profile->matrix_out_transposed, RGB_linear);
-  // normalize to the brightest value available at this hue and chroma
-  const float max_RGB = max3f(RGB_linear);
-  for_each_channel(c) RGB_linear[c] = MAX(RGB_linear[c] / max_RGB, 0.f);
-  // Apply nonlinear LUT if necessary
-  if(output_profile->nonlinearlut)
-    dt_ioppr_apply_trc(RGB_linear, *RGB_out, output_profile->lut_out, output_profile->unbounded_coeffs_out,
-                       output_profile->lutsize);
-  else
-    memcpy(*RGB_out, RGB_linear, sizeof(RGB_linear));
+  dt_XYZ_to_sRGB(XYZ_D50, sRGB);
+  *r = CLAMP(sRGB[0], 0.f, 1.f);
+  *g = CLAMP(sRGB[1], 0.f, 1.f);
+  *b = CLAMP(sRGB[2], 0.f, 1.f);
 }
 
-static inline float _clip_chroma_black(const float coeffs[3], const float cos_h, const float sin_h)
-{
-  // N.B. this is the same as clip_chroma_white_raw() but with target value = 0.
-  // This allows eliminating some computation.
-
-  // Get chroma that brings one component of target RGB to zero.
-  // coeffs are the transformation coeffs to get one components (R, G or B) from input LMS.
-  // i.e. it is a row of the LMS -> RGB transformation matrix.
-  // See tools/derive_filmic_v6_gamut_mapping.py for derivation of these equations.
-  const float denominator = coeffs[0] * (0.979381443298969f * cos_h + 0.391752577319588f * sin_h)
-                            + coeffs[1] * (0.0206185567010309f * cos_h + 0.608247422680412f * sin_h)
-                            - coeffs[2] * (cos_h + sin_h);
-
-  // this channel won't limit the chroma
-  if(denominator == 0.f) return FLT_MAX;
-
-  const float numerator = -0.427506877216495f * (coeffs[0] + 0.856492345150334f * coeffs[1] + 0.554995960637719f * coeffs[2]);
-  const float max_chroma = numerator / denominator;
-  return max_chroma >= 0.f ? max_chroma : FLT_MAX;
-}
-
-static inline float Ych_max_chroma_without_negatives(const dt_colormatrix_t matrix_out,
-                                                     const float cos_h, const float sin_h)
-{
-  const float chroma_R_black = _clip_chroma_black(matrix_out[0], cos_h, sin_h);
-  const float chroma_G_black = _clip_chroma_black(matrix_out[1], cos_h, sin_h);
-  const float chroma_B_black = _clip_chroma_black(matrix_out[2], cos_h, sin_h);
-  return MIN(MIN(chroma_R_black, chroma_G_black), chroma_B_black);
-}
-
-static void _paint_hue_slider(const dt_iop_order_iccprofile_info_t *output_profile,
-                               const dt_colormatrix_t output_matrix_LMS_to_RGB,
-                               GtkWidget *slider)
+static void _paint_hue_slider(GtkWidget *slider)
 {
   for(int i = 0; i < DT_BAUHAUS_SLIDER_MAX_STOPS; i++)
   {
     const float stop = ((float)i / (float)(DT_BAUHAUS_SLIDER_MAX_STOPS - 1));
-    const float h = CONVENTIONAL_DEG_TO_YRG_RAD(stop * 360.f);
-    const float max_chroma = Ych_max_chroma_without_negatives(output_matrix_LMS_to_RGB, cosf(h), sinf(h));
-    dt_aligned_pixel_t RGB;
-    _YchToRGB(&RGB, MIN(0.2f, max_chroma), h, output_profile, output_matrix_LMS_to_RGB);
-    dt_bauhaus_slider_set_stop(slider, stop, RGB[0], RGB[1], RGB[2]);
+    float r, g, b;
+    _hue_to_srgb(stop, &r, &g, &b);
+    dt_bauhaus_slider_set_stop(slider, stop, r, g, b);
   }
 }
 
-static void _paint_all_hue_sliders(const dt_iop_order_iccprofile_info_t *output_profile,
-                                    const dt_colormatrix_t output_matrix_LMS_to_RGB,
-                                    const dt_iop_colorharmonizer_gui_data_t *const g)
+static void _paint_all_hue_sliders(const dt_iop_colorharmonizer_gui_data_t *const g)
 {
-  _paint_hue_slider(output_profile, output_matrix_LMS_to_RGB, g->anchor_hue);
+  _paint_hue_slider(g->anchor_hue);
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
-    _paint_hue_slider(output_profile, output_matrix_LMS_to_RGB, g->custom_hue_slider[i]);
+    _paint_hue_slider(g->custom_hue_slider[i]);
+}
+
+// Convert an RGB HSV hue [0,1) to a RYB hue [0,1).
+// Uses the same piecewise control points as the RYB vectorscope in histogram.c.
+static float _rgb_hue_to_ryb(const float h)
+{
+  static const float x[7]   = { 0.f, 1.f/6, 2.f/6, 3.f/6, 4.f/6, 5.f/6, 1.f };
+  static const float ryb[7] = { 0.f, 1.f/3, 0.472217f, 0.611105f, 0.715271f, 5.f/6, 1.f };
+  const float hc = h - floorf(h);
+  int i = 0;
+  while(i < 5 && hc >= x[i+1]) i++;
+  const float t = (hc - x[i]) / (x[i+1] - x[i]);
+  return ryb[i] + t * (ryb[i+1] - ryb[i]);
+}
+
+// Convert a UCS anchor_hue [0,1) to the RYB hue fraction [0,1) that the vectorscope uses.
+// Path: UCS hue → gamut-clipped sRGB → linearize → RGB HSV hue → RYB hue.
+static float _ucs_hue_to_ryb_hue(const float ucs_hue)
+{
+  float r, g, b;
+  _hue_to_srgb(ucs_hue, &r, &g, &b);
+  const dt_aligned_pixel_t srgb = { r, g, b, 0.f };
+  dt_aligned_pixel_t lrgb;
+  dt_sRGB_to_linear_sRGB(srgb, lrgb);
+  dt_aligned_pixel_t HCV;
+  dt_RGB_2_HCV(lrgb, HCV);
+  return _rgb_hue_to_ryb(HCV[0]);
+}
+
+// Invert _ucs_hue_to_ryb_hue: find the UCS hue whose RYB representation is closest
+// to target_ryb.  Uses exhaustive search at 0.5° UCS resolution (fast enough for GUI).
+static float _ryb_hue_to_ucs_hue(const float target_ryb)
+{
+  float best_ucs = 0.f, best_dist = 1.f;
+  for(int i = 0; i < 720; i++)
+  {
+    const float ucs = i / 720.f;
+    float d = fabsf(_ucs_hue_to_ryb_hue(ucs) - target_ryb);
+    if(d > 0.5f) d = 1.f - d;
+    if(d < best_dist) { best_dist = d; best_ucs = ucs; }
+  }
+  return best_ucs;
 }
 
 static void _push_to_vectorscope(dt_iop_module_t *self)
@@ -650,12 +657,12 @@ static void _push_to_vectorscope(dt_iop_module_t *self)
     guide.type     = DT_COLOR_HARMONY_NONE;
     guide.custom_n = p->num_custom_nodes;
     for(int i = 0; i < p->num_custom_nodes; i++)
-      guide.custom_angles[i] = p->custom_hue[i];
+      guide.custom_angles[i] = _ucs_hue_to_ryb_hue(p->custom_hue[i]);
   }
   else
   {
     guide.type        = (dt_color_harmony_type_t)(p->rule + 1);
-    guide.rotation    = (int)roundf(p->anchor_hue * 360.0f) % 360;
+    guide.rotation    = (int)roundf(_ucs_hue_to_ryb_hue(p->anchor_hue) * 360.f) % 360;
     guide.custom_n    = 0;
   }
 
@@ -683,26 +690,6 @@ static void _sync_to_vectorscope_toggled(GtkToggleButton *button, dt_iop_module_
       dt_lib_histogram_set_harmony(darktable.lib, &guide);
     }
   }
-}
-
-// Render the hue for a single harmony node swatch.
-// Converts a normalized hue [0,1] to an sRGB color using JzCzhz.
-static void _hue_to_srgb(float hue, float *r, float *g, float *b)
-{
-  const float Jz = 0.1f;
-  const float Cz = 0.05f;
-  dt_aligned_pixel_t px_jzczhz = { Jz, Cz, hue, 0.0f };
-  dt_aligned_pixel_t px_jzazbz, px_xyz_d65, px_xyz_d50, px_rgb;
-
-  dt_JzCzhz_2_JzAzBz(px_jzczhz, px_jzazbz);
-  dt_JzAzBz_2_XYZ(px_jzazbz, px_xyz_d65);
-  for(int c = 0; c < 3; c++) px_xyz_d65[c] /= 100.0f;
-  XYZ_D65_to_D50(px_xyz_d65, px_xyz_d50);
-  dt_XYZ_to_sRGB(px_xyz_d50, px_rgb);
-
-  *r = CLAMP(px_rgb[0], 0.0f, 1.0f);
-  *g = CLAMP(px_rgb[1], 0.0f, 1.0f);
-  *b = CLAMP(px_rgb[2], 0.0f, 1.0f);
 }
 
 static gboolean _swatch_draw_callback(GtkWidget *widget, cairo_t *cr, gpointer user_data)
@@ -816,19 +803,7 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
   }
 
   // Paint hue slider gradients
-  const dt_iop_order_iccprofile_info_t *output_profile = NULL;
-  if(self->dev && self->dev->full.pipe)
-    output_profile = dt_ioppr_get_pipe_output_profile_info(self->dev->full.pipe);
-
-  if(!output_profile || !dt_is_valid_colormatrix(output_profile->matrix_out[0][0]))
-  {
-    output_profile = dt_ioppr_add_profile_info_to_list(self->dev, DT_COLORSPACE_SRGB, "",
-                                                       DT_INTENT_RELATIVE_COLORIMETRIC);
-  }
-  dt_colormatrix_t input_matrix = { { 0.f } };
-  dt_colormatrix_t output_matrix = { { 0.f } };
-  prepare_RGB_Yrg_matrices(output_profile, input_matrix, output_matrix);
-  _paint_all_hue_sliders(output_profile, output_matrix, g);
+  _paint_all_hue_sliders(g);
 
   // Auto-sync rule / anchor hue (or the custom rule selection) to the vectorscope
   if(widget && (widget == g->rule || widget == g->anchor_hue || widget == g->num_custom_nodes_slider)
@@ -857,8 +832,7 @@ void gui_update(dt_iop_module_t *self)
   dt_iop_color_picker_reset(self, TRUE);
 }
 
-// Convert a picked pixel color (pipeline RGB) to a normalized JzCzhz hue [0, 1].
-// Convert a picked pixel color to a normalized JzCzhz hue [0, 1].
+// Convert a picked pixel color (pipeline RGB) to a normalized darktable UCS hue [0, 1).
 // Returns FALSE only if the work profile is unavailable.
 static gboolean _picked_color_to_hue(dt_iop_module_t *self, dt_dev_pixelpipe_t *pipe, float *out_hue)
 {
@@ -875,12 +849,13 @@ static gboolean _picked_color_to_hue(dt_iop_module_t *self, dt_dev_pixelpipe_t *
   px_xyz[2] = matrix_in[2][0]*px_rgb[0] + matrix_in[2][1]*px_rgb[1] + matrix_in[2][2]*px_rgb[2];
   px_xyz[3] = 0.0f;
 
-  dt_aligned_pixel_t px_xyz_d65, px_jzazbz, px_jzczhz;
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+  dt_aligned_pixel_t px_xyz_d65, px_xyY, px_JCH;
   XYZ_D50_to_D65(px_xyz, px_xyz_d65);
-  dt_XYZ_2_JzAzBz(px_xyz_d65, px_jzazbz);
-  dt_JzAzBz_2_JzCzhz(px_jzazbz, px_jzczhz);
+  dt_D65_XYZ_to_xyY(px_xyz_d65, px_xyY);
+  xyY_to_dt_UCS_JCH(px_xyY, L_white, px_JCH);
 
-  *out_hue = px_jzczhz[2];
+  *out_hue = (px_JCH[2] + M_PI_F) / (2.f * M_PI_F);
   return TRUE;
 }
 
@@ -1058,7 +1033,7 @@ static void _set_from_vectorscope_callback(GtkButton *button, dt_iop_module_t *s
   if(guide.type != DT_COLOR_HARMONY_NONE)
   {
     params->rule = (dt_iop_colorharmonizer_rule_t)(guide.type - 1);
-    params->anchor_hue = guide.rotation / 360.0f;
+    params->anchor_hue = _ryb_hue_to_ucs_hue(guide.rotation / 360.0f);
 
     // update GUI without triggering infinite pipe recursion
     ++darktable.gui->reset;
