@@ -80,7 +80,7 @@ node, avoiding the cancellation artefact that occurs in a weighted-average when 
 ### The applied shift
 
 ```
-cutoff        = t³ · 0.3                          t = protect_neutral ∈ [0, 1]
+cutoff        = t³ · 0.03                         t = protect_neutral ∈ [0, 1]
 chroma_weight = C / (C + cutoff + ε)
 
 pull    = effect_strength × chroma_weight
@@ -88,8 +88,11 @@ new_hue = h + hue_shift × pull
         = h + (w_nearest × diff_nearest) × pull
 ```
 
-The cubic exponent on `t` distributes slider sensitivity evenly: small values of
-`protect_neutral` affect only near-absolute grays; large values reach into muted, pastel colors.
+The cutoff at `t = 1` is 0.03. Vivid colors in photographic images typically have C ≥ 0.3,
+giving them a chroma weight ≥ 0.91 — almost the full effect — even at maximum protect neutral.
+Only near-neutral colors (C < 0.03) are substantially shielded. The cubic exponent concentrates
+slider sensitivity in the upper half of the range, where pastel and muted tones are progressively
+included in the protected zone.
 
 ---
 
@@ -180,9 +183,9 @@ chroma_weight = C / (C + t³ · 0.3)
 At C = 0 the weight is always zero regardless of the slider: fully achromatic pixels (pure
 grays) are never touched. As C grows, the weight approaches 1. The slider sets how aggressively
 low-chroma pixels are exempted: low values protect only near-absolute grays; high values extend
-protection to muted and pastel tones.
+protection to muted and pastel tones. Even at the maximum, vivid colors remain largely unaffected.
 
-Default: 0.20.
+Default: 0.50.
 
 ---
 

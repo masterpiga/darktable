@@ -58,7 +58,7 @@ typedef struct dt_iop_colorharmonizer_params_t
   dt_iop_colorharmonizer_rule_t rule; // $DEFAULT: DT_COLORHARMONIZER_COMPLEMENTARY $DESCRIPTION: "harmony rule"
   float anchor_hue;                   // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.1 $DESCRIPTION: "anchor hue"
   float effect_strength;              // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "effect strength"
-  float protect_neutral;              // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.2 $DESCRIPTION: "protect neutral"
+  float protect_neutral;              // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.5 $DESCRIPTION: "protect neutral"
   float zone_width;                   // $MIN: 0.25 $MAX: 4.0 $DEFAULT: 1.0 $DESCRIPTION: "effect width"
   float custom_hue[4];               // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "custom node hue"
   int   num_custom_nodes;            // $MIN: 2 $MAX: 4 $DEFAULT: 4 $DESCRIPTION: "active nodes"
@@ -387,12 +387,12 @@ void process(dt_iop_module_t *self,
       float chroma = px_JCH[1];
 
       // Protect neutrals: reduce effect where chroma is low.
-      // Uses a hyperbolic formula (no hard ceiling) with quadratic slider mapping
-      // so sensitivity is distributed evenly across the full slider range.
-      // protect_neutral = 0 -> full effect on all pixels
-      // protect_neutral = 1 -> strong suppression even on moderately saturated colors
+      // Hyperbolic gate: chroma_weight → 0 for C << cutoff, → 1 for C >> cutoff.
+      // protect_neutral = 0 -> cutoff = 0, full effect on all pixels
+      // protect_neutral = 1 -> cutoff = 0.03, only near-neutrals (C < 0.03) are shielded;
+      //   vivid colors (C ≈ 0.3+) still receive ≥ 91 % of the effect.
       const float t = p->protect_neutral;
-      const float cutoff = t * t * t * 0.3f;
+      const float cutoff = t * t * t * 0.03f;
       const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
 
       // Soft weighted pull toward harmony nodes (smooth across zone boundaries)

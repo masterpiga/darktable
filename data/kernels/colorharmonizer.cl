@@ -91,9 +91,9 @@ kernel void colorharmonizer(read_only image2d_t in,
   const float hue    = (JCH.z + M_PI_F) / (2.0f * M_PI_F);
   const float chroma = JCH.y;
 
-  // 3. Protect neutrals
+  // 3. Protect neutrals: cutoff = 0.03 at t=1 so vivid colors (C ≥ 0.3) keep ≥ 91% effect
   const float t = protect_neutral;
-  const float cutoff = t * t * t * 0.3f;
+  const float cutoff = t * t * t * 0.03f;
   const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
 
   // 4. Weighted hue shift toward harmony nodes
