@@ -8,13 +8,11 @@
 
 ## What it does
 
-The color harmonizer nudges hues toward a selected color palette — a set of geometrically related
-hue angles called *harmony nodes* — while leaving luminance and chroma untouched. The goal is to
-reduce chromatic discord in an image: colors that are "off-palette" are gently pulled toward the
-nearest node; colors already on a node are left in place.
-
-The effect is entirely in the hue dimension. Brightness, saturation, and tone relationships are
-preserved.
+The color harmonizer nudges hues — and optionally chroma — toward a selected color palette: a set
+of geometrically related hue angles called *harmony nodes*. The goal is to reduce chromatic discord
+in an image. Colors that are "off-palette" are gently pulled toward the nearest node; colors
+already on a node are left unchanged. A per-node saturation multiplier can additionally boost or
+reduce the colorfulness of colors near each node.
 
 ---
 
@@ -42,14 +40,16 @@ linear RGB (D50)
   → XYZ D65          (CAT16 chromatic adaptation)
   → xyY              (CIE chromaticity + luminance)
   → darktable UCS JCH (hue-linear UV* plane → polar JCH)
-  [hue H modified]
+  [H and C modified]
   → xyY              (inverse)
   → XYZ D65
   → XYZ D50          (inverse chromatic adaptation)
   → linear RGB (D50)
 ```
 
-Only `H` is ever modified. `J` and `C` pass through unchanged.
+`J` (lightness) is never modified. `H` (hue) is always modified proportionally to angular
+distance from the nearest node. `C` (chroma) is modified only when per-node saturation values
+differ from 1.0.
 
 ### Hue normalization
 
@@ -71,11 +71,39 @@ nearest   = argmax_i(w_i)
 hue_shift = w_nearest × diff_nearest
 ```
 
-The Gaussian weight `w_nearest` acts as a **proximity gate**: at wide zone widths it stays near 1
-across the entire hue circle so all pixels are attracted; at narrow widths it falls off quickly so
-only hues close to a node are affected. The direction of pull is always toward the single nearest
-node, avoiding the cancellation artefact that occurs in a weighted-average when opposing nodes
-(e.g. complementary) pull in opposite directions and partially neutralize each other.
+The shift is proportional to the **angular distance from the nearest node** scaled by the
+Gaussian weight. This means:
+
+- A pixel **exactly at a node** always produces zero shift (`diff_nearest = 0`), regardless of
+  zone width. This is the key correctness invariant: node-colored pixels are never displaced.
+- A pixel **far from all nodes** receives near-zero shift because `w_nearest ≈ 0`.
+- The Gaussian `w_nearest` acts as a **proximity gate**: at wide zone widths it stays near 1
+  across the entire hue circle so all pixels are attracted; at narrow widths it falls off quickly
+  so only hues close to a node are affected.
+
+Using the nearest-node's own difference (rather than a weighted average of all nodes' differences)
+avoids an artefact where opposing nodes — e.g. in a complementary pair — partially cancel each
+other and displace pixels that are already correctly positioned on one node toward the other.
+
+### Per-node saturation
+
+Each harmony node carries an independent saturation multiplier `s_i ∈ [0, 2]`. For each pixel,
+the saturation delta is derived from the winning (nearest) node:
+
+```
+sat_delta = (s_nearest − 1) × w_nearest
+```
+
+Applied to chroma:
+
+```
+C_new = C × (1 + sat_delta × chroma_weight)
+      ≈ C × s_nearest   (at the node, where w_nearest = 1 and chroma_weight ≈ 1)
+```
+
+At the node the result is exactly the configured saturation multiplier. Away from the node the
+effect tapers to zero via the same Gaussian `w_nearest`. At `s_i = 1.0` (default) the saturation
+channel is unaffected.
 
 ### The applied shift
 
@@ -86,6 +114,8 @@ chroma_weight = C / (C + cutoff + ε)
 pull    = effect_strength × chroma_weight
 new_hue = h + hue_shift × pull
         = h + (w_nearest × diff_nearest) × pull
+
+new_C   = C × (1 + sat_delta × chroma_weight)
 ```
 
 The cutoff at `t = 1` is 0.03. Vivid colors in photographic images typically have C ≥ 0.3,
@@ -93,6 +123,23 @@ giving them a chroma weight ≥ 0.91 — almost the full effect — even at maxi
 Only near-neutral colors (C < 0.03) are substantially shielded. The cubic exponent concentrates
 slider sensitivity in the upper half of the range, where pastel and muted tones are progressively
 included in the protected zone.
+
+### Two-pass processing
+
+To allow optional spatial smoothing of the correction field, processing is split into two passes:
+
+**Pass 1 — map:** For each pixel, compute `hue_delta` and `sat_delta` from the current pixel's
+hue and the harmony nodes. Store these in two per-pixel correction maps.
+
+**Blur (optional):** If spatial smoothing is enabled, both maps are Gaussian-blurred. This softens
+zone-boundary transitions visible in smooth spatial gradients (e.g. skies, skin). The blur sigma
+scales with both the smoothing slider and the zone width.
+
+**Pass 2 — apply:** For each pixel, re-read its hue and chroma from the input, look up the
+(possibly blurred) `hue_delta` and `sat_delta`, and apply the final correction.
+
+On GPU (OpenCL), the map and apply passes are separate kernels; the blur runs on the correction
+buffer between them.
 
 ---
 
@@ -111,6 +158,7 @@ All node positions are offsets from the anchor hue. Angles are in degrees.
 | **Triad** | 3 | 0°, +120°, +240° | Evenly spaced; balanced, colorful |
 | **Tetrad** | 4 | −30°, +30°, +150°, +210° | Two dyad pairs; anchor is symmetry axis, not a node |
 | **Square** | 4 | 0°, +90°, +180°, +270° | Four equally spaced hues |
+| **Custom** | 2–4 | Freely placed | User-defined node positions |
 
 > **Note on dyad and tetrad:** the anchor hue sets the symmetry axis of the pattern, not the
 > position of a node. The palette is symmetric around the anchor. This matches the vectorscope
@@ -120,18 +168,36 @@ All node positions are offsets from the anchor hue. Angles are in degrees.
 
 ## Controls
 
+### Keep vectorscope in sync
+When enabled (default), any change to the harmony rule, anchor hue, or custom node positions is
+immediately reflected in the vectorscope harmony overlay. Disable to make adjustments without
+disturbing the vectorscope display.
+
 ### Harmony rule
-Selects the geometric pattern of the target palette. See the table above.
+Selects the geometric pattern of the target palette. When switching to *custom*, the current
+rule's node positions are copied as a starting point.
 
-### Anchor hue
-The primary hue from which all node positions are derived. Expressed as a normalized value
-displayed in degrees. An eyedropper is available to sample a color directly from the image;
-colors with very low chroma C are rejected as too neutral to yield a meaningful hue angle.
+---
 
-The color swatch strip below the slider shows the actual node colors at a fixed J and C for
-quick visual feedback.
+### Rule controls
 
-### Auto detect
+#### Anchor hue
+The primary hue from which all node positions are derived (not shown in *custom* mode). Expressed
+as a normalized value displayed in degrees. An eyedropper is available to sample a color directly
+from the image.
+
+The color swatch strip below the slider shows the actual node colors for quick visual feedback.
+
+#### Active nodes *(custom mode only)*
+Number of active harmony nodes in custom mode (2–4). Only the first N node rows are shown and
+active; the others are hidden.
+
+#### Node hue sliders *(custom mode only)*
+One row per active node. Each row shows a color swatch and a hue slider with an eyedropper. The
+hue slider sets the node position on the hue wheel (0°–360°). Use the eyedropper to sample a
+desired hue directly from the image.
+
+#### Auto detect *(standard modes only)*
 Analyses the preview image's chroma-weighted hue histogram and automatically selects the harmony
 rule and anchor hue that best fit the image's existing color distribution — i.e. the combination
 that already covers the most chromatic energy and therefore requires the least correction.
@@ -146,22 +212,24 @@ The algorithm:
 The result replaces the current rule and anchor. Use **effect strength** to control how strongly
 the remaining off-palette hues are then pulled toward the detected palette.
 
-### Set from vectorscope
+#### Set from vectorscope *(standard modes only)*
 Imports the harmony rule and anchor hue currently configured in the vectorscope panel, then
 switches the histogram panel to the vectorscope view.
 
-### Keep vectorscope in sync
-When enabled (default), any change to the harmony rule or anchor hue is immediately reflected in
-the vectorscope harmony overlay. Disable to make adjustments without disturbing the vectorscope
-display.
+---
 
-### Effect strength
+### Effect controls
+
+#### Effect strength
 Global scale on the hue pull. At 0 nothing changes. At 1 the Gaussian proximity weight is the
-only limit on how far each pixel moves; a pixel exactly on a node shifts by 0, a pixel at the
-edge of the attraction zone shifts by the Gaussian weight multiplied by its angular distance to
-that node.
+only limit on how far each pixel moves. A pixel exactly on a node shifts by 0; a pixel at the
+midpoint between two nodes is shifted by the Gaussian weight at that distance multiplied by its
+angular gap to the nearest node.
 
-### Effect width
+Note: effect strength scales the **hue** correction only. The saturation correction (per-node
+saturation multipliers) is applied independently, at full strength regardless of this slider.
+
+#### Effect width
 Scales the standard deviation σ of each node's Gaussian attraction zone. Range: 0.25–4.0.
 
 - **< 1 (narrow):** the Gaussian decays quickly with distance; only hues very close to a node
@@ -173,11 +241,14 @@ Scales the standard deviation σ of each node's Gaussian attraction zone. Range:
   attracted noticeably regardless of how far they are from a node. Useful for strongly discordant
   images or a painterly look.
 
-### Protect neutral
+Increasing effect width never displaces pixels that are already exactly on a harmony node — their
+angular distance to the nearest node is zero, so their hue shift is always zero.
+
+#### Protect neutral
 Shields low-chroma pixels from correction. The weight for each pixel is:
 
 ```
-chroma_weight = C / (C + t³ · 0.3)
+chroma_weight = C / (C + t³ · 0.03)
 ```
 
 At C = 0 the weight is always zero regardless of the slider: fully achromatic pixels (pure
@@ -185,7 +256,41 @@ grays) are never touched. As C grows, the weight approaches 1. The slider sets h
 low-chroma pixels are exempted: low values protect only near-absolute grays; high values extend
 protection to muted and pastel tones. Even at the maximum, vivid colors remain largely unaffected.
 
-Default: 0.50.
+Default: 0.00.
+
+#### Spatial smoothing
+Applies a Gaussian blur to the correction maps (hue delta and saturation delta) before they are
+applied to the image. This smooths the spatial transitions at zone boundaries — visible as subtle
+colour steps in smooth gradients like skies or skin when adjacent regions fall in different
+attraction zones.
+
+The blur sigma scales with both this slider and the current zone width: wider attraction zones
+span larger hue ranges and generate larger corrections, which can produce sharper spatial
+boundaries when pixels near each other fall on opposite sides of a zone midpoint.
+
+- **0 (default, off):** transitions are handled purely by the Gaussian interpolation in hue space.
+  Maximum detail is preserved. Recommended for most uses.
+- **0.1–0.5:** subtle spatial averaging to reduce colour noise in smooth areas.
+- **> 1.0:** broad spatial blending; can create a painterly effect but may bleed corrections
+  across image edges.
+
+---
+
+### Saturation section *(collapsible)*
+
+One row per active harmony node. Each row shows a color swatch (the node's hue) and a saturation
+multiplier slider.
+
+#### Node saturation sliders
+Saturation multiplier for colors near the corresponding harmony node.
+
+- **100 % (default):** chroma is unchanged.
+- **< 100 %:** desaturates colors near this node, proportionally to their Gaussian proximity.
+- **> 100 %:** boosts chroma near this node.
+
+The effect is weighted by the pixel's Gaussian proximity to the node (`w_nearest`) and further
+modulated by **protect neutral** so near-achromatic pixels are spared. At the node itself
+(maximum weight) the chroma is multiplied by exactly the slider value.
 
 ---
 
@@ -208,8 +313,26 @@ Default: 0.50.
 4. **Adjust effect width if needed.** If many off-palette hues are not moving enough, widen the
    zones. If you want to correct only specific hue ranges without touching the rest, narrow them.
 
-5. **Use protect neutral to taste.** The default 0.2 protects near-grays from unwanted tinting.
-   Raise it for images with many desaturated tones (architecture, faded film looks).
+5. **Use protect neutral to taste.** Raise it for images with many desaturated tones
+   (architecture, faded film looks) to exempt pastels and muted tones from correction.
+
+6. **Use the saturation section for palette polishing.** Once the hue pull is set, open the
+   Saturation section to boost or calm chroma per node — e.g. boost the warm nodes and desaturate
+   the cool ones for a cinematic split-tone look.
+
+### Custom harmony mode
+
+Use *custom* when none of the geometric rules match the image's intended palette.
+
+1. Set the harmony rule to *custom*. The previous rule's node positions are copied as a starting
+   point.
+2. Use *active nodes* to select how many palette targets you need (2–4).
+3. Drag each node's hue slider or use its eyedropper to position nodes at the desired palette
+   hues.
+4. Raise effect strength to pull off-palette colors toward the custom nodes.
+
+Custom nodes are synced to the vectorscope as free-floating angle markers (the vectorscope shows
+no standard rule name for custom palettes).
 
 ### Working with the vectorscope
 
@@ -240,8 +363,12 @@ The module supports parametric and drawn masking. Common uses:
 
 ## Technical notes
 
-- The module operates entirely on hue and introduces **no luminance or chroma change** to any
-  pixel. All radiometric accuracy (exposure, tone, saturation) is preserved.
+- Lightness (`J`) is **never modified**. All radiometric accuracy is preserved.
+- Hue correction is zero for any pixel whose hue already matches a harmony node, regardless of
+  zone width or effect strength. This is a mathematical guarantee, not a threshold: the angular
+  distance to the nearest node is zero, so the shift is zero.
+- Chroma is modified only when at least one node has its saturation slider set away from 100 %.
+  With all nodes at 100 %, the saturation channel passes through unchanged.
 - OpenCL acceleration is supported; the GPU path is numerically equivalent to the CPU path.
 - Hue is undefined for fully achromatic pixels (C = 0). These pixels are unaffected by design:
   the chroma weight drives to zero regardless of other settings.

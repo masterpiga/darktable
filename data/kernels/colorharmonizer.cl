@@ -19,7 +19,6 @@
 #include "common.h"
 #include "colorspace.h"
 
-// Wrap hue to [0, 1)
 static inline float wrap_hue(float h)
 {
   h = fmod(h, 1.0f);
@@ -28,9 +27,11 @@ static inline float wrap_hue(float h)
 }
 
 // Pull the pixel hue toward the nearest harmony node, scaled by Gaussian proximity.
-// Wide zone → high weight for all pixels → broad effect.
-// Narrow zone → low weight far from nodes → selective effect.
 // Also returns the winning node index and its max Gaussian weight via output pointers.
+//
+// The shift equals (nearest_node - px_hue) * max_w, so:
+//   - A pixel already at a node produces zero shift.
+//   - A pixel far from all nodes gets near-zero shift (max_w ≈ 0).
 static inline float get_weighted_hue_shift(const float px_hue,
                                            constant const float *const nodes,
                                            const int num_nodes,
@@ -41,9 +42,9 @@ static inline float get_weighted_hue_shift(const float px_hue,
   const float sigma = zone_width_factor * 0.5f / (float)num_nodes;
   const float inv_2sigma2 = 1.0f / (2.0f * sigma * sigma);
 
-  float max_weight = 0.0f;
-  float best_diff  = 0.0f;
-  int   winning_idx = 0;
+  float max_w        = 0.0f;
+  int   winning_idx  = 0;
+  float diff_winning = 0.0f;
 
   for(int i = 0; i < num_nodes; i++)
   {
@@ -51,79 +52,111 @@ static inline float get_weighted_hue_shift(const float px_hue,
     if(d > 0.5f) d = 1.0f - d;
 
     const float w = exp(-d * d * inv_2sigma2);
+    float diff = nodes[i] - px_hue;
+    if(diff > 0.5f)       diff -= 1.0f;
+    else if(diff < -0.5f) diff += 1.0f;
 
-    if(w > max_weight)
+    if(w > max_w)
     {
-      max_weight  = w;
-      winning_idx = i;
-      float diff = nodes[i] - px_hue;
-      if(diff > 0.5f)       diff -= 1.0f;
-      else if(diff < -0.5f) diff += 1.0f;
-      best_diff = diff;
+      max_w        = w;
+      winning_idx  = i;
+      diff_winning = diff;
     }
   }
 
   *out_winning_idx = winning_idx;
-  *out_max_weight  = max_weight;
-  return max_weight * best_diff;
+  *out_max_weight  = max_w;
+  return diff_winning * max_w;
 }
 
-kernel void colorharmonizer(read_only image2d_t in,
-                            write_only image2d_t out,
-                            const int width,
-                            const int height,
-                            constant const float *const matrix_in,
-                            constant const float *const matrix_out,
-                            constant const float *const nodes,
-                            const int num_nodes,
-                            const float zone_width,
-                            const float effect_strength,
-                            const float protect_neutral,
-                            constant const float *const node_saturation)
+// Helper: convert a pixel from image2d to JCH, returning hue [0,1) and chroma.
+static inline void rgb_to_JCH(float4 pix_in,
+                               constant const float *const matrix_in,
+                               float *out_J, float *out_chroma, float *out_hue)
+{
+  float4 XYZ_D65 = matrix_product_float4(fmax(0.0f, pix_in), matrix_in);
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+  float4 xyY = dt_D65_XYZ_to_xyY(XYZ_D65);
+  float4 JCH = xyY_to_dt_UCS_JCH(xyY, L_white);
+  *out_J      = JCH.x;
+  *out_chroma = JCH.y;
+  *out_hue    = (JCH.z + M_PI_F) / (2.0f * M_PI_F);
+}
+
+// Kernel 1: compute per-pixel correction maps (hue_delta, sat_delta).
+// These are Gaussian-blurred in a separate pass before being applied.
+kernel void colorharmonizer_map(read_only  image2d_t  in,
+                                global     float2    *p_out,
+                                const int   width,
+                                const int   height,
+                                constant const float *const matrix_in,
+                                constant const float *const nodes,
+                                const int   num_nodes,
+                                const float zone_width,
+                                const float effect_strength,
+                                const float protect_neutral,
+                                constant const float *const node_saturation)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
   if(x >= width || y >= height) return;
 
-  const float4 pix_in = fmax(0.0f, read_imagef(in, sampleri, (int2)(x, y)));
+  float J, chroma, hue;
+  rgb_to_JCH(read_imagef(in, sampleri, (int2)(x, y)), matrix_in, &J, &chroma, &hue);
 
-  // 1. Pipeline RGB -> XYZ D65 (premultiplied matrix: D50_to_D65 @ RGB_to_XYZ_D50)
-  float4 XYZ_D65 = matrix_product_float4(pix_in, matrix_in);
+  int   winning_idx = 0;
+  float max_weight  = 0.0f;
+  const float hue_shift = get_weighted_hue_shift(hue, nodes, num_nodes, zone_width,
+                                                 &winning_idx, &max_weight);
 
-  // 2. XYZ D65 -> xyY -> darktable UCS JCH
+  const float hd = hue_shift;
+  // Saturation: apply the winning node's adjustment, scaled by Gaussian proximity.
+  // At the node (max_weight = 1), this gives exactly the configured saturation.
+  // Far from all nodes (max_weight ≈ 0), the saturation is unchanged.
+  const float sd = (node_saturation[winning_idx] - 1.0f) * max_weight;
+
+  p_out[y * width + x] = (float2)(hd, sd);
+}
+
+// Kernel 2: apply Gaussian-smoothed corrections to produce output.
+kernel void colorharmonizer_apply(read_only  image2d_t  in,
+                                  write_only image2d_t  out,
+                                  const int   width,
+                                  const int   height,
+                                  constant const float *const matrix_in,
+                                  constant const float *const matrix_out,
+                                  global const float2 *corrections,
+                                  const float effect_strength,
+                                  const float protect_neutral)
+{
+  const int x = get_global_id(0);
+  const int y = get_global_id(1);
+  if(x >= width || y >= height) return;
+
+  const float4 pix_in = read_imagef(in, sampleri, (int2)(x, y));
+
+  float4 XYZ_D65 = matrix_product_float4(fmax(0.0f, pix_in), matrix_in);
   const float L_white = Y_to_dt_UCS_L_star(1.0f);
   float4 xyY = dt_D65_XYZ_to_xyY(XYZ_D65);
   float4 JCH = xyY_to_dt_UCS_JCH(xyY, L_white);
 
-  // JCH.z is in [-π, π]; normalize to [0, 1) for all internal arithmetic
   const float hue    = (JCH.z + M_PI_F) / (2.0f * M_PI_F);
   const float chroma = JCH.y;
 
-  // 3. Protect neutrals: cutoff = 0.03 at t=1 so vivid colors (C ≥ 0.3) keep ≥ 91% effect
-  const float t = protect_neutral;
-  const float cutoff = t * t * t * 0.03f;
-  const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
+  const int    k    = y * width + x;
+  const float2 corr = corrections[k];
 
-  // 4. Weighted hue shift toward harmony nodes
-  int   winning_idx = 0;
-  float max_weight  = 0.0f;
-  const float hue_shift  = get_weighted_hue_shift(hue, nodes, num_nodes, zone_width,
-                                                  &winning_idx, &max_weight);
-  const float pull_amount = effect_strength * chroma_weight;
-  JCH.z = wrap_hue(hue + hue_shift * pull_amount) * 2.0f * M_PI_F - M_PI_F;
+  const float t             = protect_neutral;
+  const float cutoff        = t * t * t * 0.03f;
+  const float chroma_weight = chroma / (chroma + cutoff + 1.0e-5f);
 
-  // Per-node saturation modulation
-  const float sat_target = node_saturation[winning_idx];
-  const float sat_factor = 1.0f + (sat_target - 1.0f) * max_weight * chroma_weight;
-  JCH.y = fmax(JCH.y * sat_factor, 0.0f);
+  JCH.z = wrap_hue(hue + corr.x * effect_strength * chroma_weight) * 2.0f * M_PI_F - M_PI_F;
+  JCH.y = fmax(chroma * (1.0f + corr.y * chroma_weight), 0.0f);
 
-  // 5. UCS JCH -> xyY -> XYZ D65
   xyY = dt_UCS_JCH_to_xyY(JCH, L_white);
   XYZ_D65 = dt_xyY_to_XYZ(xyY);
 
-  // 6. XYZ D65 -> Pipeline RGB (premultiplied matrix: XYZ_D50_to_RGB @ D65_to_D50)
   float4 pix_out = matrix_product_float4(XYZ_D65, matrix_out);
   pix_out.w = pix_in.w;
-
   write_imagef(out, (int2)(x, y), pix_out);
 }

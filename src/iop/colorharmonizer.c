@@ -29,6 +29,7 @@
 #include "libs/lib.h"
 #include "common/color_harmony.h"
 #include "common/opencl.h"
+#include "common/gaussian.h"
 
 #include <gtk/gtk.h>
 #include <math.h>
@@ -37,7 +38,7 @@
 #define COLORHARMONIZER_HUE_BINS 360
 #define COLORHARMONIZER_MAX_NODES 4
 
-DT_MODULE_INTROSPECTION(5, dt_iop_colorharmonizer_params_t)
+DT_MODULE_INTROSPECTION(6, dt_iop_colorharmonizer_params_t)
 
 typedef enum dt_iop_colorharmonizer_rule_t
 {
@@ -63,11 +64,12 @@ typedef struct dt_iop_colorharmonizer_params_t
   float custom_hue[4];               // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "custom node hue"
   int   num_custom_nodes;            // $MIN: 2 $MAX: 4 $DEFAULT: 4 $DESCRIPTION: "active nodes"
   float node_saturation[4];         // $MIN: 0.0 $MAX: 2.0 $DEFAULT: 1.0 $DESCRIPTION: "node saturation"
+  float smoothing;                   // $MIN: 0.0 $MAX: 2.0 $DEFAULT: 1.0 $DESCRIPTION: "spatial smoothing"
 } dt_iop_colorharmonizer_params_t;
 
 typedef struct dt_iop_colorharmonizer_gui_data_t
 {
-  GtkWidget *rule, *anchor_hue, *effect_strength, *protect_neutral, *zone_width;
+  GtkWidget *rule, *anchor_hue, *effect_strength, *protect_neutral, *zone_width, *smoothing;
   GtkWidget *set_from_vectorscope, *sync_to_vectorscope, *auto_detect;
   GtkWidget *actions_box;                                // "auto detect" + "set from vectorscope" row
   GtkWidget *num_custom_nodes_slider;                    // node count (custom mode only)
@@ -87,7 +89,8 @@ typedef struct dt_iop_colorharmonizer_gui_data_t
 
 typedef struct dt_iop_colorharmonizer_global_data_t
 {
-  int kernel_colorharmonizer;
+  int kernel_colorharmonizer_map;
+  int kernel_colorharmonizer_apply;
 } dt_iop_colorharmonizer_global_data_t;
 
 const char *name()
@@ -229,6 +232,17 @@ int legacy_params(dt_iop_module_t *self,
     *new_version     = 5;
     return 0;
   }
+  if(old_version == 5)
+  {
+    dt_iop_colorharmonizer_params_t *n = malloc(sizeof(dt_iop_colorharmonizer_params_t));
+    memcpy(n, old_params, sizeof(dt_iop_colorharmonizer_params_t) - sizeof(float));
+    n->smoothing = 0.0f;
+
+    *new_params      = n;
+    *new_params_size = sizeof(dt_iop_colorharmonizer_params_t);
+    *new_version     = 6;
+    return 0;
+  }
   return 1;
 }
 
@@ -240,24 +254,19 @@ void commit_params(dt_iop_module_t *self,
   memcpy(piece->data, p1, self->params_size);
 }
 
-// Compute a Gaussian-weighted hue shift toward all harmony nodes.
+// Compute a hue shift toward the nearest harmony node, scaled by Gaussian proximity.
 //
-// Rather than snapping to the single nearest node (which creates a hard zone
-// boundary at the angular midpoint between adjacent nodes — visible as harsh
-// colour transitions in smooth gradients), every node contributes a weighted
-// pull whose strength decays smoothly with angular distance.
-// Pull the pixel hue toward the nearest harmony node.
-// Returns a hue delta scaled by the Gaussian proximity to that node.
+// We use the nearest-node's angular difference (diff_winning) multiplied by
+// the peak Gaussian weight (max_w). This ensures:
+//   - A pixel already at a node gets zero shift (diff_winning = 0).
+//   - A pixel far from all nodes gets near-zero shift (max_w ≈ 0).
+//   - The correction magnitude tapers smoothly as the pixel moves away from its node.
 //
 //   Narrow zone (< 1): Gaussian drops off quickly → only hues very close to a
 //                       node are attracted; distant hues are barely shifted.
 //   Default zone (1):  Gaussian tapers to ~14 % at the midpoint between nodes.
 //   Wide zone   (> 1): Gaussian stays high across the full hue circle → broad,
 //                       global correction; all hues are pulled noticeably.
-//
-// Using the nearest-node approach (max weight) rather than a weighted average
-// avoids the cancellation artefact that occurs when opposing nodes (e.g.
-// complementary) pull in opposite directions and nearly neutralize each other.
 static inline float get_weighted_hue_shift(float px_hue, const float *nodes, int num_nodes,
                                            float zone_width_factor,
                                            int *out_winning_idx, float *out_max_weight)
@@ -265,9 +274,9 @@ static inline float get_weighted_hue_shift(float px_hue, const float *nodes, int
   const float sigma = zone_width_factor * 0.5f / (float)num_nodes;
   const float inv_2sigma2 = 1.0f / (2.0f * sigma * sigma);
 
-  float max_weight = 0.0f;
-  float best_diff  = 0.0f;
+  float max_w       = 0.0f;
   int   winning_idx = 0;
+  float diff_winning = 0.0f;
 
   for(int i = 0; i < num_nodes; i++)
   {
@@ -275,25 +284,24 @@ static inline float get_weighted_hue_shift(float px_hue, const float *nodes, int
     if(d > 0.5f) d = 1.0f - d;
 
     const float w = expf(-d * d * inv_2sigma2);
+    float diff = nodes[i] - px_hue;
+    if(diff > 0.5f)       diff -= 1.0f;
+    else if(diff < -0.5f) diff += 1.0f;
 
-    if(w > max_weight)
+    if(w > max_w)
     {
-      max_weight  = w;
+      max_w       = w;
       winning_idx = i;
-      float diff = nodes[i] - px_hue;
-      if(diff > 0.5f)       diff -= 1.0f;
-      else if(diff < -0.5f) diff += 1.0f;
-      best_diff = diff;
+      diff_winning = diff;
     }
   }
 
   if(out_winning_idx) *out_winning_idx = winning_idx;
-  if(out_max_weight)  *out_max_weight  = max_weight;
+  if(out_max_weight)  *out_max_weight  = max_w;
 
-  // max_weight acts as a proximity gate:
-  //   wide zone  → high weight for all pixels  → broad effect
-  //   narrow zone → low weight far from nodes  → selective effect
-  return max_weight * best_diff;
+  // Shift is proportional to the angular distance from the nearest node.
+  // When the pixel is exactly at a node (diff_winning = 0), the shift is zero.
+  return diff_winning * max_w;
 }
 
 static inline float wrap_hue(float h)
@@ -379,6 +387,62 @@ static inline void get_harmony_nodes(dt_iop_colorharmonizer_rule_t rule, float a
   }
 }
 
+// Gaussian blur helper (copied from colorequal).  Handles arbitrary channel counts.
+static void _mean_gaussian(float *const buf, int width, int height, int ch, float sigma)
+{
+  const float range = 1.0e9f;
+  const dt_aligned_pixel_t max = { range, range, range, range };
+  const dt_aligned_pixel_t min = { -range, -range, -range, -range };
+  dt_gaussian_t *g = dt_gaussian_init(width, height, ch, max, min, sigma, DT_IOP_GAUSSIAN_ZERO);
+  if(!g) return;
+  if(ch == 4) dt_gaussian_blur_4c(g, buf, buf);
+  else        dt_gaussian_blur(g, buf, buf);
+  dt_gaussian_free(g);
+}
+
+
+static void _update_histogram(dt_iop_module_t *self, dt_dev_pixelpipe_iop_t *piece, const float *ivoid, const dt_iop_roi_t *roi_in)
+{
+  if(!self->gui_data || !((piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) == DT_DEV_PIXELPIPE_PREVIEW))
+    return;
+
+  dt_iop_colorharmonizer_gui_data_t *g = self->gui_data;
+  const dt_iop_order_iccprofile_info_t *const work_profile = dt_ioppr_get_pipe_work_profile_info(piece->pipe);
+  if(!work_profile) return;
+
+  const int ch = piece->colors;
+  const float L_white = Y_to_dt_UCS_L_star(1.0f);
+  float local_histo[COLORHARMONIZER_HUE_BINS] = { 0.0f };
+
+  for(int j = 0; j < roi_in->height; j++)
+  {
+    const float *src = ((const float *)ivoid) + (size_t)ch * roi_in->width * j;
+    for(int i = 0; i < roi_in->width; i++, src += ch)
+    {
+      dt_aligned_pixel_t px_h, px_xyz_h, px_xyz_d65_h, px_xyY_h, px_JCH_h;
+      for_each_channel(c) px_h[c] = fmaxf(src[c], 0.0f);
+      px_h[3] = 0.0f;
+      dt_apply_transposed_color_matrix(px_h, work_profile->matrix_in_transposed, px_xyz_h);
+      XYZ_D50_to_D65(px_xyz_h, px_xyz_d65_h);
+      dt_D65_XYZ_to_xyY(px_xyz_d65_h, px_xyY_h);
+      xyY_to_dt_UCS_JCH(px_xyY_h, L_white, px_JCH_h);
+
+      const float chroma_h = px_JCH_h[1];
+      if(chroma_h > 0.01f)
+      {
+        const float hue_h = (px_JCH_h[2] + M_PI_F) / (2.f * M_PI_F);
+        const int bin = (int)(hue_h * COLORHARMONIZER_HUE_BINS) % COLORHARMONIZER_HUE_BINS;
+        local_histo[bin] += chroma_h;
+      }
+    }
+  }
+
+  g_mutex_lock(&g->histogram_lock);
+  memcpy(g->hue_histogram, local_histo, sizeof(local_histo));
+  g->histogram_valid = TRUE;
+  g_mutex_unlock(&g->histogram_lock);
+}
+
 void process(dt_iop_module_t *self,
              dt_dev_pixelpipe_iop_t *piece,
              const void *const ivoid,
@@ -392,114 +456,119 @@ void process(dt_iop_module_t *self,
   if(!dt_iop_have_required_input_format(4, self, piece->colors, ivoid, ovoid, roi_in, roi_out))
     return;
 
-  // Pre-calculate target nodes based on the harmony rule.
   float nodes[COLORHARMONIZER_MAX_NODES] = {0};
   int num_nodes = 1;
   get_harmony_nodes(p->rule, p->anchor_hue, p->custom_hue, p->num_custom_nodes, nodes, &num_nodes);
 
-  // To convert pipeline working RGB space to XYZ, we need the matrix
   const dt_iop_order_iccprofile_info_t *const work_profile = dt_ioppr_get_pipe_work_profile_info(piece->pipe);
   if(!work_profile) return;
 
   const float L_white = Y_to_dt_UCS_L_star(1.0f);
 
+  // Allocate per-pixel correction maps for the smoothing pass.
+  const size_t npx = (size_t)roi_out->width * roi_out->height;
+  float *hue_delta = dt_alloc_align_float(npx);
+  float *sat_delta = dt_alloc_align_float(npx);
+  if(!hue_delta || !sat_delta)
+  {
+    dt_free_align(hue_delta);
+    dt_free_align(sat_delta);
+    return;
+  }
+
+  // Pass 1: compute per-pixel corrections into temporary maps.
   DT_OMP_FOR()
   for(int j = 0; j < roi_out->height; j++)
   {
-    const float *in = ((const float *)ivoid) + (size_t)ch * roi_in->width * j;
-    float *out = ((float *)ovoid) + (size_t)ch * roi_out->width * j;
+    const float *in  = ((const float *)ivoid) + (size_t)ch * roi_in->width * j;
+    const size_t row = (size_t)j * roi_out->width;
 
-    for(int i = 0; i < roi_out->width; i++, in += ch, out += ch)
+    for(int i = 0; i < roi_out->width; i++, in += ch)
     {
-      // 1. Pipeline RGB -> XYZ
       dt_aligned_pixel_t px_rgb, px_xyz;
-      for_each_channel(c) px_rgb[c] = fmaxf(in[c], 0.0f); // Ensure positive
+      for_each_channel(c) px_rgb[c] = fmaxf(in[c], 0.0f);
       px_rgb[3] = 0.0f;
       dt_apply_transposed_color_matrix(px_rgb, work_profile->matrix_in_transposed, px_xyz);
 
-      // 2. XYZ (D50) -> XYZ (D65) -> xyY -> darktable UCS JCH
       dt_aligned_pixel_t px_xyz_d65, px_xyY, px_JCH;
       XYZ_D50_to_D65(px_xyz, px_xyz_d65);
       dt_D65_XYZ_to_xyY(px_xyz_d65, px_xyY);
       xyY_to_dt_UCS_JCH(px_xyY, L_white, px_JCH);
 
-      // Hue: JCH[2] is in [-π, π]; normalize to [0, 1) for all internal arithmetic
-      // Chroma: JCH[1]
-      float hue = (px_JCH[2] + M_PI_F) / (2.f * M_PI_F);
-      float chroma = px_JCH[1];
+      const float hue    = (px_JCH[2] + M_PI_F) / (2.f * M_PI_F);
 
-      // Protect neutrals: reduce effect where chroma is low.
-      // Hyperbolic gate: chroma_weight → 0 for C << cutoff, → 1 for C >> cutoff.
-      // protect_neutral = 0 -> cutoff = 0, full effect on all pixels
-      // protect_neutral = 1 -> cutoff = 0.03, only near-neutrals (C < 0.03) are shielded;
-      //   vivid colors (C ≈ 0.3+) still receive ≥ 91 % of the effect.
-      const float t = p->protect_neutral;
-      const float cutoff = t * t * t * 0.03f;
-      const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
-
-      // Soft weighted pull toward harmony nodes (smooth across zone boundaries)
       int   winning_idx = 0;
       float max_weight  = 0.0f;
       const float hue_shift = get_weighted_hue_shift(hue, nodes, num_nodes, p->zone_width,
                                                      &winning_idx, &max_weight);
-      const float pull_amount = p->effect_strength * chroma_weight;
-      float new_hue = wrap_hue(hue + hue_shift * pull_amount);
+      // Saturation: apply the winning node's adjustment, scaled by Gaussian proximity.
+      // At the node (max_weight = 1), this gives exactly the configured saturation.
+      // Far from all nodes (max_weight ≈ 0), the saturation is unchanged.
+      const size_t k = row + i;
+      hue_delta[k]   = hue_shift;
+      sat_delta[k]   = (p->node_saturation[winning_idx] - 1.0f) * max_weight;
+    }
+  }
 
-      // Per-node saturation: blend toward node_saturation[winner], gated by
-      // node proximity (max_weight) and chroma (protect neutral).
-      const float sat_target = p->node_saturation[winning_idx];
-      const float sat_factor = 1.0f + (sat_target - 1.0f) * max_weight * chroma_weight;
-      px_JCH[1] = fmaxf(chroma * sat_factor, 0.0f);
+  // Gaussian blur: smooth corrections spatially to soften zone-boundary transitions.
+  // Scale sigma with zone_width: wider zones create larger corrections that
+  // span more of the hue wheel and need proportionally more spatial smoothing.
+  if(p->smoothing > 0.0f)
+  {
+    const float sigma = p->smoothing * fmaxf(1.5f, 8.0f * roi_in->scale / piece->iscale)
+                        * fmaxf(1.0f, p->zone_width);
+    _mean_gaussian(hue_delta, roi_out->width, roi_out->height, 1, sigma);
+    _mean_gaussian(sat_delta, roi_out->width, roi_out->height, 1, sigma);
+  }
 
-      // 3. UCS JCH -> xyY -> XYZ (D65) -> XYZ (D50)
-      px_JCH[2] = new_hue * 2.f * M_PI_F - M_PI_F;  // [0, 1) -> [-π, π]
+  // Pass 2: apply smoothed corrections to produce output.
+  DT_OMP_FOR()
+  for(int j = 0; j < roi_out->height; j++)
+  {
+    const float *in  = ((const float *)ivoid) + (size_t)ch * roi_in->width  * j;
+    float       *out = ((float *)ovoid)        + (size_t)ch * roi_out->width * j;
+    const size_t row = (size_t)j * roi_out->width;
+
+    for(int i = 0; i < roi_out->width; i++, in += ch, out += ch)
+    {
+      dt_aligned_pixel_t px_rgb, px_xyz;
+      for_each_channel(c) px_rgb[c] = fmaxf(in[c], 0.0f);
+      px_rgb[3] = 0.0f;
+      dt_apply_transposed_color_matrix(px_rgb, work_profile->matrix_in_transposed, px_xyz);
+
+      dt_aligned_pixel_t px_xyz_d65, px_xyY, px_JCH;
+      XYZ_D50_to_D65(px_xyz, px_xyz_d65);
+      dt_D65_XYZ_to_xyY(px_xyz_d65, px_xyY);
+      xyY_to_dt_UCS_JCH(px_xyY, L_white, px_JCH);
+
+      const float hue    = (px_JCH[2] + M_PI_F) / (2.f * M_PI_F);
+      const float chroma = px_JCH[1];
+
+      const float t             = p->protect_neutral;
+      const float cutoff        = t * t * t * 0.03f;
+      const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
+
+      const size_t k     = row + i;
+      const float new_hue = wrap_hue(hue + hue_delta[k] * p->effect_strength * chroma_weight);
+      px_JCH[1] = fmaxf(chroma * (1.0f + sat_delta[k] * chroma_weight), 0.0f);
+      px_JCH[2] = new_hue * 2.f * M_PI_F - M_PI_F;
+
       dt_UCS_JCH_to_xyY(px_JCH, L_white, px_xyY);
       dt_xyY_to_XYZ(px_xyY, px_xyz_d65);
       XYZ_D65_to_D50(px_xyz_d65, px_xyz);
 
-      // 4. XYZ -> Pipeline RGB
       dt_aligned_pixel_t px_rgb_out;
       dt_apply_transposed_color_matrix(px_xyz, work_profile->matrix_out_transposed, px_rgb_out);
       for_each_channel(c) out[c] = px_rgb_out[c];
-      out[3] = in[3]; // Copy alpha
+      out[3] = in[3];
     }
   }
+
+  dt_free_align(hue_delta);
+  dt_free_align(sat_delta);
 
   // Build a chroma-weighted hue histogram from the input for auto-detection.
-  // Runs only on the preview pipe (small, representative, updated frequently).
-  if(self->gui_data && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) == DT_DEV_PIXELPIPE_PREVIEW)
-  {
-    dt_iop_colorharmonizer_gui_data_t *g = self->gui_data;
-    float local_histo[COLORHARMONIZER_HUE_BINS] = { 0.0f };
-
-    for(int j = 0; j < roi_in->height; j++)
-    {
-      const float *src = ((const float *)ivoid) + (size_t)ch * roi_in->width * j;
-      for(int i = 0; i < roi_in->width; i++, src += ch)
-      {
-        dt_aligned_pixel_t px_h, px_xyz_h, px_xyz_d65_h, px_xyY_h, px_JCH_h;
-        for_each_channel(c) px_h[c] = fmaxf(src[c], 0.0f);
-        px_h[3] = 0.0f;
-        dt_apply_transposed_color_matrix(px_h, work_profile->matrix_in_transposed, px_xyz_h);
-        XYZ_D50_to_D65(px_xyz_h, px_xyz_d65_h);
-        dt_D65_XYZ_to_xyY(px_xyz_d65_h, px_xyY_h);
-        xyY_to_dt_UCS_JCH(px_xyY_h, L_white, px_JCH_h);
-
-        const float chroma_h = px_JCH_h[1];
-        if(chroma_h > 0.01f)
-        {
-          const float hue_h = (px_JCH_h[2] + M_PI_F) / (2.f * M_PI_F);
-          const int bin = (int)(hue_h * COLORHARMONIZER_HUE_BINS) % COLORHARMONIZER_HUE_BINS;
-          local_histo[bin] += chroma_h;
-        }
-      }
-    }
-
-    g_mutex_lock(&g->histogram_lock);
-    memcpy(g->hue_histogram, local_histo, sizeof(local_histo));
-    g->histogram_valid = TRUE;
-    g_mutex_unlock(&g->histogram_lock);
-  }
+  _update_histogram(self, piece, ivoid, roi_in);
 }
 
 void init(dt_iop_module_t *self)
@@ -515,6 +584,7 @@ void init(dt_iop_module_t *self)
   p->num_custom_nodes = 4;
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
     p->node_saturation[i] = 1.0f;
+  p->smoothing = 0.0f;
   memcpy(self->params, self->default_params, self->params_size);
 }
 
@@ -528,18 +598,35 @@ void init_global(dt_iop_module_so_t *self)
   const int program = 40; // colorharmonizer.cl in programs.conf
   dt_iop_colorharmonizer_global_data_t *gd = malloc(sizeof(dt_iop_colorharmonizer_global_data_t));
   self->data = gd;
-  gd->kernel_colorharmonizer = dt_opencl_create_kernel(program, "colorharmonizer");
+  gd->kernel_colorharmonizer_map    = dt_opencl_create_kernel(program, "colorharmonizer_map");
+  gd->kernel_colorharmonizer_apply  = dt_opencl_create_kernel(program, "colorharmonizer_apply");
 }
 
 void cleanup_global(dt_iop_module_so_t *self)
 {
   dt_iop_colorharmonizer_global_data_t *gd = self->data;
-  dt_opencl_free_kernel(gd->kernel_colorharmonizer);
+  dt_opencl_free_kernel(gd->kernel_colorharmonizer_map);
+  dt_opencl_free_kernel(gd->kernel_colorharmonizer_apply);
   free(self->data);
   self->data = NULL;
 }
 
 #ifdef HAVE_OPENCL
+// OpenCL Gaussian blur helper (mirrors _mean_gaussian for GPU buffers).
+static int _mean_gaussian_cl(const int devid, cl_mem buf,
+                              int width, int height, int ch, float sigma)
+{
+  const float range = 1.0e9f;
+  const dt_aligned_pixel_t max = { range, range, range, range };
+  const dt_aligned_pixel_t min = { -range, -range, -range, -range };
+  dt_gaussian_cl_t *g = dt_gaussian_init_cl(devid, width, height, ch, max, min, sigma,
+                                            DT_IOP_GAUSSIAN_ZERO);
+  if(!g) return DT_OPENCL_PROCESS_CL;
+  const cl_int err = dt_gaussian_blur_cl_buffer(g, buf, buf);
+  dt_gaussian_free_cl(g);
+  return err;
+}
+
 int process_cl(dt_iop_module_t *self,
                dt_dev_pixelpipe_iop_t *piece,
                cl_mem dev_in, cl_mem dev_out,
@@ -554,52 +641,84 @@ int process_cl(dt_iop_module_t *self,
   if(piece->colors != 4)
     return err;
 
-  const int devid = piece->pipe->devid;
+  const int devid  = piece->pipe->devid;
   const int width  = roi_out->width;
   const int height = roi_out->height;
 
   const dt_iop_order_iccprofile_info_t *const work_profile = dt_ioppr_get_pipe_work_profile_info(piece->pipe);
   if(!work_profile) return err;
 
-  // Premultiply: RGB_pipeline -> XYZ_D65 = XYZ_D50_to_D65 @ RGB_to_XYZ_D50
-  dt_colormatrix_t input_matrix;
-  dt_colormatrix_mul(input_matrix, XYZ_D50_to_D65_CAT16, work_profile->matrix_in);
-
-  // Premultiply: XYZ_D65 -> RGB_pipeline = XYZ_D50_to_RGB @ XYZ_D65_to_D50
-  dt_colormatrix_t output_matrix;
+  dt_colormatrix_t input_matrix, output_matrix;
+  dt_colormatrix_mul(input_matrix,  XYZ_D50_to_D65_CAT16, work_profile->matrix_in);
   dt_colormatrix_mul(output_matrix, work_profile->matrix_out, XYZ_D65_to_D50_CAT16);
 
-  cl_mem input_matrix_cl  = dt_opencl_copy_host_to_device_constant(devid, 12 * sizeof(float), input_matrix);
-  cl_mem output_matrix_cl = dt_opencl_copy_host_to_device_constant(devid, 12 * sizeof(float), output_matrix);
-
-  // Harmony nodes
   float nodes[COLORHARMONIZER_MAX_NODES] = { 0.f };
   int num_nodes = 1;
   get_harmony_nodes(p->rule, p->anchor_hue, p->custom_hue, p->num_custom_nodes, nodes, &num_nodes);
-  cl_mem nodes_cl = dt_opencl_copy_host_to_device_constant(devid, COLORHARMONIZER_MAX_NODES * sizeof(float), nodes);
   float node_saturation[COLORHARMONIZER_MAX_NODES];
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++) node_saturation[i] = p->node_saturation[i];
+
+  cl_mem input_matrix_cl    = dt_opencl_copy_host_to_device_constant(devid, 12 * sizeof(float), input_matrix);
+  cl_mem output_matrix_cl   = dt_opencl_copy_host_to_device_constant(devid, 12 * sizeof(float), output_matrix);
+  cl_mem nodes_cl           = dt_opencl_copy_host_to_device_constant(devid, COLORHARMONIZER_MAX_NODES * sizeof(float), nodes);
   cl_mem node_saturation_cl = dt_opencl_copy_host_to_device_constant(devid, COLORHARMONIZER_MAX_NODES * sizeof(float), node_saturation);
 
-  if(input_matrix_cl == NULL || output_matrix_cl == NULL || nodes_cl == NULL || node_saturation_cl == NULL)
+  // Correction map buffer (float2 per pixel: hue_delta, sat_delta).
+  const size_t f2sz = (size_t)width * height * 2 * sizeof(float);
+  cl_mem p_cl = dt_opencl_alloc_device_buffer(devid, f2sz);
+
+  if(!input_matrix_cl || !output_matrix_cl || !nodes_cl || !node_saturation_cl || !p_cl)
   {
     err = CL_MEM_OBJECT_ALLOCATION_FAILURE;
     goto error;
   }
 
-  err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_colorharmonizer, width, height,
-    CLARG(dev_in), CLARG(dev_out),
+  // Step 1: compute per-pixel correction maps.
+  err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_colorharmonizer_map, width, height,
+    CLARG(dev_in),
+    CLARG(p_cl),
     CLARG(width), CLARG(height),
-    CLARG(input_matrix_cl), CLARG(output_matrix_cl),
+    CLARG(input_matrix_cl),
     CLARG(nodes_cl), CLARG(num_nodes),
     CLARG(p->zone_width), CLARG(p->effect_strength), CLARG(p->protect_neutral),
     CLARG(node_saturation_cl));
+  if(err != CL_SUCCESS) goto error;
+
+  // Step 2: Gaussian-blur corrections spatially.
+  if(p->smoothing > 0.0f)
+  {
+    const float sigma = p->smoothing * fmaxf(1.5f, 8.0f * roi_in->scale / piece->iscale)
+                        * fmaxf(1.0f, p->zone_width);
+    if((err = _mean_gaussian_cl(devid, p_cl, width, height, 2, sigma)) != CL_SUCCESS) goto error;
+  }
+
+  // Step 3: apply smoothed corrections to produce output.
+  err = dt_opencl_enqueue_kernel_2d_args(devid, gd->kernel_colorharmonizer_apply, width, height,
+    CLARG(dev_in), CLARG(dev_out),
+    CLARG(width), CLARG(height),
+    CLARG(input_matrix_cl), CLARG(output_matrix_cl),
+    CLARG(p_cl),
+    CLARG(p->effect_strength), CLARG(p->protect_neutral));
+
+  if(err == CL_SUCCESS && self->gui_data && (piece->pipe->type & DT_DEV_PIXELPIPE_PREVIEW) == DT_DEV_PIXELPIPE_PREVIEW)
+  {
+    float *host_in = dt_alloc_align_float((size_t)width * height * 4);
+    if(host_in)
+    {
+      if(dt_opencl_copy_device_to_host(devid, host_in, dev_in, width, height, 4 * sizeof(float)) == CL_SUCCESS)
+      {
+        _update_histogram(self, piece, host_in, roi_in);
+      }
+      dt_free_align(host_in);
+    }
+  }
 
 error:
   dt_opencl_release_mem_object(input_matrix_cl);
   dt_opencl_release_mem_object(output_matrix_cl);
   dt_opencl_release_mem_object(nodes_cl);
   dt_opencl_release_mem_object(node_saturation_cl);
+  dt_opencl_release_mem_object(p_cl);
   return err;
 }
 #endif
@@ -726,6 +845,7 @@ static void _push_to_vectorscope(dt_iop_module_t *self)
 
   dt_lib_histogram_set_harmony(darktable.lib, &guide);
   dt_lib_histogram_set_scope(darktable.lib, 0); // 0 = DT_LIB_HISTOGRAM_SCOPE_VECTORSCOPE
+  dt_lib_histogram_set_type(darktable.lib, 2);  // 2 = DT_LIB_HISTOGRAM_VECTORSCOPE_RYB
 }
 
 static void _sync_to_vectorscope_toggled(GtkToggleButton *button, dt_iop_module_t *self)
@@ -828,6 +948,30 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
   dt_iop_colorharmonizer_params_t *p = self->params;
   const gboolean is_custom = (p->rule == DT_COLORHARMONIZER_CUSTOM);
 
+  if(widget == g->rule && is_custom && previous)
+  {
+    dt_iop_colorharmonizer_rule_t old_rule = *(dt_iop_colorharmonizer_rule_t *)previous;
+    if(old_rule != DT_COLORHARMONIZER_CUSTOM)
+    {
+      float nodes[COLORHARMONIZER_MAX_NODES];
+      int num_nodes = 0;
+      get_harmony_nodes(old_rule, p->anchor_hue, NULL, 0, nodes, &num_nodes);
+
+      // Custom mode supports 2-4 nodes.
+      const int target_count = CLAMP(num_nodes, 2, COLORHARMONIZER_MAX_NODES);
+      p->num_custom_nodes = target_count;
+
+      for(int i = 0; i < num_nodes; i++) p->custom_hue[i] = nodes[i];
+      // If we only had 1 node (monochromatic), add a second one at the same hue by default
+      if(num_nodes < 2) p->custom_hue[1] = nodes[0];
+
+      // Sync the count slider
+      ++darktable.gui->reset;
+      dt_bauhaus_slider_set(g->num_custom_nodes_slider, p->num_custom_nodes);
+      --darktable.gui->reset;
+    }
+  }
+
   // Toggle between layouts depending on mode
   gtk_widget_set_visible(g->anchor_hue, !is_custom);
   gtk_widget_set_visible(g->swatches_area, !is_custom);
@@ -881,10 +1025,36 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
   _paint_all_hue_sliders(g);
 
   // Auto-sync rule / anchor hue (or the custom rule selection) to the vectorscope
-  if(widget && (widget == g->rule || widget == g->anchor_hue || widget == g->num_custom_nodes_slider)
-     && g->sync_to_vectorscope
-     && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope)))
-    _push_to_vectorscope(self);
+  if(g->sync_to_vectorscope && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope)))
+  {
+    if(self->enabled)
+    {
+      gboolean is_hue_slider = (widget == g->anchor_hue);
+      if(!is_hue_slider)
+      {
+        for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
+        {
+          if(widget == g->custom_hue_slider[i])
+          {
+            is_hue_slider = TRUE;
+            break;
+          }
+        }
+      }
+
+      if(!widget || widget == g->rule || is_hue_slider || widget == g->num_custom_nodes_slider)
+      {
+        if(!widget) dt_iop_request_focus(self);
+        _push_to_vectorscope(self);
+      }
+    }
+    else if(!widget)
+    {
+      // Clear harmony when module is disabled so vectorscope stays in focus but the guides disappear.
+      dt_color_harmony_guide_t guide = { .type = DT_COLOR_HARMONY_NONE };
+      dt_lib_histogram_set_harmony(darktable.lib, &guide);
+    }
+  }
 }
 
 void gui_update(dt_iop_module_t *self)
@@ -897,6 +1067,7 @@ void gui_update(dt_iop_module_t *self)
   dt_bauhaus_slider_set(g->effect_strength, p->effect_strength);
   dt_bauhaus_slider_set(g->protect_neutral, p->protect_neutral);
   dt_bauhaus_slider_set(g->zone_width, p->zone_width);
+  dt_bauhaus_slider_set(g->smoothing, p->smoothing);
 
   ++darktable.gui->reset;
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
@@ -961,6 +1132,7 @@ void color_picker_apply(dt_iop_module_t *self, GtkWidget *picker, dt_dev_pixelpi
     }
 
     dt_dev_add_history_item(self->dev, self, TRUE);
+    gui_changed(self, g->anchor_hue, NULL);
     return;
   }
 
@@ -974,6 +1146,7 @@ void color_picker_apply(dt_iop_module_t *self, GtkWidget *picker, dt_dev_pixelpi
       --darktable.gui->reset;
       gtk_widget_queue_draw(g->custom_swatch[i]);
       dt_dev_add_history_item(self->dev, self, TRUE);
+      gui_changed(self, g->custom_hue_slider[i], NULL);
       return;
     }
   }
@@ -1162,12 +1335,15 @@ void gui_init(dt_iop_module_t *self)
   gtk_box_pack_start(GTK_BOX(self->widget),
                      dt_ui_section_label_new(_("Rule controls")), FALSE, FALSE, 0);
 
-  g->anchor_hue = dt_color_picker_new(self, DT_COLOR_PICKER_AREA,
+  g->anchor_hue = dt_color_picker_new(self, DT_COLOR_PICKER_POINT_AREA,
                                       dt_bauhaus_slider_from_params(self, "anchor_hue"));
   dt_bauhaus_slider_set_feedback(g->anchor_hue, 0);
   dt_bauhaus_slider_set_format(g->anchor_hue, "°");
   dt_bauhaus_slider_set_factor(g->anchor_hue, 360.f);
   dt_bauhaus_slider_set_digits(g->anchor_hue, 1);
+  dt_bauhaus_widget_set_quad_tooltip(g->anchor_hue,
+    _("pick hue from image.\n"
+      "ctrl+click to select an area"));
   gtk_widget_set_tooltip_text(g->anchor_hue,
     _("the primary 'key' hue of the harmony — the first node from which all others are derived.\n"
       "\n"
@@ -1227,7 +1403,10 @@ void gui_init(dt_iop_module_t *self)
         "use the color picker to sample the desired hue from the image."));
 
     // Wrap slider with color picker quad button
-    g->custom_hue_slider[i] = dt_color_picker_new(self, DT_COLOR_PICKER_AREA, slider);
+    g->custom_hue_slider[i] = dt_color_picker_new(self, DT_COLOR_PICKER_POINT_AREA, slider);
+    dt_bauhaus_widget_set_quad_tooltip(g->custom_hue_slider[i],
+      _("pick hue from image.\n"
+        "ctrl+click to select an area"));
 
     gtk_box_pack_start(GTK_BOX(row), g->custom_hue_slider[i], TRUE, TRUE, 0);
 
@@ -1308,6 +1487,17 @@ void gui_init(dt_iop_module_t *self)
       "the weighting is smooth and hyperbolic — there is no hard cutoff. protection grows\n"
       "gradually from zero and the slider response is distributed evenly across its range."));
 
+  g->smoothing = dt_bauhaus_slider_from_params(self, "smoothing");
+  dt_bauhaus_slider_set_digits(g->smoothing, 2);
+  gtk_widget_set_tooltip_text(g->smoothing,
+    _("controls the intensity of spatial smoothing applied to the correction field.\n"
+      "\n"
+      "0: disable smoothing (recommended) — transitions are handled by smooth interpolation\n"
+      "  in hue space, preserving the maximum amount of image detail.\n"
+      "low values (0.1–0.5): subtle spatial averaging to reduce color noise in shadows.\n"
+      "high values (> 1.0): broad spatial blending; creates a soft, painterly look but may\n"
+      "  blur the grading across image edges, causing some visual separation."));
+
   // Collapsible "Saturation" section — lives below Effect controls
   dt_gui_new_collapsible_section(&g->sat_section,
                                  "plugins/darkroom/colorharmonizer/expand_saturation",
@@ -1346,6 +1536,14 @@ void gui_init(dt_iop_module_t *self)
     gtk_box_pack_start(g->sat_section.container, row, FALSE, FALSE, 0);
     g->sat_row[i] = row;
   }
+}
+
+void gui_focus(dt_iop_module_t *self, gboolean in)
+{
+  dt_iop_colorharmonizer_gui_data_t *g = self->gui_data;
+  if(in && g && self->enabled && g->sync_to_vectorscope
+     && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope)))
+    _push_to_vectorscope(self);
 }
 
 void gui_cleanup(dt_iop_module_t *self)

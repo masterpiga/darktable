@@ -1571,6 +1571,12 @@ void dt_lib_histogram_set_scope(dt_lib_t *lib, int scope)
   lib->proxy.histogram.set_scope(lib->proxy.histogram.module, scope);
 }
 
+void dt_lib_histogram_set_type(dt_lib_t *lib, int type)
+{
+  if(!lib->proxy.histogram.module || !lib->proxy.histogram.set_type) return;
+  lib->proxy.histogram.set_type(lib->proxy.histogram.module, type);
+}
+
 dt_lib_module_t *dt_lib_get_module(const char *name)
 {
   /* hide/show modules as last config */

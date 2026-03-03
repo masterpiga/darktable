@@ -80,6 +80,7 @@ typedef struct dt_lib_t
       void (*get_harmony)(struct dt_lib_module_t *self, dt_color_harmony_guide_t *guide);
       void (*set_harmony)(struct dt_lib_module_t *self, const dt_color_harmony_guide_t *guide);
       void (*set_scope)(struct dt_lib_module_t *self, int scope);
+      void (*set_type)(struct dt_lib_module_t *self, int type);
       gboolean is_linear;
     } histogram;
 
@@ -225,6 +226,9 @@ void dt_lib_histogram_set_harmony(dt_lib_t *lib, const dt_color_harmony_guide_t 
 
 /** set the histogram scope type */
 void dt_lib_histogram_set_scope(dt_lib_t *lib, int scope);
+
+/** set the histogram vectorscope type */
+void dt_lib_histogram_set_type(dt_lib_t *lib, int type);
 
 /* reset color picker pos to default */
 void dt_lib_colorpicker_reset_box_area(dt_pickerbox_t box);

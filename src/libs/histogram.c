@@ -70,6 +70,7 @@ typedef enum dt_lib_histogram_vectorscope_type_t
 static void _lib_histogram_get_harmony(dt_lib_module_t *self, dt_color_harmony_guide_t *guide);
 static void _lib_histogram_set_harmony(dt_lib_module_t *self, const dt_color_harmony_guide_t *guide);
 static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope);
+static void _lib_histogram_set_type(dt_lib_module_t *self, int type);
 
 typedef struct dt_lib_histogram_color_harmony_t
 {
@@ -1036,6 +1037,7 @@ void gui_init(dt_lib_module_t *self)
   darktable.lib->proxy.histogram.get_harmony = _lib_histogram_get_harmony;
   darktable.lib->proxy.histogram.set_harmony = _lib_histogram_set_harmony;
   darktable.lib->proxy.histogram.set_scope = _lib_histogram_set_scope;
+  darktable.lib->proxy.histogram.set_type = _lib_histogram_set_type;
   darktable.lib->proxy.histogram.is_linear =
     d->histogram_scale == DT_LIB_HISTOGRAM_SCALE_LINEAR;
 
@@ -1263,6 +1265,25 @@ static void _lib_histogram_set_scope(dt_lib_module_t *self, int scope)
       d->vectorscope_radius = 0.f;
 
     _scope_type_changed(d);
+  }
+}
+
+static void _lib_histogram_set_type(dt_lib_module_t *self, int type)
+{
+  if(self && type >= 0 && type < DT_LIB_HISTOGRAM_VECTORSCOPE_N)
+  {
+    dt_lib_histogram_t *d = (dt_lib_histogram_t *)self->data;
+    if(d->vectorscope_type == (dt_lib_histogram_vectorscope_type_t)type) return;
+
+    d->vectorscope_type = (dt_lib_histogram_vectorscope_type_t)type;
+    dt_conf_set_string("plugins/darkroom/histogram/vectorscope",
+                       dt_lib_histogram_vectorscope_type_names[d->vectorscope_type]);
+    _vectorscope_view_update(d);
+
+    if(dt_view_get_current() == DT_VIEW_DARKROOM)
+      dt_dev_process_preview(darktable.develop);
+    else
+      dt_control_queue_redraw_center();
   }
 }
 
