@@ -37,7 +37,7 @@
 #define COLORHARMONIZER_HUE_BINS 360
 #define COLORHARMONIZER_MAX_NODES 4
 
-DT_MODULE_INTROSPECTION(4, dt_iop_colorharmonizer_params_t)
+DT_MODULE_INTROSPECTION(5, dt_iop_colorharmonizer_params_t)
 
 typedef enum dt_iop_colorharmonizer_rule_t
 {
@@ -62,6 +62,7 @@ typedef struct dt_iop_colorharmonizer_params_t
   float zone_width;                   // $MIN: 0.25 $MAX: 4.0 $DEFAULT: 1.0 $DESCRIPTION: "effect width"
   float custom_hue[4];               // $MIN: 0.0 $MAX: 1.0 $DEFAULT: 0.0 $DESCRIPTION: "custom node hue"
   int   num_custom_nodes;            // $MIN: 2 $MAX: 4 $DEFAULT: 4 $DESCRIPTION: "active nodes"
+  float node_saturation[4];         // $MIN: 0.0 $MAX: 2.0 $DEFAULT: 1.0 $DESCRIPTION: "node saturation"
 } dt_iop_colorharmonizer_params_t;
 
 typedef struct dt_iop_colorharmonizer_gui_data_t
@@ -75,6 +76,10 @@ typedef struct dt_iop_colorharmonizer_gui_data_t
   GtkWidget *custom_swatch[COLORHARMONIZER_MAX_NODES];   // swatches inside custom rows
   GtkWidget *custom_hue_slider[COLORHARMONIZER_MAX_NODES];
   GtkWidget *custom_row[COLORHARMONIZER_MAX_NODES];
+  GtkWidget *sat_row[COLORHARMONIZER_MAX_NODES];         // saturation rows (swatch + slider)
+  GtkWidget *sat_swatch[COLORHARMONIZER_MAX_NODES];      // hue swatches in saturation section
+  GtkWidget *sat_slider[COLORHARMONIZER_MAX_NODES];      // per-node saturation sliders
+  dt_gui_collapsible_section_t sat_section;              // collapsible "Saturation" section
   float      hue_histogram[COLORHARMONIZER_HUE_BINS];
   gboolean   histogram_valid;
   GMutex     histogram_lock;
@@ -187,10 +192,41 @@ int legacy_params(dt_iop_module_t *self,
     n->zone_width       = o->zone_width;
     for(int i = 0; i < 4; i++) n->custom_hue[i] = o->custom_hue[i];
     n->num_custom_nodes = 4;
+    for(int i = 0; i < 4; i++) n->node_saturation[i] = 1.0f;
 
     *new_params      = n;
     *new_params_size = sizeof(dt_iop_colorharmonizer_params_t);
-    *new_version     = 4;
+    *new_version     = 5;
+    return 0;
+  }
+  if(old_version == 4)
+  {
+    typedef struct
+    {
+      dt_iop_colorharmonizer_rule_t rule;
+      float anchor_hue;
+      float effect_strength;
+      float protect_neutral;
+      float zone_width;
+      float custom_hue[4];
+      int   num_custom_nodes;
+    } v4_params_t;
+
+    const v4_params_t *o = old_params;
+    dt_iop_colorharmonizer_params_t *n = malloc(sizeof(dt_iop_colorharmonizer_params_t));
+
+    n->rule             = o->rule;
+    n->anchor_hue       = o->anchor_hue;
+    n->effect_strength  = o->effect_strength;
+    n->protect_neutral  = o->protect_neutral;
+    n->zone_width       = o->zone_width;
+    for(int i = 0; i < 4; i++) n->custom_hue[i] = o->custom_hue[i];
+    n->num_custom_nodes = o->num_custom_nodes;
+    for(int i = 0; i < 4; i++) n->node_saturation[i] = 1.0f;
+
+    *new_params      = n;
+    *new_params_size = sizeof(dt_iop_colorharmonizer_params_t);
+    *new_version     = 5;
     return 0;
   }
   return 1;
@@ -223,13 +259,15 @@ void commit_params(dt_iop_module_t *self,
 // avoids the cancellation artefact that occurs when opposing nodes (e.g.
 // complementary) pull in opposite directions and nearly neutralize each other.
 static inline float get_weighted_hue_shift(float px_hue, const float *nodes, int num_nodes,
-                                           float zone_width_factor)
+                                           float zone_width_factor,
+                                           int *out_winning_idx, float *out_max_weight)
 {
   const float sigma = zone_width_factor * 0.5f / (float)num_nodes;
   const float inv_2sigma2 = 1.0f / (2.0f * sigma * sigma);
 
   float max_weight = 0.0f;
   float best_diff  = 0.0f;
+  int   winning_idx = 0;
 
   for(int i = 0; i < num_nodes; i++)
   {
@@ -240,13 +278,17 @@ static inline float get_weighted_hue_shift(float px_hue, const float *nodes, int
 
     if(w > max_weight)
     {
-      max_weight = w;
+      max_weight  = w;
+      winning_idx = i;
       float diff = nodes[i] - px_hue;
       if(diff > 0.5f)       diff -= 1.0f;
       else if(diff < -0.5f) diff += 1.0f;
       best_diff = diff;
     }
   }
+
+  if(out_winning_idx) *out_winning_idx = winning_idx;
+  if(out_max_weight)  *out_max_weight  = max_weight;
 
   // max_weight acts as a proximity gate:
   //   wide zone  → high weight for all pixels  → broad effect
@@ -396,9 +438,18 @@ void process(dt_iop_module_t *self,
       const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
 
       // Soft weighted pull toward harmony nodes (smooth across zone boundaries)
-      const float hue_shift = get_weighted_hue_shift(hue, nodes, num_nodes, p->zone_width);
+      int   winning_idx = 0;
+      float max_weight  = 0.0f;
+      const float hue_shift = get_weighted_hue_shift(hue, nodes, num_nodes, p->zone_width,
+                                                     &winning_idx, &max_weight);
       const float pull_amount = p->effect_strength * chroma_weight;
       float new_hue = wrap_hue(hue + hue_shift * pull_amount);
+
+      // Per-node saturation: blend toward node_saturation[winner], gated by
+      // node proximity (max_weight) and chroma (protect neutral).
+      const float sat_target = p->node_saturation[winning_idx];
+      const float sat_factor = 1.0f + (sat_target - 1.0f) * max_weight * chroma_weight;
+      px_JCH[1] = fmaxf(chroma * sat_factor, 0.0f);
 
       // 3. UCS JCH -> xyY -> XYZ (D65) -> XYZ (D50)
       px_JCH[2] = new_hue * 2.f * M_PI_F - M_PI_F;  // [0, 1) -> [-π, π]
@@ -462,6 +513,8 @@ void init(dt_iop_module_t *self)
   p->custom_hue[2] = 0.5f;
   p->custom_hue[3] = 0.75f;
   p->num_custom_nodes = 4;
+  for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
+    p->node_saturation[i] = 1.0f;
   memcpy(self->params, self->default_params, self->params_size);
 }
 
@@ -524,8 +577,11 @@ int process_cl(dt_iop_module_t *self,
   int num_nodes = 1;
   get_harmony_nodes(p->rule, p->anchor_hue, p->custom_hue, p->num_custom_nodes, nodes, &num_nodes);
   cl_mem nodes_cl = dt_opencl_copy_host_to_device_constant(devid, COLORHARMONIZER_MAX_NODES * sizeof(float), nodes);
+  float node_saturation[COLORHARMONIZER_MAX_NODES];
+  for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++) node_saturation[i] = p->node_saturation[i];
+  cl_mem node_saturation_cl = dt_opencl_copy_host_to_device_constant(devid, COLORHARMONIZER_MAX_NODES * sizeof(float), node_saturation);
 
-  if(input_matrix_cl == NULL || output_matrix_cl == NULL || nodes_cl == NULL)
+  if(input_matrix_cl == NULL || output_matrix_cl == NULL || nodes_cl == NULL || node_saturation_cl == NULL)
   {
     err = CL_MEM_OBJECT_ALLOCATION_FAILURE;
     goto error;
@@ -536,12 +592,14 @@ int process_cl(dt_iop_module_t *self,
     CLARG(width), CLARG(height),
     CLARG(input_matrix_cl), CLARG(output_matrix_cl),
     CLARG(nodes_cl), CLARG(num_nodes),
-    CLARG(p->zone_width), CLARG(p->effect_strength), CLARG(p->protect_neutral));
+    CLARG(p->zone_width), CLARG(p->effect_strength), CLARG(p->protect_neutral),
+    CLARG(node_saturation_cl));
 
 error:
   dt_opencl_release_mem_object(input_matrix_cl);
   dt_opencl_release_mem_object(output_matrix_cl);
   dt_opencl_release_mem_object(nodes_cl);
+  dt_opencl_release_mem_object(node_saturation_cl);
   return err;
 }
 #endif
@@ -745,11 +803,21 @@ static void _custom_hue_changed(GtkWidget *widget, dt_iop_module_t *self)
 
   gtk_widget_queue_draw(g->custom_swatch[idx]);
   gtk_widget_queue_draw(g->node_swatch[idx]);
+  gtk_widget_queue_draw(g->sat_swatch[idx]);
   dt_dev_add_history_item(self->dev, self, TRUE);
 
   if(g->sync_to_vectorscope
      && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope)))
     _push_to_vectorscope(self);
+}
+
+static void _node_saturation_changed(GtkWidget *widget, dt_iop_module_t *self)
+{
+  if(darktable.gui->reset) return;
+  dt_iop_colorharmonizer_params_t *p = self->params;
+  const int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "slider-index"));
+  p->node_saturation[idx] = dt_bauhaus_slider_get(widget);
+  dt_dev_add_history_item(self->dev, self, TRUE);
 }
 
 void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
@@ -766,10 +834,13 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
   gtk_widget_set_visible(g->actions_box, !is_custom);
   gtk_widget_set_visible(g->num_custom_nodes_slider, is_custom);
 
+  int num_nodes = 0;
+
   if(is_custom)
   {
     // Show only the active custom rows
     const int n = CLAMP(p->num_custom_nodes, 2, COLORHARMONIZER_MAX_NODES);
+    num_nodes = n;
     for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
       gtk_widget_set_visible(g->custom_row[i], i < n);
   }
@@ -780,17 +851,21 @@ void gui_changed(dt_iop_module_t *self, GtkWidget *widget, void *previous)
 
     // Show only as many swatches as the rule needs
     float nodes[COLORHARMONIZER_MAX_NODES];
-    int num_nodes = 0;
     get_harmony_nodes(p->rule, p->anchor_hue, NULL, COLORHARMONIZER_MAX_NODES, nodes, &num_nodes);
     for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
       gtk_widget_set_visible(g->node_swatch[i], i < num_nodes);
   }
+
+  // Saturation rows: show one per active harmony node
+  for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
+    gtk_widget_set_visible(g->sat_row[i], i < num_nodes);
 
   // Redraw all swatches (both sets; only the visible ones will paint)
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
   {
     gtk_widget_queue_draw(g->node_swatch[i]);
     gtk_widget_queue_draw(g->custom_swatch[i]);
+    gtk_widget_queue_draw(g->sat_swatch[i]);
   }
 
   // In custom mode, sync slider values to params (they are editable)
@@ -825,9 +900,13 @@ void gui_update(dt_iop_module_t *self)
 
   ++darktable.gui->reset;
   for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
+  {
     dt_bauhaus_slider_set(g->custom_hue_slider[i], p->custom_hue[i]);
+    dt_bauhaus_slider_set(g->sat_slider[i], p->node_saturation[i]);
+  }
   --darktable.gui->reset;
 
+  dt_gui_update_collapsible_section(&g->sat_section);
   gui_changed(self, NULL, NULL);
   dt_iop_color_picker_reset(self, TRUE);
 }
@@ -1054,6 +1133,17 @@ void gui_init(dt_iop_module_t *self)
   dt_iop_colorharmonizer_gui_data_t *g = IOP_GUI_ALLOC(colorharmonizer);
   self->widget = dt_gui_vbox();
 
+  // "keep vectorscope in sync" at the very top
+  g->sync_to_vectorscope = gtk_check_button_new_with_label(_("keep vectorscope in sync"));
+  gtk_widget_set_tooltip_text(g->sync_to_vectorscope,
+    _("when enabled, the vectorscope harmony overlay is updated automatically every time\n"
+      "the harmony rule or anchor hue changes in this module.\n"
+      "disable to adjust the module without disturbing the vectorscope display."));
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope), TRUE);
+  gtk_box_pack_start(GTK_BOX(self->widget), g->sync_to_vectorscope, FALSE, FALSE, 0);
+  g_signal_connect(G_OBJECT(g->sync_to_vectorscope), "toggled",
+                   G_CALLBACK(_sync_to_vectorscope_toggled), self);
+
   g->rule = dt_bauhaus_combobox_from_params(self, "rule");
   gtk_widget_set_tooltip_text(g->rule,
     _("harmony rule that defines which hues are considered 'in harmony'.\n"
@@ -1218,16 +1308,44 @@ void gui_init(dt_iop_module_t *self)
       "the weighting is smooth and hyperbolic — there is no hard cutoff. protection grows\n"
       "gradually from zero and the slider response is distributed evenly across its range."));
 
-  // "keep vectorscope in sync" at the bottom
-  g->sync_to_vectorscope = gtk_check_button_new_with_label(_("keep vectorscope in sync"));
-  gtk_widget_set_tooltip_text(g->sync_to_vectorscope,
-    _("when enabled, the vectorscope harmony overlay is updated automatically every time\n"
-      "the harmony rule or anchor hue changes in this module.\n"
-      "disable to adjust the module without disturbing the vectorscope display."));
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(g->sync_to_vectorscope), TRUE);
-  gtk_box_pack_start(GTK_BOX(self->widget), g->sync_to_vectorscope, FALSE, FALSE, 0);
-  g_signal_connect(G_OBJECT(g->sync_to_vectorscope), "toggled",
-                   G_CALLBACK(_sync_to_vectorscope_toggled), self);
+  // Collapsible "Saturation" section — lives below Effect controls
+  dt_gui_new_collapsible_section(&g->sat_section,
+                                 "plugins/darkroom/colorharmonizer/expand_saturation",
+                                 _("Saturation"),
+                                 GTK_BOX(self->widget),
+                                 DT_ACTION(self));
+
+  static const char *sat_labels[] = { N_("hue 1"), N_("hue 2"), N_("hue 3"), N_("hue 4") };
+  for(int i = 0; i < COLORHARMONIZER_MAX_NODES; i++)
+  {
+    GtkWidget *row = dt_gui_hbox();
+
+    g->sat_swatch[i] = gtk_drawing_area_new();
+    gtk_widget_set_size_request(g->sat_swatch[i],
+                                DT_PIXEL_APPLY_DPI(24), DT_PIXEL_APPLY_DPI(24));
+    g_object_set_data(G_OBJECT(g->sat_swatch[i]), "swatch-index", GINT_TO_POINTER(i));
+    g_signal_connect(G_OBJECT(g->sat_swatch[i]), "draw",
+                     G_CALLBACK(_swatch_draw_callback), self);
+    gtk_box_pack_start(GTK_BOX(row), g->sat_swatch[i], FALSE, FALSE, 0);
+
+    GtkWidget *slider = dt_bauhaus_slider_new_with_range(self, 0.0f, 2.0f, 0.01f, 1.0f, 2);
+    dt_bauhaus_widget_set_label(slider, NULL, _(sat_labels[i]));
+    dt_bauhaus_slider_set_format(slider, "%%");
+    dt_bauhaus_slider_set_factor(slider, 100.f);
+    g_object_set_data(G_OBJECT(slider), "slider-index", GINT_TO_POINTER(i));
+    g_signal_connect(G_OBJECT(slider), "value-changed",
+                     G_CALLBACK(_node_saturation_changed), self);
+    gtk_widget_set_tooltip_text(slider,
+      _("saturation multiplier for colors near this harmony node.\n"
+        "100% = unchanged. below 100% desaturates; above 100% boosts saturation.\n"
+        "the effect is weighted by the pixel's proximity to this node\n"
+        "and respects the 'protect neutral' setting."));
+    g->sat_slider[i] = slider;
+
+    gtk_box_pack_start(GTK_BOX(row), slider, TRUE, TRUE, 0);
+    gtk_box_pack_start(g->sat_section.container, row, FALSE, FALSE, 0);
+    g->sat_row[i] = row;
+  }
 }
 
 void gui_cleanup(dt_iop_module_t *self)

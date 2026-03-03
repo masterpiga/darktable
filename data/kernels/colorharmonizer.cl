@@ -30,16 +30,20 @@ static inline float wrap_hue(float h)
 // Pull the pixel hue toward the nearest harmony node, scaled by Gaussian proximity.
 // Wide zone → high weight for all pixels → broad effect.
 // Narrow zone → low weight far from nodes → selective effect.
+// Also returns the winning node index and its max Gaussian weight via output pointers.
 static inline float get_weighted_hue_shift(const float px_hue,
                                            constant const float *const nodes,
                                            const int num_nodes,
-                                           const float zone_width_factor)
+                                           const float zone_width_factor,
+                                           int *out_winning_idx,
+                                           float *out_max_weight)
 {
   const float sigma = zone_width_factor * 0.5f / (float)num_nodes;
   const float inv_2sigma2 = 1.0f / (2.0f * sigma * sigma);
 
   float max_weight = 0.0f;
   float best_diff  = 0.0f;
+  int   winning_idx = 0;
 
   for(int i = 0; i < num_nodes; i++)
   {
@@ -50,7 +54,8 @@ static inline float get_weighted_hue_shift(const float px_hue,
 
     if(w > max_weight)
     {
-      max_weight = w;
+      max_weight  = w;
+      winning_idx = i;
       float diff = nodes[i] - px_hue;
       if(diff > 0.5f)       diff -= 1.0f;
       else if(diff < -0.5f) diff += 1.0f;
@@ -58,6 +63,8 @@ static inline float get_weighted_hue_shift(const float px_hue,
     }
   }
 
+  *out_winning_idx = winning_idx;
+  *out_max_weight  = max_weight;
   return max_weight * best_diff;
 }
 
@@ -71,7 +78,8 @@ kernel void colorharmonizer(read_only image2d_t in,
                             const int num_nodes,
                             const float zone_width,
                             const float effect_strength,
-                            const float protect_neutral)
+                            const float protect_neutral,
+                            constant const float *const node_saturation)
 {
   const int x = get_global_id(0);
   const int y = get_global_id(1);
@@ -97,9 +105,17 @@ kernel void colorharmonizer(read_only image2d_t in,
   const float chroma_weight = chroma / (chroma + cutoff + 1e-5f);
 
   // 4. Weighted hue shift toward harmony nodes
-  const float hue_shift  = get_weighted_hue_shift(hue, nodes, num_nodes, zone_width);
+  int   winning_idx = 0;
+  float max_weight  = 0.0f;
+  const float hue_shift  = get_weighted_hue_shift(hue, nodes, num_nodes, zone_width,
+                                                  &winning_idx, &max_weight);
   const float pull_amount = effect_strength * chroma_weight;
   JCH.z = wrap_hue(hue + hue_shift * pull_amount) * 2.0f * M_PI_F - M_PI_F;
+
+  // Per-node saturation modulation
+  const float sat_target = node_saturation[winning_idx];
+  const float sat_factor = 1.0f + (sat_target - 1.0f) * max_weight * chroma_weight;
+  JCH.y = fmax(JCH.y * sat_factor, 0.0f);
 
   // 5. UCS JCH -> xyY -> XYZ D65
   xyY = dt_UCS_JCH_to_xyY(JCH, L_white);
