@@ -3672,6 +3672,13 @@
     <longdescription/>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/masks/default_operator</name>
+    <type>string</type>
+    <default>automatic</default>
+    <shortdescription>composition operator for newly added shapes</shortdescription>
+    <longdescription>one of: automatic, union, intersection, difference, sum, exclusion. 'automatic' uses sum for brushes and union otherwise.</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/circle/size</name>
     <type>float</type>
     <default>0.05</default>
