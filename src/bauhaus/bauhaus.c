@@ -54,6 +54,7 @@ typedef struct dt_bauhaus_slider_data_t
   float *grad_pos;      // and position of these.
 
   int fill_feedback : 1; // fill the slider with brighter part up to the handle?
+  int checker_gradient : 1; // paint baseline as a checkerboard fading into solid white (opacity/alpha sliders)
 
   const char *format;   // numeric value is printed with this format
   float factor;         // multiplication factor before printing
@@ -185,6 +186,8 @@ static void _combobox_set(dt_bauhaus_widget_t *w,
                           const gboolean mute);
 static void _slider_set_normalized(dt_bauhaus_widget_t *w,
                                    const float pos);
+static float _slider_normalized_to_value(const dt_bauhaus_slider_data_t *d,
+                                         float pos);
 static void _toggle_set(dt_bauhaus_widget_t *w,
                         const gboolean active);
 
@@ -626,10 +629,23 @@ static void _window_motion_handle(GtkWidget *widget,
   const gint ex = root_x - allocation.x;
   const gint ey = root_y - allocation.y;
 
+  // a popup opened via dt_bauhaus_widget_show_popup() at a caller-chosen
+  // position rather than right where the mouse already was (see
+  // _param_row_slider_precise_open in blend_gui.c) can legitimately start
+  // this handler with the pointer more than a normal popup's tolerance away
+  // -- the reject-on-stray-pointer safety net below, and the "hover without
+  // holding a button also drags the value" convenience further down, both
+  // assume the popup opened at the pointer, so for a widget opting out of
+  // that (tagged "dt-bauhaus-static-popup") neither applies: the value only
+  // changes on an actual button-drag/scroll/typed entry, never bare hover.
+  const gboolean static_popup =
+    g_object_get_data(G_OBJECT(w), "dt-bauhaus-static-popup") != NULL;
+
   const int tol = DT_PIXEL_APPLY_DPI(state & GDK_BUTTON1_MASK ? 400 : 50);
-  if(ex < - tol || ex > allocation.width + tol
-     || ey + pop->offcut < - tol
-     || ey + pop->offcut > pop->position.height + tol)
+  if(!static_popup
+     && (ex < - tol || ex > allocation.width + tol
+         || ey + pop->offcut < - tol
+         || ey + pop->offcut > pop->position.height + tol))
   {
     _popup_reject();
     return;
@@ -670,13 +686,29 @@ static void _window_motion_handle(GtkWidget *widget,
       (pop->oldpos, 5.0 * powf(10.0f, -d->digits) / (d->max - d->min) / fabsf(d->factor),
        bh->mouse_x / (width - _widget_get_quad_width(w)), bh->mouse_y / width, ht / width);
     if(state & GDK_BUTTON1_MASK
-       || (bh->mouse_line_distance
+       || (!static_popup && bh->mouse_line_distance
            && ((bh->mouse_line_distance * mouse_off <= 0) ^
                (fabsf(bh->mouse_line_distance - mouse_off) > .5f))))
       bh->change_active = TRUE;
     bh->mouse_line_distance = mouse_off;
     if(bh->change_active)
       _slider_set_normalized(w, pop->oldpos + mouse_off);
+    else if(static_popup)
+    {
+      // a static popup never lets bare hover touch the widget's own value
+      // (see the static_popup comment above) -- but a caller that opted into
+      // this popup style may still want to know what value the pointer is
+      // currently over, to preview it elsewhere without committing anything.
+      // Used by flexi's parametric-mask precise-entry popup (see
+      // _param_row_slider_precise_open in blend_gui.c) to preview a hovered
+      // node position on the row's own range slider before the user commits
+      // to it by actually dragging.
+      dt_bauhaus_static_hover_preview_t hover_preview =
+        g_object_get_data(G_OBJECT(w), "dt-bauhaus-static-hover-preview");
+      if(hover_preview)
+        hover_preview(GTK_WIDGET(w), _slider_normalized_to_value(d, pop->oldpos + mouse_off),
+                     g_object_get_data(G_OBJECT(w), "dt-bauhaus-static-hover-preview-data"));
+    }
   }
   else if(w->type == DT_BAUHAUS_COMBOBOX)
   {
@@ -706,11 +738,11 @@ static void _window_motion_handle(GtkWidget *widget,
 // GTK3's controller variant regressed silently once before: a gtk4-prep
 // sweep (b91b228482) moved this from the raw signal (added for exactly this
 // quirk by f098290bdf) to a controller along with everything else elsewhere
-// in the file, breaking dragging inside this specific popup (e.g. a
-// right-click precise-numeric-entry popup opened via
-// dt_bauhaus_widget_show_popup()) without anyone noticing, since regular
-// in-place widgets don't hit this window type at all. Keep the GTK3 branch
-// on the raw signal.
+// in the file, breaking dragging inside this specific popup (e.g. the
+// precise-entry popover flexi opens via dt_bauhaus_widget_show_popup(), see
+// _param_row_slider_precise_open in blend_gui.c) without anyone noticing,
+// since regular in-place widgets don't hit this window type at all. Keep the
+// GTK3 branch on the raw signal.
 #if GTK_CHECK_VERSION(4, 0, 0)
 static void _window_motion_handler(GtkEventControllerMotion *controller,
                                     gdouble x,
@@ -1676,6 +1708,7 @@ GtkWidget *dt_bauhaus_slider_from_widget(dt_bauhaus_widget_t* w,
   d->grad_pos = NULL;
 
   d->fill_feedback = feedback;
+  d->checker_gradient = 0;
 
   d->is_dragging = 0;
   d->is_changed = 0;
@@ -2253,6 +2286,18 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
   }
 }
 
+// paint the baseline as a checkerboard fading into solid white left-to-right,
+// the standard alpha/opacity affordance (transparency shown as a checker,
+// solid colour as the value approaches 1) -- see _draw_baseline. Mutually
+// exclusive with the grad_col/grad_pos stops set by dt_bauhaus_slider_set_stop.
+void dt_bauhaus_slider_set_checker_gradient(GtkWidget *widget,
+                                            const gboolean enable)
+{
+  dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
+  if(w->type != DT_BAUHAUS_SLIDER) return;
+  w->slider.checker_gradient = enable;
+}
+
 static void _draw_indicator_shape(cairo_t *cr, float radius)
 {
   dt_bauhaus_t *bh = darktable.bauhaus;
@@ -2291,7 +2336,8 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
                             cairo_t *cr,
                             const float wd,
                             const GdkRGBA fg_color,
-                            const GdkRGBA border_color)
+                            const GdkRGBA border_color,
+                            const float content_height)
 {
   // draw scale indicator (the tiny triangle)
   if(w->type != DT_BAUHAUS_SLIDER) return;
@@ -2299,20 +2345,45 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   dt_bauhaus_t *bh = darktable.bauhaus;
 
   const float border_width = bh->border_width;
-  const float size = bh->marker_size;
+  // checker_gradient sliders' marker reads as noticeably larger than every
+  // other slider's at the same nominal size, since its higher-contrast
+  // fill/outline (see below) gives it more visual weight -- scale it down a
+  // touch so it matches the others' footprint instead of dominating the row.
+  const float size = w->slider.checker_gradient ? bh->marker_size * 0.8f : bh->marker_size;
+  const float htM = bh->baseline_size - border_width;
+  // a labelled slider always reserves a text line above the baseline; one
+  // with its label suppressed (content_height > 0, see the flexi group
+  // header's own opacity slider in blend_gui.c) has nothing there any more,
+  // so center the baseline/indicator in the height it actually has instead
+  // of leaving it pinned under a now-blank label row. content_height <= 0
+  // (every other caller, including the popup) keeps the original placement.
+  const float htm = (!w->show_label && content_height > 0.0f)
+    ? (content_height - htM) / 2.0f
+    : bh->line_height + INNER_PADDING;
 
   cairo_save(cr);
   if(wd)
-    cairo_translate(cr, pos * wd,
-                    bh->line_height + INNER_PADDING
-                    + (bh->baseline_size - border_width) / 2.0f);
+    cairo_translate(cr, pos * wd, htm + htM / 2.0f);
   cairo_scale(cr, 1.0f, -1.0f);
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+
+  // checker_gradient sliders' own track runs from a dark checkerboard to a
+  // near-white fade (see _draw_baseline), so the theme's usual fg/border
+  // pairing -- close in value to each other, meant for a plain flat baseline
+  // -- reads as low-contrast at either end. Use a light outline / dark fill
+  // instead: the light stroke stays visible over the dark checker half, the
+  // dark fill stays visible over the pale half, regardless of theme. Kept
+  // moderate (not pure white/black) so it still reads as the same kind of
+  // marker as every other slider's, just with a bit more separation.
+  const GdkRGBA indicator_border = w->slider.checker_gradient
+    ? (GdkRGBA){0.8, 0.8, 0.8, 1.0} : border_color;
+  const GdkRGBA indicator_fill = w->slider.checker_gradient
+    ? (GdkRGBA){0.25, 0.25, 0.25, 1.0} : fg_color;
 
   // draw the outer marker
   _draw_indicator_shape(cr, size);
   cairo_set_line_width(cr, border_width);
-  set_color(cr, border_color);
+  set_color(cr, indicator_border);
   cairo_stroke(cr);
 
   _draw_indicator_shape(cr, size - border_width);
@@ -2320,10 +2391,16 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
 
   // draw the inner marker
   _draw_indicator_shape(cr, size - border_width);
-  set_color(cr, fg_color);
+  set_color(cr, indicator_fill);
   cairo_set_line_width(cr, border_width);
 
-  if(w->slider.fill_feedback || !wd)
+  // checker_gradient sliders (see dt_bauhaus_slider_set_checker_gradient) want
+  // a solid indicator regardless of fill_feedback -- they turn fill_feedback
+  // off for a different reason (the track already fades to white on its own,
+  // see _style_opacity_gradient in blend_gui.c), but a hollow indicator meant
+  // to show a colour through it (grad_col sliders) reads as barely-there
+  // against their own white-fading track, especially near the high end.
+  if(w->slider.fill_feedback || w->slider.checker_gradient || !wd)
     cairo_fill(cr); // Plain indicator (regular sliders)
   else
     cairo_stroke(cr);  // Hollow indicator to see a color through it (gradient sliders)
@@ -2475,14 +2552,15 @@ static void _draw_color_wheel(dt_bauhaus_widget_t *w,
   cairo_translate(cr, 0, r);
   cairo_scale(cr, 1.5, 1.5);
 
-  _draw_indicator(w, d->pos, cr, .0f, *fg_color, *bg_color);
+  _draw_indicator(w, d->pos, cr, .0f, *fg_color, *bg_color, -1.0f);
 
   cairo_restore(cr);
 }
 
 static void _draw_baseline(dt_bauhaus_widget_t *w,
                            cairo_t *cr,
-                           const float slider_width)
+                           const float slider_width,
+                           const float content_height)
 {
   // draw line for orientation in slider
   if(w->type != DT_BAUHAUS_SLIDER) return;
@@ -2491,17 +2569,49 @@ static void _draw_baseline(dt_bauhaus_widget_t *w,
   cairo_save(cr);
   const dt_bauhaus_slider_data_t *d = &w->slider;
 
-  // pos of baseline
-  const float htm = bh->line_height + INNER_PADDING;
-
   // thickness of baseline
   const float htM = bh->baseline_size - bh->border_width;
+
+  // pos of baseline -- see _draw_indicator's own content_height comment for
+  // why this centers instead of using the fixed label-row offset when the
+  // label is hidden
+  const float htm = (!w->show_label && content_height > 0.0f)
+    ? (content_height - htM) / 2.0f
+    : bh->line_height + INNER_PADDING;
 
   // the background of the line
   cairo_pattern_t *gradient = NULL;
   cairo_rectangle(cr, 0, htm, slider_width, htM);
 
-  if(d->grad_cnt > 0)
+  if(d->checker_gradient)
+  {
+    // classic alpha-channel affordance: a checkerboard (standing in for
+    // "nothing here") fading into solid white (standing in for "fully
+    // covers") left to right, instead of a plain flat baseline.
+    cairo_save(cr);
+    cairo_clip(cr);
+    const double cs = DT_PIXEL_APPLY_DPI(4.0);
+    int col = 0;
+    for(double x = 0; x < slider_width; x += cs, col++)
+    {
+      int row = 0;
+      for(double y = htm; y < htm + htM; y += cs, row++)
+      {
+        const double v = ((col + row) % 2 == 0) ? 0.55 : 0.32;
+        cairo_set_source_rgb(cr, v, v, v);
+        cairo_rectangle(cr, x, y, MIN(cs, slider_width - x), MIN(cs, htm + htM - y));
+        cairo_fill(cr);
+      }
+    }
+    cairo_restore(cr);
+
+    cairo_rectangle(cr, 0, htm, slider_width, htM);
+    gradient = cairo_pattern_create_linear(0, 0, slider_width, 0);
+    cairo_pattern_add_color_stop_rgba(gradient, 0.0, 1.0, 1.0, 1.0, 0.0);
+    cairo_pattern_add_color_stop_rgba(gradient, 1.0, 1.0, 1.0, 1.0, 0.92);
+    cairo_set_source(cr, gradient);
+  }
+  else if(d->grad_cnt > 0)
   {
     // gradient line as used in some modules
     const double zoom = (d->max - d->min) / (d->hard_max - d->hard_min);
@@ -2556,7 +2666,7 @@ static void _draw_baseline(dt_bauhaus_widget_t *w,
 
   cairo_restore(cr);
 
-  if(d->grad_cnt > 0) cairo_pattern_destroy(gradient);
+  if(gradient) cairo_pattern_destroy(gradient);
 }
 
 static void _popup_reject(void)
@@ -2673,7 +2783,7 @@ static gboolean _popup_draw(GtkWidget *widget,
         _draw_color_wheel(w, context, cr, w2, fg_color, bg_color);
       else
       {
-        _draw_baseline(w, cr, w3);
+        _draw_baseline(w, cr, w3, -1.0f);
 
         cairo_save(cr);
         cairo_set_line_width(cr, 0.5);
@@ -2700,7 +2810,7 @@ static gboolean _popup_draw(GtkWidget *widget,
         _slider_draw_line(cr, pop->oldpos, d->pos - pop->oldpos, scale, w3, h2, ht, w);
         cairo_restore(cr);
 
-        _draw_indicator(w, d->pos, cr, w3, *fg_color, *bg_color);
+        _draw_indicator(w, d->pos, cr, w3, *fg_color, *bg_color, -1.0f);
 
         // show min/max of range
         set_color(cr, text_color_insensitive);
@@ -3022,35 +3132,58 @@ static gboolean _widget_draw(GtkWidget *widget,
     case DT_BAUHAUS_SLIDER:
     {
       // line for orientation
-      _draw_baseline(w, cr, w3);
+      _draw_baseline(w, cr, w3, h3);
 
       float value_width = 0;
       if(gtk_widget_is_sensitive(widget))
       {
         cairo_save(cr);
-        cairo_rectangle(cr, 0, 0, w3, h3 + INNER_PADDING);
+        // the indicator shape is wider than the 1px baseline it marks a
+        // position on, so it normally overhangs this rectangle right at
+        // pos 0.0/1.0 and gets sliced in half by this very clip -- widen it
+        // by this widget's own left/right margin (0 for a plain bauhaus
+        // slider, so no change there; a few px for one that reserves side
+        // margin specifically for this, e.g. .mask-inline-opacity in
+        // darktable.css) so the marker has room to draw in full at the
+        // extremes without the track itself (drawn separately, unaffected
+        // by this clip) appearing to extend past it.
+        cairo_rectangle(cr, -w->margin.left, 0, w3 + w->margin.left + w->margin.right,
+                        h3 + INNER_PADDING);
         cairo_clip(cr);
-        _draw_indicator(w, w->slider.pos, cr, w3, *fg_color, *bg_color);
+        _draw_indicator(w, w->slider.pos, cr, w3, *fg_color, *bg_color, h3);
         cairo_restore(cr);
 
-        // TODO: merge that text with combo
+        // unlike the combobox/toggle cases above, this text draw used to run
+        // unconditionally regardless of w->show_label -- dt_bauhaus_widget_hide_label
+        // had no effect at all on a slider (every existing caller only ever
+        // targets a combobox, where it does work, so nothing relies on that
+        // no-op). Gate it here too, so a slider that wants to show only its
+        // bare indicator (see the flexi group header's own opacity slider in
+        // blend_gui.c) actually can.
+        if(w->show_label)
+        {
+          // TODO: merge that text with combo
 
-        char *text = dt_bauhaus_slider_get_text(widget, dt_bauhaus_slider_get(widget));
-        set_color(cr, *text_color);
-        value_width = _show_pango_text(w, context, cr,
-                                       text, w3, 0, 0,
-                                       TRUE, FALSE, PANGO_ELLIPSIZE_END,
-                                       FALSE, FALSE, NULL, NULL);
-        g_free(text);
+          char *text = dt_bauhaus_slider_get_text(widget, dt_bauhaus_slider_get(widget));
+          set_color(cr, *text_color);
+          value_width = _show_pango_text(w, context, cr,
+                                         text, w3, 0, 0,
+                                         TRUE, FALSE, PANGO_ELLIPSIZE_END,
+                                         FALSE, FALSE, NULL, NULL);
+          g_free(text);
+        }
       }
       // label on top of marker:
-      gchar *label_text = _build_label(w);
-      set_color(cr, *text_color);
-      const float label_width = w3 - value_width;
-      if(label_width > 0)
-        _show_pango_text(w, context, cr, label_text, 0, 0, label_width,
-                         FALSE, FALSE, PANGO_ELLIPSIZE_END, FALSE, TRUE, NULL, NULL);
-      g_free(label_text);
+      if(w->show_label)
+      {
+        gchar *label_text = _build_label(w);
+        set_color(cr, *text_color);
+        const float label_width = w3 - value_width;
+        if(label_width > 0)
+          _show_pango_text(w, context, cr, label_text, 0, 0, label_width,
+                           FALSE, FALSE, PANGO_ELLIPSIZE_END, FALSE, TRUE, NULL, NULL);
+        g_free(label_text);
+      }
     }
     break;
     case DT_BAUHAUS_TOGGLE:
@@ -3173,6 +3306,18 @@ static void _widget_get_preferred_width(GtkWidget *widget,
 
   *natural_width = _natural_width(widget, FALSE)
                    + w->margin.left + w->margin.right + w->padding.left + w->padding.right;
+  // this was previously left unset entirely (uninitialized stack garbage) --
+  // harmless as long as nothing called gtk_widget_get_preferred_size()
+  // directly on a bauhaus widget, which held until an earlier version of
+  // _opacity_slot_size_allocate (blend_gui.c) started doing exactly that and
+  // got a garbage width back (now fixed there without needing this value at
+  // all -- it only asks for preferred *height*). Explicitly 0 rather than
+  // *natural_width: every panel that hosts sliders (not just flexi masks)
+  // sizes off this, and a real minimum equal to natural (each slider's full
+  // numeric-label width) stopped every such panel from being shrunk below
+  // that sum -- a regression from the UB's de-facto lenient behaviour, which
+  // this restores deliberately instead of by accident.
+  *minimum_width = 0;
 }
 
 static void _widget_get_preferred_height(GtkWidget *widget,
@@ -3805,14 +3950,25 @@ static gboolean _slider_value_change_dragging(gpointer data)
   return G_SOURCE_REMOVE;
 }
 
-static void _slider_set_normalized(dt_bauhaus_widget_t *w, float pos)
+// the real (min..max, exactly what dt_bauhaus_slider_get() returns) value a
+// normalized [0,1] popup position maps to, quantized to the slider's own
+// display precision -- pulled out of _slider_set_normalized so a caller can
+// ask "what would this position set the slider to" without actually setting
+// it (see the static-popup hover-preview hook in _window_motion_handle,
+// which previews a value without committing it).
+static float _slider_normalized_to_value(const dt_bauhaus_slider_data_t *d, float pos)
 {
-  dt_bauhaus_slider_data_t *d = &w->slider;
   float rpos = CLAMP(pos, 0.0f, 1.0f);
   rpos = d->curve(rpos, DT_BAUHAUS_GET);
   rpos = d->min + (d->max - d->min) * rpos;
   const float base = powf(10.0f, d->digits) * d->factor;
-  rpos = roundf(base * rpos) / base;
+  return roundf(base * rpos) / base;
+}
+
+static void _slider_set_normalized(dt_bauhaus_widget_t *w, float pos)
+{
+  dt_bauhaus_slider_data_t *d = &w->slider;
+  float rpos = _slider_normalized_to_value(d, pos);
 
   rpos = (rpos - d->min) / (d->max - d->min);
   d->pos = d->curve(rpos, DT_BAUHAUS_SET);

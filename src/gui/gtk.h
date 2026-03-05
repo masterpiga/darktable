@@ -21,6 +21,7 @@
 #include "common/atomic.h"
 #include "common/darktable.h"
 #include "common/dtpthread.h"
+#include "dtgtk/paint.h"
 
 #include <gtk/gtk.h>
 #include <stdint.h>
@@ -388,6 +389,10 @@ typedef enum dt_ui_panel_t
   DT_UI_PANEL_RIGHT,
   /* bottom panel */
   DT_UI_PANEL_BOTTOM,
+  /* flexi masks panel: a genuine extra column beside left/right, used only
+     for the "separate panel" masks_panel_position choices (see
+     dt_ui_flexi_panel_* below and develop/blend_gui.c) */
+  DT_UI_PANEL_FLEXI,
 
   DT_UI_PANEL_SIZE
 } dt_ui_panel_t;
@@ -457,6 +462,31 @@ GtkWidget *dt_ui_snapshot(const struct dt_ui_t *ui);
 GtkWidget *dt_ui_main_window(const struct dt_ui_t *ui);
 /** \brief get the thumb table */
 struct dt_thumbtable_t *dt_ui_thumbtable(const struct dt_ui_t *ui);
+/** \brief flexi masks panel: box to reparent flexi masks content into
+    (see develop/blend_gui.c, plugins/darkroom/blend/masks_panel_position) */
+GtkWidget *dt_ui_flexi_panel_content(struct dt_ui_t *ui);
+/** \brief move the flexi masks panel to the left (FALSE) or right (TRUE)
+    side of the main window, live (no view reopen needed) */
+void dt_ui_flexi_panel_set_side(struct dt_ui_t *ui, const gboolean right);
+/** \brief show/hide the flexi masks panel. When collapsed and has_content
+    is TRUE, a small corner overlay icon is shown instead (click to
+    re-expand); when has_content is FALSE neither the panel nor the icon
+    is shown. persist controls whether this collapsed state is written to
+    "plugins/darkroom/blend/masks_panel_collapsed" -- TRUE only for a
+    genuine user action (clicking collapse/the corner icon), FALSE for
+    transient/automatic visibility changes (reapplying the stored
+    preference, hiding on view-leave, auto-collapsing because the mask is
+    off) that must not clobber what the user actually chose. */
+void dt_ui_flexi_panel_set_collapsed(struct dt_ui_t *ui,
+                                     const gboolean collapsed,
+                                     const gboolean has_content,
+                                     const gboolean persist);
+gboolean dt_ui_flexi_panel_is_collapsed(struct dt_ui_t *ui);
+/** \brief drive the collapsed panel's corner bubble's highlighted (mask
+    active) vs dimmed (no mask) visual state, and its tooltip's mask-type
+    label (may be NULL) */
+void dt_ui_flexi_panel_set_icon(struct dt_ui_t *ui, const gboolean active,
+                                const char *mask_type_label);
 /** \brief get the log message widget */
 GtkWidget *dt_ui_log_msg(const struct dt_ui_t *ui);
 /** \brief get the toast message widget */

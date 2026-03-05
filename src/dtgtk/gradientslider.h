@@ -108,6 +108,14 @@ struct _GtkDarktableGradientSlider
   gboolean is_resettable;
   gboolean do_reset;
   gboolean is_entered;
+  // forces one marker's hover highlight on regardless of actual pointer
+  // position/drag state (-1 = no override) -- for a caller-driven editor
+  // (e.g. blend_gui.c's precise-value popup) that opens away from the
+  // pointer, so the marker being edited stays visibly picked out on the
+  // slider the whole time that editor is open, not just while the mouse is
+  // actually over/dragging it. See the "pinned" check in
+  // dtgtk_gradient_slider_multivalue's draw handler.
+  gint pinned;
   gint markers_type;
   guint timeout_handle;
   float (*scale_callback)(GtkWidget*, float, int); // scale callback function
@@ -168,6 +176,13 @@ void dtgtk_gradient_slider_multivalue_set_stop(GtkDarktableGradientSlider *gslid
 gdouble dtgtk_gradient_slider_multivalue_get_value(GtkDarktableGradientSlider *gslider, gint position);
 void dtgtk_gradient_slider_multivalue_get_values(GtkDarktableGradientSlider *gslider, gdouble *values);
 void dtgtk_gradient_slider_multivalue_set_value(GtkDarktableGradientSlider *gslider, gdouble value, gint position);
+/** same as above, but for FREE_MARKERS sliders: pushes the adjacent marker
+ *  along instead of leaving position[] out of order when value crosses it --
+ *  the same "drag past a neighbour and take it with you" behaviour a mouse
+ *  drag already gets via the private _slider_move(). Used by callers that set
+ *  a marker's value programmatically (e.g. a precise-entry popup) and need it
+ *  to behave exactly like a drag, not a raw clamped set. */
+void dtgtk_gradient_slider_multivalue_set_value_pushing(GtkDarktableGradientSlider *gslider, gdouble value, gint position);
 void dtgtk_gradient_slider_multivalue_set_values(GtkDarktableGradientSlider *gslider, gdouble *values);
 gboolean dtgtk_gradient_slider_multivalue_is_dragging(GtkDarktableGradientSlider *gslider);
 
