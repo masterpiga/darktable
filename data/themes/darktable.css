@@ -421,8 +421,12 @@ header button,
   color: @button_fg;
 }
 
-/* iop on/off buton */
-.dt_module_btn.dt_transparent_background:first-child
+/* iop on/off button -- targeted by its own dedicated class (set in
+   dt_iop_gui_header_button) rather than ":first-child", which used to match
+   any other icon-only transparent-background button that merely happened to
+   be packed first in its own container (e.g. a per-row color picker in the
+   flexi masks editor), dimming it like a disabled control by accident */
+.dt_module_enable_btn
 {
   color: shade(@disabled_fg_color, 0.9);
 }
@@ -607,6 +611,22 @@ dialog .sidebar row:selected:hover label,
   padding: 0.28em 0.65em;
 }
 
+/* #blending-tabs (the "blend mask" header) is a sibling of the module's own
+   .dt_plugin_ui_main content box, not a descendant of it -- padding only
+   insets a box's own children, never the box's own background, so matching
+   .dt_plugin_ui_main's horizontal inset here needs a real margin instead
+   (shrinking the header's own box, background included), left/right only so
+   .dt_section_label's vertical margin (applied via class, lower specificity
+   than this id) is left alone. Scoped to .blending-tabs-embedded (toggled in
+   _masks_flexi_relocate, blend_gui.c) because the flexi masks panel's other
+   two hosts -- the utility-module lib and the separate left/right panel --
+   already provide their own inset, so this margin would double up there. */
+#blending-tabs.blending-tabs-embedded
+{
+  margin-left: 0.65em;
+  margin-right: 0.65em;
+}
+
 /* Frame around blending boxes */
 #blending-tabs + #blending-box /* set top margin below blending tabs */
 {
@@ -736,6 +756,478 @@ dialog .sidebar row:selected:hover label,
 {
   border-bottom: 0.05em solid @section_label;
   margin: 0.21em 0;
+}
+
+/* ----------------------------------------------------------------------------
+   Flexi mask panel (drawn/parametric group composition list). These style the
+   group headers, the per-element rows, the operator chips and the elements-area
+   guidance message. Previously injected from blend_gui.c; kept here so themes can
+   override them.
+   ----------------------------------------------------------------------------*/
+
+/* every row/header kind in the panel (element/parametric/raster row, real
+   group header, empty-group header, cluster header) has its own unique widget
+   id for CSS -- #mask-shape-row, #mask-group-header-row, #mask-empty-header-row,
+   #mask-cluster-header-row -- but shares this .mask-panel-row class for base
+   styling and state washes that apply identically to every kind, so none of
+   that has to be repeated per id. A transparent border keeps the box model
+   stable across states (drag indicators colour one edge of it, see below). A
+   small bottom margin keeps consecutive rows' borders from touching --
+   otherwise two adjacent selected/hovered rows read as one fused block. */
+.mask-panel-row
+{
+  border: 2px solid transparent;
+  border-radius: 3px;
+  margin-bottom: 2px;
+}
+
+/* "selected" wash, grayscale only: no accent colour, just a lighter shade of
+   the panel itself, so it reads as "highlighted" rather than "coloured".
+   Applied to the whole group block when a group is selected (see
+   _apply_group_selection / "header-widget" in _build_masks_list, which points
+   at the group's full body, not just its header) and to a single row when a
+   canvas-clicked shape is mirrored into the list (dt_iop_gui_masks_select_form). */
+.mask-list-row-selected
+{
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04));
+  border-radius: 3px;
+}
+
+/* selection border, grayscale only: a thin light frame around the whole
+   selected element row, in addition to the wash above -- the wash alone reads
+   too subtly once several rows are visible at once. Two classes (0,2,0) beat
+   the plain .mask-panel-row rule above (0,1,0) -- and, since every row kind
+   now has its own id instead of sharing one, this no longer needs an id to
+   also outrank a same-specificity kind-specific rule like .mask-group-header
+   (same pattern as .mask-list-row-hover/-solo/-drop below). */
+.mask-panel-row.mask-list-row-selected
+{
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+/* same border for a selected whole group -- .mask-group-block carries no
+   row id/class of its own (see .mask-group-block.mask-list-row-drop* below
+   for the same reasoning), so it needs its own explicit border here rather
+   than inheriting one. Only the colour changes: .mask-group-block below
+   already reserves the same 2px width on every edge so this can never shift
+   the layout when it appears. */
+.mask-group-block.mask-list-row-selected
+{
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
+/* transient hover wash (canvas <-> list sync): a soft neutral fill, distinct
+   from the persistent selection shade so both can show at once. Also applied
+   to a row/header while the pointer is over the list row itself (_row_crossing)
+   or over the docked parametric editor's own controls
+   (_parametric_wrap_crossing), so hovering the panel reads exactly like
+   hovering the matching shape on the canvas. */
+.mask-panel-row.mask-list-row-hover
+{
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* persistent solo / solo-edit wash: same look as the transient hover above, but
+   driven by state (bd->solo_formid / soloedit_formid / solo_cluster_key) rather
+   than the pointer, so it survives hovering elsewhere in the panel or canvas
+   (see _update_shape_row_state / _sync_solo_canvas_highlight). A separate class
+   from mask-list-row-hover so _clear_hover_classes does not wipe it. */
+.mask-panel-row.mask-list-row-solo
+{
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* drag-and-drop drop target: while an element (or group) is dragged over a group
+   header, lighten its frame so the destination group is obvious */
+.mask-panel-row.mask-list-row-drop
+{
+  background-color: rgba(255, 255, 255, 0.20);
+}
+
+/* group reorder DnD: a bright insertion line on the edge where the dragged group
+   would land (top half of a header = above, bottom half = below). The base row
+   already carries a 2px transparent border, so colouring one edge does not shift
+   the layout. */
+.mask-panel-row.mask-list-row-drop-above
+{
+  border-top-color: #ffffff;
+}
+
+.mask-panel-row.mask-list-row-drop-below
+{
+  border-bottom-color: #ffffff;
+}
+
+/* each group (header + its element rows) is one visual block, separated from
+   its neighbours by a small consistent gap above -- no divider line, since
+   the group header's own background (.mask-group-header) already reads as
+   the start of a new group on its own. Margin only (no padding-top): the
+   gap must sit outside the border, between blocks -- padding-top would
+   instead sit inside the border, above the header row, making the border
+   box visibly stretch past the header with blank space before it. Border
+   reserved at the same 2px used by the selected-state border below, so
+   selecting a group never shifts the layout -- resting colour matches
+   .mask-group-header's own shade so an unselected group still reads as one
+   outlined block, not just a plain gap. The gap is always the same whether
+   the group above is empty or has shapes -- only the very first item in the
+   whole list (a group-block or an empty-group row) hugs the panel's own top
+   border with no leading gap. */
+.mask-group-block
+{
+  margin-top: 4px;
+  border: 2px solid rgba(255, 255, 255, 0.06);
+}
+
+.mask-group-block:first-child
+{
+  margin-top: 0;
+}
+
+/* group reorder DnD: a bright insertion line spanning the whole group block
+   (header + its elements), not just the header row, so it reads as landing
+   above/below the group (see _group_drop_motion / _group_drop_leave) */
+.mask-group-block.mask-list-row-drop-above
+{
+  border-top-color: #ffffff;
+}
+
+.mask-group-block.mask-list-row-drop-below
+{
+  border-bottom-color: #ffffff;
+}
+
+.mask-group-block.mask-list-row-drop
+{
+  background-color: rgba(255, 255, 255, 0.20);
+}
+
+/* a group's element rows sit indented under their header. No left rail here
+   any more -- with the group header's own background (.mask-group-header
+   below) and each row's own selection border, a vertical guide line became a
+   redundant third cue for the same hierarchy, so the indent alone carries it.
+   Left-only now (no margin-right): a right inset shifted every element row's
+   own right-aligned content -- its opacity slider, its badge stack -- a few
+   pixels left of the unindented group header's own, throwing off the
+   vertical alignment those are specifically meant to share (see
+   _make_badge_stack / _opacity_slot_size_allocate). All indent/inset spacing
+   in this file lives here in CSS, not hardcoded in blend_gui.c, so a theme
+   can restyle it without a rebuild. */
+.mask-group-elements
+{
+  margin-left: 8px;
+}
+
+/* an expanded cluster's own member rows (see _pack_group_elements), nested one
+   level deeper than .mask-group-elements' own indent so expanding a cluster
+   visually reads as revealing its members as its own children, not as more
+   siblings at the group's own depth. Same left-only convention as
+   .mask-group-elements above, for the same alignment reason. */
+.mask-cluster-elements
+{
+  margin-left: 8px;
+}
+
+/* while any element/group is soloed, dim same-kind cluster headers: the cluster
+   as a whole is not the soloed thing (its member rows already dim individually
+   via _update_shape_row_state). Driven by .mask-solo-active on the list box,
+   toggled in _refresh_all_shape_rows -- so clearing solo restores full opacity
+   automatically. Real group/empty-group headers dim in code (they carry other
+   inline opacity states); only the cluster header, which has none, does it here. */
+.mask-solo-active #mask-cluster-header-row
+{
+  opacity: 0.45;
+}
+
+/* ...but when a whole group is soloed, the clusters inside *that* group are part
+   of what's being shown, so they stay lit. The soloed group's block is tagged
+   .mask-group-soloed in _apply_group_header_dimming; this override wins over the
+   dim above by source order at equal specificity. Clusters in other (dimmed)
+   groups are unaffected -- their block never carries the tag. */
+.mask-group-soloed #mask-cluster-header-row
+{
+  opacity: 1.0;
+}
+
+/* group headers (#mask-group-header-row and #mask-empty-header-row alike)
+   get a subtle resting background distinct from plain element rows, so "this
+   is a group heading" reads clearly even when nothing is selected/hovered --
+   grayscale only, no accent colour, one step lighter than the panel itself. */
+.mask-panel-row.mask-group-header
+{
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+/* an empty group's own header doubles as its drag-drop highlight frame (see
+   _group_drop_motion's `frame` argument for _pack_empty_group_header) -- a
+   real group's frame is its group-block instead, so this collision (the drop
+   wash needing to outrank the resting background above) is empty-group-only.
+   Targeted by #mask-empty-header-row's own unique id (specificity always
+   beats a class-only selector, however many classes), rather than another
+   same-specificity class combo that would again depend on declaration order. */
+#mask-empty-header-row.mask-list-row-drop
+{
+  background-color: rgba(255, 255, 255, 0.20);
+}
+
+/* each parametric mask row's own permanently-visible editor (see
+   _build_param_row_editor) -- nests this row's own expanded content under
+   itself, inset the same amount on both sides (no padding-left/rail, which
+   previously made the left side wider than the right). */
+.mask-param-row-editor
+{
+  margin-top: 3px;
+  margin-bottom: 3px;
+  margin-left: 8px;
+  margin-right: 8px;
+}
+
+/* boost factor slider: just spacing on the wrapper -- it should blend into the
+   surrounding parametric mask controls (input/output rows above it are not
+   boxed either), not read as a separate card */
+.mask-boost-factor-box
+{
+  margin-top: 0.14em;
+}
+
+/* the input/output gradient sliders inside a parametric row's own editor. */
+.mask-param-row-editor .dt_gslider_multivalue
+{
+  min-height: 1.8em;
+  padding: 0;
+  padding-left: 0.25em;
+}
+
+/* the same slider, docked onto the row's own header bar instead while
+   collapsed (see _update_param_row_header_dock) -- own rule, not reusing
+   .mask-param-row-editor above, since that one also carries a left/right
+   margin meant for the below-row editor that would shift this slider away
+   from the name label instead of sitting flush against it. */
+.mask-param-header-slot .dt_gslider_multivalue
+{
+  min-height: 1.8em;
+  padding: 0;
+  padding-left: 0.25em;
+  padding-right: 0.25em;
+}
+
+/* every row/group's own inline "properties" expander (see
+   _build_props_row_editor) -- same treatment as .mask-param-row-editor above,
+   so a shape/raster/group's own expanded properties read the same way a
+   parametric row's does: nested under that one row, not under the whole
+   group, and inset the same amount on both sides. */
+.mask-props-row-editor
+{
+  margin-top: 3px;
+  margin-bottom: 3px;
+  margin-left: 8px;
+  margin-right: 8px;
+}
+
+/* a row/group header's own inline opacity slider (group, shape and raster
+   rows -- see the header builds in blend_gui.c): unlike .mask-props-row-editor
+   above, this one sits inline in the header row itself, not docked below it,
+   so it carries no vertical margins of its own -- but keeps a little
+   horizontal breathing room so its track doesn't touch the name / adjacent
+   icons on either side. Every bauhaus widget also carries the generic
+   .dt_bauhaus class, whose own margin: 0.2em 0 (further down this file)
+   would otherwise win the tie on source order alone (same specificity,
+   single class each) -- pair both classes in the selector here to beat it
+   regardless of order. */
+.dt_bauhaus.mask-inline-opacity
+{
+  margin: 0 6px;
+  padding: 0;
+}
+
+/* every bauhaus slider paints its own pill-shaped background from its own CSS
+   context (see dt_bauhaus_draw), which #bauhaus-slider fills with the plugin
+   background colour -- override it to transparent here so the boost factor
+   slider stops reading as a separate gray box. #bauhaus-slider + class beats
+   the plain #bauhaus-slider rule on specificity. */
+#bauhaus-slider.mask-boost-factor-slider
+{
+  background-color: transparent;
+}
+
+/* same fix, for every per-row "properties" expander slider (opacity, size,
+   hardness, feather, ...) and the parametric row's own opacity slider -- see
+   .mask-boost-factor-slider above for why this is needed. */
+#bauhaus-slider.mask-props-slider
+{
+  background-color: transparent;
+}
+
+/* parametric row's own lead handle (see _make_channel_handle): the channel
+   code (e.g. "Cz") stands in for the generic icon every other row kind's
+   handle shows. The plate itself is fixed to the same square size as every
+   other row's icon handle (see the gtk_widget_set_size_request call there),
+   so only the font needs shrinking here, enough for a two-letter code to fit
+   without crowding a plate sized for a single glyph. */
+.mask-channel-handle
+{
+  font-size: 85%;
+  padding: 0;
+}
+.mask-channel-handle label
+{
+  color: inherit;
+}
+
+/* a shape/element/group row's own name label (see _make_shape_row): a little
+   horizontal breathing room after the lead handle's rounded plate, so the
+   text doesn't sit flush against it. */
+.mask-row-name
+{
+  padding-left: 4px;
+}
+
+/* "add parametric channel" buttons (the flexi "g R G B Jz Cz hz" row): flat, no
+   frame ever. Two states fight the plain ".mask-channel-add-btn" class rule and
+   both need an explicit, equal-or-higher-specificity override to lose:
+   - the whole row is insensitive (see gtk_widget_set_sensitive on
+     masks_param_channels_box) whenever no group is selected, and the theme's
+     "button:disabled" rule (border: 0.07em solid ...) outranks a single class
+     selector -- this is the "border appears only when nothing is selected"
+     symptom.
+   - the buttons grab focus on hover (see _param_channel_button_enter, so a 'c'
+     keypress can toggle a preview), and "button:focus" is likewise more
+     specific than the plain class.
+   Repeat the override on ":disabled"/":focus"/":hover"/":active" so it wins in
+   every state. */
+.mask-channel-add-btn,
+.mask-channel-add-btn:disabled,
+.mask-channel-add-btn:focus,
+.mask-channel-add-btn:hover,
+.mask-channel-add-btn:active
+{
+  border: none;
+  outline-style: none;
+  outline-width: 0;
+  background-color: transparent;
+  box-shadow: none;
+}
+
+/* operator selectors: a thin border alone marks them as choosers (no chevron) */
+.mask-op-combo
+{
+  border: 1px solid #808080;
+  border-radius: 3px;
+}
+
+/* every row/group drag handle (element kind icon, group operator chip): a
+   subtle rounded plate behind the icon, always -- without this a blocky
+   glyph (the raster mask checkerboard, the generic grip dots) reads as a
+   bare rectangle instead of matching the rounded chips used elsewhere in the
+   panel (the within-group combo, the solo button, ...). No longer styled as
+   a distinct clickable button (border/hover) -- it is now just one of three
+   equivalent click surfaces for the row (icon, name, background gaps, see
+   _row_click_press/_row_click_release in blend_gui.c), not a special one. */
+.mask-list-handle
+{
+  background-color: alpha(@fg_color, 0.09);
+  border-radius: 3px;
+}
+
+/* an inverted shape's own drag handle (element row) swaps to a light
+   background / dark foreground -- a real colour inversion, so it reads
+   distinctly from a plain colour tint. Applied by _drag_handle_draw, which
+   paints its own CSS background since the handle is app-paintable. */
+.mask-list-handle-inverted
+{
+  background-color: #e8e8e8;
+  color: #202020;
+  border-radius: 3px;
+}
+
+/* soloed indicator badge (see _make_solo_badge): same light-background/
+   dark-foreground inversion as .mask-list-handle-inverted, so "soloed" reads
+   as a clear colour swap. Rounded + padded like the other small chips in this
+   panel (.mask-list-handle) -- a bare sharp-edged rectangle looked out of
+   place next to them. */
+.mask-power-solo
+{
+  background-color: #e8e8e8;
+  color: #202020;
+  border-radius: 2px;
+  padding: 0px;
+}
+
+/* the "mask elements" header's whole-mask invert toggle (bd->masks_polarity,
+   see dt_iop_gui_init_masks in blend_gui.c): same light-background/dark-
+   foreground inversion as .mask-list-handle-inverted / .mask-power-solo, so
+   toggling it on reads the same clear colour-swap way a single inverted
+   element/group's own icon does, instead of the generic (and here suppressed
+   via dt_ignore_fg_state) checked-button highlight giving no feedback at all. */
+.mask-invert-toggle:checked:not(:disabled)
+{
+  background-color: #e8e8e8;
+  color: #202020;
+  border-radius: 3px;
+}
+
+/* low-opacity warning badge (see _make_lowop_badge): an element or group whose
+   opacity is under 10% is nearly (or entirely) invisible, which used to be
+   prevented by a hard 5% floor rather than reported. Unlike the solo badge this
+   is not a chip -- dtgtk_cairo_paint_warning is already a solid triangle, so it
+   only needs a foreground colour, and an amber one reads as a caution without
+   the alarm of a full red. Transparent background so it sits in the row rather
+   than on top of it. */
+.mask-lowop-warn
+{
+  background-color: transparent;
+  color: #e0a030;
+  padding: 0px;
+}
+
+/* no-op badge (see _make_lowop_badge / _lowop_badge_draw's "badge-noop" data
+   flag): a parametric channel still at its full/base range contributes
+   nothing to the mask at all, which is a stronger, different fact than "low
+   opacity" -- a neutral grey (not the amber warning colour) in the same
+   slot, taking precedence over the opacity badge, since a no-op element's
+   opacity is moot. */
+.mask-noop-warn
+{
+  background-color: transparent;
+  color: #909090;
+  padding: 0px;
+}
+
+/* fixed-size stack the low-opacity and solo/solo-edit badges pack into (see
+   _make_badge_stack) -- the gap between the two squares is set as the box's
+   own spacing in C, nothing to add here. */
+.mask-badge-stack
+{
+  padding: 0px;
+}
+
+/* "mask elements" section label: margin instead of a spacer widget, so "edit
+   on canvas" (packed right after it) doesn't sit flush against the text */
+.mask-elements-label
+{
+  margin-right: 6px;
+}
+
+/* inline rename entry (mask list): replaces a plain label in place, so it must
+   not carry a GtkEntry's usual border/padding or the row (and the whole
+   panel) visibly grows while a rename is in progress */
+.mask-rename-entry
+{
+  padding: 0;
+  border: none;
+  min-height: 0;
+}
+
+/* within-group combine chooser: it sits right next to the (hexpand, unmargined)
+   group/element label, so give it a little breathing room on its left */
+.mask-within-combo
+{
+  margin-left: 4px;
+}
+
+/* spacing between the add-shapes toolbar and the group / element lists */
+.masks-list
+{
+  margin-top: 3px;
 }
 
 /* Collapsible sections on lib & iop modules */
@@ -916,6 +1408,18 @@ popover #bauhaus-slider,
   border-radius: 0.14em;
   min-height: 0.4em;
   min-width: 0.4em;
+}
+
+/* the flexi masks parametric-channel range slider's precise-value popup (see
+   _param_row_slider_precise_open in blend_gui.c) is never meant to be seen
+   itself -- it exists purely as a real, mapped, on-screen anchor so the
+   bauhaus slider embedded in it can open *its own* right-click popup at a
+   valid position. More specific than the plain "popover" rule above (element
+   + class beats element alone), so it wins the override despite coming
+   first in the file. */
+popover.mask-precise-anchor
+{
+  opacity: 0;
 }
 
 menu
@@ -1659,6 +2163,83 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   margin: 0.14em 0.28em;
 }
 
+/* flexi masks panel: deliberately NO background-color rule here. #left/
+   #right also have none -- both rely on the "box, box *" reset (above)
+   making them transparent so the ambient grid's own @bg_color paint (from
+   the universal "*" rule) shows through untouched. An earlier explicit
+   "background-color: @bg_color" rule here painted a visually close but not
+   pixel-identical value (measured ~6/255 darker than #left/#right) -- going
+   through the ancestor-reveal path instead of a fresh paint guarantees an
+   identical result since it's the exact mechanism #left/#right use. */
+
+/* #bauhaus-slider always paints a flat @plugin_bg_color background (see that
+   rule above) -- fine inside a normal module, which sits on a card tuned to
+   roughly match, but the dedicated flexi masks panel (#flexi, see the
+   comment above) shows the raw ambient background instead, by design, so
+   the slider's hardcoded fill stands out against it as a visibly different
+   shade (measured @plugin_bg_color is exactly shade(@darkroom_bg_color,
+   0.95) in this theme -- a real, consistent ~6/255 gap, not a rounding
+   artifact). Made transparent here instead, so it blends with whatever
+   background actually surrounds it in this one context. */
+#flexi #bauhaus-slider
+{
+  background-color: transparent;
+}
+
+/* inline collapse button prepended to the mode-select row when hosted in
+   the separate flexi masks panel -- deliberately NOT styled like the
+   .dt_module_btn mode toggles next to it (no frame/checked state) so it
+   doesn't read as one more mask type; a lighter pill background (rather
+   than a thin separator line) is what actually sets it apart at a glance */
+#flexi-inline-collapse
+{
+  margin-right: 0.35em;
+  padding: 0.15em 0.3em;
+  background-color: alpha(@fg_color, 0.12);
+  border-radius: 0.3em;
+}
+
+#flexi-inline-collapse:hover
+{
+  background-color: alpha(@fg_color, 0.22);
+}
+
+/* collapsed-panel corner icon overlay: bigger hit target + rounded "pill"
+   so it reads as a real button floating on the canvas, not a bare icon.
+   Dimmed by default (no mask active on the hosted module); the
+   "flexi-corner-icon-active" class (see dt_ui_flexi_panel_set_icon)
+   highlights it once a mask actually is active. */
+#flexi-corner-icon
+{
+  min-width: 2.2em;
+  min-height: 2.2em;
+  margin: 0.4em;
+  padding: 0.3em;
+  opacity: 0.55;
+  background-color: alpha(@bg_color, 0.85);
+  border: 0.07em solid alpha(@fg_color, 0.3);
+  border-radius: 0.5em;
+}
+
+#flexi-corner-icon:hover
+{
+  opacity: 0.8;
+  background-color: alpha(@bg_color, 0.95);
+  border-color: alpha(@fg_color, 0.5);
+}
+
+#flexi-corner-icon.flexi-corner-icon-active
+{
+  opacity: 1;
+  background-color: @selected_bg_color;
+  border-color: alpha(@fg_color, 0.6);
+}
+
+#flexi-corner-icon.flexi-corner-icon-active:hover
+{
+  opacity: 1;
+}
+
 .search label
 {
   margin-right: 0.5em;
@@ -1855,6 +2436,29 @@ treeview *:checked:not(check),
 {
   background-color: @field_selected_bg;
   color: @field_selected_fg;
+}
+
+/* the parametric mask's "show output" toggle is an expander, not a mode
+   switch -- its chevron direction (see _paint_param_inout) already carries
+   the state, so suppress the usual checked-button highlight (selector
+   specificity matched to the rule above so it actually overrides it) */
+button.mask-inout-toggle:checked:not(:disabled):not(.dt_transparent_background):not(.dt_ignore_fg_state)
+{
+  background-color: transparent;
+  color: @button_fg;
+}
+
+/* solo-edit toggle (see dtgtk_cairo_paint_soloedit in blend_gui.c): same
+   light-background/dark-foreground inversion as .mask-power-solo when
+   active, so "solo-edit is on" reads as a clear colour swap instead of the
+   subtle default toggle-button highlight. An id selector, so it outranks
+   the generic button:checked rule regardless of source order -- no :not()
+   chain needed. */
+#mask-soloedit-toggle:checked
+{
+  background-color: #e8e8e8;
+  color: #202020;
+  border-radius: 3px;
 }
 
 /* History currently selected button ; they don't need to set background */

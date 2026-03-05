@@ -79,6 +79,21 @@ typedef struct dt_dev_pixelpipe_iop_t
   // cached distorted masks at geometric module boundaries
   dt_dev_distorted_mask_cache_t detail_mask_cache;
   dt_dev_distorted_mask_cache_t raster_mask_cache;
+  // cached output of dt_masks_group_render_roi (the rasterized drawn mask,
+  // before global post-ops/invert). hash = dt_masks_group_hash + roi_out;
+  // src_hash = pipe->scharr.hash (covers per-shape details refinement).
+  // only populated when the group needs no host guides (no guided-filter
+  // feathering / parametric member), whose result depends on module pixels.
+  dt_dev_distorted_mask_cache_t drawn_mask_cache;
+
+  // transient guides used by optional per-shape mask refinement (feathering)
+  // inside the group renderer. They point into the module in/out buffers and
+  // are only valid for the duration of dt_develop_blend_process; NULL when no
+  // shape in the group requests refinement.
+  const float *blend_refine_guide_in;
+  const float *blend_refine_guide_out;
+  const dt_iop_roi_t *blend_refine_roi_in;
+  const dt_iop_roi_t *blend_refine_roi_out;
 } dt_dev_pixelpipe_iop_t;
 
 typedef enum dt_dev_pixelpipe_change_t
@@ -215,6 +230,10 @@ typedef struct dt_dev_pixelpipe_t
   // the data for the luminance mask are kept in a buffer written by demosaic or rawprepare
   // as we have to scale the mask later we keep size at that stage
   gboolean want_detail_mask;
+  // set only while dt_dev_pixelpipe_synch_all replays history: suppresses the
+  // per-module usedetails order-0 flush; synch_all invalidates once at the end
+  // and only if the detail requirement actually toggled.
+  gboolean synch_no_detail_invalidate;
   struct dt_dev_detail_mask_t scharr;
 
   // avoid cached data for processed module

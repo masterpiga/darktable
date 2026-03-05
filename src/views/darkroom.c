@@ -1039,11 +1039,9 @@ void expose(dt_view_t *self,
 
   dt_iop_module_t *dmod = dev->gui_module;
 
-  // display mask if we have a current module activated or if the
-  // masks manager module is expanded
+  // display mask if we have a current module activated
   const gboolean display_masks =
-    (dmod && dmod->enabled && dt_dev_modulegroups_test_activated(darktable.develop))
-    || dt_lib_gui_get_expanded(dt_lib_get_module("masks"));
+    dmod && dmod->enabled && dt_dev_modulegroups_test_activated(darktable.develop);
 
   if(dev->form_visible && display_masks)
   {
@@ -4180,6 +4178,11 @@ static inline void _clear_pipecache(dt_dev_pixelpipe_t *pipe)
 
 void leave(dt_view_t *self)
 {
+  // flexi masks panel (separate panel, left/right positions) is darkroom-only
+  // window chrome, not per-view lib content -- hide it and its corner icon
+  // explicitly, since nothing else does this when leaving the view
+  dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
+
   dt_iop_color_picker_cleanup();
   if(darktable.lib->proxy.colorpicker.picker_proxy)
     dt_iop_color_picker_reset(darktable.lib->proxy.colorpicker.picker_proxy->module, FALSE);

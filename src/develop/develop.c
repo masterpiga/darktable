@@ -1706,6 +1706,14 @@ void dt_dev_reload_history_items(dt_develop_t *dev)
   // set the module list order
   dt_dev_reorder_gui_module_list(dev);
 
+  // dev->forms/history was just rewritten wholesale (this function is the
+  // sole entry point for undo/redo, jump to a history step, style paste,
+  // snapshot restore, compress history): the masks panel's GUI-only empty-
+  // group placeholders have no counterpart in what was just reloaded, so drop
+  // them before the panel next rebuilds (see dt_iop_gui_blend_forms_reloaded).
+  for(GList *modules = dev->iop; modules; modules = g_list_next(modules))
+    dt_iop_gui_blend_forms_reloaded((dt_iop_module_t *)modules->data);
+
   dt_unlock_image(dev->image_storage.id);
 }
 
@@ -2540,6 +2548,11 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   // clang-format on
 
   dev->history_end = 0;
+  // defensive: should already be NULL/drained by dt_masks_finish_flexi_migrations()
+  // at the end of the previous call, see its own comment and the field's
+  // comment in develop.h.
+  g_list_free_full(dev->pending_flexi_migrations, free);
+  dev->pending_flexi_migrations = NULL;
 
   // Specific handling for None workflow (interdependency)
 
@@ -2717,9 +2730,9 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
       memcpy(hist->blend_params, blendop_params, sizeof(dt_develop_blend_params_t));
     }
     else if(blendop_params
-            && dt_develop_blend_legacy_params
+            && dt_develop_blend_legacy_params_ext
             (hist->module, blendop_params, blendop_version,
-             hist->blend_params, dt_develop_blend_version(), bl_length) == FALSE)
+             hist->blend_params, dt_develop_blend_version(), bl_length, num) == FALSE)
     {
       legacy_params = TRUE;
     }
@@ -2825,6 +2838,11 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   }
 
   dt_ioppr_check_iop_order(dev, imgid, "dt_dev_read_history_no_image end");
+
+  // history_end is now final -- synthesize any classic->flexi masks queued
+  // during the loop above under the right row before the read below picks
+  // them up (see dt_masks_finish_flexi_migrations()'s own comment).
+  dt_masks_finish_flexi_migrations(dev);
 
   dt_masks_read_masks_history(dev, imgid);
 
@@ -4306,15 +4324,41 @@ gboolean dt_dev_equal_chroma(const float *f, const double *d)
       && feqf(f[2], (float)d[2], 0.00001f);
 }
 
+// dev->chroma.temperature/adaptation are raw, UNOWNED dt_iop_module_t pointers,
+// written commit-side by temperature.c and channelmixerrgb.c and never
+// invalidated when the module list they point into is torn down. Dereferencing
+// one after that is a hard, reproducible SIGSEGV inside
+// dt_iop_set_module_trouble_message below, reached from _try_enter (darkroom.c),
+// which resets chroma on every darkroom entry -- at which point dev->iop is the
+// *previous* session's list, or empty. dt_iop_cleanup_module now clears these
+// when it frees a module they name, but this cache is written from too many
+// places to trust that alone, so validate before dereferencing: a module that is
+// no longer in dev->iop is gone, whatever freed it. The walk is over ~50
+// modules, twice, on a view switch -- not a path where that matters.
+static gboolean _chroma_module_alive(const dt_develop_t *dev,
+                                     const dt_iop_module_t *const module)
+{
+  if(!module) return FALSE;
+  for(const GList *m = dev->iop; m; m = g_list_next(m))
+    if(m->data == module) return TRUE;
+
+  // loud on purpose: reaching here means something left a dangling module in the
+  // chroma cache. It is contained now, but the write site is still worth finding.
+  dt_print(DT_DEBUG_ALWAYS,
+           "[chroma] stale module %p in dev->chroma (not in dev->iop) -- ignored",
+           (const void *)module);
+  return FALSE;
+}
+
 void dt_dev_clear_chroma_troubles(dt_develop_t *dev)
 {
   if(!dev->gui_attached)
     return;
 
   dt_dev_chroma_t *chr = &dev->chroma;
-  if(chr->temperature)
+  if(_chroma_module_alive(dev, chr->temperature))
     dt_iop_set_module_trouble_message(chr->temperature, NULL, NULL, NULL);
-  if(chr->adaptation)
+  if(_chroma_module_alive(dev, chr->adaptation))
     dt_iop_set_module_trouble_message(chr->adaptation, NULL, NULL, NULL);
 }
 

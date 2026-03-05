@@ -287,6 +287,7 @@ gboolean dt_dev_pixelpipe_init_cached(dt_dev_pixelpipe_t *pipe,
 
   memset(&pipe->scharr, 0, sizeof(dt_dev_detail_mask_t));
   pipe->want_detail_mask = FALSE;
+  pipe->synch_no_detail_invalidate = FALSE;
 
   dt_atomic_set_int(&pipe->shutdown, DT_DEV_PIXELPIPE_STOP_NO);
   pipe->opencl_error = FALSE;
@@ -550,6 +551,25 @@ void dt_dev_pixelpipe_create_nodes(dt_dev_pixelpipe_t *pipe,
   dt_pthread_mutex_unlock(&pipe->busy_mutex);
 }
 
+// TRUE if any form in the blend mask group carries a non-zero per-shape
+// detail threshold (flexi scoped refinement, masks v7). Such refinements need
+// the scharr/detail buffer even when the global bp->details is neutral.
+static gboolean _blend_group_wants_details(dt_develop_t *dev,
+                                           const dt_mask_id_t mask_id)
+{
+  if(!dt_is_valid_maskid(mask_id)) return FALSE;
+  const dt_masks_form_t *grp = dt_masks_get_from_id(dev, mask_id);
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
+
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(pt && pt->refinement.enabled && !feqf(pt->refinement.details, 0.0f, 1e-6))
+      return TRUE;
+  }
+  return FALSE;
+}
+
 // helper
 static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
                                  dt_develop_t *dev,
@@ -661,15 +681,73 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
         const dt_develop_blend_params_t *const bp = piece->blendop_data;
         const gboolean valid_mask = bp->mask_mode > DEVELOP_MASK_ENABLED;
 
-        if(!feqf(bp->details, 0.0f, 1e-6) && valid_mask && pipe->want_detail_mask == FALSE)
+        // The detail/scharr buffer is requested when the global refinement
+        // carries a detail threshold, but also when any per-shape refinement
+        // (flexi scoped refinement, masks v7) does: those store their detail
+        // threshold in the form's pt->refinement, not in bp->details. Without
+        // this the scharr buffer is never produced and the per-shape pass hits
+        // "detail mask blending error".
+        if(valid_mask
+           && pipe->want_detail_mask == FALSE
+           && (!feqf(bp->details, 0.0f, 1e-6)
+               || _blend_group_wants_details(dev, bp->mask_id)))
         {
-          dt_iop_module_t *gen = raw_img ? dt_iop_get_module("demosaic") : NULL;
-          dt_dev_pixelpipe_cache_invalidate_later(pipe, gen ? gen->iop_order : 0, "usedetails ");
+          dt_print_pipe(DT_DEBUG_PIPE, "details requested",
+                        pipe, piece->module, DT_DEVICE_NONE, NULL, NULL);
+          // during synch_all replay the flush is deferred to a single
+          // toggle-gated invalidation at the end (see
+          // dt_dev_pixelpipe_synch_all); the scharr buffer is preserved across
+          // replay so a per-module flush here is both unnecessary and ruinous
+          // for the pipe cache.
+          if(!pipe->synch_no_detail_invalidate)
+          {
+            dt_iop_module_t *gen = raw_img ? dt_iop_get_module("demosaic") : NULL;
+            dt_dev_pixelpipe_cache_invalidate_later(pipe, gen ? gen->iop_order : 0, "usedetails ");
+          }
           pipe->want_detail_mask = TRUE;
         }
       }
     }
   }
+}
+
+/* TRUE if the consumer's mask group contains a DT_MASKS_RASTER form element
+   referencing `source` (op + instance).
+
+   A flexi raster element is a group member, not the module's exclusive raster
+   sink: it leaves blend_params.raster_mask_* untouched and its mask_mode is
+   MASK/FLEXI, never RASTER. The legacy `consumes` test in
+   _iop_prune_stale_raster_users therefore cannot see it, and would prune a
+   perfectly live consumer -- after which the source stops storing its mask and
+   the element silently contributes nothing.
+
+   `mask_id` must come from the consumer's piece->blendop_data (authoritative in
+   every pipe), but the forms themselves are resolved through dev->forms rather
+   than pipe->forms: the pipe's snapshot is only refreshed later, inside
+   dt_dev_pixelpipe_process(), so at prune time it is the previous run's copy
+   (or NULL on the first run). dev->forms is per-dev and correct in the export
+   pipe too -- unlike module->enabled/blend_params, which track the darkroom GUI
+   and must never be consulted here. */
+static gboolean _raster_form_consumes(dt_develop_t *dev,
+                                      const dt_mask_id_t mask_id,
+                                      const dt_iop_module_t *source)
+{
+  if(!dev || !dt_is_valid_maskid(mask_id)) return FALSE;
+  const dt_masks_form_t *grp = dt_masks_get_from_id(dev, mask_id);
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
+
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(!pt) continue;
+    const dt_masks_form_t *f = dt_masks_get_from_id(dev, pt->formid);
+    if(!f || !(f->type & DT_MASKS_RASTER) || !f->points) continue;
+    const dt_masks_point_raster_t *rp = f->points->data;
+    if(dt_iop_module_is(source, rp->source)
+       && source->multi_priority == rp->instance)
+      return TRUE;
+  }
+  return FALSE;
 }
 
 /** remove stale entries (deleted, disabled or de-synced consumers) from a
@@ -725,8 +803,13 @@ static void _iop_prune_stale_raster_users(dt_dev_pixelpipe_t *pipe, dt_iop_modul
     // to drawn/parametric) leaves a phantom entry that would otherwise keep us
     // publishing -- and invalidating every downstream cacheline -- on every run.
     const dt_develop_blend_params_t *bp = sink_piece->blendop_data;
-    const gboolean consumes = sink->raster_mask.sink.source == module && sink_piece->enabled &&
-                              bp && (bp->mask_mode & DEVELOP_MASK_RASTER);
+    // ...either as the exclusive whole-mask raster sink, or as a raster FORM
+    // element inside its mask group (which the legacy test cannot see).
+    const gboolean consumes =
+      sink_piece->enabled && bp
+      && ((sink->raster_mask.sink.source == module
+           && (bp->mask_mode & DEVELOP_MASK_RASTER))
+          || _raster_form_consumes(module->dev, bp->mask_id, module));
     if(!consumes)
     {
       g_hash_table_iter_remove(&iter);
@@ -773,9 +856,28 @@ void dt_dev_pixelpipe_synch_all(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
   dt_print_pipe(DT_DEBUG_PARAMS, "synch all module history",
     pipe, NULL, DT_DEVICE_NONE, NULL, NULL);
 
-  dt_dev_clear_scharr_mask(pipe);
-  pipe->want_detail_mask = FALSE;
+  /* Keep the scharr detail mask across history replay. Each producer
+     (demosaic / rawprepare) rewrites it precisely when it reprocesses -- i.e.
+     exactly when its output, and hence the scharr, would change -- and leaves it
+     valid on a cache hit. rawprepare writes it WB-independently and demosaic sits
+     downstream of temperature, so there is no input the scharr depends on that
+     can change without its producer reprocessing.
 
+     Previously the scharr was freed here and regenerated via the usedetails
+     order-0 flush below, which wiped the *whole* pipe cache on every synch_all
+     (e.g. every mask-overlay toggle, every mask edit) for any pipe using a detail
+     mask. Instead we suppress that per-module flush during replay and, only if the
+     detail requirement actually toggles, drop the scharr and invalidate once.
+
+     The per-piece distortion caches are still dropped every synch_all as before
+     (hash-guarded and cheap); only the scharr buffer is preserved. */
+  for(GList *n = pipe->nodes; n; n = g_list_next(n))
+    _clear_piece_mask_caches(n->data);
+
+  pipe->want_detail_mask = FALSE;
+  pipe->synch_no_detail_invalidate = TRUE;
+
+  /* go through all history items and adjust params */
   GList *history = dev->history;
   for(int k = 0; k < dev->history_end && history; k++)
   {
@@ -788,6 +890,29 @@ void dt_dev_pixelpipe_synch_all(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
   for(GList *nodes = pipe->nodes; nodes; nodes = g_list_next(nodes))
     _iop_prune_stale_raster_users(pipe, ((dt_dev_pixelpipe_iop_t *)nodes->data)->module);
 
+  pipe->synch_no_detail_invalidate = FALSE;
+
+  /* Decide whether a full flush is really needed from the ACTUAL state, not a
+     cross-synch_all compare of want_detail_mask (which is unreliable: node
+     rebuilds reset it, and it can flicker mid-drag). The scharr buffer is the
+     ground truth -- a producer rebuilds it whenever it reprocesses, so if it is
+     present it is valid and the whole tail can stay cached. We only need to flush
+     when the buffer must be built (needed but missing) or dropped (no longer
+     needed). A mere detail-threshold change touches neither: it changes the mask
+     hash, so the masked module invalidates on its own without a full flush. */
+  if(pipe->want_detail_mask && pipe->scharr.data == NULL)
+  {
+    // needed but not built yet (first process, or dropped by a node rebuild):
+    // force the producer to reprocess and build it.
+    dt_dev_pixelpipe_cache_invalidate_later(pipe, 0, "usedetails build ");
+  }
+  else if(!pipe->want_detail_mask && pipe->scharr.data != NULL)
+  {
+    // no longer needed: drop the now-unused scharr and recompute the tail that
+    // previously carried its influence.
+    dt_dev_clear_scharr_mask(pipe);
+    dt_dev_pixelpipe_cache_invalidate_later(pipe, 0, "usedetails drop ");
+  }
   dt_print_pipe(DT_DEBUG_PARAMS,
            "synch all modules done",
            pipe, NULL, DT_DEVICE_NONE, NULL, NULL,
@@ -3684,6 +3809,7 @@ static void _clear_piece_mask_caches(dt_dev_pixelpipe_iop_t *piece)
 {
   _clear_mask_cache(piece->pipe, &piece->detail_mask_cache);
   _clear_mask_cache(piece->pipe, &piece->raster_mask_cache);
+  _clear_mask_cache(piece->pipe, &piece->drawn_mask_cache);
 }
 
 static inline gboolean _distort_piece_roi(const dt_dev_pixelpipe_iop_t *piece)

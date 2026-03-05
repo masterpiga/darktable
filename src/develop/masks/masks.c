@@ -181,6 +181,9 @@ void dt_masks_init_form_gui(dt_masks_form_gui_t *gui)
   gui->posx = gui->posy = -1.0f;
   gui->posx_source = gui->posy_source = -1.0f;
   gui->source_pos_type = DT_MASKS_SOURCE_POS_RELATIVE_TEMP;
+  gui->panel_hover_formids = NULL;
+  gui->panel_selected_formid = INVALID_MASKID;
+  gui->canvas_hover_formid = INVALID_MASKID;
 }
 
 void dt_masks_gui_form_create(dt_masks_form_t *form,
@@ -379,20 +382,12 @@ void dt_masks_register_forms(dt_develop_t *dev,
   dt_dev_add_masks_history_item(dev, NULL, TRUE);
 }
 
-void dt_masks_gui_form_save_creation(dt_develop_t *dev,
-                                     dt_iop_module_t *module,
-                                     dt_masks_form_t *form,
-                                     dt_masks_form_gui_t *gui)
+void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form)
 {
-  // we check if the id is already registered
-  _check_id(form);
-
-  if(gui) gui->creation = FALSE;
-
   // mask nb will be at least the length of the list
-  guint nb = 0;
 
   // count only the same forms to have a clean numbering
+  guint nb = 0;
   for(GList *l = dev->forms; l; l = g_list_next(l))
   {
     const dt_masks_form_t *f = l->data;
@@ -422,6 +417,19 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
       }
     }
   } while(exist);
+}
+
+void dt_masks_gui_form_save_creation(dt_develop_t *dev,
+                                     dt_iop_module_t *module,
+                                     dt_masks_form_t *form,
+                                     dt_masks_form_gui_t *gui)
+{
+  // we check if the id is already registered
+  _check_id(form);
+
+  if(gui) gui->creation = FALSE;
+
+  dt_masks_assign_unique_name(dev, form);
 
   dev->forms = g_list_append(dev->forms, form);
 
@@ -440,19 +448,73 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
         grp = _group_create(dev, module, DT_MASKS_GROUP);
     }
     // we add the form in this group
-    dt_masks_point_group_t *grpt = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *grpt = calloc(1, sizeof(dt_masks_point_group_t));
     grpt->formid = form->formid;
     grpt->parentid = grp->formid;
     grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
-    if(grp->points)
+    // the remembered "last used" opacity only makes sense for drawn shapes
+    // (the on-canvas gesture that sets it); a parametric channel or raster
+    // reference has no such gesture, and defaulting it to some unrelated
+    // shape's last opacity is surprising -- always start those fully opaque.
+    grpt->opacity = (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+      ? 1.0f
+      : dt_conf_get_float("plugins/darkroom/masks/opacity");
+    // the group-level opacity (see dt_masks_point_group_t.group_opacity) is
+    // only ever read from a run's head, but every member carries its own
+    // broadcast copy so any of them can serve as head after a reorder --
+    // 1.0 (no effect) is the correct starting point for a freshly added one.
+    grpt->group_opacity = 1.0f;
+
+    // flexi: when a group is the active draw target, the new shape lands inside
+    // that group (adopting its operator and in-group screen flag) instead of being
+    // appended on top with the default operator. Gated on the flexi insertion hint,
+    // which classic drawing never sets -> classic path stays byte-identical.
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    const gboolean flexi_insert =
+      bd && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) && bd->insert_active;
+    if(flexi_insert)
     {
-      if(form->type == DT_MASKS_BRUSH)
-        grpt->state |= DT_MASKS_STATE_SUM;
+      grpt->state |= (dt_masks_state_t)bd->insert_op;   // 0 = the base add group
+      grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
+      if(dt_is_valid_maskid(bd->insert_after_fid))
+      {
+        // land directly above the anchor member (its run)
+        int pos = -1, k = 0;
+        for(GList *l = grp->points; l; l = g_list_next(l), k++)
+          if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
+          { pos = k; break; }
+        if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
+        else         grp->points = g_list_append(grp->points, grpt);
+      }
       else
-        grpt->state |= DT_MASKS_STATE_UNION;
+      {
+        // a bottom-anchored group (e.g. the base "add"): the new shape becomes the
+        // bottom of the list
+        grp->points = g_list_prepend(grp->points, grpt);
+      }
+      // tell the panel which form realized the (selected) empty group
+      if(bd->insert_realize_empty)
+      {
+        bd->insert_realized_fid = form->formid;
+        // first-class groups: a realized empty group is a brand-new group, so mark
+        // its (single) member as a group head -- this keeps it distinct even when
+        // its operator matches the group below (normalize clears it if it lands at
+        // the very bottom). See dt_masks_point_group_t.group_start.
+        grpt->group_start = 1;
+        // a brand-new group always starts fully opaque (1.0 unless the empty
+        // group being realized carries a saved layout preset's remembered
+        // opacity) -- the remembered "last used" opacity above is for
+        // successive shapes within the same group, and carrying it over to a
+        // new group is surprising.
+        grpt->opacity = bd->insert_opacity;
+      }
     }
-    grpt->opacity = dt_conf_get_float("plugins/darkroom/masks/opacity");
-    grp->points = g_list_append(grp->points, grpt);
+    else
+    {
+      if(grp->points)
+        grpt->state |= dt_masks_get_default_operator(form);
+      grp->points = g_list_append(grp->points, grpt);
+    }
     // we save the group
     dt_dev_add_masks_history_item(dev, module, TRUE);
     // we update module gui
@@ -842,50 +904,109 @@ static int _masks_legacy_params_v5_to_v6(dt_develop_t *dev, void *params)
   return 0;
 }
 
+static int dt_masks_legacy_params_v6_to_v7(dt_develop_t *dev, void *params)
+{
+  /*
+   * masks v7 appended an optional per-shape refinement block to the group
+   * point struct (dt_masks_point_group_t.refinement). The block is already
+   * zero-filled at read time (enabled == 0), which disables it and keeps
+   * rendering identical to v6. Nothing to convert; just bump the version.
+   */
+  dt_masks_form_t *m = (dt_masks_form_t *)params;
+  m->version = 7;
+  return 0;
+}
+
+static int dt_masks_legacy_params_v7_to_v8(dt_develop_t *dev, void *params)
+{
+  /*
+   * masks v8 appended an optional custom group-name field to the group point
+   * struct (dt_masks_point_group_t.name), for flexi first-class groups. The
+   * field is already zero-filled at read time (empty string), which means no
+   * custom name and keeps rendering identical to v7. Nothing to convert;
+   * just bump the version.
+   */
+  dt_masks_form_t *m = (dt_masks_form_t *)params;
+  m->version = 8;
+  return 0;
+}
+
+static int dt_masks_legacy_params_v8_to_v9(dt_develop_t *dev, void *params)
+{
+  /*
+   * masks v9 appended a persistent, multiplicative group-level opacity to
+   * the group point struct (dt_masks_point_group_t.group_opacity), broadcast
+   * to every member of a run the same way refinement/name are. Unlike those,
+   * 0.0 (what the read-time zero-fill above leaves it at) is not a neutral
+   * value for a multiplicative gain -- it would silently zero out every
+   * pre-v9 group's mask -- so every group point explicitly gets the
+   * identity value (1.0) here instead.
+   */
+  dt_masks_form_t *m = (dt_masks_form_t *)params;
+  if(m->type & DT_MASKS_GROUP)
+    for(GList *l = m->points; l; l = g_list_next(l))
+      ((dt_masks_point_group_t *)l->data)->group_opacity = 1.0f;
+  m->version = 9;
+  return 0;
+}
+
+static int dt_masks_legacy_params_v9_to_v10(dt_develop_t *dev, void *params)
+{
+  /*
+   * masks v10 replaced the temporary DT_MASKS_STATE_GROUP_BREAK bit
+   * (borrowed from the group point's `state` field) with a real, dedicated
+   * field, dt_masks_point_group_t.group_start -- see that enum value's own
+   * comment. Zero-fill is neutral for the new field (0 = "no explicit
+   * break," same as "bit not set"), so there is nothing to backfill; the
+   * only work here is carrying forward any break that was actually set in
+   * the old bit, and clearing that bit from `state` so it doesn't linger
+   * as stale data once nothing reads it from there anymore.
+   */
+  dt_masks_form_t *m = (dt_masks_form_t *)params;
+  if(m->type & DT_MASKS_GROUP)
+    for(GList *l = m->points; l; l = g_list_next(l))
+    {
+      dt_masks_point_group_t *pt = (dt_masks_point_group_t *)l->data;
+      if(pt->state & DT_MASKS_STATE_GROUP_BREAK)
+      {
+        pt->group_start = 1;
+        pt->state &= ~DT_MASKS_STATE_GROUP_BREAK;
+      }
+    }
+  m->version = 10;
+  return 0;
+}
+
 
 int dt_masks_legacy_params(dt_develop_t *dev,
                            void *params,
                            const int old_version,
                            const int new_version)
 {
-  int res = 1;
-#if 0 // we should not need this any longer
-  if(old_version == 1 && new_version == 2)
-  {
-    res = dt_masks_legacy_params_v1_to_v2(dev, params);
-  }
-#endif
+  // sequential upgrade chain: apply every step from old_version up to
+  // new_version in order. Each dt_masks_legacy_params_vN_to_vN+1 bumps the
+  // form version and returns non-zero on failure.
+  if(old_version < 1 || old_version > new_version) return 1;
 
-  if(old_version == 1 && new_version == 6)
-  {
+  int res = 0;
+  if(!res && old_version < 2 && new_version >= 2)
     res = _masks_legacy_params_v1_to_v2(dev, params);
-    if(!res) res = _masks_legacy_params_v2_to_v3(dev, params);
-    if(!res) res = _masks_legacy_params_v3_to_v4(dev, params);
-    if(!res) res = _masks_legacy_params_v4_to_v5(dev, params);
-    if(!res) res = _masks_legacy_params_v5_to_v6(dev, params);
-  }
-  else if(old_version == 2 && new_version == 6)
-  {
+  if(!res && old_version < 3 && new_version >= 3)
     res = _masks_legacy_params_v2_to_v3(dev, params);
-    if(!res) res = _masks_legacy_params_v3_to_v4(dev, params);
-    if(!res) res = _masks_legacy_params_v4_to_v5(dev, params);
-    if(!res) res = _masks_legacy_params_v5_to_v6(dev, params);
-  }
-  else if(old_version == 3 && new_version == 6)
-  {
+  if(!res && old_version < 4 && new_version >= 4)
     res = _masks_legacy_params_v3_to_v4(dev, params);
-    if(!res) res = _masks_legacy_params_v4_to_v5(dev, params);
-    if(!res) res = _masks_legacy_params_v5_to_v6(dev, params);
-  }
-  else if(old_version == 4 && new_version == 6)
-  {
+  if(!res && old_version < 5 && new_version >= 5)
     res = _masks_legacy_params_v4_to_v5(dev, params);
-    if(!res) res = _masks_legacy_params_v5_to_v6(dev, params);
-  }
-  else if(old_version == 5 && new_version == 6)
-  {
+  if(!res && old_version < 6 && new_version >= 6)
     res = _masks_legacy_params_v5_to_v6(dev, params);
-  }
+  if(!res && old_version < 7 && new_version >= 7)
+    res = dt_masks_legacy_params_v6_to_v7(dev, params);
+  if(!res && old_version < 8 && new_version >= 8)
+    res = dt_masks_legacy_params_v7_to_v8(dev, params);
+  if(!res && old_version < 9 && new_version >= 9)
+    res = dt_masks_legacy_params_v8_to_v9(dev, params);
+  if(!res && old_version < 10 && new_version >= 10)
+    res = dt_masks_legacy_params_v9_to_v10(dev, params);
 
   return res;
 }
@@ -913,6 +1034,10 @@ dt_masks_form_t *dt_masks_create(const dt_masks_type_t type)
     form->functions = &dt_masks_functions_gradient;
   else if(type & DT_MASKS_GROUP)
     form->functions = &dt_masks_functions_group;
+  else if(type & DT_MASKS_PARAMETRIC)
+    form->functions = &dt_masks_functions_parametric;
+  else if(type & DT_MASKS_RASTER)
+    form->functions = &dt_masks_functions_raster;
 #ifdef HAVE_AI
   else if(type & DT_MASKS_OBJECT)
     form->functions = &dt_masks_functions_object;
@@ -1043,10 +1168,33 @@ void dt_masks_read_masks_history(dt_develop_t *dev, const dt_imgid_t imgid)
     {
       const char *const ptbuf = (char *)sqlite3_column_blob(stmt, 5);
       const size_t point_size = form->functions->point_struct_size;
+
+      // the on-disk stride may be smaller than the current struct when an
+      // older edit predates a field being appended to a point struct. So
+      // far this affects group points, which gained the per-shape
+      // refinement block in masks v7, the custom group-name field in masks
+      // v8, the persistent group-opacity field in masks v9, and the
+      // first-class group_start field in masks v10. We read the historic
+      // stride and zero-fill the remainder so older masks load with
+      // refinements disabled, no custom name, and no explicit group break
+      // (all neutral at 0). The zero-filled group_opacity is NOT neutral (0
+      // would zero out the whole group) -- the version migration below
+      // fixes it up to 1.0 explicitly; group_start's zero-fill is neutral
+      // (see its own comment in masks.h), but the migration still has to
+      // carry forward any break that was set in the old, pre-v10 bit.
+      size_t read_size = point_size;
+      if(type & DT_MASKS_GROUP)
+      {
+        if(form->version < 7)       read_size = offsetof(dt_masks_point_group_t, refinement);
+        else if(form->version < 8)  read_size = offsetof(dt_masks_point_group_t, name);
+        else if(form->version < 9)  read_size = offsetof(dt_masks_point_group_t, group_opacity);
+        else if(form->version < 10) read_size = offsetof(dt_masks_point_group_t, group_start);
+      }
+
       for(int i = 0; i < nb_points; i++)
       {
-        char *point = malloc(point_size);
-        memcpy(point, ptbuf + i*point_size, point_size);
+        char *point = calloc(1, point_size);
+        memcpy(point, ptbuf + i * read_size, MIN(read_size, point_size));
         form->points = g_list_append(form->points, point);
       }
     }
@@ -1551,6 +1699,13 @@ void dt_masks_set_edit_mode(dt_iop_module_t *module,
   }
 
   const dt_masks_edit_mode_t old_shown = bd->masks_shown;
+
+  // leaving edit mode cancels any solo-edit so its toggle does not linger active
+  if(value == DT_MASKS_EDIT_OFF)
+  {
+    bd->soloedit_formid = INVALID_MASKID;
+  }
+
   bd->masks_shown = value;
   dt_masks_change_form_gui(grp);
   darktable.develop->form_gui->edit_mode = value;
@@ -1596,7 +1751,7 @@ void dt_masks_set_edit_mode_single_form(dt_iop_module_t *module,
   const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, formid);
   if(form)
   {
-    dt_masks_point_group_t *fpt = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *fpt = calloc(1, sizeof(dt_masks_point_group_t));
     fpt->formid = formid;
     fpt->parentid = grid;
     fpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
@@ -1617,12 +1772,82 @@ void dt_masks_set_edit_mode_single_form(dt_iop_module_t *module,
   dt_control_queue_redraw_center();
 }
 
+void dt_masks_set_edit_mode_forms(dt_iop_module_t *module,
+                                  GList *formids,
+                                  const dt_masks_edit_mode_t value)
+{
+  if(!module) return;
+
+  dt_masks_form_t *grp = dt_masks_create_ext(DT_MASKS_GROUP);
+  const dt_mask_id_t grid = module->blend_params->mask_id;
+
+  // build a scratch group holding only the requested forms, so only their
+  // outlines/handles become editable on the canvas. The actual mask computation
+  // (blend_params->mask_id) is untouched, so every shape still composites.
+  dt_mask_id_t first = NO_MASKID;
+  for(GList *l = formids; l; l = g_list_next(l))
+  {
+    const dt_mask_id_t formid = GPOINTER_TO_INT(l->data);
+    const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, formid);
+    if(!form) continue;
+    if(!dt_is_valid_maskid(first)) first = formid;
+    dt_masks_point_group_t *fpt = calloc(1, sizeof(dt_masks_point_group_t));
+    fpt->formid = formid;
+    fpt->parentid = grid;
+    fpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
+    fpt->opacity = 1.0f;
+    grp->points = g_list_append(grp->points, fpt);
+  }
+
+  dt_masks_form_t *grp2 = dt_masks_create_ext(DT_MASKS_GROUP);
+  grp2->formid = NO_MASKID;
+  dt_masks_group_ungroup(grp2, grp);
+  dt_masks_change_form_gui(grp2);
+  darktable.develop->form_gui->edit_mode = value;
+
+  DT_ENTER_GUI_UPDATE();
+  dt_dev_masks_selection_change(darktable.develop, NULL,
+                                value && dt_is_valid_maskid(first) ? first : NO_MASKID);
+  DT_LEAVE_GUI_UPDATE();
+
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(bd)
+  {
+    bd->masks_shown = value;
+    if(bd->masks_support)
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit),
+                                   value == DT_MASKS_EDIT_OFF ? FALSE : TRUE);
+  }
+
+  dt_control_queue_redraw_center();
+}
+
+void dt_masks_iop_edit_toggle_callback(GtkToggleButton *togglebutton,
+                                       dt_iop_module_t *module)
+{
+  if(!module) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(module->blend_params->mask_id == NO_MASKID)
+  {
+    bd->masks_shown = DT_MASKS_EDIT_OFF;
+    return;
+  }
+
+  // reset the gui
+  dt_masks_set_edit_mode(module,
+                         (bd->masks_shown == DT_MASKS_EDIT_OFF
+                          ? DT_MASKS_EDIT_FULL
+                          : DT_MASKS_EDIT_OFF));
+}
+
 static void _menu_no_masks(dt_iop_module_t *module)
 {
   // we drop all the forms in the iop
   dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
   if(grp) dt_masks_form_remove(module, NULL, grp);
 
+  dt_print(DT_DEBUG_MASKS, "[masks] _menu_no_masks '%s': mask_id %d->NO_MASKID",
+           module->op, module->blend_params->mask_id);
   module->blend_params->mask_id = NO_MASKID;
 
   // and we update the iop
@@ -1644,6 +1869,51 @@ static void _menu_add_shape(dt_iop_module_t *module,
   dt_control_queue_redraw_center();
 }
 
+// flexi: a form was just appended to the module's mask group as the top point with
+// the default operator (the import path). Reposition it per the panel's insertion
+// hint so it lands in the selected (or single default) group, mirroring how a freshly
+// drawn shape is placed in dt_masks_gui_form_save_creation. No-op outside flexi or
+// when no hint is active, so the classic path stays byte-identical.
+static void _flexi_reposition_imported(dt_iop_module_t *module, dt_masks_form_t *grp,
+                                       dt_masks_point_group_t *grpt,
+                                       const dt_masks_form_t *form)
+{
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!bd || !grp || !grpt || !form) return;
+  if(!(module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) || !bd->insert_active)
+    return;
+
+  grpt->state &= ~DT_MASKS_STATE_OP;
+  grpt->state |= (dt_masks_state_t)bd->insert_op;
+  grpt->state &= ~DT_MASKS_STATE_WITHIN;
+  grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
+
+  grp->points = g_list_remove(grp->points, grpt);
+  if(dt_is_valid_maskid(bd->insert_after_fid))
+  {
+    int pos = -1, k = 0;
+    for(GList *l = grp->points; l; l = g_list_next(l), k++)
+      if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
+      { pos = k; break; }
+    if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
+    else         grp->points = g_list_append(grp->points, grpt);
+  }
+  else
+    grp->points = g_list_prepend(grp->points, grpt);  // bottom-anchored -> base
+
+  // realizing an empty group: tell the panel which form filled it, and mark the new
+  // single-member group as a head so it stays distinct from a same-op neighbour
+  // (first-class groups; see dt_masks_point_group_t.group_start)
+  if(bd->insert_realize_empty)
+  {
+    bd->insert_realized_fid = form->formid;
+    grpt->group_start = 1;
+    // a brand-new group always starts fully opaque, unless it's realizing a
+    // saved layout preset's remembered opacity; see dt_masks_gui_form_save_creation
+    grpt->opacity = bd->insert_opacity;
+  }
+}
+
 static void _menu_add_exist(dt_iop_module_t *module,
                             const dt_mask_id_t formid)
 {
@@ -1657,8 +1927,9 @@ static void _menu_add_exist(dt_iop_module_t *module,
   {
     grp = _group_create(darktable.develop, module, DT_MASKS_GROUP);
   }
-  // we add the form in this group
-  dt_masks_group_add_form(grp, form);
+  // we add the form in this group, then (flexi) move it into the target group
+  dt_masks_point_group_t *grpt = dt_masks_group_add_form(grp, form);
+  _flexi_reposition_imported(module, grp, grpt, form);
   // we save the group
   // and we ensure that we are in edit mode
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
@@ -1957,6 +2228,10 @@ void dt_masks_form_remove(dt_iop_module_t *module,
       // is the form the base group of the iop ?
       if(id == m->blend_params->mask_id)
       {
+        dt_print(DT_DEBUG_MASKS,
+                 "[masks] dt_masks_form_remove '%s': mask_id %d->NO_MASKID"
+                 " (form %d permanently removed)",
+                 m->op, m->blend_params->mask_id, id);
         m->blend_params->mask_id = NO_MASKID;
         dt_masks_iop_update(m);
         dt_dev_add_history_item(darktable.develop, m, TRUE);
@@ -2023,7 +2298,13 @@ float dt_masks_form_change_opacity(dt_masks_form_t *form,
     dt_masks_point_group_t *fpt = fpts->data;
     if(fpt->formid == id)
     {
-      const float opacity = CLAMP(fpt->opacity + amount, 0.05f, 1.0f);
+      // 0, not the 0.05 floor this used to carry (upstream c646d7e959): that
+      // clamp existed because a 0% shape was silently indistinguishable from a
+      // live one, and the on-canvas toast below plus the mask panel's
+      // low-opacity warning badge now say so out loud. The default opacity for
+      // *new* shapes is still floored (see dt_masks_events_mouse_scrolled) --
+      // there, a forgotten 0 makes every shape drawn afterwards invisible.
+      const float opacity = CLAMP(fpt->opacity + amount, 0.0f, 1.0f);
       if(opacity != fpt->opacity)
       {
         fpt->opacity = opacity;
@@ -2090,6 +2371,53 @@ static int _find_in_group(const dt_masks_form_t *grp,
   return nb;
 }
 
+dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form)
+{
+  // parametric forms are ordinary group members now: a new one adopts the
+  // selected group's operator (the shared default_operator pref, set when a group
+  // or staged group is the active target), exactly like a drawn shape. With no
+  // group selected (pref unset / "automatic") fall back to multiply, the
+  // historic sensible default for a parametric "limit" mask. This only ever
+  // affects flexi forms (parametric-as-form does not exist in legacy edits).
+  if(form && (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)))
+  {
+    const char *pop = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
+    if(pop && *pop)
+    {
+      if(!strcmp(pop, "union"))        return DT_MASKS_STATE_UNION;
+      if(!strcmp(pop, "intersection")) return DT_MASKS_STATE_INTERSECTION;
+      if(!strcmp(pop, "difference"))   return DT_MASKS_STATE_DIFFERENCE;
+      if(!strcmp(pop, "sum"))          return DT_MASKS_STATE_SUM;
+      if(!strcmp(pop, "exclusion"))    return DT_MASKS_STATE_EXCLUSION;
+      if(!strcmp(pop, "multiply"))     return DT_MASKS_STATE_MULTIPLY;
+    }
+    return DT_MASKS_STATE_MULTIPLY;
+  }
+
+  // the user can pick a default composition operator for newly added
+  // shapes in the mask manager. when unset (or "automatic") we keep the
+  // historic behavior: brushes default to sum, everything else to union.
+  // this only affects forms added from now on, never existing edits.
+  const char *op = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
+  if(op && *op)
+  {
+    if(!strcmp(op, "union"))        return DT_MASKS_STATE_UNION;
+    if(!strcmp(op, "intersection")) return DT_MASKS_STATE_INTERSECTION;
+    if(!strcmp(op, "difference"))   return DT_MASKS_STATE_DIFFERENCE;
+    if(!strcmp(op, "sum"))          return DT_MASKS_STATE_SUM;
+    if(!strcmp(op, "exclusion"))    return DT_MASKS_STATE_EXCLUSION;
+    if(!strcmp(op, "multiply"))     return DT_MASKS_STATE_MULTIPLY;
+  }
+  // "automatic" / unset → historic default
+  const dt_masks_state_t st = (form && form->type == DT_MASKS_BRUSH)
+    ? DT_MASKS_STATE_SUM
+    : DT_MASKS_STATE_UNION;
+  dt_print(DT_DEBUG_MASKS,
+           "[masks] default operator for new form (pref='%s') -> 0x%x",
+           (op && *op) ? op : "automatic", st);
+  return st;
+}
+
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form)
 {
@@ -2100,12 +2428,17 @@ dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
   // or we go through all points of form to see if we find a ref to grp->formid
   if(!(form->type & DT_MASKS_GROUP) || _find_in_group(form, grp->formid) == 0)
   {
-    dt_masks_point_group_t *grpt = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *grpt = calloc(1, sizeof(dt_masks_point_group_t));
     grpt->formid = form->formid;
     grpt->parentid = grp->formid;
     grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
-    if(grp->points) grpt->state |= DT_MASKS_STATE_UNION;
-    grpt->opacity = dt_conf_get_float("plugins/darkroom/masks/opacity");
+    if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
+    // see dt_masks_gui_form_save_creation: the remembered opacity default is
+    // a drawn-shape-only concept
+    grpt->opacity = (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+      ? 1.0f
+      : dt_conf_get_float("plugins/darkroom/masks/opacity");
+    grpt->group_opacity = 1.0f;
     grp->points = g_list_append(grp->points, grpt);
     return grpt;
   }
@@ -2134,11 +2467,12 @@ void dt_masks_group_ungroup(dt_masks_form_t *dest_grp,
       }
       else
       {
-        dt_masks_point_group_t *fpt = malloc(sizeof(dt_masks_point_group_t));
+        dt_masks_point_group_t *fpt = calloc(1, sizeof(dt_masks_point_group_t));
         fpt->formid = grpt->formid;
         fpt->parentid = grpt->parentid;
         fpt->state = grpt->state;
         fpt->opacity = grpt->opacity;
+        fpt->group_opacity = grpt->group_opacity;
         dest_grp->points = g_list_append(dest_grp->points, fpt);
       }
     }
@@ -2165,6 +2499,10 @@ dt_hash_t dt_masks_group_hash(dt_hash_t hash, dt_masks_form_t *form)
         // state & opacity
         hash = dt_hash(hash, &grpt->state, sizeof(int));
         hash = dt_hash(hash, &grpt->opacity, sizeof(float));
+        // per-shape/per-group refinement (masks v7) is a rendering input consumed
+        // by the group renderer, so it must feed the pixelpipe cache hash too;
+        // zero-filled for legacy blobs, so this is neutral for old edits.
+        hash = dt_hash(hash, &grpt->refinement, sizeof(dt_masks_refinement_t));
         hash = dt_masks_group_hash(hash, f);
       }
     }
@@ -2509,6 +2847,15 @@ void dt_masks_select_form(dt_iop_module_t *module,
       darktable.develop->mask_form_selected_id = sel->formid;
       selection_changed = TRUE;
     }
+    // flexi mode: clicking the already-selected shape on the canvas toggles the
+    // selection back off (matches the in-module list's click-to-deselect). Other
+    // modes keep their classic behaviour (re-click leaves it selected).
+    else if(module && module->blend_params
+            && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI))
+    {
+      darktable.develop->mask_form_selected_id = 0;
+      selection_changed = TRUE;
+    }
   }
   else
   {
@@ -2526,6 +2873,8 @@ void dt_masks_select_form(dt_iop_module_t *module,
     {
       if(module->masks_selection_changed)
         module->masks_selection_changed(module, darktable.develop->mask_form_selected_id);
+      // mirror the canvas selection into the flexi mask list (highlight its row)
+      dt_iop_gui_masks_select_form(module, darktable.develop->mask_form_selected_id);
     }
   }
 }

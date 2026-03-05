@@ -206,6 +206,9 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *frm = dt_masks_get_from_id(darktable.develop, fpt->formid);
+    // a hidden shape is not editable on the canvas: skip it when picking the
+    // form under the cursor (it also draws no outline).
+    if(fpt->state & DT_MASKS_STATE_HIDDEN) { pos++; continue; }
     int inside, inside_border, near, inside_source;
     float dist = FLT_MAX;
     inside = inside_border = inside_source = 0;
@@ -235,12 +238,45 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   if(sel && sel->functions)
   {
     gui->group_edited = gui->group_selected = sel_pos;
+    // canvas -> list hover sync: highlight the matching row (or collapsed cluster
+    // header) in the in-module mask list. Only when the hovered shape changes.
+    if(gui->canvas_hover_formid != sel_fpt->formid)
+    {
+      gui->canvas_hover_formid = sel_fpt->formid;
+      dt_iop_gui_masks_hover_form(module, sel_fpt->formid);
+    }
     return sel->functions->mouse_moved(module, pzx, pzy, pressure, which, zoom_scale,
                                        sel, sel_fpt->parentid, gui, gui->group_edited);
   }
 
+  // nothing under the cursor: drop the list row hover highlight
+  if(dt_is_valid_maskid(gui->canvas_hover_formid))
+  {
+    gui->canvas_hover_formid = INVALID_MASKID;
+    dt_iop_gui_masks_hover_form(module, INVALID_MASKID);
+  }
+
   dt_control_queue_redraw_center();
   return 0;
+}
+
+// is this formid one the in-module panel asked us to highlight (a hovered list
+// row, or every member of a hovered cluster header)?
+static gboolean _panel_hovered(const dt_masks_form_gui_t *gui, const dt_mask_id_t formid)
+{
+  for(const GList *l = gui->panel_hover_formids; l; l = g_list_next(l))
+    if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
+  return FALSE;
+}
+
+// is this formid soloed or solo-edited in the panel? Unlike the hover sync above,
+// this stays true regardless of what the mouse is doing, so a soloed shape keeps
+// its canvas highlight while the user works elsewhere in the list.
+static gboolean _panel_soloed(const dt_masks_form_gui_t *gui, const dt_mask_id_t formid)
+{
+  for(const GList *l = gui->solo_formids; l; l = g_list_next(l))
+    if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
+  return FALSE;
 }
 
 void dt_group_events_post_expose(cairo_t *cr,
@@ -248,14 +284,40 @@ void dt_group_events_post_expose(cairo_t *cr,
                                  dt_masks_form_t *form,
                                  dt_masks_form_gui_t *gui)
 {
+  // base_sel is the canvas hover: the shape currently under the cursor (or -1).
+  // A hovered shape always wins; the persistent panel selection is only drawn
+  // when nothing at all is being hovered (no canvas hover, no list-row hover).
+  const int base_sel = gui->group_selected;
+  const gboolean any_list_hover = gui->panel_hover_formids != NULL;
+
   int pos = 0;
   for(GList *fpts = form->points; fpts; fpts = g_list_next(fpts))
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return;
-    if(sel->functions)
+    // a hidden shape draws no outline/handles on the canvas (matches the
+    // renderer, which excludes it from the composite). keep pos in step with
+    // gui->points by skipping only the draw call.
+    if(sel->functions && !(fpt->state & DT_MASKS_STATE_HIDDEN))
+    {
+      // decide whether this shape draws its own highlight (feather + anchors) by
+      // posing as the selected group member for the duration of its post_expose
+      // call only: a hovered list row/cluster member, else -- when nothing is
+      // hovered -- the persistently selected shape.
+      int eff = base_sel;
+      if(_panel_hovered(gui, fpt->formid))
+        eff = pos;
+      else if(_panel_soloed(gui, fpt->formid))
+        eff = pos;
+      else if(!any_list_hover && base_sel < 0
+              && dt_is_valid_maskid(gui->panel_selected_formid)
+              && fpt->formid == gui->panel_selected_formid)
+        eff = pos;
+      gui->group_selected = eff;
       sel->functions->post_expose(cr, zoom_scale, gui, pos, g_list_length(sel->points));
+      gui->group_selected = base_sel;
+    }
     pos++;
   }
 }
@@ -334,7 +396,8 @@ static int _group_get_mask(const dt_iop_module_t *const module,
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *sel = dt_masks_get_from_id_ext(piece->pipe->forms, fpt->formid);
-    if(sel)
+    // a hidden shape (hide / solo controls) contributes nothing
+    if(sel && !(fpt->state & DT_MASKS_STATE_HIDDEN))
     {
       ok[pos] = dt_masks_get_mask(module, piece, sel, &bufs[pos],
                                   &w[pos], &h[pos], &px[pos], &py[pos]);
@@ -350,6 +413,11 @@ static int _group_get_mask(const dt_iop_module_t *const module,
       states[pos] = fpt->state;
       if(ok[pos]) nb_ok++;
     }
+    else
+    {
+      // hidden or missing form: takes no slot in the composite
+      ok[pos] = 0;
+    }
     pos++;
   }
   if(nb_ok == 0) goto error;
@@ -358,6 +426,7 @@ static int _group_get_mask(const dt_iop_module_t *const module,
   int l = INT_MAX, r = INT_MIN, t = INT_MAX, b = INT_MIN;
   for(int i = 0; i < nb; i++)
   {
+    if(!ok[i]) continue;
     l = MIN(l, px[i]);
     t = MIN(t, py[i]);
     r = MAX(r, px[i] + w[i]);
@@ -372,10 +441,15 @@ static int _group_get_mask(const dt_iop_module_t *const module,
   *buffer = dt_alloc_align_float((size_t)(r - l) * (b - t));
 
   // and we copy each buffer inside, row by row
+  // the first *visible* shape always composites as a plain copy onto the
+  // (uninitialized) buffer, whatever its explicit operator: the rendered mask
+  // must match the algebra of the visible shapes only (see _group_get_mask_roi).
+  gboolean first_visible = TRUE;
   for(int i = 0; i < nb; i++)
   {
+    if(!ok[i]) continue;  // hidden/missing form: nothing to composite
     double start = dt_get_debug_wtime();
-    if(states[i] & (DT_MASKS_STATE_UNION | DT_MASKS_STATE_SUM))
+    if(!first_visible && (states[i] & (DT_MASKS_STATE_UNION | DT_MASKS_STATE_SUM)))
     {
       for(int y = 0; y < h[i]; y++)
       {
@@ -387,7 +461,7 @@ static int _group_get_mask(const dt_iop_module_t *const module,
         }
       }
     }
-    else if(states[i] & DT_MASKS_STATE_INTERSECTION)
+    else if(!first_visible && (states[i] & DT_MASKS_STATE_INTERSECTION))
     {
       for(int y = 0; y < b - t; y++)
       {
@@ -407,7 +481,7 @@ static int _group_get_mask(const dt_iop_module_t *const module,
         }
       }
     }
-    else if(states[i] & DT_MASKS_STATE_DIFFERENCE)
+    else if(!first_visible && (states[i] & DT_MASKS_STATE_DIFFERENCE))
     {
       for(int y = 0; y < h[i]; y++)
       {
@@ -420,7 +494,7 @@ static int _group_get_mask(const dt_iop_module_t *const module,
         }
       }
     }
-    else if(states[i] & DT_MASKS_STATE_EXCLUSION)
+    else if(!first_visible && (states[i] & DT_MASKS_STATE_EXCLUSION))
     {
       for(int y = 0; y < h[i]; y++)
       {
@@ -435,6 +509,24 @@ static int _group_get_mask(const dt_iop_module_t *const module,
             (*buffer)[(py[i] + y - t) * (r - l) + px[i] + x - l]
                 = fmaxf((*buffer)[(py[i] + y - t) * (r - l) + px[i] + x - l],
                         bufs[i][y * w[i] + x] * op[i]);
+        }
+      }
+    }
+    else if(!first_visible && (states[i] & DT_MASKS_STATE_MULTIPLY))
+    {
+      // multiply the accumulator by this shape; outside the shape b2 = 0, so
+      // the product is 0 there (iterate the whole region, like intersection).
+      for(int y = 0; y < b - t; y++)
+      {
+        for(int x = 0; x < r - l; x++)
+        {
+          float b2 = 0.0f;
+          if(y + t - py[i] >= 0
+             && y + t - py[i] < h[i]
+             && x + l - px[i] >= 0
+             && x + l - px[i] < w[i])
+            b2 = bufs[i][(y + t - py[i]) * w[i] + x + l - px[i]];
+          (*buffer)[y * (r - l) + x] *= b2 * op[i];
         }
       }
     }
@@ -458,6 +550,7 @@ static int _group_get_mask(const dt_iop_module_t *const module,
     dt_print(DT_DEBUG_MASKS | DT_DEBUG_PERF,
              "[masks %d] combine took %0.04f sec",
              i, dt_get_lap_time(&start));
+    first_visible = FALSE;
   }
 
   free(op);
@@ -628,6 +721,333 @@ static void _combine_masks_exclusion(float *const restrict dest,
   }
 }
 
+static void _combine_masks_multiply(float *const restrict dest,
+                                    float *const restrict newmask,
+                                    const size_t npixels,
+                                    const float opacity,
+                                    const int inverted)
+{
+  // multiply the running accumulator by this shape, the way legacy parametric
+  // masks combine. Onto the empty base this is degenerate (0), so the
+  // first-visible-as-add rule promotes a base multiply to a plain copy.
+  if(inverted)
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(int index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * (1.0f - newmask[index]);
+      dest[index] *= mask;
+    }
+  }
+  else
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(int index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * newmask[index];
+      dest[index] *= mask;
+    }
+  }
+}
+
+// soft union ("screen"): a+b-ab. Like union it is associative/commutative with
+// the empty mask as identity, but it is *not* idempotent, so feathered overlaps
+// build up smoothly instead of leaving the crease that max() produces. Used as
+// the optional within-group combiner on the flexi group-fold path.
+static void _combine_masks_screen(float *const restrict dest,
+                                  float *const restrict newmask,
+                                  const size_t npixels,
+                                  const float opacity,
+                                  const int inverted)
+{
+  if(inverted)
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(int index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * (1.0f - newmask[index]);
+      const float d = dest[index];
+      dest[index] = d + mask - d * mask;
+    }
+  }
+  else
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(int index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * newmask[index];
+      const float d = dest[index];
+      dest[index] = d + mask - d * mask;
+    }
+  }
+}
+
+// Composite a finished group sub-mask into the accumulator with the group's
+// own operator, exactly once (opacity/invert already baked into `grp`, so
+// op=1, inverted=0). Never called for the base (bottom) group -- its own
+// operator is never evaluated at all, see the base-group handling in
+// _group_get_mask_roi_flexi.
+static void _flexi_apply_group_op(float *const restrict buffer,
+                                  float *const restrict grp,
+                                  const size_t npixels,
+                                  const guint group_op)
+{
+  if(group_op & DT_MASKS_STATE_UNION)
+    _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_INTERSECTION)
+    _combine_masks_intersect(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_DIFFERENCE)
+    _combine_masks_difference(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_SUM)
+    _combine_masks_sum(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_EXCLUSION)
+    _combine_masks_exclusion(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_MULTIPLY)
+    _combine_masks_multiply(buffer, grp, npixels, 1.0f, 0);
+  else if(group_op & DT_MASKS_STATE_OP_SCREEN)
+    _combine_masks_screen(buffer, grp, npixels, 1.0f, 0);
+  else
+    _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
+}
+
+// true iff every pixel is (within float rounding) exactly 1.0 -- a rendered
+// mask member that changes nothing, used to keep a parametric channel still
+// sitting at its full/base range from counting as an "active" group member
+// (see the nb_members bookkeeping in _group_get_mask_roi_flexi below).
+static gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
+                                            const size_t npixels)
+{
+  for(size_t i = 0; i < npixels; i++)
+    if(buffer[i] < 0.9999f) return FALSE;
+  return TRUE;
+}
+
+// Flexi group-composition fold (group-composition model, flexi masks only):
+// consecutive *visible* shapes sharing one operator form a "group". A group's
+// members are combined into a sub-mask by union (default) or screen — both
+// order-independent, so a group is an unordered bag of shapes. That sub-mask is
+// refined once (per-group refinement, stored broadcast on the members), then
+// composited into the result with the group's operator a single time. An empty
+// group (no visible members) contributes nothing (identity), so an empty
+// intersect group never blanks the mask. The classic sequential fold below is
+// left untouched, so legacy (non-flexi) masks render byte-identically.
+static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict module,
+                                     const dt_dev_pixelpipe_iop_t *const restrict piece,
+                                     dt_masks_form_t *const form,
+                                     const dt_iop_roi_t *const roi,
+                                     float *const restrict buffer)
+{
+  const int width = roi->width;
+  const int height = roi->height;
+  const size_t npixels = (size_t)width * height;
+
+  float *const restrict bufs = dt_alloc_align_float(npixels);  // one raw shape
+  float *const restrict grp  = dt_alloc_align_float(npixels);  // group sub-mask
+  if(bufs == NULL || grp == NULL)
+  {
+    dt_free_align(bufs);
+    dt_free_align(grp);
+    return 0;
+  }
+
+  memset(buffer, 0, npixels * sizeof(float));
+
+  // transient (non-serialized, flexi-only) refinement bypass: the GUI sets these
+  // flags on the module's blend_data and triggers a reprocess. bypass_all skips
+  // every group's refinement; bypass_cid skips just the selected group's run
+  // (identified by its bottom member = run head = the group id).
+  const dt_iop_gui_blend_data_t *const bd =
+    module ? (const dt_iop_gui_blend_data_t *)module->blend_data : NULL;
+  const gboolean bypass_all = bd && bd->refine_bypass_all;
+  const dt_mask_id_t bypass_cid =
+    (bd && bd->refine_bypass_group) ? bd->panel_selected_group_cid : INVALID_MASKID;
+
+  int nb_groups = 0;  // how many groups have composited into `buffer`
+  GList *fpts = form->points;
+  while(fpts)
+  {
+    // skip hidden/absent shapes; the first usable one starts a new group
+    dt_masks_point_group_t *const head = fpts->data;
+    if((head->state & DT_MASKS_STATE_HIDDEN)
+       || !dt_masks_get_from_id_ext(piece->pipe->forms, head->formid))
+    {
+      fpts = g_list_next(fpts);
+      continue;
+    }
+
+    const guint group_op = head->state & DT_MASKS_STATE_OP;
+    // a bypassed group is skipped whole: its members are still walked (so the
+    // run boundary is found and the next group starts in the right place) but
+    // none of their masks are rendered and nothing is composited, exactly as
+    // if the group were not there. Its real operator is still in `group_op`,
+    // untouched, so un-bypassing restores it.
+    const gboolean bypassed = (group_op & DT_MASKS_STATE_OP_BYPASS) != 0;
+    // within-group combine mode (how members fold together): union (default),
+    // screen (soft union), intersect (min), or multiply (true per-pixel
+    // product). Read from the run head, which carries the broadcast flag.
+    const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
+    const gboolean isect  = (head->state & DT_MASKS_STATE_ISECT) != 0;
+    const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
+    // per-group refinement is broadcast onto every member, so the head carries a
+    // copy. Only a GROUP-scoped one applies to the whole group -- an ELEMENT one
+    // belongs to that member alone and is applied to its own mask in the fold
+    // below. Reading the head unconditionally (as this used to) meant the head's
+    // element refinement leaked over the entire group while every other member's
+    // was dropped, and soloing a member made its own refinement work only because
+    // hiding the rest promoted it to head.
+    dt_masks_refinement_t group_refine = { 0 };
+    if(head->refinement.enabled == DT_MASKS_REFINE_GROUP)
+      group_refine = head->refinement;
+
+    // build the group sub-mask by folding all consecutive visible members that
+    // share this operator. Intersect and multiply seed at 1.0 (everything,
+    // then min/multiply each member in); union/screen seed at 0.0 (nothing,
+    // then max/soft-union in). (a bypassed group folds nothing into `grp`, so
+    // it needs no seed either)
+    if(!bypassed)
+    {
+      if(isect || within_multiply)
+        for(size_t i = 0; i < npixels; i++) grp[i] = 1.0f;
+      else
+        memset(grp, 0, npixels * sizeof(float));
+    }
+    int nb_members = 0;  // members whose mask actually folded into `grp`
+    int nb_seen = 0;     // members belonging to this run, renderable or not
+    while(fpts)
+    {
+      dt_masks_point_group_t *const m = fpts->data;
+      if(m->state & DT_MASKS_STATE_HIDDEN)
+      {
+        fpts = g_list_next(fpts);
+        continue;
+      }
+      // a different operator -- or a group_start marker on a same-operator head
+      // (first-class groups) -- ends this group and starts the next one. The
+      // run-boundary test counts every member seen, not just the ones that
+      // rendered: a bypassed group renders none of them, and even in a live
+      // group an unrenderable head must not let the next group's head slip in.
+      if(nb_seen > 0
+         && (((m->state & DT_MASKS_STATE_OP) != group_op) || m->group_start))
+        break;
+      nb_seen++;
+      if(bypassed)  // nothing to render, just walk to the end of the run
+      {
+        fpts = g_list_next(fpts);
+        continue;
+      }
+      dt_masks_form_t *const sel =
+        dt_masks_get_from_id_ext(piece->pipe->forms, m->formid);
+      if(!sel)
+      {
+        fpts = g_list_next(fpts);
+        continue;
+      }
+
+      memset(bufs, 0, npixels * sizeof(float));
+      if(dt_masks_get_mask_roi(module, piece, sel, roi, bufs))
+      {
+        // this member's own refinement, applied to its raw mask before inversion
+        // and compositing -- the same point the classic renderer applies it (see
+        // _group_get_mask_roi below). No-op unless this member carries one.
+        if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT)
+          dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
+                                            (dt_dev_pixelpipe_iop_t *)piece,
+                                            bufs, roi, &m->refinement);
+
+        const float op = m->opacity;
+        const int inverted = (m->state & DT_MASKS_STATE_INVERSE);
+        if(isect)                _combine_masks_intersect(grp, bufs, npixels, op, inverted);
+        else if(screen)          _combine_masks_screen   (grp, bufs, npixels, op, inverted);
+        else if(within_multiply) _combine_masks_multiply (grp, bufs, npixels, op, inverted);
+        else                     _combine_masks_union    (grp, bufs, npixels, op, inverted);
+        // a parametric channel still sitting at its base/full-range state (or
+        // one whose refinement scope happens to cover nothing) renders as a
+        // uniform, fully-opaque buffer -- exactly a no-op, indistinguishable
+        // in its effect from the member not being there at all. Checked on
+        // the rendered result (after refinement, above) rather than by
+        // inspecting the form's own range fields, so it also covers a
+        // refinement that empties out an otherwise-narrowed channel. Not
+        // counting it here means a group made up entirely of such members is
+        // treated the same as a truly empty one by the nb_members==0 check
+        // below, which is what lets the "no active mask element -> fully
+        // opaque, no yellow overlay" fallback (see nb_groups==0 further down)
+        // apply while the user is still setting up a fresh channel, instead
+        // of showing a yellow wall that has nothing to do with their actual
+        // (not yet narrowed) selection.
+        const gboolean is_uniform_noop =
+          (sel->type & DT_MASKS_PARAMETRIC) && _mask_buffer_is_uniform_one(bufs, npixels);
+        if(!is_uniform_noop) nb_members++;
+      }
+      fpts = g_list_next(fpts);
+    }
+
+    if(bypassed) continue;         // disabled group → contributes nothing
+    if(nb_members == 0) continue;  // empty group → identity
+
+    // per-group refinement, applied once to the finished sub-mask (skipped when
+    // this group -- or every group -- is bypassed for preview)
+    const gboolean group_bypassed =
+      bypass_all || (dt_is_valid_maskid(bypass_cid) && head->formid == bypass_cid);
+    if(group_refine.enabled && !group_bypassed)
+      dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
+                                        (dt_dev_pixelpipe_iop_t *)piece,
+                                        grp, roi, &group_refine);
+
+    // invert-output (true group invert, see DT_MASKS_STATE_OP_INVERT):
+    // applied to this run's finished sub-mask, after its members have folded
+    // and any group refinement has run, but before it composites onto the
+    // accumulator below -- so a difference-op group seeding the accumulator
+    // (the `continue` case right below) also seeds it already inverted.
+    if(group_op & DT_MASKS_STATE_OP_INVERT)
+      for(size_t i = 0; i < npixels; i++) grp[i] = 1.0f - grp[i];
+
+    // group-level opacity (see dt_masks_point_group_t.group_opacity): a
+    // persistent, multiplicative gain on this run's own finished sub-mask,
+    // applied on top of -- not instead of -- each member's own independent
+    // opacity (already folded into `grp` above; the two multiply together).
+    // Read from the head, same convention as every other broadcast run-level
+    // field (state/refinement/name). Applied after invert-output, for the
+    // same reason element opacity multiplies a shape's already-inverted mask
+    // in _combine_masks_union et al: it scales the run's actual finished
+    // contribution, whatever its state, not some pre-invert intermediate.
+    for(size_t i = 0; i < npixels; i++) grp[i] *= head->group_opacity;
+
+    if(nb_groups == 0)
+    {
+      // the base group has no predecessor to combine with, so its own
+      // operator is never evaluated: its finished sub-mask becomes the
+      // initial accumulator directly, whatever operator happens to be shown
+      // on it (every operator's own identity element reduces to exactly this
+      // anyway -- union/sum/exclusion/screen from empty and
+      // intersect/multiply from full all equal `grp` unchanged; only
+      // difference has no identity element at all, so this is also its
+      // fallback). Invert the group (or its members) for the complement
+      // instead.
+      memcpy(buffer, grp, npixels * sizeof(float));
+    }
+    else
+    {
+      _flexi_apply_group_op(buffer, grp, npixels, group_op);
+    }
+    nb_groups++;
+  }
+
+  if(nb_groups == 0)
+  {
+    // no group actually contributed anything (every group hidden, bypassed,
+    // or member-less) -- this must render as "no active mask element", which
+    // in dt is a fully opaque mask (the module stays 100% active), matching
+    // the `mode_drawn && !form` fallback in dt_develop_blend. Leaving
+    // `buffer` at its initial all-zero state here would instead silently
+    // disable the module, which is not classic's convention.
+    for(size_t i = 0; i < npixels; i++) buffer[i] = 1.0f;
+  }
+
+  dt_free_align(bufs);
+  dt_free_align(grp);
+  return nb_groups != 0;
+}
+
 static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
                                const dt_dev_pixelpipe_iop_t *const restrict piece,
                                dt_masks_form_t *const form,
@@ -635,6 +1055,14 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
                                float *const restrict buffer)
 {
   if(!form->points) return 0;
+
+  // flexi masks use the group-composition fold; legacy masks fall through to
+  // the classic sequential fold below, byte-identically.
+  const dt_develop_blend_params_t *const bp =
+    piece ? (const dt_develop_blend_params_t *)piece->blendop_data : NULL;
+  if(bp && (bp->mask_mode & DEVELOP_MASK_FLEXI))
+    return _group_get_mask_roi_flexi(module, piece, form, roi, buffer);
+
   double start = dt_get_debug_wtime();
   int nb_ok = 0;
 
@@ -647,10 +1075,16 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
   float *const restrict bufs = dt_alloc_align_float(npixels);
   if(bufs == NULL) return 0;
 
+  // start from an empty result so a hidden/absent base form does not leave the
+  // first composited shape reading uninitialized memory
+  memset(buffer, 0, npixels * sizeof(float));
+
   // and we get all masks
   for(GList *fpts = form->points; fpts; fpts = g_list_next(fpts))
   {
     dt_masks_point_group_t *fpt = fpts->data;
+    // a hidden shape contributes nothing (hide / solo controls)
+    if(fpt->state & DT_MASKS_STATE_HIDDEN) continue;
     dt_masks_form_t *sel = dt_masks_get_from_id_ext(piece->pipe->forms, fpt->formid);
 
     if(sel)
@@ -676,10 +1110,24 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
 
       if(ok)
       {
+        // optional per-shape refinement, applied to the raw shape mask before
+        // inversion and compositing. No-op (and zero cost) unless this shape
+        // has refinement enabled, so existing masks render unchanged.
+        if(fpt->refinement.enabled)
+          dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
+                                            (dt_dev_pixelpipe_iop_t *)piece,
+                                            bufs, roi, &fpt->refinement);
+
         // first see if we need to invert this shape
         const int inverted = (state & DT_MASKS_STATE_INVERSE);
 
-        if(state & DT_MASKS_STATE_UNION)
+        // the first *visible* shape always composites as ADD onto the empty
+        // accumulator, whatever its explicit operator says: the rendered mask
+        // must match the algebra of the visible shapes only. e.g. hiding the
+        // base promotes the next visible shape to the implicit base (add),
+        // so [add][intersect][union] with the first two hidden renders as the
+        // third shape alone. (nb_ok == 0 means nothing has composited yet.)
+        if(nb_ok == 0 || (state & DT_MASKS_STATE_UNION))
         {
           _combine_masks_union(buffer, bufs, npixels, op, inverted);
         }
@@ -698,6 +1146,10 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
         else if(state & DT_MASKS_STATE_EXCLUSION)
         {
           _combine_masks_exclusion(buffer, bufs, npixels, op, inverted);
+        }
+        else if(state & DT_MASKS_STATE_MULTIPLY)
+        {
+          _combine_masks_multiply(buffer, bufs, npixels, op, inverted);
         }
         else // if we are here, this mean that we just have to copy
              // the shape and null other parts
@@ -784,12 +1236,14 @@ static void _group_duplicate_points(dt_develop_t *const dev,
   for(GList *pts = base->points; pts; pts = g_list_next(pts))
   {
     dt_masks_point_group_t *pt = pts->data;
-    dt_masks_point_group_t *npt = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *npt = calloc(1, sizeof(dt_masks_point_group_t));
 
     npt->formid = dt_masks_form_duplicate(dev, pt->formid);
     npt->parentid = dest->formid;
     npt->state = pt->state;
     npt->opacity = pt->opacity;
+    npt->refinement = pt->refinement;
+    npt->group_opacity = pt->group_opacity;
     dest->points = g_list_append(dest->points, npt);
   }
 }

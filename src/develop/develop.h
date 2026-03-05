@@ -237,6 +237,17 @@ typedef struct dt_develop_t
   struct dt_masks_form_gui_t *form_gui;
   // all forms to be linked here for cleanup:
   GList *allforms;
+  // classic-to-flexi mask migrations (dt_masks_migrate_classic_to_flexi(),
+  // src/develop/masks/migrate_legacy.c) queued during dt_dev_read_history_ext()'s
+  // per-row loop, still to be synthesized. Deferred rather than done inline
+  // because the newly-created forms must be written into main.masks_history
+  // under the *final* dev->history_end - 1 (the row dt_masks_read_masks_history()
+  // will treat as "current"), which is only known once the whole loop finishes
+  // and history_end has been corrected from the DB -- not yet, mid-loop, where
+  // dev->history_end is merely a running count of rows processed so far.
+  // Drained and freed by dt_masks_finish_flexi_migrations(), always empty
+  // (NULL) between dt_dev_read_history_ext() calls.
+  GList *pending_flexi_migrations;
 
   //full preview stuff
   gboolean full_preview;
@@ -301,6 +312,30 @@ typedef struct dt_develop_t
                                struct dt_iop_module_t *module,
                                const dt_mask_id_t selectid);
     } masks;
+
+    // flexi masks panel relocation host for the "utility module" position
+    // ONLY (masks_panel_position == MASKS_PANEL_POS_UTILITY, see
+    // masks_flexi_host.c and develop/blend_gui.c). The "separate panel,
+    // left/right" positions don't use this -- they're a genuine extra grid
+    // column owned by gui/gtk.c instead (dt_ui_flexi_panel_*), a real
+    // independent panel rather than more content stacked inside the
+    // existing left/right panels. The lib always registers and sets
+    // module/content_box regardless of the conf position -- it just stays
+    // hidden and unused outside "utility".
+    struct
+    {
+      struct dt_lib_module_t *module;
+      // where flexi content gets reparented into; owned by the lib
+      GtkBox *content_box;
+      // which iop module's relocatable_box currently occupies content_box,
+      // NULL if empty. Tracked here (rather than inspecting content_box's
+      // children) so _masks_flexi_relocate can cheaply tell whether it needs
+      // to move a previous occupant out first.
+      struct dt_iop_module_t *hosted_module;
+      // called by blend_gui.c right after the hamburger menu writes a new
+      // masks_panel_position, so the lib can show/hide itself live
+      void (*reconfigure)(struct dt_lib_module_t *self);
+    } masks_flexi_host;
   } proxy;
 
   dt_dev_chroma_t chroma;
