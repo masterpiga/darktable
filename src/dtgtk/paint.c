@@ -262,6 +262,28 @@ void dtgtk_cairo_paint_store(cairo_t *cr, const gint x, const gint y, const gint
   FINISH
 }
 
+void dtgtk_cairo_paint_import(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
+{
+  PREAMBLE(1, 1, 0, 0)
+
+  // open tray
+  cairo_move_to(cr, 0.15, 0.45);
+  cairo_line_to(cr, 0.15, 0.85);
+  cairo_line_to(cr, 0.85, 0.85);
+  cairo_line_to(cr, 0.85, 0.45);
+  cairo_stroke(cr);
+
+  // downward arrow, into the tray
+  cairo_move_to(cr, 0.5, 0.1);
+  cairo_line_to(cr, 0.5, 0.55);
+  cairo_move_to(cr, 0.32, 0.37);
+  cairo_line_to(cr, 0.5, 0.55);
+  cairo_line_to(cr, 0.68, 0.37);
+  cairo_stroke(cr);
+
+  FINISH
+}
+
 void dtgtk_cairo_paint_switch(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
 {
   PREAMBLE(1, 1, 0, 0)
@@ -878,8 +900,53 @@ void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, const gint x, const gint y, co
   FINISH
 }
 
+// "invert mask values" for the flexi mask UI. Evokes the "display mask overlay"
+// glyph (dtgtk_cairo_paint_showmask: a filled square with a circular hole) but
+// inverted across the main diagonal: the lower-left triangle keeps the
+// square-minus-circle fill, while the upper-right triangle shows the negative
+// (only the circle filled). The diagonal split reads as "invert".
+void dtgtk_cairo_paint_mask_invert(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
+{
+  PREAMBLE(1, 1, 0, 0)
+
+  // lower-left triangle: square with the circle punched out (like showmask)
+  cairo_save(cr);
+  cairo_move_to(cr, 0.0, 0.0);
+  cairo_line_to(cr, 1.0, 1.0);
+  cairo_line_to(cr, 0.0, 1.0);
+  cairo_close_path(cr);
+  cairo_clip(cr);
+  cairo_rectangle(cr, 0.0, 0.0, 1.0, 1.0);
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, 0.5, 0.5, 0.32, 0, 2.0 * M_PI);
+  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+  cairo_fill(cr);
+  cairo_restore(cr);
+
+  // upper-right triangle: only the circle filled (the inverted negative)
+  cairo_save(cr);
+  cairo_move_to(cr, 0.0, 0.0);
+  cairo_line_to(cr, 1.0, 1.0);
+  cairo_line_to(cr, 1.0, 0.0);
+  cairo_close_path(cr);
+  cairo_clip(cr);
+  cairo_arc(cr, 0.5, 0.5, 0.32, 0, 2.0 * M_PI);
+  cairo_fill(cr);
+  cairo_restore(cr);
+
+  // outline the square so the empty upper-right corner reads
+  cairo_rectangle(cr, 0.0, 0.0, 1.0, 1.0);
+  cairo_stroke(cr);
+
+  FINISH
+}
+
 void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
+  // these icons are PREAMBLE-less, so they must honor the content offset (x,y)
+  // themselves -- otherwise they draw from the widget origin and look chopped
+  // on the left once the button has a border/padding.
+  cairo_translate(cr, x, y);
   // note : as the icon is not square, we don't want PREAMBLE macro
   // we want 2 circles of radius R that intersect in the middle,
   // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
@@ -893,6 +960,7 @@ void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, const gint w, co
 
 void dtgtk_cairo_paint_masks_intersection(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
+  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
   // note : as the icon is not square, we don't want PREAMBLE macro
   // we want 2 circles of radius R that intersect in the middle,
   // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
@@ -920,6 +988,7 @@ void dtgtk_cairo_paint_masks_intersection(cairo_t *cr, gint x, gint y, const gin
 
 void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
+  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
   // note : as the icon is not square, we don't want PREAMBLE macro
   // we want 2 round of radius R that intersect in the middle,
   // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
@@ -945,6 +1014,7 @@ void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, const gint 
 
 void dtgtk_cairo_paint_masks_sum(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
+  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
   // note : as the icon is not square, we don't want PREAMBLE macro
   // we want 2 round of radius R that intersect in the middle,
   // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
@@ -973,6 +1043,7 @@ void dtgtk_cairo_paint_masks_sum(cairo_t *cr, gint x, gint y, const gint w, cons
 
 void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
+  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
   // note : as the icon is not square, we don't want PREAMBLE macro
   // we want 2 round of radius R that intersect in the middle,
   // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
@@ -1000,6 +1071,45 @@ void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, const gint w
   cairo_pop_group_to_source(cr);
   cairo_paint(cr);
 }
+
+void dtgtk_cairo_paint_masks_multiply(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
+{
+  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
+  // note : as the icon is not square, we don't want PREAMBLE macro
+  // two circle outlines (like intersection), with the overlap filled and a
+  // small multiplication cross to set it apart from the plain intersection.
+  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
+  const double padding_left = (w - r * 3.4) / 2.0;
+  const double cx = padding_left + r * 1.7;  // center between the two circles
+  const double cy = h / 2.0;
+
+  // outlines of the 2 circles
+  cairo_save(cr);
+  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
+  cairo_arc(cr, padding_left + r, cy, r, 0, 2.0 * M_PI);
+  cairo_stroke(cr);
+  cairo_arc(cr, padding_left + r * 2.4, cy, r, 0, 2.0 * M_PI);
+  cairo_stroke_preserve(cr);
+
+  // fill the overlap area only (clip to the 2nd circle, redraw the 1st)
+  cairo_clip(cr);
+  cairo_arc(cr, padding_left + r, cy, r, 0, 2.0 * M_PI);
+  cairo_fill(cr);
+  cairo_restore(cr);
+
+  // multiplication cross in the overlap
+  cairo_save(cr);
+  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.9);
+  const double d = r * 0.32;
+  cairo_move_to(cr, cx - d, cy - d);
+  cairo_line_to(cr, cx + d, cy + d);
+  cairo_move_to(cr, cx + d, cy - d);
+  cairo_line_to(cr, cx - d, cy + d);
+  cairo_stroke(cr);
+  cairo_restore(cr);
+}
+
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
 {
   PREAMBLE(1, 1, 0, 0)
@@ -1037,6 +1147,68 @@ void dtgtk_cairo_paint_eye_toggle(cairo_t *cr, const gint x, const gint y, const
     cairo_move_to(cr, 0.1, 0.9);
     cairo_line_to(cr, 0.9, 0.1);
     cairo_stroke(cr);
+  }
+
+  FINISH
+}
+
+// "invert visibility": an open eye whose entire right half is inverted (the eye
+// body filled solid with the pupil punched out), so it reads clearly distinct
+// from the plain open eye used for "show all".
+void dtgtk_cairo_paint_invert_visibility(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
+{
+  PREAMBLE(1, 1, 0, 0)
+
+  // eye almond outline, same proportions as dtgtk_cairo_paint_eye_toggle
+  cairo_save(cr);
+  cairo_translate(cr, 0, 0.22);
+  cairo_scale(cr, 1.0, 0.55);
+  cairo_arc(cr, 0.5, 0.5, 0.45, 0, 2 * M_PI);
+  cairo_restore(cr);
+  cairo_stroke(cr);
+
+  // right half of the eye filled solid (the inverted side), pupil punched out
+  cairo_save(cr);
+  cairo_rectangle(cr, 0.5, -0.3, 0.9, 1.6);
+  cairo_clip(cr);
+  cairo_save(cr);
+  cairo_translate(cr, 0, 0.22);
+  cairo_scale(cr, 1.0, 0.55);
+  cairo_arc(cr, 0.5, 0.5, 0.45, 0, 2 * M_PI);
+  cairo_restore(cr);
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, 0.5, 0.5, 0.16, 0, 2 * M_PI);
+  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+  cairo_fill(cr);
+  cairo_restore(cr);
+
+  // left half: pupil drawn solid
+  cairo_save(cr);
+  cairo_rectangle(cr, -0.4, -0.3, 0.9, 1.6);
+  cairo_clip(cr);
+  cairo_arc(cr, 0.5, 0.5, 0.16, 0, 2 * M_PI);
+  cairo_fill(cr);
+  cairo_restore(cr);
+
+  FINISH
+}
+
+// "solo-edit": isolate one shape (or cluster) for editing -- only its
+// outline/handles stay editable on the canvas, while every shape still
+// composites. Drawn as a selection box with filled corner handles.
+void dtgtk_cairo_paint_soloedit(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
+{
+  PREAMBLE(1, 1, 0, 0)
+
+  cairo_rectangle(cr, 0.27, 0.27, 0.46, 0.46);
+  cairo_stroke(cr);
+
+  const double r = 0.1;
+  const double c[4][2] = { { 0.27, 0.27 }, { 0.73, 0.27 }, { 0.27, 0.73 }, { 0.73, 0.73 } };
+  for(int i = 0; i < 4; i++)
+  {
+    cairo_rectangle(cr, c[i][0] - r, c[i][1] - r, 2 * r, 2 * r);
+    cairo_fill(cr);
   }
 
   FINISH
@@ -2356,6 +2528,10 @@ void dtgtk_cairo_paint_andnot(cairo_t *cr, const gint x, const gint y, const gin
 void dtgtk_cairo_paint_dropdown(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
 {
   PREAMBLE(1, 1, 0, 0)
+
+  // honor direction flags so this chevron can double as a disclosure indicator
+  // (no flags = points down, like a combobox; CPF_DIRECTION_UP points right).
+  _rotate(cr, flags);
 
   cairo_move_to(cr, 0.1, 0.3);
   cairo_line_to(cr, 0.5, 0.7);

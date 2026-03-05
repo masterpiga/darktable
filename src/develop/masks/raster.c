@@ -1,0 +1,203 @@
+/*
+    This file is part of darktable,
+    Copyright (C) 2013-2026 darktable developers.
+
+    darktable is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    darktable is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with darktable.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "common/debug.h"
+#include "develop/blend.h"
+#include "develop/imageop.h"
+#include "develop/masks.h"
+#include "develop/pixelpipe.h"
+
+#include <float.h>
+
+/* A raster mask (another module's output mask) as a first-class drawn-mask
+ * form.
+ *
+ * A raster form (dt_masks_point_raster_t) references an upstream module's
+ * output mask by (op, instance, id). Placing it in a module's mask group lets
+ * the raster be composited as an element -- combined with shapes and
+ * parametric channels by the usual operators (union/intersection/...), exactly
+ * like any other element -- instead of being an exclusive whole-mask mode.
+ *
+ * This is purely additive: the module's built-in exclusive raster mode (mask
+ * mode RASTER) and its UI are untouched, so existing edits render identically.
+ * A raster form only ever exists in edits created after this feature.
+ *
+ * Rendering reuses the pipe's existing raster-mask fetch/distortion machinery
+ * (dt_dev_get_raster_mask), which returns the source mask already distorted to
+ * the requesting module's output roi. The dependency (so the source module
+ * stores its mask and the pipe orders correctly) is wired through the module's
+ * blend_params raster_mask_* fields, kept in sync with the (single, first-cut)
+ * raster element by the mask-list UI. Because the group is rendered on the CPU
+ * even in the OpenCL pipe, a raster element works identically on GPU. */
+
+static void _raster_set_form_name(dt_masks_form_t *const form, const size_t nb)
+{
+  // prefix must match _form_type_prefix / _kind_name(DT_MASKS_RASTER) in
+  // blend_gui.c so the mask-list row strips it cleanly from the display name
+  snprintf(form->name, sizeof(form->name), "%s #%d", _("raster mask"), (int)nb);
+}
+
+static GSList *_raster_setup_mouse_actions(const dt_masks_form_t *const form)
+{
+  // no canvas interaction; configured from the side panel
+  return NULL;
+}
+
+/* A raster form has no on-canvas geometry, but the group event/expose
+ * dispatchers (src/develop/masks/group.c) call some vtable entries on every
+ * group member without a per-function NULL check. We therefore provide explicit
+ * no-op stubs rather than leaving those slots NULL, so a raster form can sit in
+ * a shown group without crashing. The form is never the "closest" form
+ * (get_distance returns a huge distance), so it is never picked for direct
+ * interaction. Mirrors the parametric form (see parametric.c). */
+
+static void _raster_post_expose(cairo_t *const cr,
+                                const float zoom_scale,
+                                dt_masks_form_gui_t *const gui,
+                                const int nb,
+                                const int index)
+{
+  // nothing to draw
+}
+
+static void _raster_get_distance(const float x,
+                                 const float y,
+                                 const float as,
+                                 dt_masks_form_gui_t *const gui,
+                                 const int index,
+                                 const int num_points,
+                                 gboolean *const inside,
+                                 gboolean *const inside_border,
+                                 int *const near,
+                                 gboolean *const inside_source,
+                                 float *const dist)
+{
+  // never the closest form to the pointer
+  if(inside) *inside = FALSE;
+  if(inside_border) *inside_border = FALSE;
+  if(near) *near = -1;
+  if(inside_source) *inside_source = FALSE;
+  if(dist) *dist = FLT_MAX;
+}
+
+static int _raster_get_points_border(dt_develop_t *const dev,
+                                     dt_masks_form_t *const form,
+                                     float **const points,
+                                     int *const points_count,
+                                     float **const border,
+                                     int *const border_count,
+                                     const int source,
+                                     const dt_iop_module_t *const module)
+{
+  // no geometric outline
+  return 0;
+}
+
+static void _raster_duplicate_points(dt_develop_t *const dev,
+                                     dt_masks_form_t *const base,
+                                     dt_masks_form_t *const dest)
+{
+  for(GList *pts = base->points; pts; pts = g_list_next(pts))
+  {
+    dt_masks_point_raster_t *p = malloc(sizeof(dt_masks_point_raster_t));
+    memcpy(p, pts->data, sizeof(dt_masks_point_raster_t));
+    dest->points = g_list_append(dest->points, p);
+  }
+}
+
+// resolve the form's source (op + instance) to a live module in the pipe
+static dt_iop_module_t *_raster_resolve_source(const dt_iop_module_t *const module,
+                                               const dt_masks_point_raster_t *const p)
+{
+  if(!module || !module->dev || !p->source[0]) return NULL;
+  for(GList *iter = module->dev->iop; iter; iter = g_list_next(iter))
+  {
+    dt_iop_module_t *iop = iter->data;
+    if(dt_iop_module_is(iop, p->source) && iop->multi_priority == p->instance)
+      return iop;
+  }
+  return NULL;
+}
+
+static int _raster_get_mask_roi(const dt_iop_module_t *const module,
+                                const dt_dev_pixelpipe_iop_t *const piece,
+                                dt_masks_form_t *const form,
+                                const dt_iop_roi_t *const roi,
+                                float *const buffer)
+{
+  if(!form->points) return 0;
+  const dt_masks_point_raster_t *const p = form->points->data;
+
+  dt_iop_module_t *source = _raster_resolve_source(module, p);
+  if(!source)
+  {
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] raster form %d: source '%s' not found in pipe",
+             form->formid, p->source);
+    return 0;
+  }
+
+  // dt_dev_get_raster_mask returns the source mask already distorted to the
+  // requesting piece's output roi (== the group render roi here), or NULL if
+  // the mask is not (yet) available. free_mask tells us whether the buffer was
+  // freshly allocated (distorted) and must be released.
+  gboolean free_mask = FALSE;
+  float *raster = dt_dev_get_raster_mask((dt_dev_pixelpipe_iop_t *)piece,
+                                         source, p->id,
+                                         module, &free_mask);
+  if(!raster)
+  {
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] raster form %d: no raster mask from '%s' id=%d",
+             form->formid, p->source, p->id);
+    return 0;
+  }
+
+  const size_t npix = (size_t)roi->width * roi->height;
+  // hand the raw 0..1 mask to the group compositor; opacity and the per-element
+  // invert (DT_MASKS_STATE_INVERSE) are applied there like any other element
+  memcpy(buffer, raster, npix * sizeof(float));
+
+  if(free_mask) dt_free_align(raster);
+  return 1;
+}
+
+// The function table for raster masks. Most geometric/mouse callbacks are
+// unused; the form is a pure pixel reference to another module's mask.
+const dt_masks_functions_t dt_masks_functions_raster = {
+  .point_struct_size = sizeof(struct dt_masks_point_raster_t),
+  .sanitize_config = NULL,
+  .setup_mouse_actions = _raster_setup_mouse_actions,
+  .set_form_name = _raster_set_form_name,
+  .set_hint_message = NULL,
+  .modify_property = NULL,
+  .duplicate_points = _raster_duplicate_points,
+  .initial_source_pos = NULL,
+  .get_distance = _raster_get_distance,
+  .get_points = NULL,
+  .get_points_border = _raster_get_points_border,
+  .get_mask = NULL,
+  .get_mask_roi = _raster_get_mask_roi,
+  .get_area = NULL,
+  .get_source_area = NULL,
+  .mouse_moved = NULL,
+  .mouse_scrolled = NULL,
+  .button_pressed = NULL,
+  .button_released = NULL,
+  .post_expose = _raster_post_expose
+};

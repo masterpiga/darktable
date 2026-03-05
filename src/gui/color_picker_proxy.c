@@ -104,6 +104,24 @@ static gboolean _record_point_area(dt_iop_color_picker_t *self)
   return changed;
 }
 
+// forget this picker's remembered box/point entirely -- its next arm starts
+// blank (see the `!self->initialized` branches in
+// _color_picker_callback_button_press) instead of resuming from wherever it
+// was last left, exactly as if it had never been used before. For a
+// DT_COLOR_PICKER_DEFERRED_AREA picker this is how a caller says "the value
+// this picker was feeding just went back to its own base/reset state, so
+// the picker should wait for an entirely fresh selection next time too" --
+// see _param_row_slider_reset_callback in blend_gui.c, its only caller.
+void dt_iop_color_picker_forget(GtkWidget *picker_widget)
+{
+  dt_iop_color_picker_t *picker =
+    picker_widget ? g_object_get_data(G_OBJECT(picker_widget), DT_COLOR_PICKER_INSTANCE_KEY) : NULL;
+  if(!picker) return;
+  picker->initialized = FALSE;
+  memset(picker->pick_box, 0, sizeof(picker->pick_box));
+  memset(picker->pick_pos, 0, sizeof(picker->pick_pos));
+}
+
 static void _color_picker_reset(dt_iop_color_picker_t *picker)
 {
   if(picker)
@@ -191,11 +209,33 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
     dt_iop_color_picker_flags_t kind = self->flags & DT_COLOR_PICKER_POINT_AREA;
     if(kind == DT_COLOR_PICKER_POINT_AREA)
       kind = to_area_mode ? DT_COLOR_PICKER_AREA : DT_COLOR_PICKER_POINT;
+    // DT_COLOR_PICKER_DEFERRED_AREA: skip resetting to the usual large
+    // (~96%-of-frame) default box and skip the immediate sample below --
+    // wait for the user's own drag on canvas to define a box instead. Point
+    // mode has no default-box/immediate-sample to defer, so it is unaffected.
+    const gboolean deferred_area =
+      (kind & DT_COLOR_PICKER_AREA) && (flags & DT_COLOR_PICKER_DEFERRED_AREA);
     // pull picker's last recorded positions
     if(kind & DT_COLOR_PICKER_AREA)
     {
-      if(!self->initialized)
+      // !self->initialized covers two cases identically: this picker has
+      // truly never been armed before, or a caller explicitly invalidated it
+      // (see dt_iop_color_picker_force_reinit, used by the flexi-mask range
+      // reset to make a deferred picker forget its last box once the range
+      // it fed goes back to its own base/no-op state -- see
+      // _param_row_slider_reset_callback). Either way "start blank" is
+      // right; a picker that already has a real remembered box from an
+      // earlier, still-live pick keeps resuming from it, same as ever.
+      if(!self->initialized && deferred_area)
+        memset(self->pick_box, 0, sizeof(self->pick_box));
+      else if(!self->initialized)
         dt_lib_colorpicker_reset_box_area(self->pick_box);
+      // still registers a BOX-kind sample (size == DT_LIB_COLORPICKER_SIZE_BOX)
+      // so darkroom.c's button_pressed still lets the user drag a box at all --
+      // deferred just means self->pick_box may still be its zeroed initial
+      // value here, which is a harmless degenerate box: the user's very first
+      // click on canvas replaces it with a real one from scratch regardless
+      // (see button_pressed's own corner-grab-or-create-fresh-box logic).
       dt_lib_colorpicker_set_box_area(darktable.lib, self->pick_box);
     }
     else if(kind & DT_COLOR_PICKER_POINT)
@@ -222,17 +262,28 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
       dt_bauhaus_widget_set_quad_active(self->colorpick, TRUE);
     DT_LEAVE_GUI_UPDATE();
 
-    if(module)
+    if(deferred_area)
+    {
+      // still bring the module's own panel into focus, just without forcing
+      // a sample from whatever (possibly stale/degenerate) box happens to be
+      // set -- the user's own click/drag on canvas (darkroom.c's
+      // button_pressed) dirties the preview pipe itself once it defines a
+      // real box, which is the only trigger a deferred picker gets.
+      if(module) dt_iop_request_focus(module);
+    }
+    else if(module)
     {
       module->dev->preview_pipe->status = DT_DEV_PIXELPIPE_DIRTY;
       dt_iop_request_focus(module);
+      // force applying the next incoming sample
+      self->changed = TRUE;
     }
     else
     {
       dt_dev_invalidate_all(darktable.develop);
+      // force applying the next incoming sample
+      self->changed = TRUE;
     }
-    // force applying the next incoming sample
-    self->changed = TRUE;
   }
   else
   {

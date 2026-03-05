@@ -63,6 +63,8 @@ void dtgtk_cairo_paint_line_arrow(cairo_t *cr, gint x, int y, gint w, gint h, gi
 void dtgtk_cairo_paint_sortby(cairo_t *cr, gint x, int y, gint w, gint h, gint flags, void *data);
 /** Paint a store icon */
 void dtgtk_cairo_paint_store(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint an import icon: a downward arrow over an open tray */
+void dtgtk_cairo_paint_import(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a reset icon */
 void dtgtk_cairo_paint_reset(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a preset icon - similar to hamburger menu */
@@ -103,6 +105,10 @@ void dtgtk_cairo_paint_color(cairo_t *cr, gint x, gint y, gint w, gint h, gint f
 void dtgtk_cairo_paint_eye(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an eye icon which is crossed out if toggled */
 void dtgtk_cairo_paint_eye_toggle(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint an eye whose right half is inverted (invert visibility) */
+void dtgtk_cairo_paint_invert_visibility(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint a selection box with corner handles (solo-edit) */
+void dtgtk_cairo_paint_soloedit(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a timer icon */
 void dtgtk_cairo_paint_timer(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a filmstrip icon */
@@ -301,6 +307,9 @@ void dtgtk_cairo_paint_masks_object(cairo_t *cr, gint x, gint y, gint w, gint h,
 void dtgtk_cairo_paint_masks_multi(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an inverse icon for masks */
 void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint a horizontally-split invert icon for inverting mask values (distinct
+ * from the blend-order invert) */
+void dtgtk_cairo_paint_mask_invert(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op union icon for masks */
 void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op intersection icon for masks */
@@ -311,6 +320,8 @@ void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, gint w, gin
 void dtgtk_cairo_paint_masks_sum(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op exclusion icon for masks */
 void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint an op multiply icon for masks */
+void dtgtk_cairo_paint_masks_multiply(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a used icon for masks */
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a clone tool for retouch */

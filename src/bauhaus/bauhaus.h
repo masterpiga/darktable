@@ -198,6 +198,24 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 // Used by callers that want the popup without sending the widget a synthetic
 // button press (which a gesture-based widget cannot handle cleanly)
 void dt_bauhaus_widget_show_popup(GtkWidget *widget);
+
+// hover-preview hook for a "dt-bauhaus-static-popup" slider (a popup opened
+// away from the pointer via dt_bauhaus_widget_show_popup(), which therefore
+// opts out of the normal "hover alone drags the value" popup behaviour --
+// see the static_popup comment in bauhaus.c's _window_motion_handle). Set it
+// with g_object_set_data(G_OBJECT(widget), "dt-bauhaus-static-hover-preview",
+// hook) and, if the hook needs its own user_data, also
+// g_object_set_data(G_OBJECT(widget), "dt-bauhaus-static-hover-preview-data",
+// data). Called on every pointer motion over such a popup while no button is
+// held, with the real (min..max, exactly what dt_bauhaus_slider_get() would
+// return) value the pointer is currently over -- the slider's own value is
+// left untouched; it is purely informational, for a caller that wants to
+// preview a hovered position elsewhere (e.g. on another widget) without
+// committing to it until the user actually drags or the caller decides the
+// hover has settled.
+typedef void (*dt_bauhaus_static_hover_preview_t)(GtkWidget *widget,
+                                                  float value,
+                                                  gpointer user_data);
 void dt_bauhaus_widget_set_module(GtkWidget *widget,
                                   dt_action_t *module);
 gpointer dt_bauhaus_widget_get_module(GtkWidget *widget);
@@ -335,6 +353,8 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
                                 float g,
                                 float b);
 void dt_bauhaus_slider_clear_stops(GtkWidget *widget);
+void dt_bauhaus_slider_set_checker_gradient(GtkWidget *widget,
+                                            gboolean enable);
 void dt_bauhaus_slider_set_default(GtkWidget *widget,
                                    float def);
 float dt_bauhaus_slider_get_default(GtkWidget *widget);
