@@ -1,4 +1,4 @@
-name: Cycle Actions PKG
+name: build_cycle_actions
 
 on:
   workflow_dispatch:
@@ -10,7 +10,7 @@ permissions:
 jobs:
   AppImage:
     if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
-    name: darktable + cycle actions AppImage
+    name: darktable + cycle_actions AppImage
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -179,7 +179,7 @@ jobs:
 
   Windows:
     if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
-    name: darktable + cycle actions Windows
+    name: darktable + cycle_actions Windows
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: true
@@ -332,7 +332,7 @@ jobs:
 
   macOS:
     if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
-    name: darktable + cycle actions macOS
+    name: darktable + cycle_actions macOS
     runs-on: ${{ matrix.build.os }}
     strategy:
       fail-fast: true
