@@ -23,6 +23,7 @@
 #include "control/conf.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
+#include "dtgtk/expander.h"
 #include "gui/accelerators.h"
 #include "gui/color_picker_proxy.h"
 #include "gui/gtk.h"
@@ -149,7 +150,7 @@ enum
 
 static const dt_action_def_t _action_def_slider, _action_def_combo,
                              _action_def_focus_slider, _action_def_focus_combo,
-                             _action_def_focus_button;
+                             _action_def_focus_button, _action_def_focus_slider_or_combo;
 
 // INNER_PADDING is the horizontal space between slider and quad
 // and vertical space between labels and slider baseline
@@ -158,6 +159,7 @@ static double INNER_PADDING = 4.0;
 // fwd declare
 static void _popup_reject(void);
 static void _popup_hide(void);
+static void _popup_show(GtkWidget *widget);
 static gboolean _popup_draw(GtkWidget *widget, cairo_t *cr, gpointer user_data);
 static gboolean _popup_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data);
 static void _combobox_set(dt_bauhaus_widget_t *w,
@@ -924,6 +926,10 @@ void dt_bauhaus_init()
   g_signal_connect(area, "key-press-event", G_CALLBACK(_popup_key_press), NULL);
   g_signal_connect(area, "scroll-event", G_CALLBACK(_popup_scroll), NULL);
 
+  darktable.control->actions_focused_bh =
+    dt_action_define(&darktable.control->actions_global, NULL,
+                     N_("edit focused widget"), NULL, &_action_def_focus_slider_or_combo);
+
   dt_action_define(&darktable.control->actions_focus, NULL, N_("sliders"),
                    NULL, &_action_def_focus_slider);
   dt_action_define(&darktable.control->actions_focus, NULL, N_("dropdowns"),
@@ -1377,6 +1383,16 @@ void dt_bauhaus_widget_release_quad(GtkWidget *widget)
       w->quad_paint_flags &= ~CPF_ACTIVE;
     gtk_widget_queue_draw(GTK_WIDGET(w));
   }
+}
+
+gboolean dt_bauhaus_widget_get_quad_toggle(GtkWidget *widget)
+{
+  return DT_BAUHAUS_WIDGET(widget)->quad_toggle;
+}
+
+void dt_bauhaus_widget_show_popup(GtkWidget *widget)
+{
+  _popup_show(widget);
 }
 
 static float _default_linear_curve(const float value,
@@ -3753,11 +3769,20 @@ static void _action_process_button(GtkWidget *widget,
                                    const dt_action_effect_t effect)
 {
   dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
+  if(!w->quad_paint)
+  {
+    dt_action_widget_toast(w->module, widget, _("no button on focused widget"));
+    return;
+  }
   if(effect != (w->quad_paint_flags & CPF_ACTIVE
                 ? DT_ACTION_EFFECT_ON : DT_ACTION_EFFECT_OFF))
   {
     dt_bauhaus_widget_press_quad(widget);
     dt_bauhaus_widget_release_quad(widget);
+    // picker activation moves GTK focus to the canvas so the user can click to sample;
+    // grab it back so keyboard shortcuts remain active on this widget
+    if(w->quad_toggle && (w->quad_paint_flags & CPF_ACTIVE))
+      gtk_widget_grab_focus(widget);
   }
 
   gchar *text = w->quad_toggle
@@ -4016,6 +4041,35 @@ static float _action_process_focus_combo(gpointer widget,
   return DT_ACTION_NOT_VALID;
 }
 
+static float _action_process_focus_slider_or_combo(gpointer target,
+                                                   const dt_action_element_t element,
+                                                   const dt_action_effect_t effect,
+                                                   float move_size)
+{
+  if(!DT_IS_BAUHAUS_WIDGET(target))
+  {
+    // no focused bauhaus widget — if a picker is active and the button effect is
+    // triggered, turn the picker off and restore focus to its widget
+    if(element == DT_ACTION_ELEMENT_BUTTON
+       && DT_PERFORM_ACTION(move_size)
+       && dt_iop_color_picker_is_visible(darktable.develop))
+    {
+      dt_iop_color_picker_t *proxy = darktable.lib->proxy.colorpicker.picker_proxy;
+      GtkWidget *picker_widget = proxy ? proxy->colorpick : NULL;
+      dt_iop_color_picker_reset(proxy->module, FALSE);
+      if(picker_widget) gtk_widget_grab_focus(picker_widget);
+      return 0;
+    }
+    return DT_ACTION_NOT_VALID;
+  }
+
+  dt_bauhaus_widget_t *bhw = DT_BAUHAUS_WIDGET(target);
+  if(bhw->type == DT_BAUHAUS_SLIDER)
+    return _action_process_slider(target, element, effect, move_size);
+  else
+    return _action_process_combo(target, element, effect, move_size);
+}
+
 static float _action_process_focus_button(gpointer widget,
                                           dt_action_element_t element,
                                           const dt_action_effect_t effect,
@@ -4033,6 +4087,96 @@ static float _action_process_focus_button(gpointer widget,
     dt_action_widget_toast(&darktable.control->actions_focus,
                            NULL, _("not that many buttons"));
   return DT_ACTION_NOT_VALID;
+}
+
+void dt_bauhaus_widget_ensure_visible(GtkWidget *widget, dt_iop_module_t *module)
+{
+    GtkWidget *current = widget;
+    GtkWidget *parent = NULL;
+
+    while (current) {
+        parent = gtk_widget_get_parent(current);
+        // Stop going up when we hit the module boundary.
+        if (parent == (GtkWidget*)module) {
+            break;
+        }
+        if (DTGTK_IS_EXPANDER(parent))
+        {
+          dtgtk_expander_set_expanded(DTGTK_EXPANDER(parent), TRUE);
+        }
+        else if (GTK_IS_NOTEBOOK(parent))
+        {
+            GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+            gint page_num = gtk_notebook_page_num(notebook, current);
+            if (page_num != -1) {
+                gtk_widget_show(current);
+                gtk_notebook_set_current_page(notebook, page_num);
+            }
+        }
+        current = parent;
+        // Keep going up in case this is nested into multiple expanders/notebooks.
+    }
+}
+
+// returns true if widget is in a collapsed expander or non visible notebook page.
+static inline gboolean _is_in_hidden_container(GtkWidget *widget)
+{
+  GtkWidget *current = widget;
+  while (current)
+  {
+    GtkWidget *parent = gtk_widget_get_parent(current);
+    if (DTGTK_IS_EXPANDER(parent))
+    {
+      if (!dtgtk_expander_get_expanded(DTGTK_EXPANDER(parent)))
+      {
+        return TRUE;
+      }
+    }
+    if (GTK_IS_NOTEBOOK(parent))
+    {
+      GtkNotebook *notebook = GTK_NOTEBOOK(parent);
+      gint page_num = gtk_notebook_page_num(notebook, current);
+      gint current_page = gtk_notebook_get_current_page(notebook);
+      if (page_num != current_page) {
+        return TRUE;
+      }
+    }
+    current = gtk_widget_get_parent(current);
+  }
+  return FALSE;
+}
+
+static inline gboolean _is_cycleable_widget(GtkWidget *widget)
+{
+  return
+    DT_IS_BAUHAUS_WIDGET(widget) &&
+    gtk_widget_get_can_focus(widget) &&
+    gtk_widget_get_visible(widget) &&
+    (gtk_widget_is_visible(widget) || _is_in_hidden_container(widget));
+}
+
+int dt_bauhaus_widget_get_nested(GtkWidget *widget, GList **result)
+{
+  int num_descendants = 0;
+  if (_is_cycleable_widget(widget))
+  {
+    *result = g_list_append(*result, widget);
+    num_descendants += 1;
+  }
+  if (GTK_IS_STACK(widget))
+  {
+    GtkWidget* visible_child = gtk_stack_get_visible_child(GTK_STACK(widget));
+    num_descendants += dt_bauhaus_widget_get_nested(visible_child, result);
+  }
+  else if (GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for (GList *child = children; child; child = g_list_next(child))
+    {
+      num_descendants += dt_bauhaus_widget_get_nested(GTK_WIDGET(child->data), result);
+    }
+  }
+  return num_descendants;
 }
 
 static const dt_action_element_def_t _action_elements_slider[]
@@ -4081,6 +4225,39 @@ static const dt_shortcut_fallback_t _action_fallbacks_combo[]
         .speed   = -1 },
       { } };
 
+static const dt_action_element_def_t _action_elements_focus_slider_or_combo[]
+  = { { N_("value"), dt_action_effect_value },
+      { N_("button"), dt_action_effect_toggle },
+      { N_("force"), dt_action_effect_value },
+      { N_("zoom"), dt_action_effect_value },
+      { NULL } };
+
+static const dt_shortcut_fallback_t _action_fallbacks_focus_slider_or_combo[]
+  = { { .element = DT_ACTION_ELEMENT_VALUE,
+        .effect  = DT_ACTION_EFFECT_RESET,
+        .button  = DT_SHORTCUT_LEFT,
+        .click   = DT_SHORTCUT_DOUBLE },
+      { .element = DT_ACTION_ELEMENT_BUTTON,
+        .button  = DT_SHORTCUT_LEFT },
+      { .element = DT_ACTION_ELEMENT_BUTTON,
+        .effect  = DT_ACTION_EFFECT_TOGGLE_CTRL,
+        .button  = DT_SHORTCUT_LEFT,
+        .mods    = GDK_CONTROL_MASK },
+      { .element = DT_ACTION_ELEMENT_FORCE,
+        .mods    = GDK_CONTROL_MASK | GDK_SHIFT_MASK,
+        .speed   = 10.0 },
+      { .element = DT_ACTION_ELEMENT_ZOOM,
+        .effect  = DT_ACTION_EFFECT_DEFAULT_MOVE,
+        .button  = DT_SHORTCUT_RIGHT,
+        .move    = DT_SHORTCUT_MOVE_VERTICAL },
+      { .move    = DT_SHORTCUT_MOVE_SCROLL,
+        .effect  = DT_ACTION_EFFECT_DEFAULT_MOVE,
+        .speed   = -1 },
+      { .move    = DT_SHORTCUT_MOVE_VERTICAL,
+        .effect  = DT_ACTION_EFFECT_DEFAULT_MOVE,
+        .speed   = -1 },
+      { } };
+
 static const dt_action_def_t _action_def_slider
   = { N_("slider"),
       _action_process_slider,
@@ -4102,6 +4279,11 @@ static const dt_action_def_t _action_def_focus_combo
       _action_process_focus_combo,
       DT_ACTION_ELEMENTS_NUM(selection),
       NULL, TRUE };
+static const dt_action_def_t _action_def_focus_slider_or_combo
+  = { N_("edit focused widget"),
+      _action_process_focus_slider_or_combo,
+      _action_elements_focus_slider_or_combo,
+      _action_fallbacks_focus_slider_or_combo, TRUE };
 static const dt_action_def_t _action_def_focus_button
   = { N_("buttons"),
       _action_process_focus_button,

@@ -2470,6 +2470,127 @@ void connect_button_press_release(GtkWidget *w, GtkWidget *p)
                    G_CALLBACK(_quickbutton_press_release), p);
 }
 
+// Cycle widgets begins
+
+void _cycle_widgets(const gboolean down)
+{
+  dt_iop_module_t *module = dt_dev_gui_module();
+  if(!module || !module->widget)
+  {
+    dt_toast_log(N_("no focused module"));
+    return;
+  }
+
+  GList* all_bauhaus_widgets = NULL;
+  if(!dt_bauhaus_widget_get_nested(module->widget, &all_bauhaus_widgets))
+  {
+    dt_toast_log(N_("no focusable widgets in [%s]"), dt_iop_get_localized_name(module->op));
+    return;
+  }
+
+  GtkWidget *focused_widget = gtk_window_get_focus(GTK_WINDOW(dt_ui_main_window(darktable.gui->ui)));
+  GList *current = g_list_find(all_bauhaus_widgets, focused_widget);
+
+  GList* next_to_focus = NULL;
+  if (current)
+    next_to_focus = down ? g_list_next(current) : g_list_previous(current);
+  if (!next_to_focus)
+    next_to_focus = down ? g_list_first(all_bauhaus_widgets) : g_list_last(all_bauhaus_widgets);
+
+  dt_bauhaus_widget_ensure_visible(next_to_focus->data, module);
+  gtk_widget_grab_focus(next_to_focus->data);
+
+  const gchar *instance_name = dt_iop_get_instance_name(module);
+  if(strlen(instance_name) > 0)
+    dt_toast_log(N_("focused widget [%s] in [%s] - [%s]"),
+                 dt_bauhaus_widget_get_label(next_to_focus->data),
+                 dt_iop_get_localized_name(module->op), instance_name);
+  else
+    dt_toast_log(N_("focused widget [%s] in [%s]"),
+                 dt_bauhaus_widget_get_label(next_to_focus->data),
+                 dt_iop_get_localized_name(module->op));
+  g_list_free(all_bauhaus_widgets);
+}
+
+static const gchar *_action_effect_cycle_widgets[]
+  = { N_("edit"),
+      N_("up"),
+      N_("down"),
+      N_("toggle picker"),
+      NULL };
+
+static float _action_callback_cycle_widgets(gpointer widget,
+                                            dt_action_element_t element,
+                                            const dt_action_effect_t effect,
+                                            const float move_size)
+{
+  if(DT_PERFORM_ACTION(move_size))
+  {
+    if(effect == 3) // toggle picker
+    {
+      // if a picker is already active, turn it off and return focus to its widget
+      if(dt_iop_color_picker_is_visible(darktable.develop))
+      {
+        dt_iop_color_picker_t *proxy = darktable.lib->proxy.colorpicker.picker_proxy;
+        GtkWidget *picker_widget = proxy ? proxy->colorpick : NULL;
+        dt_iop_color_picker_reset(proxy->module, FALSE);
+        if(picker_widget) gtk_widget_grab_focus(picker_widget);
+        return 0;
+      }
+      dt_iop_module_t *module = dt_dev_gui_module();
+      if(!module || !module->widget)
+      {
+        dt_toast_log(N_("no focused module"));
+        return 0;
+      }
+      GtkWidget *focused = gtk_window_get_focus(GTK_WINDOW(dt_ui_main_window(darktable.gui->ui)));
+      if(!focused || !DT_IS_BAUHAUS_WIDGET(focused))
+      {
+        dt_toast_log(N_("no focused widget"));
+        return 0;
+      }
+      if(!dt_bauhaus_widget_get_quad_toggle(focused))
+      {
+        dt_toast_log(N_("[%s] has no picker"),
+                     dt_bauhaus_widget_get_label(focused));
+        return 0;
+      }
+      dt_bauhaus_widget_press_quad(focused);
+    }
+    else if(effect == DT_ACTION_EFFECT_DEFAULT_KEY) // edit
+    {
+      dt_iop_module_t *module = dt_dev_gui_module();
+      if(!module || !module->widget)
+      {
+        dt_toast_log(N_("no focused module"));
+        return 0;
+      }
+      GtkWidget *focused = gtk_window_get_focus(GTK_WINDOW(dt_ui_main_window(darktable.gui->ui)));
+      if(!focused || !DT_IS_BAUHAUS_WIDGET(focused))
+      {
+        dt_toast_log(N_("no focused widget"));
+        return 0;
+      }
+      dt_bauhaus_widget_show_popup(focused);
+    }
+    else
+      _cycle_widgets(effect == DT_ACTION_EFFECT_DEFAULT_DOWN);
+    return 0;
+  }
+  return DT_ACTION_NOT_VALID;
+}
+
+const dt_action_element_def_t _action_elements_cycle_widgets[]
+  = { { NULL, _action_effect_cycle_widgets } };
+
+static const dt_action_def_t _action_def_cycle_widgets
+  = { N_("cycle widgets"),
+      _action_callback_cycle_widgets,
+      _action_elements_cycle_widgets,
+      NULL, TRUE };
+
+// Cycle widgets ends
+
 void gui_init(dt_view_t *self)
 {
   dt_develop_t *dev = self->data;
@@ -2523,6 +2644,11 @@ void gui_init(dt_view_t *self)
      right-click shortcut assignment and tooltip display. */
   dt_action_register(DT_ACTION(self), N_("toggle pinned state in second window"),
                      _toggle_pin_second_window_action, 0, 0);
+
+  /* allow to navigate through visible widgets in focused module */
+  dt_action_define(sa, NULL, N_("cycle widgets"),
+                   NULL, &_action_def_cycle_widgets);
+
 
   /* Enable color assessment conditions */
   {
