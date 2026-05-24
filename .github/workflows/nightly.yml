@@ -4,6 +4,11 @@ on:
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
+    inputs:
+      branch:
+        description: 'Branch to build (leave empty to use the branch this workflow runs from)'
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -18,8 +23,6 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-22.04, ubuntu-24.04-arm]
-        branch:
-          - { code: master, label: gitmaster }
         include:
           - os: ubuntu-22.04
             compiler: { compiler: GNU12, CC: gcc-12, CXX: g++-12, packages: gcc-12 g++-12 }
@@ -34,8 +37,8 @@ jobs:
       CMAKE_BUILD_TYPE: ${{ matrix.btype }}
       GENERATOR: ${{ matrix.generator }}
       TARGET: ${{ matrix.target }}
-      BRANCH: ${{ matrix.branch.code }}
-      BUILD_NAME: ${{ matrix.branch.label }}
+      BRANCH: ${{ inputs.branch || github.ref_name }}
+      BUILD_NAME: ${{ inputs.branch || github.ref_name }}
     steps:
       - name: Install compiler ${{ matrix.compiler.compiler }}
         run: |
@@ -160,7 +163,7 @@ jobs:
         run: |
           # Note that we can't make a shallow clone to reduce clone traffic and time, as we have to
           # fetch the entire history to correctly generate the version for the AppImage filename
-          git clone -b ${{ github.ref_name }} https://github.com/${{ github.repository }} src
+          git clone -b ${{ inputs.branch || github.ref_name }} https://github.com/${{ github.repository }} src
           pushd src
           git submodule init
           git config submodule.src/tests/integration.update none
@@ -294,7 +297,7 @@ jobs:
         run: |
           # Note that we can't make a shallow clone to reduce clone traffic and time, as we have to
           # fetch the entire history to correctly generate the version for the installation package filename
-          git clone -b ${{ github.ref_name }} https://github.com/${{ github.repository }} src
+          git clone -b ${{ inputs.branch || github.ref_name }} https://github.com/${{ github.repository }} src
           pushd src
           git submodule init
           git config submodule.src/tests/integration.update none
@@ -371,7 +374,7 @@ jobs:
         run: |
           # Note that we can't make a shallow clone to reduce clone traffic and time, as we have to
           # fetch the entire history to correctly generate the version for the disk image filename
-          git clone -b ${{ github.ref_name }} https://github.com/${{ github.repository }} src
+          git clone -b ${{ inputs.branch || github.ref_name }} https://github.com/${{ github.repository }} src
           pushd src
           git submodule init
           git config submodule.src/tests/integration.update none
