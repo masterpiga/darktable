@@ -19,6 +19,7 @@
 #include "bauhaus/bauhaus.h"
 #include "common/debug.h"
 #include "common/imagebuf.h"
+#include "common/ras2vect.h"
 #include "common/undo.h"
 #include "control/conf.h"
 #include "control/control.h"
@@ -27,6 +28,16 @@
 #include "develop/masks.h"
 #include "develop/openmp_maths.h"
 #include <assert.h>
+
+// Per-form resize cache: scrolling back restores the exact pre-morph points.
+// Keyed by formid so the cache survives switching to another path and back.
+typedef struct
+{
+  GList *stack;
+  gboolean build_up;
+} _resize_cache_t;
+// Accessed only from GUI-thread scroll/button events — no mutex needed.
+static GHashTable *_resize_caches = NULL;
 
 static void _path_bounding_box_raw(const float *const points,
                                    const float *border,
@@ -444,6 +455,48 @@ static void _path_catmull_to_bezier(const float x1,
   *by2 = (y2 + 6 * y3 - y4) / 6;
 }
 
+// Clamp a Bezier handle so it doesn't extend past the chord length of its edge.
+// This prevents visual loops when two nodes are very close but their Catmull-Rom
+// handles (derived from far neighbors) are much longer than the chord.
+static void
+_clamp_bezier_handle(float *hx, float *hy, const float px, const float py, const float cl2)
+{
+  const float dx = *hx - px, dy = *hy - py;
+  const float hl2 = dx * dx + dy * dy;
+  if(hl2 > cl2 && hl2 > 1e-18f)
+  {
+    const float s = sqrtf(cl2 / hl2);
+    *hx = px + dx * s;
+    *hy = py + dy * s;
+  }
+}
+
+// Clamp all auto-computed Bezier handles to their edge's chord length.
+// Only call this after re-vectorization (potrace output), where Catmull-Rom
+// handles derived from densely-packed nodes can exceed the chord and cause
+// visible self-intersecting loops. Do NOT call it unconditionally from
+// _path_init_ctrl_points — that would silently alter carefully hand-crafted
+// masks whose intentional curvature exceeds the chord.
+static void _path_clamp_ctrl_points(dt_masks_form_t *form)
+{
+  const guint nb = g_list_length(form->points);
+  if(nb < 2)
+    return;
+  const GList *l = form->points;
+  for(guint k = 0; k < nb; k++)
+  {
+    dt_masks_point_path_t *cur = l->data;
+    const GList *next_l = g_list_next_wraparound(l, form->points);
+    dt_masks_point_path_t *next = next_l->data;
+    const float cx = next->corner[0] - cur->corner[0];
+    const float cy = next->corner[1] - cur->corner[1];
+    const float cl2 = cx * cx + cy * cy;
+    _clamp_bezier_handle(&cur->ctrl2[0], &cur->ctrl2[1], cur->corner[0], cur->corner[1], cl2);
+    _clamp_bezier_handle(&next->ctrl1[0], &next->ctrl1[1], next->corner[0], next->corner[1], cl2);
+    l = g_list_next(l);
+  }
+}
+
 /** initialise all control points to eventually match a catmull-rom
  * like spline */
 static void _path_init_ctrl_points(dt_masks_form_t *form)
@@ -474,20 +527,34 @@ static void _path_init_ctrl_points(dt_masks_form_t *form)
       dt_masks_point_path_t *point5 = pt5->data;
 
       float bx1 = 0.0f, by1 = 0.0f, bx2 = 0.0f, by2 = 0.0f;
-      _path_catmull_to_bezier(point1->corner[0], point1->corner[1],
-                              point2->corner[0], point2->corner[1],
-                              point3->corner[0], point3->corner[1],
-                              point4->corner[0], point4->corner[1],
-                              &bx1, &by1, &bx2, &by2);
+      _path_catmull_to_bezier(point1->corner[0],
+                              point1->corner[1],
+                              point2->corner[0],
+                              point2->corner[1],
+                              point3->corner[0],
+                              point3->corner[1],
+                              point4->corner[0],
+                              point4->corner[1],
+                              &bx1,
+                              &by1,
+                              &bx2,
+                              &by2);
       if(point2->ctrl2[0] == -1.0) point2->ctrl2[0] = bx1;
       if(point2->ctrl2[1] == -1.0) point2->ctrl2[1] = by1;
       point3->ctrl1[0] = bx2;
       point3->ctrl1[1] = by2;
-      _path_catmull_to_bezier(point2->corner[0], point2->corner[1],
-                              point3->corner[0], point3->corner[1],
-                              point4->corner[0], point4->corner[1],
-                              point5->corner[0], point5->corner[1],
-                              &bx1, &by1, &bx2, &by2);
+      _path_catmull_to_bezier(point2->corner[0],
+                              point2->corner[1],
+                              point3->corner[0],
+                              point3->corner[1],
+                              point4->corner[0],
+                              point4->corner[1],
+                              point5->corner[0],
+                              point5->corner[1],
+                              &bx1,
+                              &by1,
+                              &bx2,
+                              &by2);
       if(point4->ctrl1[0] == -1.0) point4->ctrl1[0] = bx2;
       if(point4->ctrl1[1] == -1.0) point4->ctrl1[1] = by2;
       point3->ctrl2[0] = bx1;
@@ -1746,6 +1813,207 @@ static int _path_get_points_border(dt_develop_t *dev,
                               points_count, border, border_count, source);
 }
 
+static void _resize_stack_free_snapshot(gpointer data)
+{
+  g_list_free_full((GList *)data, free);
+}
+
+static void _resize_cache_entry_free(gpointer data)
+{
+  _resize_cache_t *c = data;
+  g_list_free_full(c->stack, _resize_stack_free_snapshot);
+  free(c);
+}
+
+static void _resize_cache_invalidate(const dt_mask_id_t formid)
+{
+  if(_resize_caches)
+    g_hash_table_remove(_resize_caches, GINT_TO_POINTER(formid));
+}
+
+static GList *_copy_points(const GList *points)
+{
+  GList *copy = NULL;
+  for(const GList *l = points; l; l = g_list_next(l))
+  {
+    dt_masks_point_path_t *pt = malloc(sizeof(dt_masks_point_path_t));
+    memcpy(pt, l->data, sizeof(dt_masks_point_path_t));
+    copy = g_list_prepend(copy, pt);
+  }
+  return g_list_reverse(copy);
+}
+
+/* Compute the squared Euclidean distance transform of a binary seed image.
+ * seeds[y*rw+x] = 1 → seed (distance 0), 0 → non-seed.
+ * edt2[y*rw+x]  = squared pixel distance to the nearest seed.
+ * Uses the Meijster 2000 two-pass separable algorithm, O(rw*rh) time.
+ */
+static void _edt_compute(const int *seeds, int *edt2, const int rw, const int rh)
+{
+  const int INF = rw + rh + 1; // safe upper bound on any distance
+
+  // ── Phase 1: per-column vertical distances (squared) ──────────────────────
+  // edt2[y*rw+x] ← (min vertical distance from (x,y) to any seed in column x)^2
+  DT_OMP_FOR()
+  for(int x = 0; x < rw; x++)
+  {
+    // forward scan: distance to nearest seed above
+    int d = INF;
+    for(int y = 0; y < rh; y++)
+    {
+      if(seeds[y * rw + x])
+        d = 0;
+      else if(d < INF)
+        d++;
+      edt2[y * rw + x] = d;
+    }
+    // backward scan: update with distance to nearest seed below
+    d = INF;
+    for(int y = rh - 1; y >= 0; y--)
+    {
+      if(seeds[y * rw + x])
+        d = 0;
+      else if(d < INF)
+        d++;
+      if(d < edt2[y * rw + x])
+        edt2[y * rw + x] = d;
+    }
+    // square the vertical distances
+    for(int y = 0; y < rh; y++)
+    {
+      const int v = edt2[y * rw + x];
+      edt2[y * rw + x] = (v < INF) ? v * v : INF * INF;
+    }
+  }
+
+  // ── Phase 2: per-row parabola envelope → full 2D squared distances ────────
+  // For each row y, compute: edt2[y*rw+x] = min_{x'} (g[x'] + (x-x')^2)
+  // where g[x'] = edt2[y*rw+x'] from phase 1.
+  // Rows are independent, so we parallelize. Each thread gets its own s/t/row
+  // scratch buffers (3 × rw ints) to avoid per-row heap allocation inside the loop.
+  const size_t nthreads = dt_get_num_threads();
+  int *scratch = malloc(3 * nthreads * (size_t)rw * sizeof(int));
+  if(scratch)
+  {
+    DT_OMP_FOR()
+    for(int y = 0; y < rh; y++)
+    {
+      const int tid = dt_get_thread_num();
+      int *s = scratch + ((size_t)tid * 3 + 0) * rw;   // parabola center indices
+      int *t = scratch + ((size_t)tid * 3 + 1) * rw;   // transition points
+      int *row = scratch + ((size_t)tid * 3 + 2) * rw; // copy of g before overwrite
+
+      int *g = &edt2[y * rw]; // phase-1 values; overwritten in-place
+
+      for(int x = 0; x < rw; x++)
+        row[x] = g[x];
+
+      int q = 0;
+      s[0] = 0;
+      t[0] = 0;
+
+      // build lower envelope of parabolas f(x, i) = row[i] + (x-i)^2
+      for(int u = 1; u < rw; u++)
+      {
+        // pop parabolas whose contribution at t[q] is exceeded by the new one at u
+        while(q >= 0)
+        {
+          const long fq = (long)row[s[q]] + (long)(t[q] - s[q]) * (t[q] - s[q]);
+          const long fu = (long)row[u] + (long)(t[q] - u) * (t[q] - u);
+          if(fq <= fu)
+            break;
+          q--;
+        }
+        if(q < 0)
+        {
+          q = 0;
+          s[0] = u;
+          t[0] = 0;
+        }
+        else
+        {
+          // intersection (sep): first x where parabola u beats s[q]
+          const int si = s[q];
+          const long num = (long)u * u - (long)si * si + (long)row[u] - (long)row[si];
+          const int w = (int)(num / (2 * (u - si))) + 1;
+          if(w < rw)
+          {
+            q++;
+            s[q] = u;
+            t[q] = w;
+          }
+        }
+      }
+
+      // scan right to left, assigning each pixel to its closest parabola
+      for(int u = rw - 1; u >= 0; u--)
+      {
+        g[u] = row[s[q]] + (u - s[q]) * (u - s[q]);
+        if(u == t[q])
+          q--;
+      }
+    }
+    free(scratch);
+  }
+  else
+  {
+    // fallback: sequential with stack-allocated scratch (rw bounded by trace_res ≤ 4096)
+    int *s = malloc((size_t)rw * sizeof(int));
+    int *t = malloc((size_t)rw * sizeof(int));
+    int *row = malloc((size_t)rw * sizeof(int));
+    if(s && t && row)
+    {
+      for(int y = 0; y < rh; y++)
+      {
+        int *g = &edt2[y * rw];
+        for(int x = 0; x < rw; x++)
+          row[x] = g[x];
+        int q = 0;
+        s[0] = 0;
+        t[0] = 0;
+        for(int u = 1; u < rw; u++)
+        {
+          while(q >= 0)
+          {
+            const long fq = (long)row[s[q]] + (long)(t[q] - s[q]) * (t[q] - s[q]);
+            const long fu = (long)row[u] + (long)(t[q] - u) * (t[q] - u);
+            if(fq <= fu)
+              break;
+            q--;
+          }
+          if(q < 0)
+          {
+            q = 0;
+            s[0] = u;
+            t[0] = 0;
+          }
+          else
+          {
+            const int si = s[q];
+            const long num = (long)u * u - (long)si * si + (long)row[u] - (long)row[si];
+            const int w = (int)(num / (2 * (u - si))) + 1;
+            if(w < rw)
+            {
+              q++;
+              s[q] = u;
+              t[q] = w;
+            }
+          }
+        }
+        for(int u = rw - 1; u >= 0; u--)
+        {
+          g[u] = row[s[q]] + (u - s[q]) * (u - s[q]);
+          if(u == t[q])
+            q--;
+        }
+      }
+    }
+    free(s);
+    free(t);
+    free(row);
+  }
+}
+
 static int _path_events_mouse_scrolled(dt_iop_module_t *module,
                                        const float pzx,
                                        const float pzy,
@@ -1820,68 +2088,285 @@ static int _path_events_mouse_scrolled(dt_iop_module_t *module,
       }
       else if(gui->edit_mode == DT_MASKS_EDIT_FULL)
       {
-        // get the center of gravity of the form (like if it was a simple polygon)
-        float bx = 0.0f;
-        float by = 0.0f;
-        float surf = 0.0f;
+        // Inset/outset by: rasterize path → morphological erosion/dilation → re-vectorize.
+        // If the user reverses direction, pop the saved snapshot instead of re-running
+        // the lossy pipeline, so shrink-then-grow restores the original exactly.
+        if(g_list_length(form->points) < 3)
+          return 1;
 
-        for(const GList *form_points = form->points;
-            form_points;
-            form_points = g_list_next(form_points))
+        // Lazily create the per-form cache table.
+        if(!_resize_caches)
+          _resize_caches =
+            g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, _resize_cache_entry_free);
+
+        _resize_cache_t *cache = g_hash_table_lookup(_resize_caches, GINT_TO_POINTER(form->formid));
+
+        dt_print(DT_DEBUG_MASKS,
+                 "[masks path] resize cache: formid=%d up=%d cache=%p stack_len=%d build_up=%d",
+                 form->formid,
+                 up,
+                 cache,
+                 cache ? g_list_length(cache->stack) : -1,
+                 cache ? (int)cache->build_up : -1);
+
+        if(cache && cache->stack && (gboolean)up != cache->build_up)
         {
-          const GList *next =
-            g_list_next_wraparound(form_points, form->points); // next w/ wrap
-          dt_masks_point_path_t *point1 = form_points->data; // kth element of form->points
-          dt_masks_point_path_t *point2 = next->data;
+          // Direction reversed: pop the saved snapshot and restore the shape.
+          // Feathering is orthogonal to shape, so carry it forward from the
+          // current points rather than restoring whatever was saved in the snapshot.
+          float border0 = 0.f, border1 = 0.f;
+          if(form->points)
+          {
+            const dt_masks_point_path_t *pt = form->points->data;
+            border0 = pt->border[0];
+            border1 = pt->border[1];
+          }
 
-          surf += point1->corner[0] * point2->corner[1]
-            - point2->corner[0] * point1->corner[1];
+          GList *head = cache->stack;
+          GList *saved = head->data;
+          cache->stack = g_list_remove_link(cache->stack, head);
+          g_list_free(head);
 
-          bx += (point1->corner[0] + point2->corner[0])
-                * (point1->corner[0] * point2->corner[1]
-                   - point2->corner[0] * point1->corner[1]);
-          by += (point1->corner[1] + point2->corner[1])
-                * (point1->corner[0] * point2->corner[1]
-                   - point2->corner[0] * point1->corner[1]);
+          g_list_free_full(form->points, free);
+          form->points = saved;
+
+          for(GList *l = form->points; l; l = g_list_next(l))
+          {
+            dt_masks_point_path_t *pt = l->data;
+            pt->border[0] = border0;
+            pt->border[1] = border1;
+          }
+          // build_up is intentionally NOT updated here: the stack was built in
+          // build_up direction and pop continues in the opposite direction.
+
+          dt_print(
+            DT_DEBUG_MASKS, "[masks path] resize cache: POP → %d pts", g_list_length(form->points));
+
+          _path_init_ctrl_points(form);
+          dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+          dt_masks_gui_form_create(form, gui, index, module);
+          return 1;
         }
-        bx /= 3.0f * surf;
-        by /= 3.0f * surf;
 
-        surf = sqrtf(fabsf(surf));
-        if(!up && surf < 0.001f) return 1;
-        if(up && surf > 2.0f) return 1;
-
-        // now we move each point
-        for(GList *l = form->points; l; l = g_list_next(l))
+        // Same direction (or first tick): push a snapshot and run the raster pipeline.
+        if(!cache)
         {
-          dt_masks_point_path_t *point = l->data;
-          const float x = dt_masks_change_size(up, point->corner[0] - bx, -FLT_MAX, FLT_MAX);
-          const float y = dt_masks_change_size(up, point->corner[1] - by, -FLT_MAX, FLT_MAX);
+          cache = calloc(1, sizeof(_resize_cache_t));
+          g_hash_table_insert(_resize_caches, GINT_TO_POINTER(form->formid), cache);
+        }
+        cache->stack = g_list_prepend(cache->stack, _copy_points(form->points));
+        cache->build_up = up;
+        dt_print(DT_DEBUG_MASKS,
+                 "[masks path] resize cache: PUSH (stack now %d)",
+                 g_list_length(cache->stack));
 
-          // we stretch ctrl points
-          const float ct1x = dt_masks_change_size
-            (up, point->ctrl1[0] - point->corner[0], -FLT_MAX, FLT_MAX);
-          const float ct1y = dt_masks_change_size
-            (up, point->ctrl1[1] - point->corner[1], -FLT_MAX, FLT_MAX);
-          const float ct2x = dt_masks_change_size
-            (up, point->ctrl2[0] - point->corner[0], -FLT_MAX, FLT_MAX);
-          const float ct2y = dt_masks_change_size
-            (up, point->ctrl2[1] - point->corner[1], -FLT_MAX, FLT_MAX);
+        float iwidth, iheight, dummy_w, dummy_h;
+        dt_masks_get_image_size(&dummy_w, &dummy_h, &iwidth, &iheight);
+        if(iwidth <= 0.0f || iheight <= 0.0f)
+          return 1;
 
-          // and we set the new points
-          point->corner[0] = bx + x;
-          point->corner[1] = by + y;
-          point->ctrl1[0] = point->corner[0] + ct1x;
-          point->ctrl1[1] = point->corner[1] + ct1y;
-          point->ctrl2[0] = point->corner[0] + ct2x;
-          point->ctrl2[1] = point->corner[1] + ct2y;
+        // Collect mean border so new nodes inherit the original feather.
+        const guint nb = g_list_length(form->points);
+        float mean_border = 0.0f;
+        for(const GList *bl = form->points; bl; bl = g_list_next(bl))
+        {
+          const dt_masks_point_path_t *bp = bl->data;
+          mean_border += bp->border[0] + bp->border[1];
+        }
+        mean_border = fmaxf(0.0005f, mean_border / (2.0f * (float)nb));
+
+        // ── Step 1: determine raster size and resize radius ────────────────────
+        const char *res_str = dt_conf_get_string_const("masks/path_resize_resolution");
+        const int res_pref = res_str ? atoi(res_str) : 0;
+        const int trace_res = (res_pref > 0) ? res_pref : 2048;
+        const float rscale = (float)trace_res / fmaxf(iwidth, iheight);
+        const int rw = MAX(1, (int)(iwidth * rscale + 0.5f));
+        const int rh = MAX(1, (int)(iheight * rscale + 0.5f));
+
+        const int resize_amount = MAX(1, dt_conf_get_int("masks/path_resize_amount"));
+        const gboolean use_percent =
+          !g_strcmp0(dt_conf_get_string_const("masks/path_resize_unit"), "% of path size");
+
+        float offset_img_px;
+        if(use_percent)
+        {
+          // bounding box of the control points in image pixels
+          float bbx0 = 1.0f, bbx1 = 0.0f, bby0 = 1.0f, bby1 = 0.0f;
+          for(const GList *pl = form->points; pl; pl = g_list_next(pl))
+          {
+            const dt_masks_point_path_t *bpt = pl->data;
+            bbx0 = fminf(bbx0, bpt->corner[0]);
+            bbx1 = fmaxf(bbx1, bpt->corner[0]);
+            bby0 = fminf(bby0, bpt->corner[1]);
+            bby1 = fmaxf(bby1, bpt->corner[1]);
+          }
+          const float bb_max = fmaxf((bbx1 - bbx0) * iwidth, (bby1 - bby0) * iheight);
+          offset_img_px = (float)resize_amount / 100.0f * fmaxf(bb_max, 1.0f);
+        }
+        else
+        {
+          offset_img_px = (float)resize_amount;
         }
 
-        // now the redraw/save stuff
+        // radius in raster pixels (float for sub-pixel EDT threshold)
+        const float r_float = fmaxf(0.5f, offset_img_px * rscale);
+
+        dt_print(DT_DEBUG_MASKS,
+                 "[masks path] inset: rw=%d rh=%d r_float=%.2f up=%d",
+                 rw,
+                 rh,
+                 r_float,
+                 up);
+
+        // ── Step 2: rasterize path to float buffer via Cairo ───────────────────
+        // ras2forms convention: value < 0.5 → inside, value >= 0.5 → outside.
+        // We render the path as alpha=1 on a cleared A8 surface, then invert.
+        cairo_surface_t *surf = cairo_image_surface_create(CAIRO_FORMAT_A8, rw, rh);
+        cairo_t *cr2 = cairo_create(surf);
+        cairo_set_operator(cr2, CAIRO_OPERATOR_SOURCE);
+        cairo_set_source_rgba(cr2, 0, 0, 0, 0);
+        cairo_paint(cr2);
+        cairo_set_source_rgba(cr2, 0, 0, 0, 1);
+
+        _path_init_ctrl_points(form); // ensure ctrl1/ctrl2 are valid
+
+        {
+          const GList *seg = form->points;
+          const dt_masks_point_path_t *first = seg->data;
+          cairo_move_to(cr2, first->corner[0] * rw, first->corner[1] * rh);
+          for(; seg; seg = g_list_next(seg))
+          {
+            const dt_masks_point_path_t *a = seg->data;
+            const GList *seg2 = g_list_next_wraparound(seg, form->points);
+            const dt_masks_point_path_t *b = seg2->data;
+            cairo_curve_to(cr2,
+                           a->ctrl2[0] * rw,
+                           a->ctrl2[1] * rh,
+                           b->ctrl1[0] * rw,
+                           b->ctrl1[1] * rh,
+                           b->corner[0] * rw,
+                           b->corner[1] * rh);
+          }
+        }
+        cairo_close_path(cr2);
+        cairo_fill(cr2);
+        cairo_surface_flush(surf);
+
+        const unsigned char *pixels = cairo_image_surface_get_data(surf);
+        const int pstride = cairo_image_surface_get_stride(surf);
+
+        float *mask = dt_alloc_align_float((size_t)rw * rh);
+        if(!mask)
+        {
+          cairo_destroy(cr2);
+          cairo_surface_destroy(surf);
+          return 1;
+        }
+        DT_OMP_FOR()
+        for(int y = 0; y < rh; y++)
+          for(int x = 0; x < rw; x++)
+            mask[y * rw + x] = (pixels[y * pstride + x] > 127) ? 0.0f : 1.0f;
+
+        cairo_destroy(cr2);
+        cairo_surface_destroy(surf);
+
+        // ── Step 3: Euclidean distance transform erosion/dilation ────────────
+        // grow (up=TRUE):  seeds = inside pixels; new inside if dist ≤ r_float
+        // shrink (up=FALSE): seeds = outside pixels; new inside if original
+        //                    inside AND dist to outside > r_float
+        const size_t npx = (size_t)rw * rh;
+        int *seeds_map = g_malloc_n(npx, sizeof(int));
+        int *edt2 = g_malloc_n(npx, sizeof(int));
+        float *morphed = dt_alloc_align_float(npx);
+        if(!seeds_map || !edt2 || !morphed)
+        {
+          g_free(seeds_map);
+          g_free(edt2);
+          dt_free_align(morphed);
+          dt_free_align(mask);
+          return 1;
+        }
+
+        DT_OMP_FOR()
+        for(size_t i = 0; i < npx; i++)
+          seeds_map[i] = up ? (mask[i] < 0.5f ? 1 : 0) : (mask[i] >= 0.5f ? 1 : 0);
+
+        _edt_compute(seeds_map, edt2, rw, rh);
+        g_free(seeds_map);
+
+        const float r2 = r_float * r_float;
+        DT_OMP_FOR()
+        for(size_t i = 0; i < npx; i++)
+        {
+          if(up)
+            morphed[i] = ((float)edt2[i] <= r2) ? 0.0f : 1.0f;
+          else
+            morphed[i] = (mask[i] < 0.5f && (float)edt2[i] > r2) ? 0.0f : 1.0f;
+        }
+        g_free(edt2);
+        dt_free_align(mask);
+
+        // ── Step 4: re-vectorize with potrace ──────────────────────────────────
+        const char *smoothing = dt_conf_get_string_const("masks/path_resize_curve_smoothing");
+        const double alphamax = !g_strcmp0(smoothing, "sharp")    ? 0.0
+                                : !g_strcmp0(smoothing, "smooth") ? 1.3
+                                                                  : 1.0; // balanced
+        GList *new_forms = ras2forms(morphed, rw, rh, NULL, 0.5f, 2, alphamax, NULL);
+        dt_free_align(morphed);
+
+        // Take the form with the most nodes (outer boundary).
+        dt_masks_form_t *best = NULL;
+        int best_n = 0;
+        for(GList *fl = new_forms; fl; fl = g_list_next(fl))
+        {
+          dt_masks_form_t *f = fl->data;
+          const int npts = g_list_length(f->points);
+          if(npts > best_n)
+          {
+            best_n = npts;
+            best = f;
+          }
+        }
+
+        if(!best || best_n < 3)
+        {
+          dt_print(DT_DEBUG_MASKS, "[masks path] inset REJECTED: ras2forms empty");
+          g_list_free_full(new_forms, (GDestroyNotify)dt_masks_free_form);
+          return 1;
+        }
+
+        dt_print(DT_DEBUG_MASKS,
+                 "[masks path] ras2forms: %d forms, best=%d pts",
+                 g_list_length(new_forms),
+                 best_n);
+
+        // ── Step 5: normalize coords and set border, then replace points ────────
+        // ras2forms (image=NULL) returns raw pixel coords [0..rw]×[0..rh];
+        // mask coords are normalized: corner[0] ∈ [0,1] = pixel_x / rw.
+        for(GList *pl = best->points; pl; pl = g_list_next(pl))
+        {
+          dt_masks_point_path_t *pt = pl->data;
+          pt->corner[0] /= rw;
+          pt->corner[1] /= rh;
+          pt->ctrl1[0] /= rw;
+          pt->ctrl1[1] /= rh;
+          pt->ctrl2[0] /= rw;
+          pt->ctrl2[1] /= rh;
+          pt->border[0] = pt->border[1] = mean_border;
+        }
+
+        g_list_free_full(form->points, free);
+        form->points = best->points;
+        best->points = NULL; // prevent double-free in dt_masks_free_form
+        g_list_free_full(new_forms, (GDestroyNotify)dt_masks_free_form);
+
         _path_init_ctrl_points(form);
-
-        surf = dt_masks_change_size(up, surf, -FLT_MAX, FLT_MAX);
-        dt_toast_log(_("size: %3.2f%%"), surf * 50.0f);
+        // Potrace nodes can be packed tightly, making Catmull-Rom handles longer
+        // than the edge chord and producing self-intersecting splines. Clamp here,
+        // after re-vectorization only, so hand-crafted masks are never affected.
+        _path_clamp_ctrl_points(form);
+        dt_toast_log(
+          _("resize: %+d %s"), up ? resize_amount : -resize_amount, use_percent ? "%" : "px");
       }
       else
       {
@@ -2290,6 +2775,7 @@ static int _path_events_button_pressed(dt_iop_module_t *module,
     gui->point_selected = -1;
     _path_init_ctrl_points(form);
 
+    _resize_cache_invalidate(form->formid);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points
@@ -2397,6 +2883,7 @@ static int _path_events_button_released(dt_iop_module_t *module,
       point->ctrl2[1] += dy;
     }
 
+    _resize_cache_invalidate(form->formid);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points
@@ -2425,6 +2912,7 @@ static int _path_events_button_released(dt_iop_module_t *module,
   {
     gui->seg_dragging = -1;
     gpt->clockwise = _path_is_clockwise(form);
+    _resize_cache_invalidate(form->formid);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
     return 1;
   }
@@ -2453,6 +2941,7 @@ static int _path_events_button_released(dt_iop_module_t *module,
 
     _path_init_ctrl_points(form);
 
+    _resize_cache_invalidate(form->formid);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points
@@ -2477,6 +2966,7 @@ static int _path_events_button_released(dt_iop_module_t *module,
 
     _path_init_ctrl_points(form);
 
+    _resize_cache_invalidate(form->formid);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points
