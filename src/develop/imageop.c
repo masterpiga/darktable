@@ -2400,6 +2400,14 @@ void dt_iop_request_focus(dt_iop_module_t *module)
   dev->gui_module = module;
   dev->focus_hash = TRUE;
 
+  // if show_output is active, follow the newly focused module
+  if(dev->show_output_iop_order && module)
+  {
+    dev->show_output_iop_order = module->iop_order;
+    g_strlcpy(dev->show_output_op, module->op, sizeof(dev->show_output_op));
+    dt_dev_invalidate_all(dev);
+  }
+
   dt_free_align(dev->full.pipe->bcache_data);
   dev->full.pipe->bcache_data = NULL;
   dt_free_align(dev->preview_pipe->bcache_data);
@@ -4071,6 +4079,34 @@ static float _action_process(gpointer target,
         _gui_rename_callback   (NULL, module);
       else _gui_multiinstance_callback(NULL, NULL, module);
       break;
+    case DT_ACTION_ELEMENT_SHOW_OUTPUT:
+    {
+      dt_develop_t *d = module->dev;
+      const gboolean was_active = (d->show_output_iop_order == module->iop_order &&
+                                   strcmp(d->show_output_op, module->op) == 0);
+      if(DT_ACTION_TOGGLE_NEEDED(effect, move_size, !was_active))
+      {
+        if(was_active)
+        {
+          d->show_output_iop_order = 0;
+          d->show_output_op[0] = '\0';
+          dt_toast_log(_("show output off"));
+        }
+        else
+        {
+          // activate on any previous show_output
+          if(d->show_output_iop_order)
+          {
+            dt_toast_log(_("show output on: %s"), dt_iop_get_localized_name(module->op));
+          }
+          d->show_output_iop_order = module->iop_order;
+          g_strlcpy(d->show_output_op, module->op, sizeof(d->show_output_op));
+          dt_toast_log(_("show output: %s"), dt_iop_get_localized_name(module->op));
+        }
+        dt_dev_invalidate_all(d);
+      }
+    }
+    break;
     case DT_ACTION_ELEMENT_RESET:
       {
         GdkEventButton event = { .state = (effect == DT_ACTION_EFFECT_ACTIVATE_CTRL
@@ -4105,12 +4141,13 @@ static float _action_process(gpointer target,
   }
 
   return element == DT_ACTION_ELEMENT_FOCUS
-    ? dt_dev_gui_module() == module
-    : (element == DT_ACTION_ELEMENT_ENABLE
-       ? module->off && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(module->off))
-       : (element == DT_ACTION_ELEMENT_SHOW
-          ? module->expanded
-          : 0));
+           ? dt_dev_gui_module() == module
+           : (element == DT_ACTION_ELEMENT_ENABLE
+                ? module->off && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(module->off))
+                : (element == DT_ACTION_ELEMENT_SHOW_OUTPUT
+                     ? (module->dev->show_output_iop_order == module->iop_order &&
+                        strcmp(module->dev->show_output_op, module->op) == 0)
+                     : (element == DT_ACTION_ELEMENT_SHOW ? module->expanded : 0)));
 }
 
 const gchar *dt_action_effect_instance[]
@@ -4123,14 +4160,12 @@ const gchar *dt_action_effect_instance[]
       N_("duplicate"),
       NULL };
 
-static const dt_action_element_def_t _action_elements[]
-  = { { N_("show"), dt_action_effect_toggle },
-      { N_("reset"), dt_action_effect_activate },
-      { N_("presets"), dt_action_effect_presets },
-      { N_("enable"), dt_action_effect_toggle },
-      { N_("focus"), dt_action_effect_toggle },
-      { N_("instance"), dt_action_effect_instance },
-      { NULL } };
+static const dt_action_element_def_t _action_elements[] = {
+  { N_("show"), dt_action_effect_toggle },        { N_("reset"), dt_action_effect_activate },
+  { N_("presets"), dt_action_effect_presets },    { N_("enable"), dt_action_effect_toggle },
+  { N_("focus"), dt_action_effect_toggle },       { N_("instance"), dt_action_effect_instance },
+  { N_("show output"), dt_action_effect_toggle }, { NULL }
+};
 
 static const dt_shortcut_fallback_t _action_fallbacks[]
   = { { .element = DT_ACTION_ELEMENT_ENABLE,

@@ -305,6 +305,13 @@ void dt_dev_invalidate(dt_develop_t *dev)
 
 void dt_dev_invalidate_all(dt_develop_t *dev)
 {
+  // When show_output state changes, we need a full synch to apply/remove the bypass
+  if(dev->full.pipe)
+    dev->full.pipe->changed |= DT_DEV_PIPE_SYNCH;
+  if(dev->preview_pipe)
+    dev->preview_pipe->changed |= DT_DEV_PIPE_SYNCH;
+  if(dev->preview2.pipe)
+    dev->preview2.pipe->changed |= DT_DEV_PIPE_SYNCH;
   if(dev->full.pipe)
     dev->full.pipe->status = DT_DEV_PIXELPIPE_DIRTY;
   if(dev->preview_pipe)

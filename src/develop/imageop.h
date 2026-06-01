@@ -135,6 +135,7 @@ enum
   DT_ACTION_ELEMENT_ENABLE = 3,
   DT_ACTION_ELEMENT_FOCUS = 4,
   DT_ACTION_ELEMENT_INSTANCE = 5,
+  DT_ACTION_ELEMENT_SHOW_OUTPUT = 6,
 };
 
 /** part of the module which only contains the cached dlopen stuff. */

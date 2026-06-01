@@ -366,6 +366,11 @@ typedef struct dt_develop_t
   // When pinned, this holds its own image, history, iop modules, and pipeline
   gboolean preview2_pinned;                       // Whether the second window is pinned to a specific image
   struct dt_develop_t *preview2_pinned_dev;       // Separate develop for pinned image (NULL when not pinned)
+
+  // "Show Output" — temporarily disable all modules after a given iop_order
+  double show_output_iop_order;  // iop_order of anchor module (0 = disabled)
+  char show_output_op[20];       // operation name of anchor module
+  GtkWidget *show_output_button; // toolbar toggle button (NULL when not in darkroom)
 } dt_develop_t;
 
 void dt_dev_init(dt_develop_t *dev, gboolean gui_attached);

@@ -1566,6 +1566,35 @@ static void _toggle_pin_second_window_action(dt_action_t *action)
   dt_dev_toggle_preview2_pinned(dev);
 }
 
+static void _show_output_quickbutton_clicked(GtkToggleButton *button, gpointer user_data);
+
+// Update the toolbar toggle button to reflect current show_output state without
+// triggering the button's own callback.
+static void _show_output_update_button(dt_develop_t *dev)
+{
+  if(!dev->show_output_button)
+    return;
+  g_signal_handlers_block_by_func(dev->show_output_button, _show_output_quickbutton_clicked, dev);
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(dev->show_output_button),
+                               dev->show_output_iop_order != 0);
+  g_signal_handlers_unblock_by_func(dev->show_output_button, _show_output_quickbutton_clicked, dev);
+}
+
+static void _action_clear_show_output(dt_action_t *action)
+{
+  dt_view_t *self = dt_action_view(action);
+  dt_develop_t *dev = self->data;
+
+  if(dev->show_output_iop_order)
+  {
+    dev->show_output_iop_order = 0;
+    dev->show_output_op[0] = '\0';
+    dt_toast_log(_("show output off"));
+    dt_dev_invalidate_all(dev);
+    _show_output_update_button(dev);
+  }
+}
+
 static void skip_b_key_accel_callback(dt_action_t *action)
 {
   _dev_jump_image(dt_action_view(action)->data, -1, TRUE);
@@ -2753,6 +2782,63 @@ static void _action_show_focused(dt_action_t *action)
   _show_focused_module();
 }
 
+static void _action_show_output_focused(dt_action_t *action)
+{
+  dt_develop_t *dev = darktable.develop;
+  dt_iop_module_t *module = dt_dev_gui_module();
+
+  if(!module)
+    return;
+
+  const gboolean was_active = (dev->show_output_iop_order == module->iop_order &&
+                               strcmp(dev->show_output_op, module->op) == 0);
+  if(was_active)
+  {
+    dev->show_output_iop_order = 0;
+    dev->show_output_op[0] = '\0';
+    dt_toast_log(_("show output off"));
+  }
+  else
+  {
+    if(dev->show_output_iop_order)
+    {
+      dt_toast_log(_("show output on: %s"), dt_iop_get_localized_name(module->op));
+    }
+    dev->show_output_iop_order = module->iop_order;
+    g_strlcpy(dev->show_output_op, module->op, sizeof(dev->show_output_op));
+    dt_toast_log(_("show output: %s"), dt_iop_get_localized_name(module->op));
+  }
+  dt_dev_invalidate_all(dev);
+  _show_output_update_button(dev);
+}
+
+static void _show_output_quickbutton_clicked(GtkToggleButton *button, gpointer user_data)
+{
+  dt_develop_t *dev = (dt_develop_t *)user_data;
+  const gboolean active = gtk_toggle_button_get_active(button);
+
+  if(!active)
+  {
+    dev->show_output_iop_order = 0;
+    dev->show_output_op[0] = '\0';
+    dt_toast_log(_("show output off"));
+  }
+  else
+  {
+    dt_iop_module_t *module = dt_dev_gui_module();
+    if(!module)
+    {
+      // no focused module — keep button pressed but do nothing yet;
+      // the follow-focus logic will activate on the next focus event
+      return;
+    }
+    dev->show_output_iop_order = module->iop_order;
+    g_strlcpy(dev->show_output_op, module->op, sizeof(dev->show_output_op));
+    dt_toast_log(_("show output: %s"), dt_iop_get_localized_name(module->op));
+  }
+  dt_dev_invalidate_all(dev);
+}
+
 static void _action_new_instance_focused(dt_action_t *action)
 {
   _new_instance_focused_module();
@@ -2908,8 +2994,14 @@ void gui_init(dt_view_t *self)
      shortcut works independently of the pin button widget.  The pin button
      is wired to this same action in _darkroom_ui_second_window_init() for
      right-click shortcut assignment and tooltip display. */
-  dt_action_register(DT_ACTION(self), N_("toggle pinned state in second window"),
-                     _toggle_pin_second_window_action, 0, 0);
+  dt_action_register(DT_ACTION(self),
+                     N_("toggle pinned state in second window"),
+                     _toggle_pin_second_window_action,
+                     0,
+                     0);
+
+  /* global "clear show output" action */
+  dt_action_register(DT_ACTION(self), N_("clear show output"), _action_clear_show_output, 0, 0);
 
   /* cycle through visible modules and their instances */
   dt_action_define(sa, NULL, N_("cycle modules"), NULL, &_action_def_cycle_modules);
@@ -2917,6 +3009,8 @@ void gui_init(dt_view_t *self)
   /* global <focused> shortcuts */
   dt_action_register(&darktable.control->actions_focus, N_("enable"), _action_enable_focused, 0, 0);
   dt_action_register(&darktable.control->actions_focus, N_("show"), _action_show_focused, 0, 0);
+  dt_action_register(
+    &darktable.control->actions_focus, N_("show output"), _action_show_output_focused, 0, 0);
   dt_action_register(
     &darktable.control->actions_focus, N_("new instance"), _action_new_instance_focused, 0, 0);
   dt_action_register(&darktable.control->actions_focus,
@@ -2969,6 +3063,23 @@ void gui_init(dt_view_t *self)
     gtk_box_pack_start(GTK_BOX(vbox), GTK_WIDGET(border_ratio_slider), TRUE, TRUE, 0);
 
     gtk_widget_show_all(vbox);
+  }
+
+  /* Show output button — toggle show-output mode for the focused module */
+  {
+    dev->show_output_button = dtgtk_togglebutton_new(dtgtk_cairo_paint_eye, 0, NULL);
+    dt_action_define(
+      DT_ACTION(self), NULL, N_("show output"), dev->show_output_button, &dt_action_def_toggle);
+    gtk_widget_set_tooltip_text(dev->show_output_button,
+                                _("show the output of the focused module,\n"
+                                  "hiding the effect of all modules applied on top of it.\n"
+                                  "follows the focused module automatically while active"));
+    g_signal_connect(G_OBJECT(dev->show_output_button),
+                     "toggled",
+                     G_CALLBACK(_show_output_quickbutton_clicked),
+                     dev);
+    dt_view_manager_module_toolbox_add(
+      darktable.view_manager, dev->show_output_button, DT_VIEW_DARKROOM);
   }
 
   /* Enable late-scaling button */

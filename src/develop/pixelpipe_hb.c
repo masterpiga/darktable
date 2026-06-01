@@ -614,6 +614,32 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
         }
       }
 
+      // disable downstream modules when "show output" is active;
+      // color profile, gamma, and geometry modules must remain enabled:
+      // gamma converts float→uint8 for display; colorin/colorout keep the
+      // display color pipeline intact; geometric modules (flip, crop,
+      // ashift, rotatepixels, finalscale) preserve image orientation and
+      // dimensions so the viewer always sees a correctly-framed image
+      if(dev->show_output_iop_order && piece->module->iop_order > dev->show_output_iop_order &&
+         !dt_iop_module_is_gamma(piece->module) && !dt_iop_module_is_finalscale(piece->module) &&
+         !dt_iop_module_is(piece->module, "colorout") &&
+         !dt_iop_module_is(piece->module, "colorin") && !dt_iop_module_is(piece->module, "flip") &&
+         !dt_iop_module_is(piece->module, "clipping") && !dt_iop_module_is(piece->module, "crop") &&
+         !dt_iop_module_is(piece->module, "ashift") &&
+         !dt_iop_module_is(piece->module, "rotatepixels"))
+      {
+        piece->enabled = FALSE;
+        dt_print_pipe(DT_DEBUG_PIPE,
+                      "dt_dev_pixelpipe_synch show_output",
+                      pipe,
+                      piece->module,
+                      DT_DEVICE_NONE,
+                      NULL,
+                      NULL,
+                      "disabled downstream of show_output anchor (%.1f)",
+                      dev->show_output_iop_order);
+      }
+
       dt_iop_commit_params(hist->module, hist->params, hist->blend_params, pipe, piece);
 
       dt_print_pipe(DT_DEBUG_PARAMS,
