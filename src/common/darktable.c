@@ -180,6 +180,26 @@ static int usage(const char *argv0)
          "    Typical locations are /opt/darktable/share/darktable/ \n"
          "    and /usr/share/darktable/\n"
          "\n"
+         "--flexi-test-mode / --no-flexi-test-mode\n"
+         "    This is a test build of the masks_revamp branch, so it never writes\n"
+         "    to the real library.db or configdir by default. The first run seeds\n"
+         "    a scratch configdir (and, inside it, a scratch library.db) by\n"
+         "    copying one -- --configdir DIR if given, else the normal default\n"
+         "    configdir -- so the test build starts out seeing the same\n"
+         "    presets/styles/collection as usual. NOTE: in test mode --configdir\n"
+         "    (and, likewise, --library if it points outside configdir) only picks\n"
+         "    which files to seed FROM, it does not change where darktable writes\n"
+         "    to. Every write for the rest of that session and\n"
+         "    any later ones goes only to the scratch copy at a fixed location\n"
+         "    under the system tmp directory (e.g. /tmp/flexi_mask_test/config on\n"
+         "    Linux), reused across runs so test edits accumulate instead of\n"
+         "    being lost -- the real files are never touched again after the\n"
+         "    initial seed. Edited masks are also written to XMP sidecars as\n"
+         "    ORIGINALNAME_flexi_test.xmp in a scratch directory\n"
+         "    (/tmp/flexi_mask_test/xmp) instead of next to the original image.\n"
+         "    Pass --no-flexi-test-mode to use --configdir/--library the normal\n"
+         "    way (as the actual write target) instead.\n"
+         "\n"
          "--library FILE\n"
          "    Specifies an alternate location for darktable's image information database,\n"
          "    which is stored in an SQLite file by default (library.db) in the directory\n"
@@ -976,6 +996,59 @@ char *version = g_strdup_printf(
   return version;
 }
 
+// portable (Linux/macOS/Windows) recursive directory copy for
+// --flexi-test-mode's configdir seeding, using GIO instead of shelling out
+// to a platform-specific copy tool. Best-effort: logs and skips entries it
+// can't copy rather than aborting the whole seed.
+static void _flexi_test_mode_copy_dir_recursive(const char *src, const char *dst)
+{
+  g_mkdir_with_parents(dst, 0700);
+
+  GError *error = NULL;
+  GDir *dir = g_dir_open(src, 0, &error);
+  if(!dir)
+  {
+    dt_print(DT_DEBUG_ALWAYS,
+             "[init] flexi test mode: could not read '%s' while seeding scratch configdir: %s",
+             src, error ? error->message : "unknown error");
+    g_clear_error(&error);
+    return;
+  }
+
+  const gchar *name;
+  while((name = g_dir_read_name(dir)))
+  {
+    gchar *src_path = g_build_filename(src, name, NULL);
+    gchar *dst_path = g_build_filename(dst, name, NULL);
+
+    if(g_file_test(src_path, G_FILE_TEST_IS_DIR))
+    {
+      _flexi_test_mode_copy_dir_recursive(src_path, dst_path);
+    }
+    else if(g_file_test(src_path, G_FILE_TEST_IS_REGULAR))
+    {
+      GFile *src_file = g_file_new_for_path(src_path);
+      GFile *dst_file = g_file_new_for_path(dst_path);
+      GError *copy_error = NULL;
+      if(!g_file_copy(src_file, dst_file, G_FILE_COPY_OVERWRITE | G_FILE_COPY_NOFOLLOW_SYMLINKS,
+                       NULL, NULL, NULL, &copy_error))
+      {
+        dt_print(DT_DEBUG_ALWAYS,
+                 "[init] flexi test mode: failed to copy '%s' while seeding scratch configdir: %s",
+                 src_path, copy_error ? copy_error->message : "unknown error");
+        g_clear_error(&copy_error);
+      }
+      g_object_unref(src_file);
+      g_object_unref(dst_file);
+    }
+    // symlinks and other special files are skipped -- configdir doesn't use them
+
+    g_free(src_path);
+    g_free(dst_path);
+  }
+  g_dir_close(dir);
+}
+
 int dt_init(int argc,
             char *argv[],
             const gboolean init_gui,
@@ -1059,6 +1132,11 @@ int dt_init(int argc,
   darktable.num_openmp_threads = dt_get_num_procs();
   darktable.pipe_cache = TRUE;
   darktable.unmuted = 0;
+  // this is a test build of the masks_revamp branch: always isolate it from
+  // the real library.db/configdir/xmp sidecars, no flag required -- testers
+  // just double-click the app. --no-flexi-test-mode below is an escape hatch
+  // for developers who checked out this same commit and want the real db.
+  darktable.flexi_test_mode = TRUE;
   GSList *config_override = NULL;
 
   // keep a copy of argv array for possibly reporting later
@@ -1159,6 +1237,16 @@ int dt_init(int argc,
       {
         cachedir_from_command = argv[++k];
         argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--flexi-test-mode"))
+      {
+        darktable.flexi_test_mode = TRUE; // already the default in this build, accepted for clarity/scripts
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--no-flexi-test-mode"))
+      {
+        darktable.flexi_test_mode = FALSE;
         argv[k] = NULL;
       }
       else if(!strcmp(argv[k], "--dumpdir") && argc > k + 1)
@@ -1521,6 +1609,75 @@ int dt_init(int argc,
     dt_print(DT_DEBUG_ALWAYS,
              "[init] darktable dump directory is '%s'",
              darktable.tmp_directory ? darktable.tmp_directory : "NOT AVAILABLE");
+  }
+
+  if(darktable.flexi_test_mode)
+  {
+    // isolate this run from the real configdir/library.db/xmp sidecars while
+    // still letting it see the user's real presets/styles/collection: the
+    // first time this test build runs, seed a scratch configdir by copying
+    // the real one into it (read access to everything the user already
+    // has); every write for the rest of this and future test sessions goes
+    // only to that scratch copy, so the real configdir/library.db are never
+    // modified. The scratch copy lives at a fixed (not random) location so
+    // test edits accumulate across sessions instead of being seeded fresh
+    // -- and lost -- on every launch.
+    //
+    // A --configdir on the command line does NOT bypass this: in test mode
+    // it names which configdir to seed *from*, not the configdir to write
+    // to -- otherwise a launcher script that always passes --configdir
+    // (like this dev's) would defeat the whole point of test mode. Only
+    // --no-flexi-test-mode turns this off and lets --configdir mean what it
+    // normally means.
+    gchar *test_root = g_build_filename(g_get_tmp_dir(), "flexi_mask_test", NULL);
+    gchar *test_configdir = g_build_filename(test_root, "config", NULL);
+    if(!g_file_test(test_configdir, G_FILE_TEST_IS_DIR))
+    {
+      gchar *real_configdir = configdir_from_command
+        ? g_strdup(configdir_from_command)
+        : g_build_filename(g_get_user_config_dir(), "darktable", NULL);
+      if(g_file_test(real_configdir, G_FILE_TEST_IS_DIR))
+        _flexi_test_mode_copy_dir_recursive(real_configdir, test_configdir);
+      else
+        g_mkdir_with_parents(test_configdir, 0700);
+      g_free(real_configdir);
+    }
+    configdir_from_command = test_configdir; // leaked intentionally, lives for process lifetime
+
+    // --library works the same way as --configdir above: it's only ever a
+    // seed source in test mode, never the real write target. This matters
+    // because library.db is not necessarily inside configdir -- a --library
+    // pointing elsewhere would otherwise slip past the configdir copy above
+    // and get written to directly.
+    if(dbfilename_from_command && strcmp(dbfilename_from_command, ":memory:") != 0)
+    {
+      gchar *test_library = g_build_filename(test_root, "library.db", NULL);
+      if(!g_file_test(test_library, G_FILE_TEST_EXISTS)
+         && g_file_test(dbfilename_from_command, G_FILE_TEST_EXISTS))
+      {
+        GFile *src = g_file_new_for_path(dbfilename_from_command);
+        GFile *dst = g_file_new_for_path(test_library);
+        GError *copy_error = NULL;
+        if(!g_file_copy(src, dst, G_FILE_COPY_OVERWRITE, NULL, NULL, NULL, &copy_error))
+        {
+          dt_print(DT_DEBUG_ALWAYS,
+                   "[init] flexi test mode: failed to seed scratch library from '%s': %s",
+                   dbfilename_from_command, copy_error ? copy_error->message : "unknown error");
+          g_clear_error(&copy_error);
+        }
+        g_object_unref(src);
+        g_object_unref(dst);
+      }
+      dbfilename_from_command = test_library; // leaked intentionally, lives for process lifetime
+    }
+
+    darktable.flexi_test_xmp_dir = g_build_filename(test_root, "xmp", NULL);
+    g_mkdir_with_parents(darktable.flexi_test_xmp_dir, 0700);
+    g_free(test_root);
+    dt_print(DT_DEBUG_ALWAYS,
+             "[init] flexi test mode: using scratch configdir '%s', library '%s', xmp scratch dir '%s'",
+             configdir_from_command, dbfilename_from_command ? dbfilename_from_command : "(inside configdir)",
+             darktable.flexi_test_xmp_dir);
   }
 
   // Set directories as requested or default.

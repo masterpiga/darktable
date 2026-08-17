@@ -3019,7 +3019,23 @@ gboolean dt_image_write_sidecar_file(const dt_imgid_t imgid)
   gboolean error = FALSE;
 
   dt_image_path_append_version(imgid, filename, sizeof(filename));
-  g_strlcat(filename, ".xmp", sizeof(filename));
+
+  if(darktable.flexi_test_mode)
+  {
+    // redirect into the scratch xmp dir instead of next to the original
+    // image, flattening the path into the filename (separators -> '_') so
+    // images with the same basename in different folders can't collide.
+    gchar *flat = g_strdup(filename);
+    for(char *c = flat; *c; c++)
+      if(*c == G_DIR_SEPARATOR) *c = '_';
+    gchar *redirected = g_build_filename(darktable.flexi_test_xmp_dir, flat, NULL);
+    g_strlcpy(filename, redirected, sizeof(filename));
+    g_strlcat(filename, "_flexi_test.xmp", sizeof(filename));
+    g_free(flat);
+    g_free(redirected);
+  }
+  else
+    g_strlcat(filename, ".xmp", sizeof(filename));
 
   // the sidecar is written only if required
   if((xmp_mode == DT_WRITE_XMP_ALWAYS)
