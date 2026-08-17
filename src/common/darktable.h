@@ -500,6 +500,11 @@ typedef struct darktable_t
   // Keep database history for known images rather than replacing it from XMP.
   // Set by darktable-cli with explicit --library <db>; GUI and CLI use XMP by default.
   gboolean prefer_library_history;
+  // --flexi-test-mode: forces an in-memory library and a scratch configdir/xmp
+  // location so test builds of masks_revamp never touch a real library.db,
+  // configdir, or working copy's .xmp files. See dt_image_write_sidecar_file().
+  gboolean flexi_test_mode;
+  char *flexi_test_xmp_dir;
   int gui_running;		// atomic, access with g_atomic_int_*()
   GTimeZone *utc_tz;
   GDateTime *origin_gdt;
