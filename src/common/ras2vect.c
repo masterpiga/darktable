@@ -128,7 +128,14 @@ static void _add_point(dt_masks_form_t *form,
   }
 
   bzpt->state = DT_MASKS_POINT_STATE_USER;
-  bzpt->border[0] = bzpt->border[1] = 0.f;
+  // NOT a literal 0: path.c's own points always seed this with at least
+  // 0.0005f (see e.g. _path_events_button_pressed), because
+  // _path_modify_property's feather slider treats old_val == 0 as "identity,
+  // nothing to scale" (ratio forced to 1.0 whenever either old or new value
+  // is 0) -- a point stuck at literally 0 can therefore never be dragged to
+  // any other value, which is exactly what made the feather control on an
+  // AI-vectorized path look permanently unresponsive/empty.
+  bzpt->border[0] = bzpt->border[1] = 0.0005f;
 
   form->points = g_list_append(form->points, bzpt);
 }

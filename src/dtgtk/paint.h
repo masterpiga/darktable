@@ -324,6 +324,9 @@ void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, gint w, gint
 void dtgtk_cairo_paint_masks_multiply(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a used icon for masks */
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint the flexi masks panel corner icon: two overlapping sheets, the front one
+    filled when CPF_ACTIVE (a mask is actually in use), outline-only otherwise */
+void dtgtk_cairo_paint_masks_panel(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a clone tool for retouch */
 void dtgtk_cairo_paint_tool_clone(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a heal tool for retouch */
