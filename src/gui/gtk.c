@@ -43,6 +43,7 @@
 
 #include "common/styles.h"
 #include "common/usermanual_url.h"
+#include "common/utility.h"
 #include "control/conf.h"
 #include "control/control.h"
 #include "control/signal.h"
@@ -3743,6 +3744,19 @@ static void _flexi_ensure_corner_icon_side(dt_ui_t *ui)
 {
   gtk_widget_set_halign(ui->flexi_corner_icon,
                         ui->flexi_panel_right ? GTK_ALIGN_END : GTK_ALIGN_START);
+  // drives the flush/square edge in darktable.css (#flexi-corner-icon.flexi-
+  // corner-icon-left/-right) so the icon looks like it protrudes from
+  // whichever side the dedicated panel is docked on
+  if(ui->flexi_panel_right)
+  {
+    dt_gui_remove_class(ui->flexi_corner_icon, "flexi-corner-icon-left");
+    dt_gui_add_class(ui->flexi_corner_icon, "flexi-corner-icon-right");
+  }
+  else
+  {
+    dt_gui_remove_class(ui->flexi_corner_icon, "flexi-corner-icon-right");
+    dt_gui_add_class(ui->flexi_corner_icon, "flexi-corner-icon-left");
+  }
 }
 
 GtkWidget *dt_ui_flexi_panel_content(dt_ui_t *ui)
@@ -3801,26 +3815,71 @@ static gboolean _flexi_corner_icon_query_tooltip(GtkWidget *widget,
   gchar *text = gtk_widget_get_tooltip_text(widget);
   if(!text) return FALSE;
   gtk_tooltip_set_text(tooltip, text);
+  GtkAllocation alloc;
+  gtk_widget_get_allocation(widget, &alloc);
+  GdkRectangle rect = { 0, 0, alloc.width, alloc.height };
+  gtk_tooltip_set_tip_area(tooltip, &rect);
   g_free(text);
   return TRUE;
 }
 
+// native GTK tooltips (the query-tooltip handler above, kept in case it
+// starts working in some environment) turned out not to reliably render for
+// this widget at all -- confirmed via temporary logging that query-tooltip
+// fires every time with the right text and returns TRUE, yet no popup ever
+// became visible, on this corner icon specifically (every other tooltip in
+// the app works fine). Rather than keep chasing a GTK/macOS popup-window
+// quirk blind, fall back to the same status-bar hint mechanism the canvas's
+// own overlay elements already rely on for exactly this situation (see
+// dt_control_hinter_message's other call sites in blend_gui.c) -- it does
+// not depend on GTK's tooltip popup machinery at all.
+static gboolean _flexi_corner_icon_crossing(GtkWidget *w, GdkEventCrossing *e, gpointer user_data)
+{
+  if(e->type == GDK_ENTER_NOTIFY)
+  {
+    gchar *text = gtk_widget_get_tooltip_text(w);
+    if(text)
+    {
+      // the hint bar is a single line -- the tooltip text's own newline
+      // (between the mask-state summary and the "click to expand" hint)
+      // reads fine collapsed to ", " there instead
+      gchar *flat = dt_util_str_replace(text, "\n", ", ");
+      dt_control_hinter_message(flat);
+      g_free(flat);
+      g_free(text);
+    }
+  }
+  else if(e->type == GDK_LEAVE_NOTIFY)
+  {
+    dt_control_hinter_message("");
+  }
+  return FALSE;
+}
+
 // same icon as the "show mask overlay" toggle (bd->showmask) -- reads as
 // "this reveals the mask editor", regardless of the hosted module's actual
-// mask mode; highlighted vs dimmed (see the "flexi-corner-icon-active" CSS
-// class) conveys whether a mask is actually active, not the icon shape
+// mask mode; the glyph itself (empty outline vs. filled front sheet, see
+// dtgtk_cairo_paint_masks_panel) plus the "flexi-corner-icon-active" CSS
+// class both convey whether a mask is actually active -- a dedicated icon
+// rather than reusing bd->showmask's, which sits right next to it in the
+// undocked panel and would otherwise read as the same control
 static void _flexi_build_corner_icon(dt_ui_t *ui)
 {
-  ui->flexi_corner_icon = dtgtk_button_new(dtgtk_cairo_paint_showmask, 0, NULL);
+  ui->flexi_corner_icon = dtgtk_button_new(dtgtk_cairo_paint_masks_panel,
+                                           ui->flexi_corner_icon_active ? CPF_ACTIVE : 0, NULL);
   gtk_widget_set_name(ui->flexi_corner_icon, "flexi-corner-icon");
   if(ui->flexi_corner_icon_active) dt_gui_add_class(ui->flexi_corner_icon, "flexi-corner-icon-active");
   gtk_widget_set_has_tooltip(ui->flexi_corner_icon, TRUE);
   g_signal_connect(G_OBJECT(ui->flexi_corner_icon), "query-tooltip",
                    G_CALLBACK(_flexi_corner_icon_query_tooltip), NULL);
+  gtk_widget_add_events(ui->flexi_corner_icon, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
+  g_signal_connect(G_OBJECT(ui->flexi_corner_icon), "enter-notify-event",
+                   G_CALLBACK(_flexi_corner_icon_crossing), NULL);
+  g_signal_connect(G_OBJECT(ui->flexi_corner_icon), "leave-notify-event",
+                   G_CALLBACK(_flexi_corner_icon_crossing), NULL);
   _flexi_update_corner_icon_tooltip(ui);
   gtk_widget_set_no_show_all(ui->flexi_corner_icon, TRUE);
-  gtk_widget_set_halign(ui->flexi_corner_icon,
-                        ui->flexi_panel_right ? GTK_ALIGN_END : GTK_ALIGN_START);
+  _flexi_ensure_corner_icon_side(ui);
   gtk_widget_set_valign(ui->flexi_corner_icon, GTK_ALIGN_START);
   gtk_overlay_add_overlay(GTK_OVERLAY(dt_ui_center_base(ui)), ui->flexi_corner_icon);
   g_signal_connect(G_OBJECT(ui->flexi_corner_icon), "clicked",
@@ -3862,6 +3921,8 @@ void dt_ui_flexi_panel_set_icon(dt_ui_t *ui, const gboolean active, const char *
   if(!ui->flexi_corner_icon) return;
   if(active) dt_gui_add_class(ui->flexi_corner_icon, "flexi-corner-icon-active");
   else dt_gui_remove_class(ui->flexi_corner_icon, "flexi-corner-icon-active");
+  dtgtk_button_set_active(DTGTK_BUTTON(ui->flexi_corner_icon), active);
+  gtk_widget_queue_draw(ui->flexi_corner_icon);
   _flexi_update_corner_icon_tooltip(ui);
 }
 

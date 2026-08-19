@@ -23,6 +23,40 @@
 #include "develop/imageop.h"
 #include "develop/masks.h"
 
+// a flattened scratch-group entry's own parentid is the id of its *real*
+// structural parent (see dt_masks_group_ungroup, masks/masks.c), not
+// necessarily the module's own top group -- for a committed AI-mask bundle's
+// child (see _register_vectorized_forms, masks/object.c), that is the
+// bundle's own formid. Returns the bundle form if `fpt` is one of its
+// children, else NULL. Used throughout this file to treat a bundle as one
+// coordinated unit on the canvas (select/highlight/drag/grow-shrink), while
+// individual bezier-node dragging still targets just the one child.
+static dt_masks_form_t *_bundle_parent_of(const dt_masks_point_group_t *fpt)
+{
+  dt_masks_form_t *parent = dt_masks_get_from_id(darktable.develop, fpt->parentid);
+  return (parent && (parent->type & DT_MASKS_OBJECT)) ? parent : NULL;
+}
+
+// after a bundle-wide edit (coordinated resize/drag) has mutated every
+// child's own points directly, force-rebuild each child's own display buffer
+// in `gui->points` -- dt_masks_gui_form_create (unlike its "only if the pipe
+// hash changed" _test_create sibling) always recomputes unconditionally, the
+// same call path.c's own scroll/drag handlers use after mutating one form.
+static void _bundle_refresh_children(dt_masks_form_t *scratch_grp,
+                                     const dt_masks_form_t *bundle,
+                                     dt_masks_form_gui_t *gui,
+                                     const dt_iop_module_t *module)
+{
+  int pos = 0;
+  for(GList *l = scratch_grp->points; l; l = g_list_next(l), pos++)
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(pt->parentid != bundle->formid) continue;
+    dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(child) dt_masks_gui_form_create(child, gui, pos, module);
+  }
+}
+
 static int _group_events_mouse_scrolled(dt_iop_module_t *module,
                                         const float pzx,
                                         const float pzy,
@@ -38,9 +72,100 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
-    if(sel && sel->functions)
-      return sel->functions->mouse_scrolled(module, pzx, pzy, up, state, sel,
-                                            fpt->parentid, gui, gui->group_edited);
+    if(!sel || !sel->functions) return 0;
+
+    // Bundle-coordinated scroll gestures. dt_modifier_is is an *exact* match
+    // among Shift+Control+Alt/Meta, so the four modifier states (none, ctrl,
+    // shift, ctrl+shift) must be told apart the same way path.c's own
+    // _path_events_mouse_scrolled does -- as one mutually exclusive
+    // if/else-if chain -- rather than four independent conditions that can
+    // silently overlap (e.g. "not exactly ctrl" AND "not exactly shift" is
+    // also true for ctrl+shift together, which an earlier version of this
+    // function got wrong: it hijacked ctrl+shift's legacy-resize gesture into
+    // plain resize instead of leaving it alone).
+    dt_masks_form_t *bundle = _bundle_parent_of(fpt);
+    if(bundle && dt_modifier_is(state, GDK_CONTROL_MASK))
+    {
+      // ctrl+scroll (opacity): the panel's own inline opacity control for a
+      // bundle row edits the bundle's own membership entry in the module's
+      // top group (its overall contribution to the composite) via
+      // dt_masks_form_change_opacity(bundle, module's group formid, ...) --
+      // not any child's own internal per-membership opacity within the
+      // bundle, which is invisible bookkeeping nothing else in the UI
+      // exposes. Drive the exact same call here.
+      const float amount = up ? 0.05f : -0.05f;
+      dt_masks_form_change_opacity(bundle, module->blend_params->mask_id, amount);
+      dt_masks_iop_update(module);
+      dt_control_queue_redraw_center();
+      return 1;
+    }
+    if(bundle && !dt_modifier_is(state, GDK_CONTROL_MASK))
+    {
+      if(dt_modifier_is(state, GDK_SHIFT_MASK) && bundle->functions && bundle->functions->modify_property)
+      {
+        // shift+scroll (feather): drives the bundle's own FEATHER case
+        // (_object_bundle_modify_property) directly, exactly as the panel's
+        // own feather slider does -- every child, the scrolled one included,
+        // scaled by the one ratio a scroll tick represents (matching
+        // dt_masks_change_size's own step), through the identical call. No
+        // child is special-cased against its siblings.
+        const float ratio = up ? 1.0f / 0.97f : 0.97f;
+        float sum = 0.0f, minv = 0.0f, maxv = 0.0f;
+        int count = 0;
+        bundle->functions->modify_property(bundle, DT_MASKS_PROPERTY_FEATHER, 1.0f, ratio,
+                                           &sum, &count, &minv, &maxv);
+        dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+        _bundle_refresh_children(form, bundle, gui, module);
+        dt_masks_iop_update(module);
+        dt_control_queue_redraw_center();
+        return 1;
+      }
+      else if(dt_modifier_is(state, GDK_CONTROL_MASK | GDK_SHIFT_MASK)
+              && gui->edit_mode == DT_MASKS_EDIT_FULL
+              && bundle->functions && bundle->functions->modify_property)
+      {
+        // ctrl+shift (legacy centroid resize, path.c's _path_resize_centroid)
+        // is the exact same affine scale-about-center operation as the
+        // panel's own SIZE slider -- same dt_masks_change_size step ratio,
+        // same math, just driven by a scroll tick instead of a dragged
+        // value. Drives the bundle's own coordinated SIZE case directly, the
+        // same way plain-scroll resize and shift-scroll feather already do.
+        const float ratio = up ? 1.0f / 0.97f : 0.97f;
+        float sum = 0.0f, minv = 0.0f, maxv = 0.0f;
+        int count = 0;
+        bundle->functions->modify_property(bundle, DT_MASKS_PROPERTY_SIZE, 1.0f, ratio,
+                                           &sum, &count, &minv, &maxv);
+        dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+        _bundle_refresh_children(form, bundle, gui, module);
+        dt_masks_iop_update(module);
+        dt_control_queue_redraw_center();
+        return 1;
+      }
+      else if(gui->edit_mode == DT_MASKS_EDIT_FULL
+              && bundle->functions && bundle->functions->resize && bundle->functions->resize_get)
+      {
+        // plain scroll (grow/shrink): drives the bundle's own coordinated
+        // resize (same cached-baseline mechanism as the panel's "shrink or
+        // grow" slider, see _object_bundle_resize/object.c).
+        const gboolean use_percent =
+          !g_strcmp0(dt_conf_get_string_const("masks/path_resize_unit"), "% of path size");
+        float amount = 0.0f;
+        bundle->functions->resize_get(bundle, use_percent, &amount);
+        const int new_amount = (int)roundf(amount) + (up ? 1 : -1);
+        if(bundle->functions->resize(bundle, new_amount, use_percent))
+        {
+          dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+          _bundle_refresh_children(form, bundle, gui, module);
+          dt_masks_iop_update(module);
+          dt_control_queue_redraw_center();
+        }
+        return 1;
+      }
+    }
+    // anything not handled above (ordinary, non-bundle members) falls
+    // straight through to the child's own handler, unchanged.
+    return sel->functions->mouse_scrolled(module, pzx, pzy, up, state, sel,
+                                          fpt->parentid, gui, gui->group_edited);
   }
   return 0;
 }
@@ -100,8 +225,20 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
                                     gui, gui->group_edited);
       }
 
-      return sel->functions->button_pressed(module, pzx, pzy, pressure, which, type, state, sel,
-                                           fpt->parentid, gui, gui->group_edited);
+      const int ret = sel->functions->button_pressed(module, pzx, pzy, pressure, which, type, state, sel,
+                                                     fpt->parentid, gui, gui->group_edited);
+      // a plain click just selected this child individually (dt_masks_select_form,
+      // called from inside the child's own button_pressed) -- if it belongs to
+      // an AI-mask bundle, promote that selection to the whole bundle instead,
+      // so canvas clicks always select the bundle as one unit, matching the
+      // panel row's own selection (see dt_group_events_post_expose's highlight
+      // logic below, which highlights every child sharing the selected parent).
+      if(darktable.develop->mask_form_selected_id == sel->formid)
+      {
+        dt_masks_form_t *bundle = _bundle_parent_of(fpt);
+        if(bundle) dt_masks_select_form(module, bundle);
+      }
+      return ret;
     }
   }
   return 0;
@@ -122,9 +259,19 @@ static int _group_events_button_released(dt_iop_module_t *module,
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
-    if(sel && sel->functions)
-      return sel->functions->button_released(module, pzx, pzy, which, state, sel, fpt->parentid,
-                                             gui, gui->group_edited);
+    if(!sel || !sel->functions) return 0;
+
+    // a bundle-wide rotation drag (see _bundle_rotate_step) deliberately
+    // skips the panel-sync call on every mouse_moved tick -- a full rebuild
+    // per tick during a live drag would be janky -- but the panel's own
+    // rotation slider still needs to catch up once the drag actually ends,
+    // the same way scroll-driven feather/size/opacity already do per tick.
+    const gboolean was_rotating = gui->form_rotating;
+    const dt_masks_form_t *bundle = was_rotating ? _bundle_parent_of(fpt) : NULL;
+    const int ret = sel->functions->button_released(module, pzx, pzy, which, state, sel, fpt->parentid,
+                                                     gui, gui->group_edited);
+    if(bundle) dt_masks_iop_update(module);
+    return ret;
   }
   return 0;
 }
@@ -141,6 +288,85 @@ static inline gboolean _is_handling_form(dt_masks_form_gui_t *gui)
     || (gui->feather_dragging != -1)
     || (gui->point_border_dragging != -1)
     || (gui->seg_dragging != -1);
+}
+
+// canvas ctrl+drag rotation on a bundle child rotates the whole AI-mask
+// bundle together about one shared center, exactly like the panel's own
+// rotation slider (reuses _object_bundle_modify_property's ROTATION case,
+// the already skew-free pixel-space rotation) -- the child's own
+// screen-space, per-shape-centroid rotation (dt_masks_rotate_ctrl_points via
+// its own gpt display buffer, see path.c's form_rotating branch) is bypassed
+// entirely: this computes the angular sweep about the bundle's own shared
+// center instead and lets modify_property apply it to every child. Returns 1
+// (always handles the tick) once form_rotating + a bundle parent are found.
+static int _bundle_rotate_step(dt_iop_module_t *module,
+                               dt_masks_form_t *bundle,
+                               dt_masks_form_t *scratch_grp,
+                               dt_masks_form_gui_t *gui,
+                               const float pzx,
+                               const float pzy)
+{
+  float wd, ht, iwidth, iheight;
+  dt_masks_get_image_size(&wd, &ht, &iwidth, &iheight);
+  if(iwidth <= 0.0f || iheight <= 0.0f || wd <= 0.0f || ht <= 0.0f)
+  {
+    gui->dx = pzx;
+    gui->dy = pzy;
+    return 1;
+  }
+
+  // shared bundle center: pooled mean of every child's own corner points
+  // (form space), same convention _object_bundle_modify_property itself uses
+  double cx = 0.0, cy = 0.0;
+  int npts = 0;
+  for(GList *l = bundle->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    const dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(!child) continue;
+    for(GList *p = child->points; p; p = g_list_next(p))
+    {
+      const dt_masks_point_path_t *pp = p->data;
+      cx += pp->corner[0];
+      cy += pp->corner[1];
+      npts++;
+    }
+  }
+  if(npts == 0)
+  {
+    gui->dx = pzx;
+    gui->dy = pzy;
+    return 1;
+  }
+  cx /= npts;
+  cy /= npts;
+
+  // forward-transform the shared center into backbuffer/screen space -- the
+  // same space the mouse position and path.c's own rotation gesture both
+  // measure their angular sweep in, so the drag pivots visually where the
+  // bundle actually is on screen.
+  float piv[2] = { (float)cx * iwidth, (float)cy * iheight };
+  dt_dev_distort_transform(darktable.develop, piv, 1);
+
+  const float cmx = pzx * wd, cmy = pzy * ht;
+  const float pmx = gui->dx * wd, pmy = gui->dy * ht;
+  float dv = atan2f(cmy - piv[1], cmx - piv[0]) - atan2f(pmy - piv[1], pmx - piv[0]);
+  if(fabsf(dv) > M_PI_F) dv -= copysignf(DT_2PI_F, dv);
+  const float dv_deg = rad2degf(dv);
+
+  if(dv_deg != 0.0f && bundle->functions && bundle->functions->modify_property)
+  {
+    float sum = 0.0f, minv = 0.0f, maxv = 0.0f;
+    int count = 0;
+    bundle->functions->modify_property(bundle, DT_MASKS_PROPERTY_ROTATION, 0.0f, dv_deg,
+                                       &sum, &count, &minv, &maxv);
+    _bundle_refresh_children(scratch_grp, bundle, gui, module);
+  }
+
+  gui->dx = pzx;
+  gui->dy = pzy;
+  dt_control_queue_redraw_center();
+  return 1;
 }
 
 static int _group_events_mouse_moved(dt_iop_module_t *module,
@@ -175,10 +401,65 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return 0;
+
+    // a ctrl+drag rotation on a bundle child rotates the whole bundle about
+    // its own shared center instead -- fully handled here, bypassing the
+    // child's own per-shape rotation entirely (see _bundle_rotate_step).
+    if(gui->form_rotating)
+    {
+      dt_masks_form_t *rot_bundle = _bundle_parent_of(fpt);
+      if(rot_bundle)
+        return _bundle_rotate_step(module, rot_bundle, form, gui, pzx, pzy);
+    }
+
+    // a whole-shape (body) drag on a bundle child should translate the whole
+    // AI-mask bundle together, not just this one child -- path.c's own
+    // form_dragging case (the only kind of drag this applies to; a node/
+    // feather/segment drag is left alone, still purely per-child) recomputes
+    // its per-tick delta from its own first point's corner each call, so
+    // snapshotting that corner before and after the delegated call recovers
+    // exactly the delta it just applied, which is then reapplied verbatim to
+    // every sibling (a pure translation needs no per-child sign-awareness,
+    // unlike SIZE/ROTATION).
+    dt_masks_form_t *bundle = gui->form_dragging ? _bundle_parent_of(fpt) : NULL;
+    float anchor_before[2] = { 0.0f, 0.0f };
+    if(bundle && sel->points)
+    {
+      const dt_masks_point_path_t *p0 = sel->points->data;
+      anchor_before[0] = p0->corner[0];
+      anchor_before[1] = p0->corner[1];
+    }
+
     int rep = 0;
     if(sel->functions)
       rep = sel->functions->mouse_moved(module, pzx, pzy, pressure, which, zoom_scale, sel, fpt->parentid,
                                         gui, gui->group_edited);
+
+    if(bundle && sel->points)
+    {
+      const dt_masks_point_path_t *p0 = sel->points->data;
+      const float dx = p0->corner[0] - anchor_before[0];
+      const float dy = p0->corner[1] - anchor_before[1];
+      if(dx != 0.0f || dy != 0.0f)
+      {
+        for(GList *l = bundle->points; l; l = g_list_next(l))
+        {
+          const dt_masks_point_group_t *cpt = l->data;
+          if(cpt->formid == sel->formid) continue; // already moved above
+          dt_masks_form_t *sib = dt_masks_get_from_id(darktable.develop, cpt->formid);
+          if(!sib) continue;
+          for(GList *pp = sib->points; pp; pp = g_list_next(pp))
+          {
+            dt_masks_point_path_t *pt = pp->data;
+            pt->corner[0] += dx; pt->corner[1] += dy;
+            pt->ctrl1[0] += dx; pt->ctrl1[1] += dy;
+            pt->ctrl2[0] += dx; pt->ctrl2[1] += dy;
+          }
+        }
+        _bundle_refresh_children(form, bundle, gui, module);
+      }
+    }
+
     if(rep) return 1;
     // if a point is in state editing, then we don't want that another
     // form can be selected
@@ -260,22 +541,35 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   return 0;
 }
 
-// is this formid one the in-module panel asked us to highlight (a hovered list
-// row, or every member of a hovered cluster header)?
-static gboolean _panel_hovered(const dt_masks_form_gui_t *gui, const dt_mask_id_t formid)
+// is this formid (or, for an AI-mask bundle child, its parent bundle's own
+// formid) one the in-module panel asked us to highlight (a hovered list row,
+// or every member of a hovered cluster header)? The parentid check is what
+// makes hovering/selecting a bundle's single panel row highlight every one
+// of its children together, the same way a real cluster header already does.
+static gboolean _panel_hovered(const dt_masks_form_gui_t *gui,
+                               const dt_mask_id_t formid,
+                               const dt_mask_id_t parentid)
 {
   for(const GList *l = gui->panel_hover_formids; l; l = g_list_next(l))
-    if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
+  {
+    const dt_mask_id_t id = GPOINTER_TO_INT(l->data);
+    if(id == formid || id == parentid) return TRUE;
+  }
   return FALSE;
 }
 
 // is this formid soloed or solo-edited in the panel? Unlike the hover sync above,
 // this stays true regardless of what the mouse is doing, so a soloed shape keeps
 // its canvas highlight while the user works elsewhere in the list.
-static gboolean _panel_soloed(const dt_masks_form_gui_t *gui, const dt_mask_id_t formid)
+static gboolean _panel_soloed(const dt_masks_form_gui_t *gui,
+                              const dt_mask_id_t formid,
+                              const dt_mask_id_t parentid)
 {
   for(const GList *l = gui->solo_formids; l; l = g_list_next(l))
-    if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
+  {
+    const dt_mask_id_t id = GPOINTER_TO_INT(l->data);
+    if(id == formid || id == parentid) return TRUE;
+  }
   return FALSE;
 }
 
@@ -289,6 +583,17 @@ void dt_group_events_post_expose(cairo_t *cr,
   // when nothing at all is being hovered (no canvas hover, no list-row hover).
   const int base_sel = gui->group_selected;
   const gboolean any_list_hover = gui->panel_hover_formids != NULL;
+
+  // if the canvas-hovered/selected entry is a child of an AI-mask bundle,
+  // every sibling shares its highlight too -- the bundle is one coordinated
+  // unit (see _bundle_parent_of/masks/object.c), not N independent shapes.
+  dt_mask_id_t base_sel_bundle = INVALID_MASKID;
+  if(base_sel >= 0)
+  {
+    const dt_masks_point_group_t *base_fpt = g_list_nth_data(form->points, base_sel);
+    const dt_masks_form_t *bundle = base_fpt ? _bundle_parent_of(base_fpt) : NULL;
+    if(bundle) base_sel_bundle = bundle->formid;
+  }
 
   int pos = 0;
   for(GList *fpts = form->points; fpts; fpts = g_list_next(fpts))
@@ -306,13 +611,16 @@ void dt_group_events_post_expose(cairo_t *cr,
       // call only: a hovered list row/cluster member, else -- when nothing is
       // hovered -- the persistently selected shape.
       int eff = base_sel;
-      if(_panel_hovered(gui, fpt->formid))
+      if(_panel_hovered(gui, fpt->formid, fpt->parentid))
         eff = pos;
-      else if(_panel_soloed(gui, fpt->formid))
+      else if(_panel_soloed(gui, fpt->formid, fpt->parentid))
         eff = pos;
       else if(!any_list_hover && base_sel < 0
               && dt_is_valid_maskid(gui->panel_selected_formid)
-              && fpt->formid == gui->panel_selected_formid)
+              && (fpt->formid == gui->panel_selected_formid
+                  || fpt->parentid == gui->panel_selected_formid))
+        eff = pos;
+      else if(dt_is_valid_maskid(base_sel_bundle) && fpt->parentid == base_sel_bundle)
         eff = pos;
       gui->group_selected = eff;
       sel->functions->post_expose(cr, zoom_scale, gui, pos, g_list_length(sel->points));
@@ -367,7 +675,7 @@ static void _inverse_mask(const dt_iop_module_t *const module,
   *height = ht;
 }
 
-static int _group_get_mask(const dt_iop_module_t *const module,
+int dt_masks_group_get_mask(const dt_iop_module_t *const module,
                            const dt_dev_pixelpipe_iop_t *const piece,
                            dt_masks_form_t *const form,
                            float **buffer,
@@ -1048,7 +1356,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   return nb_groups != 0;
 }
 
-static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
+int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
                                const dt_dev_pixelpipe_iop_t *const restrict piece,
                                dt_masks_form_t *const form,
                                const dt_iop_roi_t *const roi,
@@ -1229,9 +1537,9 @@ static GSList *_group_setup_mouse_actions(const dt_masks_form_t *const form)
   return lm;
 }
 
-static void _group_duplicate_points(dt_develop_t *const dev,
-                                    dt_masks_form_t *const base,
-                                    dt_masks_form_t *const dest)
+void dt_masks_group_duplicate_points(dt_develop_t *const dev,
+                                     dt_masks_form_t *const base,
+                                     dt_masks_form_t *const dest)
 {
   for(GList *pts = base->points; pts; pts = g_list_next(pts))
   {
@@ -1255,13 +1563,13 @@ const dt_masks_functions_t dt_masks_functions_group = {
   .setup_mouse_actions = _group_setup_mouse_actions,
   .set_form_name = NULL,
   .set_hint_message = NULL,
-  .duplicate_points = _group_duplicate_points,
+  .duplicate_points = dt_masks_group_duplicate_points,
   .initial_source_pos = NULL,
   .get_distance = NULL,
   .get_points = NULL,
   .get_points_border = NULL,
-  .get_mask = _group_get_mask,
-  .get_mask_roi = _group_get_mask_roi,
+  .get_mask = dt_masks_group_get_mask,
+  .get_mask_roi = dt_masks_group_get_mask_roi,
   .get_area = NULL,
   .get_source_area = NULL,
   .mouse_moved = _group_events_mouse_moved,

@@ -1122,6 +1122,24 @@ void dtgtk_cairo_paint_masks_used(cairo_t *cr, const gint x, const gint y, const
   FINISH
 }
 
+void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
+{
+  PREAMBLE(0.9, 1, 0, 0)
+
+  // back sheet, always just an outline
+  cairo_rectangle(cr, 0.0, 0.25, 0.65, 0.65);
+  cairo_stroke(cr);
+
+  // front sheet -- filled solid once a mask is actually active, outline only
+  // otherwise, so the glyph itself (not just the button background) tells
+  // the two states apart
+  cairo_rectangle(cr, 0.35, 0.0, 0.65, 0.65);
+  if(flags & CPF_ACTIVE) cairo_fill_preserve(cr);
+  cairo_stroke(cr);
+
+  FINISH
+}
+
 void dtgtk_cairo_paint_eye(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
 {
   dtgtk_cairo_paint_eye_toggle(cr, x, y, w, h, flags & ~CPF_ACTIVE, data);
