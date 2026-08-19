@@ -832,18 +832,16 @@ static int _ellipse_events_button_released(dt_iop_module_t *module,
   }
   if(gui->form_dragging)
   {
-    // we get the ellipse
-    dt_masks_point_ellipse_t *ellipse = form->points->data;
-
-    // we end the form dragging
+    // the move was already applied tick by tick in mouse_moved (each tick
+    // sets ellipse->center fresh from that tick's own pzx/pzy), so the shape
+    // is already at the correct position by the time the button comes up --
+    // recomputing it again here from THIS release event's own pzx/pzy is
+    // redundant, and if this event's position ever diverges even slightly
+    // from the last mouse_moved tick's, it silently re-moves the
+    // already-correctly-placed shape a second time (observed live as the
+    // shape snapping to a wrong position right on mouse-up).
     gui->form_dragging = FALSE;
 
-    // we change the center value
-    float pts[2] = { pzx * wd + gui->dx, pzy * ht + gui->dy };
-    dt_masks_clamp_move_pts(pts, wd, ht);
-    dt_dev_distort_backtransform(darktable.develop, pts, 1);
-    ellipse->center[0] = pts[0] / iwidth;
-    ellipse->center[1] = pts[1] / iheight;
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points
@@ -1003,23 +1001,15 @@ static int _ellipse_events_button_released(dt_iop_module_t *module,
     // we end the form dragging
     gui->source_dragging = FALSE;
 
-    if(gui->scrollx != 0.0
-       || gui->scrolly != 0.0)
-    {
-      // if there's no dragging the source is calculated in
-      // _ellipse_events_button_pressed()
-    }
-    else
-    {
-      // we change the center value
-      float pts[2] = { pzx * wd + gui->dx, pzy * ht + gui->dy };
-      dt_masks_clamp_move_pts(pts, wd, ht);
-
-      dt_dev_distort_backtransform(darktable.develop, pts, 1);
-
-      form->source[0] = pts[0] / iwidth;
-      form->source[1] = pts[1] / iheight;
-    }
+    // if there was an actual drag, mouse_moved already set form->source
+    // fresh on every tick, so the source is already at the correct position
+    // by the time the button comes up -- recomputing it again here from
+    // THIS release event's own pzx/pzy is redundant and risks re-moving the
+    // already-correctly-placed source a second time if this event's
+    // position ever diverges from the last tick's. (If there was no drag at
+    // all -- gui->scrollx/scrolly nonzero -- the source was already
+    // positioned in _ellipse_events_button_pressed(), nothing to do here
+    // either way.)
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points

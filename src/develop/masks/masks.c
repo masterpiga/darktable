@@ -103,7 +103,7 @@ static int _get_opacity(const dt_masks_form_gui_t *gui,
 
 static dt_masks_type_t _get_all_types_in_group(const dt_masks_form_t *form)
 {
-  if(form->type & DT_MASKS_GROUP)
+  if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
   {
     dt_masks_type_t tp = 0;
     for(GList *l = form->points; l; l = g_list_next(l))
@@ -419,6 +419,103 @@ void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form)
   } while(exist);
 }
 
+// the opacity a freshly added shape starts at. Parametric/raster channels
+// have no on-canvas "set opacity" gesture, so remembering a shape's last
+// opacity for them would be surprising -- always start those fully opaque.
+// For drawn shapes, the "sticky opacity" option (masks panel hamburger ->
+// options) controls whether the last-used opacity (see
+// dt_masks_form_change_opacity) is carried over, or every new shape starts
+// fully opaque instead.
+static float _new_shape_default_opacity(const dt_masks_type_t type)
+{
+  if(type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)) return 1.0f;
+  if(dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky")) return 1.0f;
+  return dt_conf_get_float("plugins/darkroom/masks/opacity");
+}
+
+void dt_masks_group_insert_member(dt_develop_t *dev,
+                                  dt_iop_module_t *module,
+                                  dt_masks_form_t *form,
+                                  dt_masks_form_gui_t *gui)
+{
+  // is there already a masks group for this module ?
+  dt_masks_form_t *grp = _group_from_module(dev, module);
+  if(!grp)
+  {
+    // we create a new group
+    if(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
+      grp = _group_create(dev, module, DT_MASKS_GROUP | DT_MASKS_CLONE);
+    else
+      grp = _group_create(dev, module, DT_MASKS_GROUP);
+  }
+  // we add the form in this group
+  dt_masks_point_group_t *grpt = calloc(1, sizeof(dt_masks_point_group_t));
+  grpt->formid = form->formid;
+  grpt->parentid = grp->formid;
+  grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
+  grpt->opacity = _new_shape_default_opacity(form->type);
+  // the group-level opacity (see dt_masks_point_group_t.group_opacity) is
+  // only ever read from a run's head, but every member carries its own
+  // broadcast copy so any of them can serve as head after a reorder --
+  // 1.0 (no effect) is the correct starting point for a freshly added one.
+  grpt->group_opacity = 1.0f;
+
+  // flexi: when a group is the active draw target, the new shape lands inside
+  // that group (adopting its operator and in-group screen flag) instead of being
+  // appended on top with the default operator. Gated on the flexi insertion hint,
+  // which classic drawing never sets -> classic path stays byte-identical.
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const gboolean flexi_insert =
+    bd && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) && bd->insert_active;
+  if(flexi_insert)
+  {
+    grpt->state |= (dt_masks_state_t)bd->insert_op;   // 0 = the base add group
+    grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
+    if(dt_is_valid_maskid(bd->insert_after_fid))
+    {
+      // land directly above the anchor member (its run)
+      int pos = -1, k = 0;
+      for(GList *l = grp->points; l; l = g_list_next(l), k++)
+        if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
+        { pos = k; break; }
+      if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
+      else         grp->points = g_list_append(grp->points, grpt);
+    }
+    else
+    {
+      // a bottom-anchored group (e.g. the base "add"): the new shape becomes the
+      // bottom of the list
+      grp->points = g_list_prepend(grp->points, grpt);
+    }
+    // tell the panel which form realized the (selected) empty group
+    if(bd->insert_realize_empty)
+    {
+      bd->insert_realized_fid = form->formid;
+      // first-class groups: a realized empty group is a brand-new group, so mark
+      // its (single) member as a group head -- this keeps it distinct even when
+      // its operator matches the group below (normalize clears it if it lands at
+      // the very bottom). See dt_masks_point_group_t.group_start.
+      grpt->group_start = 1;
+      // a brand-new group always starts fully opaque (1.0 unless the empty
+      // group being realized carries a saved layout preset's remembered
+      // opacity) -- the remembered "last used" opacity above is for
+      // successive shapes within the same group, and carrying it over to a
+      // new group is surprising.
+      grpt->opacity = bd->insert_opacity;
+    }
+  }
+  else
+  {
+    if(grp->points)
+      grpt->state |= dt_masks_get_default_operator(form);
+    grp->points = g_list_append(grp->points, grpt);
+  }
+  // we save the group
+  dt_dev_add_masks_history_item(dev, module, TRUE);
+  // we update module gui
+  if(gui) dt_masks_iop_update(module);
+}
+
 void dt_masks_gui_form_save_creation(dt_develop_t *dev,
                                      dt_iop_module_t *module,
                                      dt_masks_form_t *form,
@@ -435,92 +532,8 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
 
   dt_dev_add_masks_history_item(dev, module, TRUE);
 
-  if(module)
-  {
-    // is there already a masks group for this module ?
-    dt_masks_form_t *grp = _group_from_module(dev, module);
-    if(!grp)
-    {
-      // we create a new group
-      if(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
-        grp = _group_create(dev, module, DT_MASKS_GROUP | DT_MASKS_CLONE);
-      else
-        grp = _group_create(dev, module, DT_MASKS_GROUP);
-    }
-    // we add the form in this group
-    dt_masks_point_group_t *grpt = calloc(1, sizeof(dt_masks_point_group_t));
-    grpt->formid = form->formid;
-    grpt->parentid = grp->formid;
-    grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
-    // the remembered "last used" opacity only makes sense for drawn shapes
-    // (the on-canvas gesture that sets it); a parametric channel or raster
-    // reference has no such gesture, and defaulting it to some unrelated
-    // shape's last opacity is surprising -- always start those fully opaque.
-    grpt->opacity = (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
-      ? 1.0f
-      : dt_conf_get_float("plugins/darkroom/masks/opacity");
-    // the group-level opacity (see dt_masks_point_group_t.group_opacity) is
-    // only ever read from a run's head, but every member carries its own
-    // broadcast copy so any of them can serve as head after a reorder --
-    // 1.0 (no effect) is the correct starting point for a freshly added one.
-    grpt->group_opacity = 1.0f;
+  if(module) dt_masks_group_insert_member(dev, module, form, gui);
 
-    // flexi: when a group is the active draw target, the new shape lands inside
-    // that group (adopting its operator and in-group screen flag) instead of being
-    // appended on top with the default operator. Gated on the flexi insertion hint,
-    // which classic drawing never sets -> classic path stays byte-identical.
-    dt_iop_gui_blend_data_t *bd = module->blend_data;
-    const gboolean flexi_insert =
-      bd && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) && bd->insert_active;
-    if(flexi_insert)
-    {
-      grpt->state |= (dt_masks_state_t)bd->insert_op;   // 0 = the base add group
-      grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
-      if(dt_is_valid_maskid(bd->insert_after_fid))
-      {
-        // land directly above the anchor member (its run)
-        int pos = -1, k = 0;
-        for(GList *l = grp->points; l; l = g_list_next(l), k++)
-          if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
-          { pos = k; break; }
-        if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
-        else         grp->points = g_list_append(grp->points, grpt);
-      }
-      else
-      {
-        // a bottom-anchored group (e.g. the base "add"): the new shape becomes the
-        // bottom of the list
-        grp->points = g_list_prepend(grp->points, grpt);
-      }
-      // tell the panel which form realized the (selected) empty group
-      if(bd->insert_realize_empty)
-      {
-        bd->insert_realized_fid = form->formid;
-        // first-class groups: a realized empty group is a brand-new group, so mark
-        // its (single) member as a group head -- this keeps it distinct even when
-        // its operator matches the group below (normalize clears it if it lands at
-        // the very bottom). See dt_masks_point_group_t.group_start.
-        grpt->group_start = 1;
-        // a brand-new group always starts fully opaque (1.0 unless the empty
-        // group being realized carries a saved layout preset's remembered
-        // opacity) -- the remembered "last used" opacity above is for
-        // successive shapes within the same group, and carrying it over to a
-        // new group is surprising.
-        grpt->opacity = bd->insert_opacity;
-      }
-    }
-    else
-    {
-      if(grp->points)
-        grpt->state |= dt_masks_get_default_operator(form);
-      grp->points = g_list_append(grp->points, grpt);
-    }
-    // we save the group
-    dt_dev_add_masks_history_item(dev, module, TRUE);
-    // we update module gui
-    if(gui) dt_masks_iop_update(module);
-    //dt_dev_add_history_item(dev, module, TRUE);
-  }
   // show the form if needed
   if(gui) dev->form_gui->formid = form->formid;
 }
@@ -1604,6 +1617,19 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
 {
   const dt_masks_form_t *old = darktable.develop->form_visible;
 
+  // NB on the flexi panel's pending-row placeholder (see _build_masks_list's
+  // pending-row synthesis in blend_gui.c): every shape type's own right-
+  // click-cancel handler already calls dt_masks_set_edit_mode() followed by
+  // its own explicit dt_masks_iop_update(module) (e.g. circle.c's
+  // GDK_BUTTON_SECONDARY branch) -- that pre-existing call is what makes the
+  // pending row disappear on cancel; nothing extra is needed here. An
+  // earlier version of this function tried to also notify the panel from
+  // here directly, but dt_masks_set_edit_mode() itself calls this function
+  // (via dt_masks_change_form_gui(grp)) before it finishes setting up
+  // edit_mode/selection state, so a synchronous panel rebuild fired from
+  // inside here reentered _build_masks_list on that half-transitioned state
+  // -- observed as a stuck/incorrect shape selection after cancelling.
+
   dt_masks_clear_form_gui(darktable.develop);
   darktable.develop->form_visible = newform;
 
@@ -2174,7 +2200,12 @@ void dt_masks_form_remove(dt_iop_module_t *module,
 {
   if(!form) return;
   const dt_mask_id_t id = form->formid;
-  if(grp && !(grp->type & DT_MASKS_GROUP)) return;
+  // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
+  // in masks/object.c) is a valid parent too: canvas node-editing routes a
+  // whole-shape delete here with `grp` resolved from the flattened scratch
+  // group's own parentid (see dt_masks_group_ungroup), which for a bundle
+  // child is the bundle's own formid, not the module's real top group.
+  if(grp && !(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))) return;
 
   if(!(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
      && grp)
@@ -2286,7 +2317,11 @@ float dt_masks_form_change_opacity(dt_masks_form_t *form,
 {
   if(!form) return 0;
   dt_masks_form_t *grp = dt_masks_get_from_id(darktable.develop, parentid);
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return 0;
+  // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
+  // in masks/object.c) is a valid parent too: ctrl+scroll on a bundle child
+  // resolves `parentid` to the bundle's own formid (see dt_masks_group_ungroup's
+  // flattening), not the module's real top group.
+  if(!grp || !(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))) return 0;
 
   // we first need to test if the opacity can be set to the form
   if(form->type & DT_MASKS_GROUP) return 0;
@@ -2433,11 +2468,7 @@ dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
     grpt->parentid = grp->formid;
     grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
     if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
-    // see dt_masks_gui_form_save_creation: the remembered opacity default is
-    // a drawn-shape-only concept
-    grpt->opacity = (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
-      ? 1.0f
-      : dt_conf_get_float("plugins/darkroom/masks/opacity");
+    grpt->opacity = _new_shape_default_opacity(form->type);
     grpt->group_opacity = 1.0f;
     grp->points = g_list_append(grp->points, grpt);
     return grpt;
@@ -2451,7 +2482,17 @@ void dt_masks_group_ungroup(dt_masks_form_t *dest_grp,
                             dt_masks_form_t *grp)
 {
   if(!grp || !dest_grp) return;
-  if(!(grp->type & DT_MASKS_GROUP)
+  // a committed, multi-path AI-mask bundle (DT_MASKS_OBJECT, see
+  // _register_vectorized_forms in masks/object.c) is recursed into exactly
+  // like a real nested DT_MASKS_GROUP below: its own children get flattened
+  // into dest_grp individually, so the canvas's on-screen node-editing (which
+  // always operates on this flattened scratch copy, see dt_masks_set_edit_mode)
+  // can drag each sub-path's own points directly, delegating to that child's
+  // own event handlers (path.c) with zero changes needed there -- the actual
+  // mask math (module->blend_params->mask_id's real, unflattened group) is
+  // untouched by this, so the panel's own coordinated feather/size/rotation
+  // controls for the bundle keep working exactly as before.
+  if(!(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
      || !(dest_grp->type & DT_MASKS_GROUP))
     return;
 
@@ -2461,7 +2502,7 @@ void dt_masks_group_ungroup(dt_masks_form_t *dest_grp,
     dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, grpt->formid);
     if(form)
     {
-      if(form->type & DT_MASKS_GROUP)
+      if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
       {
         dt_masks_group_ungroup(dest_grp, form);
       }
@@ -2490,7 +2531,17 @@ dt_hash_t dt_masks_group_hash(dt_hash_t hash, dt_masks_form_t *form)
 
   for(const GList *forms = form->points; forms; forms = g_list_next(forms))
   {
-    if(form->type & DT_MASKS_GROUP)
+    // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
+    // in masks/object.c) has a ->points list structurally identical to a
+    // group's (dt_masks_point_group_t referencing real child forms) -- it
+    // must recurse the same way, or a child's own geometry (e.g. a canvas
+    // node drag, see masks/masks.c's dt_masks_group_ungroup flattening) never
+    // reaches this hash: the else branch below would hash only the bundle's
+    // own point-group entries (formid/state/opacity), which a node drag never
+    // touches, leaving blend.c's drawn-mask cache keyed on a stale hash that
+    // never changes -- the edit becomes invisible until something else (e.g.
+    // undo, which bypasses that cache) forces a full reprocess.
+    if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
     {
       const dt_masks_point_group_t *grpt = forms->data;
       dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, grpt->formid);
@@ -2847,15 +2898,10 @@ void dt_masks_select_form(dt_iop_module_t *module,
       darktable.develop->mask_form_selected_id = sel->formid;
       selection_changed = TRUE;
     }
-    // flexi mode: clicking the already-selected shape on the canvas toggles the
-    // selection back off (matches the in-module list's click-to-deselect). Other
-    // modes keep their classic behaviour (re-click leaves it selected).
-    else if(module && module->blend_params
-            && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI))
-    {
-      darktable.develop->mask_form_selected_id = 0;
-      selection_changed = TRUE;
-    }
+    // clicking a shape on the canvas always selects it -- including
+    // re-clicking the already-selected shape -- and never deselects; a
+    // shape can only be deselected by clicking empty canvas or another
+    // shape's own row/title in the panel.
   }
   else
   {

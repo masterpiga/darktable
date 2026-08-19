@@ -679,7 +679,13 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
       if(piece->enabled && piece->blendop_data)
       {
         const dt_develop_blend_params_t *const bp = piece->blendop_data;
-        const gboolean valid_mask = bp->mask_mode > DEVELOP_MASK_ENABLED;
+        // details-threshold refinement (bp->details) applies even in plain
+        // "uniformly" mode (mask_mode == DEVELOP_MASK_ENABLED, no mask type
+        // bit at all -- see the matching fix in dt_develop_blend_process's
+        // own `uniform` branch, which now honors it instead of silently
+        // ignoring it). Only mask_mode == DEVELOP_MASK_DISABLED (blending
+        // off entirely) has nothing that could ever need the detail buffer.
+        const gboolean valid_mask = bp->mask_mode >= DEVELOP_MASK_ENABLED;
 
         // The detail/scharr buffer is requested when the global refinement
         // carries a detail threshold, but also when any per-shape refinement

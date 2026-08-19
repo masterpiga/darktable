@@ -632,9 +632,15 @@ void dt_develop_blend_process(dt_iop_module_t *self,
 
   const gboolean valid_request = dt_iop_has_focus(self) && (piece->pipe == self->dev->full.pipe);
 
-  // does user want us to display a specific channel?
+  // does user want us to display a specific channel? Details-threshold
+  // refinement (d->details) carves a real, non-uniform mask out of image
+  // detail even with no drawn/parametric/raster mask engaged at all -- so a
+  // module with just that refinement active still has something genuine to
+  // show on the overlay, same as mode_parametric/mode_drawn (see the
+  // matching fix in the `uniform` branch below, which actually applies the
+  // refinement in that case instead of silently ignoring it).
   const dt_dev_pixelpipe_display_mask_t request_mask_display =
-      valid_request && (mode_parametric || mode_drawn)
+      valid_request && (mode_parametric || mode_drawn || d->details != 0.0f)
         ? self->request_mask_display
         : DT_DEV_PIXELPIPE_DISPLAY_NONE;
 
@@ -690,6 +696,16 @@ void dt_develop_blend_process(dt_iop_module_t *self,
   {
     // blend uniformly (no drawn or parametric mask)
     dt_iop_image_fill(mask, opacity, owidth, oheight, 1); // mask[k] = value;
+    // details-threshold refinement still carves real, non-uniform detail out
+    // of this otherwise-flat mask even with no drawn/parametric/raster mask
+    // active -- skipped only for suppress_mask, which must show the truly
+    // unrefined result. Matches the raster/mode_drawn branches below, which
+    // already apply this; this uniform branch had silently ignored
+    // d->details entirely, making the "details threshold" slider a no-op
+    // whenever no other mask type was engaged.
+    if(!suppress_mask)
+      _refine_with_detail_mask(self, piece, mask, roi_in, roi_out,
+                               global_refine_bypass ? 0.0f : d->details);
   }
   else if(raster)
   {
@@ -841,8 +857,14 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     // uniform, non-inverted mask -- computed once here, after the fact,
     // rather than duplicated inside each branch above, so it stays correct
     // regardless of which specific branch ends up doing the fill.
+    // ... but only when nothing is going to make the buffer non-uniform
+    // afterwards: _refine_with_detail_mask below still multiplies this flat
+    // fill by real per-pixel detail data whenever d->details is active, at
+    // which point the result is genuinely informative and must not be
+    // suppressed as if it were still the flat "everything/nothing" fallback.
     mask_is_uniform_fallback =
-      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted;
+      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted
+      && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
 
     dt_print_pipe(DT_DEBUG_PIPE,
        form && form_ok ? "blend with form" : "blend without form",
@@ -1177,9 +1199,15 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
   // -- see the identical flag (and its own comment) in dt_develop_blend_process.
   gboolean mask_is_uniform_fallback = FALSE;
 
-  // does user want us to display a specific channel?
+  // does user want us to display a specific channel? Details-threshold
+  // refinement (d->details) carves a real, non-uniform mask out of image
+  // detail even with no drawn/parametric/raster mask engaged at all -- so a
+  // module with just that refinement active still has something genuine to
+  // show on the overlay, same as mode_parametric/mode_drawn (see the
+  // matching fix in the `uniform` branch below, which actually applies the
+  // refinement in that case instead of silently ignoring it).
   const dt_dev_pixelpipe_display_mask_t request_mask_display =
-      valid_request && (mode_parametric || mode_drawn)
+      valid_request && (mode_parametric || mode_drawn || d->details != 0.0f)
         ? self->request_mask_display
         : DT_DEV_PIXELPIPE_DISPLAY_NONE;
 
@@ -1310,14 +1338,32 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
 
   if(uniform)
   {
-    // set dev_mask with global opacity value
-    err = dt_opencl_enqueue_kernel_2d_args(devid, kernel_set_mask, owidth, oheight,
-                              CLARG(dev_mask), CLARG(owidth), CLARG(oheight), CLARG(opacity));
-    if(err != CL_SUCCESS)
+    // details-threshold refinement still carves real, non-uniform detail out
+    // of this otherwise-flat mask even with no drawn/parametric/raster mask
+    // active (see the matching fix in dt_develop_blend_process's own
+    // `uniform` branch) -- skipped only for suppress_mask, which must show
+    // the truly unrefined result, and for the common opacity-only case (no
+    // details set) which keeps the fast GPU-only fill kernel below. The
+    // refinement itself has no GPU kernel path, so this builds the mask on
+    // the host (same as the raster branch just below) and uploads it.
+    if(!suppress_mask && !global_refine_bypass && d->details != 0.0f)
     {
-      dt_print(DT_DEBUG_OPENCL,
-               "[opencl_blendop] kernel_set_mask: %s", cl_errstr(err));
-      goto error;
+      dt_iop_image_fill(mask, opacity, owidth, oheight, 1);
+      _refine_with_detail_mask_cl(self, piece, mask, roi_in, roi_out, d->details, devid);
+      err = dt_opencl_write_host_to_image(devid, mask, dev_mask, owidth, oheight, sizeof(float));
+      if(err != CL_SUCCESS) goto error;
+    }
+    else
+    {
+      // set dev_mask with global opacity value
+      err = dt_opencl_enqueue_kernel_2d_args(devid, kernel_set_mask, owidth, oheight,
+                                CLARG(dev_mask), CLARG(owidth), CLARG(oheight), CLARG(opacity));
+      if(err != CL_SUCCESS)
+      {
+        dt_print(DT_DEBUG_OPENCL,
+                 "[opencl_blendop] kernel_set_mask: %s", cl_errstr(err));
+        goto error;
+      }
     }
   }
   else if(raster)
@@ -1456,7 +1502,8 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     // dt_develop_blend_process -- kept in sync by hand since this is a
     // separate OpenCL implementation of the same branch structure.
     mask_is_uniform_fallback =
-      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted;
+      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted
+      && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
 
     dt_print_pipe(DT_DEBUG_PIPE,
        form && form_ok ? "blend with form" : "blend without form",

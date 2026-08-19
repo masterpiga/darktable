@@ -327,6 +327,35 @@ const dt_iop_gui_blendif_channel_t *dt_develop_blendif_channels_for_csp(const in
 // prefix on a form's name across renames.
 const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form);
 
+// group-composition mask renderers (defined in masks/group.c, non-static so
+// masks/object.c can reuse them by direct reference for a committed
+// DT_MASKS_OBJECT bundle -- its ->points list is structurally identical to a
+// DT_MASKS_GROUP's, a GList of dt_masks_point_group_t referencing real,
+// independently-registered child forms).
+int dt_masks_group_get_mask(const dt_iop_module_t *const module,
+                            const dt_dev_pixelpipe_iop_t *const piece,
+                            struct dt_masks_form_t *const form,
+                            float **buffer,
+                            int *width,
+                            int *height,
+                            int *posx,
+                            int *posy);
+int dt_masks_group_get_mask_roi(const dt_iop_module_t *const module,
+                                const dt_dev_pixelpipe_iop_t *const piece,
+                                struct dt_masks_form_t *const form,
+                                const dt_iop_roi_t *const roi,
+                                float *const buffer);
+void dt_masks_group_duplicate_points(struct dt_develop_t *const dev,
+                                     struct dt_masks_form_t *const base,
+                                     struct dt_masks_form_t *const dest);
+
+// drop a path form's cached shrink/grow baseline+results (defined in
+// masks/path.c). Used by masks/object.c to invalidate a bundle child's
+// resize cache after a bundle-wide SIZE/ROTATION edit mutates its points
+// directly (bypassing path.c's own property-change cases, which do this
+// invalidation themselves).
+void dt_masks_path_resize_invalidate(const dt_mask_id_t formid);
+
 typedef struct dt_iop_gui_blendif_filter_t
 {
   GtkDarktableGradientSlider *slider;
@@ -430,13 +459,11 @@ typedef struct dt_iop_gui_blend_data_t
   dt_dev_pixelpipe_display_mask_t save_for_leave;
   guint timeout_handle;
   GtkNotebook *channel_tabs;
-  gboolean output_channels_shown;
   // single-channel parametric editing chrome (flexi): blendif_invert = the
   // "invert all channels" header button (hidden when a single-channel form is
-  // bound, where it is meaningless); param_output_saved = output_channels_shown
-  // saved on entering single-channel editing so it can be restored on exit
-  // (-1 = not saved). The in/out toggle itself lives on the shape row (see
-  // _make_shape_row / _masks_param_inout_toggled), not in this editor chrome.
+  // bound, where it is meaningless). The in/out toggle itself lives on the
+  // shape row (see _make_shape_row / _masks_param_inout_toggled), not in
+  // this editor chrome.
   GtkWidget *blendif_invert;
   int param_output_saved;
   // blendif_section/blendif_header: legacy classic multi-channel editor
@@ -562,6 +589,17 @@ typedef struct dt_iop_gui_blend_data_t
   // come out byte-identical, so the teardown/rebuild is skipped. DT_INVALID_HASH
   // means "never built" (always rebuild). See _masks_list_signature.
   dt_hash_t masks_list_sig;
+  // the two AI-object creation-time sliders (smoothing/cleanup), live for the
+  // whole duration of an active DT_MASKS_OBJECT creation session -- built once
+  // by the pending-row synthesis in _build_masks_list, NOT torn down/rebuilt on
+  // every value change (see dt_masks_object_creation_apply_property's own
+  // caller), so an in-progress slider drag is never interrupted. NULL outside
+  // an active AI-object creation session. Canvas scroll-wheel adjustments sync
+  // into these via dt_iop_gui_blend_sync_pending_ai_sliders.
+  GtkWidget *pending_ai_smoothing_slider;
+  GtkWidget *pending_ai_cleanup_slider;
+  float pending_ai_smoothing_last;
+  float pending_ai_cleanup_last;
   // retired (kept NULL): the elements used to live in a separate box/title under an
   // "elements" header; they are now nested under each group header in masks_list_box.
   GtkWidget *masks_elements_box;
@@ -669,6 +707,25 @@ typedef struct dt_iop_gui_blend_data_t
   // longer double as "did a drag happen in between" without also suppressing
   // the menu on every ordinary click.
   gboolean masks_group_op_drag_started;
+  // set around _auto_expand_selected_row's own programmatic
+  // gtk_toggle_button_set_active calls (see blend_gui.c): its own
+  // "toggling this row's expander also selects it" side effect is meant for
+  // a real user click, not a toggle flipped by code to enforce "auto-expand
+  // selected shape"'s single-expansion invariant -- without this guard,
+  // collapsing another row's toggle re-selects it, which recurses back into
+  // _auto_expand_selected_row without end. Deliberately a dedicated flag
+  // rather than DT_ENTER/LEAVE_GUI_UPDATE: that one already makes
+  // _props_row_toggled bail out entirely (see its own top-of-function
+  // guard), which would also suppress the hash/visibility update this
+  // programmatic toggle still needs to take effect.
+  gboolean masks_suppress_toggle_select;
+  // "auto-expand selected shape" option: the most recently selected shape
+  // that actually has its own props row (see _make_props_row_toggle /
+  // _auto_expand_selected_row, blend_gui.c) -- kept separate from
+  // panel_selected_formid so selecting a parametric channel row or a group
+  // (neither of which has a props toggle) does not collapse whichever shape
+  // was expanded before. NO_MASKID (0, the zero-init value) means none yet.
+  dt_mask_id_t masks_last_expanded_shape;
   // set by _row_drag_begin (element rows' handle/name), consumed by
   // _row_click_release: a plain click that turns into a real drag still gets
   // its row selected (see _row_drag_begin), so the eventual release -- drop or
@@ -693,6 +750,13 @@ typedef struct dt_iop_gui_blend_data_t
   // single teardown/rebuild instead of running it N times. Cleared when the
   // idle fires. See _queue_masks_list_rebuild().
   gboolean masks_rebuild_pending;
+  // the g_idle_add() source id for that pending rebuild, so
+  // dt_iop_gui_cleanup_blending can cancel it -- an idle callback captures the
+  // dt_iop_module_t* by pointer, so one left running past module teardown (at
+  // darkroom exit/app quit) dereferences already-destroyed widgets (observed
+  // live as a burst of GTK_IS_WIDGET/GTK_IS_BOX critical warnings right at
+  // quit). 0 when nothing is pending (g_idle_add never returns 0).
+  guint masks_rebuild_idle_id;
   // masks_refine_header_label: section caption, updated to name the refinement
   // target ("mask refinement — <group>" or "— whole mask").
   GtkWidget *masks_refine_header_label;
@@ -948,6 +1012,14 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
 // panel corner icon: clicking it while the hosted module's mask is off
 // should turn the mask on, not just re-expand the panel to an inert editor.
 void dt_iop_gui_blend_mask_enable(dt_iop_module_t *module);
+// re-reads the active AI-object creation session's smoothing/cleanup (via
+// dt_masks_object_creation_get_preview_params) and pushes the values into
+// the flexi panel's pending-row sliders (bd->pending_ai_smoothing_slider/
+// pending_ai_cleanup_slider), if that module currently owns one. No-op
+// otherwise. Called from object.c's canvas scroll-wheel handler so the panel
+// stays in sync without a full masks-list rebuild (which would interrupt an
+// in-progress slider drag).
+void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module);
 
 gboolean blend_color_picker_apply(dt_iop_module_t *module,
                                   GtkWidget *picker,

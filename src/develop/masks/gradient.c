@@ -379,19 +379,16 @@ static int _gradient_events_button_released(dt_iop_module_t *module,
      && form->points
      && gui->edit_mode == DT_MASKS_EDIT_FULL)
   {
-    // we get the gradient
-    dt_masks_point_gradient_t *gradient = form->points->data;
-
-    // we end the form dragging
+    // the move was already applied tick by tick in mouse_moved (each tick
+    // sets gradient->anchor fresh from that tick's own pzx/pzy), so the
+    // shape is already at the correct position by the time the button comes
+    // up -- recomputing it again here from THIS release event's own
+    // pzx/pzy is redundant, and if this event's position ever diverges even
+    // slightly from the last mouse_moved tick's, it silently re-moves the
+    // already-correctly-placed shape a second time (observed live as the
+    // shape snapping to a wrong position right on mouse-up).
     gui->form_dragging = FALSE;
 
-    // we change the center value
-    float pts[2] = { pzx * wd + gui->dx, pzy * ht + gui->dy };
-    dt_masks_clamp_move_pts(pts, wd, ht);
-    dt_dev_distort_backtransform(darktable.develop, pts, 1);
-
-    gradient->anchor[0] = pts[0] / iwidth;
-    gradient->anchor[1] = pts[1] / iheight;
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
     // we recreate the form points

@@ -805,6 +805,17 @@ dialog .sidebar row:selected:hover label,
   border-color: rgba(255, 255, 255, 0.32);
 }
 
+/* disposable placeholder row for a shape still being drawn on canvas, not yet
+   committed (see _make_pending_shape_row in blend_gui.c) -- dashed instead of
+   solid so it visually reads as "not real yet", reusing the same 2px border
+   .mask-panel-row already reserves so nothing shifts once it turns solid on
+   commit. */
+.mask-panel-row.mask-row-pending
+{
+  border-style: dashed;
+  border-color: rgba(255, 255, 255, 0.32);
+}
+
 /* same border for a selected whole group -- .mask-group-block carries no
    row id/class of its own (see .mask-group-block.mask-list-row-drop* below
    for the same reasoning), so it needs its own explicit border here rather
@@ -914,6 +925,11 @@ dialog .sidebar row:selected:hover label,
    can restyle it without a rebuild. */
 .mask-group-elements
 {
+  margin-left: 0;
+}
+
+.mask-group-elements .dt_drag_handle
+{
   margin-left: 8px;
 }
 
@@ -924,7 +940,12 @@ dialog .sidebar row:selected:hover label,
    .mask-group-elements above, for the same alignment reason. */
 .mask-cluster-elements
 {
-  margin-left: 8px;
+  margin-left: 0;
+}
+
+.mask-cluster-elements .dt_drag_handle
+{
+  margin-left: 16px;
 }
 
 /* while any element/group is soloed, dim same-kind cluster headers: the cluster
@@ -1005,9 +1026,8 @@ dialog .sidebar row:selected:hover label,
 .mask-param-header-slot .dt_gslider_multivalue
 {
   min-height: 1.8em;
+  margin: 0 6px;
   padding: 0;
-  padding-left: 0.25em;
-  padding-right: 0.25em;
 }
 
 /* every row/group's own inline "properties" expander (see
@@ -2204,35 +2224,64 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   background-color: alpha(@fg_color, 0.22);
 }
 
-/* collapsed-panel corner icon overlay: bigger hit target + rounded "pill"
-   so it reads as a real button floating on the canvas, not a bare icon.
-   Dimmed by default (no mask active on the hosted module); the
-   "flexi-corner-icon-active" class (see dt_ui_flexi_panel_set_icon)
-   highlights it once a mask actually is active. */
+/* collapsed-panel corner icon overlay: bigger hit target so it reads as a
+   real button floating on the canvas, not a bare icon. Sits flush in the
+   canvas's actual top corner (no margin, no border, square corners) so it
+   reads as protruding from the top/side dedicated panel it belongs to,
+   rather than floating free above it -- the .flexi-corner-icon-left/-right
+   variants below (set alongside halign, see _flexi_ensure_corner_icon_side)
+   zero the padding on whichever side touches the panel; the other two
+   (unflush) sides keep equal padding so the icon glyph sits centered within
+   its own visible area. Background matches @darkroom_bg_color (the canvas
+   fill itself) rather than the usual panel background, so it blends into
+   the canvas instead of standing out as a foreign panel-colored patch.
+   border/box-shadow/outline are all explicitly zeroed (not just relying on
+   the generic "button" rule's border:none being lower-specificity) since a
+   flat-colored rectangle sitting directly on photo content already reads as
+   an edge on its own -- an actual drawn border on top of that only doubled
+   up the effect. Whether a mask is actually active is conveyed two ways:
+   the "flexi-corner-icon-active" class (see dt_ui_flexi_panel_set_icon)
+   swaps the background to @selected_bg_color and lifts it to full opacity,
+   and the icon glyph itself (dtgtk_cairo_paint_masks_panel) fills its front
+   sheet solid instead of outline-only -- so the state reads even without
+   color (e.g. for color-blind users, or at a glance while dimmed). */
 #flexi-corner-icon
 {
   min-width: 2.2em;
   min-height: 2.2em;
-  margin: 0.4em;
+  margin: 0;
   padding: 0.3em;
-  opacity: 0.55;
-  background-color: alpha(@bg_color, 0.85);
-  border: 0.07em solid alpha(@fg_color, 0.3);
-  border-radius: 0.5em;
+  padding-top: 0;
+  opacity: 0.65;
+  background-color: @darkroom_bg_color;
+  border: none;
+  border-radius: 0;
+  box-shadow: none;
+  outline: none;
+}
+
+/* the edge touching the dedicated panel (left panel -> left edge, right
+   panel -> right edge) is flush, so the icon reads as an extension of the
+   panel rather than a separate floating button */
+#flexi-corner-icon.flexi-corner-icon-left
+{
+  padding-left: 0;
+}
+
+#flexi-corner-icon.flexi-corner-icon-right
+{
+  padding-right: 0;
 }
 
 #flexi-corner-icon:hover
 {
   opacity: 0.8;
-  background-color: alpha(@bg_color, 0.95);
-  border-color: alpha(@fg_color, 0.5);
 }
 
 #flexi-corner-icon.flexi-corner-icon-active
 {
   opacity: 1;
   background-color: @selected_bg_color;
-  border-color: alpha(@fg_color, 0.6);
 }
 
 #flexi-corner-icon.flexi-corner-icon-active:hover

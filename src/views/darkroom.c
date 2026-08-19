@@ -4178,6 +4178,25 @@ static inline void _clear_pipecache(dt_dev_pixelpipe_t *pipe)
 
 void leave(dt_view_t *self)
 {
+  // ask any pipe still mid-run (e.g. a late-scaling HQ reprocess at full
+  // resolution, which can legitimately take many seconds on a mask-heavy
+  // image) to abort at its next checkpoint instead of running to completion.
+  // Must happen before ANYTHING else below: dt_image_update_final_size (via
+  // dt_dev_pixelpipe_get_dimensions) blocks on full.pipe->busy_mutex -- a
+  // separate lock from full.pipe->mutex, held by an in-flight run's worker
+  // thread for the same reason -- and that call happens well before this
+  // function's own later dev->full.pipe->mutex locks (see below). Asking for
+  // shutdown only there was too late to help the busy_mutex wait; asking
+  // here gives an in-flight run the most possible time to actually notice
+  // and bail before either blocking wait is reached. Same pattern
+  // _darkroom_ui_second_window_cleanup already uses for the very same reason.
+  {
+    dt_develop_t *dev0 = self->data;
+    dt_dev_pixelpipe_set_shutdown(dev0->preview_pipe, DT_DEV_PIXELPIPE_STOP_NODES);
+    dt_dev_pixelpipe_set_shutdown(dev0->preview2.pipe, DT_DEV_PIXELPIPE_STOP_NODES);
+    dt_dev_pixelpipe_set_shutdown(dev0->full.pipe, DT_DEV_PIXELPIPE_STOP_NODES);
+  }
+
   // flexi masks panel (separate panel, left/right positions) is darkroom-only
   // window chrome, not per-view lib content -- hide it and its corner icon
   // explicitly, since nothing else does this when leaving the view

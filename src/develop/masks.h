@@ -43,9 +43,13 @@ typedef enum dt_masks_type_t
   DT_MASKS_ELLIPSE = 1 << 5,
   DT_MASKS_BRUSH = 1 << 6,
   DT_MASKS_NON_CLONE = 1 << 7,
-#ifdef HAVE_AI
+  // always defined, even without HAVE_AI: generic type-bitmask code (switch
+  // statements over every dt_masks_type_t, `form->type & (DT_MASKS_GROUP |
+  // DT_MASKS_OBJECT)` checks in masks.c, ...) references this unconditionally
+  // -- only object.c (the code that can ever actually create a form of this
+  // type) is itself gated on HAVE_AI, so without AI support this bit simply
+  // never appears on any real form.
   DT_MASKS_OBJECT = 1 << 8,
-#endif
   DT_MASKS_PARAMETRIC = 1 << 9,  // a parametric (blendif) mask as a first-class form
   DT_MASKS_RASTER = 1 << 10,     // a raster mask (another module's output) as a first-class form
 } dt_masks_type_t;
@@ -663,6 +667,16 @@ extern const dt_masks_functions_t dt_masks_functions_raster;
 extern const dt_masks_functions_t dt_masks_functions_object;
 /** check if AI object mask model is downloaded and AI is enabled */
 gboolean dt_masks_object_available(void);
+/** apply a smoothing/cleanup delta to the active AI-object creation session
+    (the pending, not-yet-committed preview) -- called from the flexi panel's
+    pending-row sliders. No-op if no such session is active. */
+void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
+                                              const float old_val,
+                                              const float new_val);
+/** read the active AI-object creation session's current smoothing/cleanup,
+    for initial slider population and re-sync after a canvas scroll-wheel
+    change. Returns FALSE (leaving outputs untouched) if no session is active. */
+gboolean dt_masks_object_creation_get_preview_params(float *smoothing, int *cleanup);
 #endif
 
 /** init dt_masks_form_gui_t struct with default values */
@@ -880,6 +894,18 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
                                      struct dt_iop_module_t *module,
                                      dt_masks_form_t *form,
                                      dt_masks_form_gui_t *gui);
+// the "attach an already-registered form to the module's mask group" half of
+// dt_masks_gui_form_save_creation, factored out so any finalize path that
+// builds/names/registers its own form (e.g. the AI-mask object.c finalizers)
+// can still land it exactly where the flexi panel's insert-hint machinery
+// (bd->insert_op/insert_after_fid/insert_realize_empty, see
+// _recompute_insert_hint in blend_gui.c) says the next element should go,
+// instead of always appending to the module's group -- one code path for
+// "where does a new element land", regardless of what created the element.
+void dt_masks_group_insert_member(dt_develop_t *dev,
+                                  struct dt_iop_module_t *module,
+                                  dt_masks_form_t *form,
+                                  dt_masks_form_gui_t *gui);
 // assigns `form` the next free "<type label> #<n>" name, exactly like a
 // freshly-created shape/channel gets from dt_masks_gui_form_save_creation
 // (which now calls this too) -- used directly by callers that build forms
