@@ -2537,6 +2537,13 @@ void dt_iop_commit_params(dt_iop_module_t *module,
       {
         phash = dt_masks_group_hash(phash, grp);
       }
+
+      const dt_iop_gui_blend_data_t *bd = module->blend_data;
+      if(bd)
+      {
+        const dt_hash_t bph = dt_masks_refine_bypass_hash(bd);
+        phash = dt_hash(phash, &bph, sizeof(dt_hash_t));
+      }
     }
   }
   piece->hash = phash;

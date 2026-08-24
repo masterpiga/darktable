@@ -313,6 +313,8 @@ static gboolean _flexi_global_refine_bypassed(const dt_iop_module_t *const self,
   const dt_iop_gui_blend_data_t *const bd = self ? self->blend_data : NULL;
   if(!bd) return FALSE;
   if(bd->refine_bypass_all) return TRUE;
+  if(bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER(0)))
+    return TRUE;
   return bd->refine_bypass_group && !dt_is_valid_maskid(bd->panel_selected_group_cid);
 }
 
@@ -790,6 +792,12 @@ void dt_develop_blend_process(dt_iop_module_t *self,
       if(cacheable)
       {
         mkey = dt_masks_group_hash(DT_INITHASH, form);
+        const dt_iop_gui_blend_data_t *bd = self->blend_data;
+        if(bd)
+        {
+          const dt_hash_t bph = dt_masks_refine_bypass_hash(bd);
+          mkey = dt_hash(mkey, &bph, sizeof(dt_hash_t));
+        }
         mkey = dt_hash(mkey, roi_out, sizeof(dt_iop_roi_t));
       }
 

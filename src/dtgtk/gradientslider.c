@@ -25,6 +25,7 @@
 #include "gradientslider.h"
 #include "gui/gtk.h"
 #include "gui/accelerators.h"
+#include "bauhaus/bauhaus.h"
 
 #define DTGTK_GRADIENT_SLIDER_VALUE_CHANGED_DELAY_MAX 50
 #define DTGTK_GRADIENT_SLIDER_VALUE_CHANGED_DELAY_MIN 10
@@ -605,8 +606,17 @@ static void _gradient_slider_get_preferred_width(GtkWidget *widget,
   gtk_style_context_get_padding(context, state, &padding);
   *min_width = *nat_width = css_min_width + padding.left + padding.right + border.left + border.right + margin.left + margin.right;
 
-  DTGTK_GRADIENT_SLIDER(widget)->margin_left = padding.left + border.left + margin.left;
-  DTGTK_GRADIENT_SLIDER(widget)->margin_right = padding.right + border.right + margin.right;
+  dt_bauhaus_t *bh = darktable.bauhaus;
+  const dt_bauhaus_marker_shape_t shape = bh ? bh->marker_shape : DT_BAUHAUS_MARKER_TRIANGLE;
+  const double base_r = DT_PIXEL_APPLY_DPI(4.0);
+  const double h_radius = (shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (0.866025404 * base_r)
+                        : (shape == DT_BAUHAUS_MARKER_DIAMOND)  ? (0.8 * base_r)
+                        : (shape == DT_BAUHAUS_MARKER_BAR)      ? (0.35 * base_r)
+                        : base_r;
+  const int hpad = ceil(h_radius);
+
+  DTGTK_GRADIENT_SLIDER(widget)->margin_left = padding.left + border.left + margin.left + hpad;
+  DTGTK_GRADIENT_SLIDER(widget)->margin_right = padding.right + border.right + margin.right + hpad;
 }
 
 static void _gradient_slider_dispose(GObject *object)
@@ -626,6 +636,49 @@ static void _gradient_slider_dispose(GObject *object)
   gslider->colors = NULL;
 
   G_OBJECT_CLASS(parent_class)->dispose(object);
+}
+
+static void _draw_gradient_marker_shape(cairo_t *cr,
+                                        const double vx,
+                                        const double cy,
+                                        const double r,
+                                        const gboolean is_upper,
+                                        const dt_bauhaus_marker_shape_t shape)
+{
+  if(shape == DT_BAUHAUS_MARKER_CIRCLE)
+  {
+    cairo_arc(cr, vx, cy, r, 0, 2.0 * M_PI);
+  }
+  else if(shape == DT_BAUHAUS_MARKER_DIAMOND)
+  {
+    cairo_move_to(cr, vx, cy - r);
+    cairo_line_to(cr, vx - r * 0.8, cy);
+    cairo_line_to(cr, vx, cy + r);
+    cairo_line_to(cr, vx + r * 0.8, cy);
+  }
+  else if(shape == DT_BAUHAUS_MARKER_BAR)
+  {
+    cairo_rectangle(cr, vx - r * 0.35, cy - r, r * 0.7, 2.0 * r);
+  }
+  else
+  {
+    // DT_BAUHAUS_MARKER_TRIANGLE (default)
+    const double sin_r = 0.866025404 * r;
+    const double cos_r = 0.5 * r;
+    if(is_upper)
+    {
+      cairo_move_to(cr, vx, cy + r);
+      cairo_line_to(cr, vx - sin_r, cy - cos_r);
+      cairo_line_to(cr, vx + sin_r, cy - cos_r);
+    }
+    else
+    {
+      cairo_move_to(cr, vx, cy - r);
+      cairo_line_to(cr, vx - sin_r, cy + cos_r);
+      cairo_line_to(cr, vx + sin_r, cy + cos_r);
+    }
+  }
+  cairo_close_path(cr);
 }
 
 static gboolean _gradient_slider_draw(GtkWidget *widget,
@@ -663,13 +716,28 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
   starty += padding.top + border.top;
   cwidth -= padding.left + padding.right + border.left + border.right;
   cheight -= padding.top + padding.bottom + border.top + border.bottom;
-  const int y1 = round(0.3f * cheight);
+
+  dt_bauhaus_t *bh = darktable.bauhaus;
+  const dt_bauhaus_marker_shape_t shape = bh ? bh->marker_shape : DT_BAUHAUS_MARKER_TRIANGLE;
+  const double base_r = DT_PIXEL_APPLY_DPI(4.0);
+  const double h_radius = (shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (0.866025404 * base_r)
+                        : (shape == DT_BAUHAUS_MARKER_DIAMOND)  ? (0.8 * base_r)
+                        : (shape == DT_BAUHAUS_MARKER_BAR)      ? (0.35 * base_r)
+                        : base_r;
+  const int hpad = ceil(h_radius);
+
+  gslider->margin_left = padding.left + border.left + margin.left + hpad;
+  gslider->margin_right = padding.right + border.right + margin.right + hpad;
+
+  const int gx = startx + hpad;
+  const int gw = cwidth - 2 * hpad;
+  const int y1 = DT_PIXEL_APPLY_DPI(1);
   const int gheight = cheight - 2 * y1;
 
   // First build the cairo gradient and then fill the gradient
   if(gslider->colors)
   {
-    cairo_pattern_t *gradient = cairo_pattern_create_linear(0, 0, cwidth, 0);
+    cairo_pattern_t *gradient = cairo_pattern_create_linear(0, 0, gw, 0);
     for(GList *current = gslider->colors; current; current = g_list_next(current))
     {
       _gradient_slider_stop_t *stop = (_gradient_slider_stop_t *)current->data;
@@ -680,12 +748,13 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
     {
       cairo_set_line_width(cr, 0.1);
       cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-      cairo_translate(cr, 0, starty);
+      cairo_translate(cr, gx, starty);
       cairo_set_source(cr, gradient);
-      cairo_rectangle(cr, startx, y1, cwidth, gheight);
+      cairo_rectangle(cr, 0, y1, gw, gheight);
       cairo_fill(cr);
       cairo_stroke(cr);
       cairo_pattern_destroy(gradient);
+      cairo_translate(cr, -gx, -starty);
     }
   }
 
@@ -761,9 +830,9 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
     // non-inverted/included range -- same bit apex0 above already keys off.
     if(gslider->marker[0] & 0x04)
     {
-      cairo_rectangle(cr, startx + 0.5, top + 0.5, fmax(x1 - startx - 1, 0), fmax(bottom - top - 1, 0));
+      cairo_rectangle(cr, gx + 0.5, top + 0.5, fmax(x1 - gx - 1, 0), fmax(bottom - top - 1, 0));
       cairo_stroke(cr);
-      cairo_rectangle(cr, x2 + 0.5, top + 0.5, fmax(startx + cwidth - x2 - 1, 0), fmax(bottom - top - 1, 0));
+      cairo_rectangle(cr, x2 + 0.5, top + 0.5, fmax(gx + gw - x2 - 1, 0), fmax(bottom - top - 1, 0));
       cairo_stroke(cr);
     }
     else
@@ -790,30 +859,66 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
     const int vx = _scale_to_screen(widget, gslider->position[k]);
     const int mk = gslider->marker[k];
     const gboolean hovered = (k == hovered_marker);
-    // small circle handles straddling the bar's edge, enlarged on hover
-    // so the four control points stay easy to grab
-    const double r = ((mk & (1 << 3)) ? 0.55 : 0.45) * y1 * (hovered ? 1.5 : 1.0);
-
-    if(hovered) // highlight the active marker
-      cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
-    else
-      cairo_set_source_rgba(cr, color.red * 0.8, color.green * 0.8, color.blue * 0.8, 1.0);
+    const double r = DT_PIXEL_APPLY_DPI(hovered ? 5.2 : 4.0);
 
     cairo_set_antialias(cr, CAIRO_ANTIALIAS_DEFAULT);
-    cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
 
     if(mk & 0x04) /* upper handle, sits on the bar's top edge */
     {
-      cairo_arc(cr, vx, y1, r, 0, 2 * M_PI);
-      if(mk & 0x01) cairo_fill(cr);
-      else cairo_stroke(cr);
+      const double cy = y1 + ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
+      _draw_gradient_marker_shape(cr, vx, cy, r, TRUE, shape);
+      if(mk & 0x01)
+      {
+        if(hovered)
+          cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
+        else
+          cairo_set_source_rgba(cr, color.red * 0.85, color.green * 0.85, color.blue * 0.85, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.7);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
+        cairo_stroke(cr);
+      }
+      else
+      {
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.7);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(2.5));
+        cairo_stroke_preserve(cr);
+        if(hovered)
+          cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
+        else
+          cairo_set_source_rgba(cr, color.red * 0.85, color.green * 0.85, color.blue * 0.85, 1.0);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
+        cairo_stroke(cr);
+      }
     }
 
     if(mk & 0x02) /* lower handle, sits on the bar's bottom edge */
     {
-      cairo_arc(cr, vx, cheight - y1, r, 0, 2 * M_PI);
-      if(mk & 0x01) cairo_fill(cr);
-      else cairo_stroke(cr);
+      const double cy = (cheight - y1) - ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
+      _draw_gradient_marker_shape(cr, vx, cy, r, FALSE, shape);
+      if(mk & 0x01)
+      {
+        if(hovered)
+          cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
+        else
+          cairo_set_source_rgba(cr, color.red * 0.85, color.green * 0.85, color.blue * 0.85, 1.0);
+        cairo_fill_preserve(cr);
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.7);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
+        cairo_stroke(cr);
+      }
+      else
+      {
+        cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.7);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(2.5));
+        cairo_stroke_preserve(cr);
+        if(hovered)
+          cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
+        else
+          cairo_set_source_rgba(cr, color.red * 0.85, color.green * 0.85, color.blue * 0.85, 1.0);
+        cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
+        cairo_stroke(cr);
+      }
     }
   }
 

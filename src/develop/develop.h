@@ -327,6 +327,8 @@ typedef struct dt_develop_t
       struct dt_lib_module_t *module;
       // where flexi content gets reparented into; owned by the lib
       GtkBox *content_box;
+      // header action buttons container; owned by the lib
+      GtkBox *actions_box;
       // which iop module's relocatable_box currently occupies content_box,
       // NULL if empty. Tracked here (rather than inspecting content_box's
       // children) so _masks_flexi_relocate can cheaply tell whether it needs
