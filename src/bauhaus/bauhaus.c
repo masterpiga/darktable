@@ -686,6 +686,7 @@ static void _window_motion_handle(GtkWidget *widget,
       (pop->oldpos, 5.0 * powf(10.0f, -d->digits) / (d->max - d->min) / fabsf(d->factor),
        bh->mouse_x / (width - _widget_get_quad_width(w)), bh->mouse_y / width, ht / width);
     if(state & GDK_BUTTON1_MASK
+       || (!static_popup && (ex >= 0 && ex <= allocation.width && ey >= 0 && ey <= allocation.height))
        || (!static_popup && bh->mouse_line_distance
            && ((bh->mouse_line_distance * mouse_off <= 0) ^
                (fabsf(bh->mouse_line_distance - mouse_off) > .5f))))

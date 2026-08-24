@@ -103,12 +103,18 @@ void dtgtk_expander_set_expanded(GtkDarktableExpander *expander, gboolean expand
     {
       // expose expansion state to CSS so themes can style expanded modules
       dt_gui_add_class(GTK_WIDGET(expander), "dt_module_expanded");
-      _set_last_expanded(GTK_WIDGET(expander));
-      GtkWidget *sw = gtk_widget_get_ancestor(_last_expanded, GTK_TYPE_SCROLLED_WINDOW);
-      if(sw)
+      const gboolean is_iop = !g_strcmp0("iop-expander", gtk_widget_get_name(GTK_WIDGET(expander)));
+      const gboolean is_lib = darktable.lib && darktable.lib->gui_module
+                              && darktable.lib->gui_module->expander == GTK_WIDGET(expander);
+      if(is_iop || is_lib)
       {
-        gtk_widget_get_allocation(_last_expanded, &_start_pos);
-        _start_pos.x = gtk_adjustment_get_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)));
+        _set_last_expanded(GTK_WIDGET(expander));
+        GtkWidget *sw = gtk_widget_get_ancestor(_last_expanded, GTK_TYPE_SCROLLED_WINDOW);
+        if(sw)
+        {
+          gtk_widget_get_allocation(_last_expanded, &_start_pos);
+          _start_pos.x = gtk_adjustment_get_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)));
+        }
       }
     }
     else
@@ -122,25 +128,6 @@ void dtgtk_expander_set_expanded(GtkDarktableExpander *expander, gboolean expand
                                            animate ? dt_conf_get_int("darkroom/ui/transition_duration") : 0);
       gtk_revealer_set_reveal_child(GTK_REVEALER(expander->frame), expander->expanded);
     }
-  }
-  else if(expanded)
-  {
-    // The expander is already expanded. Still update scroll tracking
-    // so that _expander_resize can scroll to this widget. This is
-    // needed when navigating from the Quick Access Panel to a module
-    // that was already expanded on the destination tab.
-    _set_last_expanded(GTK_WIDGET(expander));
-    GtkWidget *sw = gtk_widget_get_ancestor(GTK_WIDGET(expander), GTK_TYPE_SCROLLED_WINDOW);
-    if(sw)
-    {
-      gtk_widget_get_allocation(GTK_WIDGET(expander), &_start_pos);
-      _start_pos.x = gtk_adjustment_get_value(
-        gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)));
-    }
-    // Force a size-allocate so _expander_resize fires even if the
-    // widget layout has not changed (e.g. module already visible and
-    // expanded on the current tab).
-    gtk_widget_queue_resize(GTK_WIDGET(expander));
   }
 }
 
@@ -256,17 +243,7 @@ static void _expander_resize(GtkWidget *widget, GdkRectangle *allocation, gpoint
     }
     else
     {
-      const gboolean height_changed =
-        gtk_widget_get_allocated_height(widget) != _start_pos.height;
-
-      if(!height_changed)
-        return;
-
-      const gboolean frame_selected =
-        gtk_widget_get_state_flags(user_data) & GTK_STATE_FLAG_SELECTED;
-
-      if(!frame_selected && !is_lib_gui_module)
-        return;
+      return;
     }
   }
 
