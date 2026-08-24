@@ -50,13 +50,14 @@ DT_MODULE(1)
 typedef struct dt_lib_masks_flexi_host_t
 {
   GtkBox *content_box;
+  GtkBox *actions_box;
 } dt_lib_masks_flexi_host_t;
 
 static void _reconfigure(dt_lib_module_t *self);
 
 const char *name(dt_lib_module_t *self)
 {
-  return _("mask editor");
+  return _("blend mask");
 }
 
 const char *description(dt_lib_module_t *self)
@@ -83,6 +84,17 @@ int position(const dt_lib_module_t *self)
   return 2;
 }
 
+GtkWidget *gui_tool_box(dt_lib_module_t *self)
+{
+  dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
+  if(!d->actions_box)
+  {
+    d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+    darktable.develop->proxy.masks_flexi_host.actions_box = d->actions_box;
+  }
+  return GTK_WIDGET(d->actions_box);
+}
+
 // shows/hides self->expander depending on whether masks_panel_position is
 // currently "utility" -- see file comment for why this is a plain
 // gtk_widget_hide/show rather than dt_lib_set_visible. Must only run once
@@ -101,11 +113,13 @@ void gui_init(dt_lib_module_t *self)
   self->data = (void *)d;
 
   d->content_box = GTK_BOX(dt_gui_vbox());
+  d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
   self->widget = GTK_WIDGET(d->content_box);
   gtk_widget_show_all(self->widget);
 
   darktable.develop->proxy.masks_flexi_host.module = self;
   darktable.develop->proxy.masks_flexi_host.content_box = d->content_box;
+  darktable.develop->proxy.masks_flexi_host.actions_box = d->actions_box;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = _reconfigure;
 
@@ -123,6 +137,9 @@ void view_enter(dt_lib_module_t *self,
   // self->expander now exists (view.c just built it) -- apply the initial
   // visual state for the current masks_panel_position
   _reconfigure(self);
+
+  if(self->reset_button)
+    gtk_widget_set_visible(self->reset_button, FALSE);
 
   // this lib has no presets/preferences of its own, so lib.c's default
   // header hamburger would otherwise sit there permanently disabled and
@@ -150,6 +167,7 @@ void gui_cleanup(dt_lib_module_t *self)
 {
   darktable.develop->proxy.masks_flexi_host.module = NULL;
   darktable.develop->proxy.masks_flexi_host.content_box = NULL;
+  darktable.develop->proxy.masks_flexi_host.actions_box = NULL;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = NULL;
 
