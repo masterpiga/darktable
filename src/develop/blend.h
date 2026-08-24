@@ -574,6 +574,7 @@ typedef struct dt_iop_gui_blend_data_t
   // showmask/suppress, and (when hosted in a side panel) the collapse
   // button -- unrelated to the "mask elements" header above.
   GtkWidget *masks_blend_header;
+  GtkWidget *masks_right_cluster;
   // the flexi group list: each group's header followed by that group's element rows,
   // nested (indented) directly under it (built by _pack_group_elements).
   GtkBox *masks_list_box;
@@ -759,50 +760,25 @@ typedef struct dt_iop_gui_blend_data_t
   guint masks_rebuild_idle_id;
   // masks_refine_header_label: section caption, updated to name the refinement
   // target ("mask refinement — <group>" or "— whole mask").
-  GtkWidget *masks_refine_header_label;
+  GtkWidget *masks_refine_section_label;
+  GtkWidget *masks_refine_expander;
+  GtkWidget *masks_refine_icon_box;
+  GtkWidget *masks_refine_name_label;
+  GtkWidget *masks_refine_indicator_icon;
+  GtkWidget *masks_refine_bypass_btn;
+  GtkWidget *masks_refine_toggle_btn;
+  GtkBox *masks_refine_sliders_box;
+  GHashTable *masks_refine_expanded;
+  GHashTable *masks_refine_bypassed;
   // transient (non-serialized, flexi-only) refinement bypass flags, read by the
   // flexi renderer (group.c) and the global refinement pass (blend.c):
   //   refine_bypass_group: suspend refinement of the selected group, or of the
   //     whole-mask (global) pass when no group is selected.
-  //   refine_bypass_all: suspend every refinement (all groups + whole mask).
-  // Both UI toggles (the per-group bulb and the "bypass all" eye) are retired
-  // and dropped from the mask refinement panel; the fields stay permanently
-  // FALSE now but are kept so the renderer's reads stay valid. They never
-  // entered masks/blend history, so exports were never bypassed by them.
-  GtkWidget *masks_refine_bypass_btn;
   GtkWidget *masks_refine_bypass_all_btn;
   gboolean refine_bypass_group;
   gboolean refine_bypass_all;
 
-  // Phase 3 (superseded): per-shape/group properties are no longer a separate,
-  // selection-following panel -- every row (shape, raster, group, parametric)
-  // now owns its own inline expander revealing just its own properties (see
-  // _build_props_row_editor / _make_props_row_toggle in blend_gui.c). The 10
-  // classic mask-manager properties (opacity, size, hardness, feather,
-  // rotation, curvature, compression, cleanup, smoothing, "refine mask
-  // boundary") and their delta-apply machinery (_props_row_apply) are still
-  // reused; only the global scope-following panel is gone.
-  //
-  // masks_props_expanded: remembers the expanded/collapsed state of each
-  // row's inline properties expander across list rebuilds, keyed by the row's
-  // own target id (a shape/raster formid, or a group's head/cid) -- mirrors
-  // masks_cluster_expanded's pattern exactly (transient, non-persisted,
-  // per-rebuild UI state; not the same thing as parametric's persisted
-  // p->in_out bit, which stays a separate mechanism). Lazily created.
-  // value = gboolean.
   GHashTable *masks_props_expanded;
-
-  // group_ordinals: the number shown after a group's operator in its header
-  // ("union-2"), keyed by the group's cid (head/bottom member formid).
-  // Deliberately a remembered identity, not a positional count: numbering
-  // groups by their position renumbered every survivor above a deleted group,
-  // so removing union-1 silently turned union-2 into union-1 and looked like
-  // the wrong group had been deleted. A group keeps the number it was given
-  // for as long as it exists; entries for groups that are gone are pruned on
-  // rebuild, and a fresh number is one past the highest still in use for that
-  // operator (so numbers are never recycled while a peer holds them, and a
-  // series restarts at 1 once its last group goes). Lazily created.
-  // value = int ordinal (1-based).
   GHashTable *group_ordinals;
 
   GtkWidget *raster_combo;
@@ -811,6 +787,31 @@ typedef struct dt_iop_gui_blend_data_t
   int control_button_pressed;
   dt_pthread_mutex_t lock;
 } dt_iop_gui_blend_data_t;
+
+static inline dt_hash_t dt_masks_refine_bypass_hash(const dt_iop_gui_blend_data_t *bd)
+{
+  if(!bd) return 0;
+  dt_hash_t h = dt_hash(DT_INITHASH, &bd->refine_bypass_all, sizeof(gboolean));
+  h = dt_hash(h, &bd->refine_bypass_group, sizeof(gboolean));
+  if(bd->masks_refine_bypassed)
+  {
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, bd->masks_refine_bypassed);
+    dt_hash_t xor_hash = 0;
+    while(g_hash_table_iter_next(&iter, &key, &value))
+    {
+      if(GPOINTER_TO_INT(value))
+      {
+        guint32 k = (guint32)GPOINTER_TO_UINT(key);
+        dt_hash_t eh = dt_hash(DT_INITHASH, &k, sizeof(guint32));
+        xor_hash ^= eh;
+      }
+    }
+    h = dt_hash(h, &xor_hash, sizeof(dt_hash_t));
+  }
+  return h;
+}
 
 
 /** global init of blendops */

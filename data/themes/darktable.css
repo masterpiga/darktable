@@ -611,20 +611,18 @@ dialog .sidebar row:selected:hover label,
   padding: 0.28em 0.65em;
 }
 
-/* #blending-tabs (the "blend mask" header) is a sibling of the module's own
-   .dt_plugin_ui_main content box, not a descendant of it -- padding only
-   insets a box's own children, never the box's own background, so matching
-   .dt_plugin_ui_main's horizontal inset here needs a real margin instead
-   (shrinking the header's own box, background included), left/right only so
-   .dt_section_label's vertical margin (applied via class, lower specificity
-   than this id) is left alone. Scoped to .blending-tabs-embedded (toggled in
-   _masks_flexi_relocate, blend_gui.c) because the flexi masks panel's other
-   two hosts -- the utility-module lib and the separate left/right panel --
-   already provide their own inset, so this margin would double up there. */
+/* #blending-tabs (the "blend mask" header): thicker when docked in dedicated panel, flush/compact when embedded */
+#blending-tabs:not(.blending-tabs-embedded)
+{
+  padding: 0.45em 0.5em;
+  min-height: 2em;
+}
+
 #blending-tabs.blending-tabs-embedded
 {
-  margin-left: 0.65em;
-  margin-right: 0.65em;
+  padding: 0.14em 0.3em;
+  margin-left: 0;
+  margin-right: 0;
 }
 
 /* Frame around blending boxes */
@@ -789,7 +787,7 @@ dialog .sidebar row:selected:hover label,
    canvas-clicked shape is mirrored into the list (dt_iop_gui_masks_select_form). */
 .mask-list-row-selected
 {
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.10), rgba(255, 255, 255, 0.04));
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.10));
   border-radius: 3px;
 }
 
@@ -802,7 +800,7 @@ dialog .sidebar row:selected:hover label,
    (same pattern as .mask-list-row-hover/-solo/-drop below). */
 .mask-panel-row.mask-list-row-selected
 {
-  border-color: rgba(255, 255, 255, 0.32);
+  border-color: transparent;
 }
 
 /* disposable placeholder row for a shape still being drawn on canvas, not yet
@@ -816,15 +814,16 @@ dialog .sidebar row:selected:hover label,
   border-color: rgba(255, 255, 255, 0.32);
 }
 
-/* same border for a selected whole group -- .mask-group-block carries no
-   row id/class of its own (see .mask-group-block.mask-list-row-drop* below
-   for the same reasoning), so it needs its own explicit border here rather
-   than inheriting one. Only the colour changes: .mask-group-block below
-   already reserves the same 2px width on every edge so this can never shift
-   the layout when it appears. */
 .mask-group-block.mask-list-row-selected
 {
-  border-color: rgba(255, 255, 255, 0.32);
+  border: none;
+  background-image: none;
+}
+
+.mask-group-block.mask-list-row-selected .mask-group-header
+{
+  background-color: rgba(255, 255, 255, 0.18);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
 }
 
 /* transient hover wash (canvas <-> list sync): a soft neutral fill, distinct
@@ -872,21 +871,11 @@ dialog .sidebar row:selected:hover label,
 /* each group (header + its element rows) is one visual block, separated from
    its neighbours by a small consistent gap above -- no divider line, since
    the group header's own background (.mask-group-header) already reads as
-   the start of a new group on its own. Margin only (no padding-top): the
-   gap must sit outside the border, between blocks -- padding-top would
-   instead sit inside the border, above the header row, making the border
-   box visibly stretch past the header with blank space before it. Border
-   reserved at the same 2px used by the selected-state border below, so
-   selecting a group never shifts the layout -- resting colour matches
-   .mask-group-header's own shade so an unselected group still reads as one
-   outlined block, not just a plain gap. The gap is always the same whether
-   the group above is empty or has shapes -- only the very first item in the
-   whole list (a group-block or an empty-group row) hugs the panel's own top
-   border with no leading gap. */
+   the start of a new group on its own. */
 .mask-group-block
 {
   margin-top: 4px;
-  border: 2px solid rgba(255, 255, 255, 0.06);
+  border: none;
 }
 
 .mask-group-block:first-child
@@ -899,12 +888,12 @@ dialog .sidebar row:selected:hover label,
    above/below the group (see _group_drop_motion / _group_drop_leave) */
 .mask-group-block.mask-list-row-drop-above
 {
-  border-top-color: #ffffff;
+  border-top: 2px solid #ffffff;
 }
 
 .mask-group-block.mask-list-row-drop-below
 {
-  border-bottom-color: #ffffff;
+  border-bottom: 2px solid #ffffff;
 }
 
 .mask-group-block.mask-list-row-drop
@@ -912,40 +901,30 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.20);
 }
 
-/* a group's element rows sit indented under their header. No left rail here
-   any more -- with the group header's own background (.mask-group-header
-   below) and each row's own selection border, a vertical guide line became a
-   redundant third cue for the same hierarchy, so the indent alone carries it.
-   Left-only now (no margin-right): a right inset shifted every element row's
-   own right-aligned content -- its opacity slider, its badge stack -- a few
-   pixels left of the unindented group header's own, throwing off the
-   vertical alignment those are specifically meant to share (see
-   _make_badge_stack / _opacity_slot_size_allocate). All indent/inset spacing
-   in this file lives here in CSS, not hardcoded in blend_gui.c, so a theme
-   can restyle it without a rebuild. */
+/* a group's element rows sit under their header with a subtle left rail conveying hierarchy */
 .mask-group-elements
 {
-  margin-left: 0;
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  margin-left: 6px;
+  padding-left: 6px;
 }
 
-.mask-group-elements .dt_drag_handle
+.mask-group-block.mask-list-row-selected .mask-group-elements
 {
-  margin-left: 8px;
+  border-left-color: rgba(255, 255, 255, 0.42);
 }
 
-/* an expanded cluster's own member rows (see _pack_group_elements), nested one
-   level deeper than .mask-group-elements' own indent so expanding a cluster
-   visually reads as revealing its members as its own children, not as more
-   siblings at the group's own depth. Same left-only convention as
-   .mask-group-elements above, for the same alignment reason. */
+/* an expanded cluster's own member rows nested with a subtle left rail */
 .mask-cluster-elements
 {
-  margin-left: 0;
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  margin-left: 6px;
+  padding-left: 6px;
 }
 
-.mask-cluster-elements .dt_drag_handle
+.mask-group-block.mask-list-row-selected .mask-cluster-elements
 {
-  margin-left: 16px;
+  border-left-color: rgba(255, 255, 255, 0.42);
 }
 
 /* while any element/group is soloed, dim same-kind cluster headers: the cluster
@@ -975,7 +954,7 @@ dialog .sidebar row:selected:hover label,
    grayscale only, no accent colour, one step lighter than the panel itself. */
 .mask-panel-row.mask-group-header
 {
-  background-color: rgba(255, 255, 255, 0.06);
+  background-color: rgba(255, 255, 255, 0.08);
 }
 
 /* an empty group's own header doubles as its drag-drop highlight frame (see
@@ -990,16 +969,19 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.20);
 }
 
-/* each parametric mask row's own permanently-visible editor (see
-   _build_param_row_editor) -- nests this row's own expanded content under
-   itself, inset the same amount on both sides (no padding-left/rail, which
-   previously made the left side wider than the right). */
+/* each parametric mask row's own permanently-visible editor with a subtle left rail */
 .mask-param-row-editor
 {
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
   margin-top: 3px;
   margin-bottom: 3px;
   margin-left: 8px;
-  margin-right: 8px;
+  padding-left: 6px;
+}
+
+.mask-list-row-selected .mask-param-row-editor
+{
+  border-left-color: rgba(255, 255, 255, 0.42);
 }
 
 /* boost factor slider: just spacing on the wrapper -- it should blend into the
@@ -1030,17 +1012,80 @@ dialog .sidebar row:selected:hover label,
   padding: 0;
 }
 
-/* every row/group's own inline "properties" expander (see
-   _build_props_row_editor) -- same treatment as .mask-param-row-editor above,
-   so a shape/raster/group's own expanded properties read the same way a
-   parametric row's does: nested under that one row, not under the whole
-   group, and inset the same amount on both sides. */
+/* every row/group's own inline "properties" expander with a subtle left rail */
 .mask-props-row-editor
 {
+  border-left: 2px solid rgba(255, 255, 255, 0.22);
   margin-top: 3px;
   margin-bottom: 3px;
   margin-left: 8px;
-  margin-right: 8px;
+  padding-left: 6px;
+}
+
+.mask-list-row-selected .mask-props-row-editor
+{
+  border-left-color: rgba(255, 255, 255, 0.42);
+}
+
+/* refinement section header label styling */
+.dt_section_expander.mask-refine-section-expander
+{
+  padding-left: 0;
+}
+
+.mask-refine-indicator-box
+{
+  min-width: 1.7em;
+}
+
+.mask-refine-inner-header
+{
+  padding: 2px 4px 4px 4px;
+}
+
+button.mask-refine-bypass-btn
+{
+  background-color: transparent;
+  border: none;
+  opacity: 0.5;
+  color: @button_fg;
+}
+
+button.mask-refine-bypass-btn:hover
+{
+  opacity: 0.85;
+}
+
+button.mask-refine-bypass-btn:checked
+{
+  opacity: 1.0;
+  color: @field_active_fg;
+}
+
+.mask-refine-header-name
+{
+  font-weight: bold;
+  margin-left: 4px;
+  margin-right: 4px;
+}
+
+button.mask-enable-toggle
+{
+  background-color: transparent;
+  border: none;
+  opacity: 0.55;
+  color: @button_fg;
+}
+
+button.mask-enable-toggle:hover
+{
+  opacity: 0.85;
+}
+
+button.mask-enable-toggle:checked
+{
+  opacity: 1.0;
+  color: @field_active_fg;
 }
 
 /* a row/group header's own inline opacity slider (group, shape and raster
@@ -1057,6 +1102,21 @@ dialog .sidebar row:selected:hover label,
 {
   margin: 0 6px;
   padding: 0;
+}
+
+/* interactive text percentage widget in row headers */
+.mask-inline-opacity-value
+{
+  margin: 0 4px;
+  padding: 1px 4px;
+  border-radius: 3px;
+  color: alpha(@text_color, 0.85);
+}
+
+.mask-inline-opacity-value:hover
+{
+  color: @text_color;
+  background-color: alpha(@grey_50, 0.25);
 }
 
 /* every bauhaus slider paints its own pill-shaped background from its own CSS
@@ -1568,6 +1628,11 @@ notebook tabs,
 #modules-tabs
 {
   background-color: @field_active_bg;
+}
+
+#blending-tabs.mask-enabled
+{
+  background-color: shade(@field_active_bg, 1.35);
 }
 
 /* set sizes of "buttons" in modules and blending tabs ; and guides lines too */
@@ -2247,11 +2312,10 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
    color (e.g. for color-blind users, or at a glance while dimmed). */
 #flexi-corner-icon
 {
-  min-width: 2.2em;
-  min-height: 2.2em;
+  min-width: 1.7em;
+  min-height: 1.7em;
   margin: 0;
-  padding: 0.3em;
-  padding-top: 0;
+  padding: 0.14em;
   opacity: 0.65;
   background-color: @darkroom_bg_color;
   border: none;
@@ -2281,12 +2345,15 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
 #flexi-corner-icon.flexi-corner-icon-active
 {
   opacity: 1;
-  background-color: @selected_bg_color;
+  background-color: @field_selected_bg;
+  color: @field_active_fg;
 }
 
 #flexi-corner-icon.flexi-corner-icon-active:hover
 {
   opacity: 1;
+  background-color: @field_hover_bg;
+  color: @field_hover_fg;
 }
 
 .search label

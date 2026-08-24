@@ -1257,7 +1257,10 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         // this member's own refinement, applied to its raw mask before inversion
         // and compositing -- the same point the classic renderer applies it (see
         // _group_get_mask_roi below). No-op unless this member carries one.
-        if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT)
+        gboolean elem_bypassed = FALSE;
+        if(bd && bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER((guint32)m->formid)))
+          elem_bypassed = TRUE;
+        if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
           dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
                                             (dt_dev_pixelpipe_iop_t *)piece,
                                             bufs, roi, &m->refinement);
@@ -1295,7 +1298,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // per-group refinement, applied once to the finished sub-mask (skipped when
     // this group -- or every group -- is bypassed for preview)
     const gboolean group_bypassed =
-      bypass_all || (dt_is_valid_maskid(bypass_cid) && head->formid == bypass_cid);
+      bypass_all || (dt_is_valid_maskid(bypass_cid) && head->formid == bypass_cid)
+      || (bd && bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER((guint32)head->formid | 0x80000000U)));
     if(group_refine.enabled && !group_bypassed)
       dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
                                         (dt_dev_pixelpipe_iop_t *)piece,
