@@ -900,9 +900,18 @@ void dt_develop_blend_refine_form_mask(struct dt_iop_module_t *self,
                                        const dt_iop_roi_t *const roi,
                                        const dt_masks_refinement_t *const r);
 
-/** color blending mask generation functions */
+/** color blending mask generation functions.
+
+    `d` is the blend configuration to evaluate; it is passed explicitly rather
+    than read off `piece->blendop_data` because it is not always the piece's
+    own. A parametric mask *form* (see masks/parametric.c) carries its own
+    blendif config and evaluates it against the same channel machinery while
+    the piece's params describe the module's drawn/flexi mask instead. The
+    piece is still needed for what genuinely belongs to it (channel count,
+    pipe/mask_display state). Classic callers pass piece->blendop_data. */
 
 void dt_develop_blendif_raw_make_mask(dt_dev_pixelpipe_iop_t *piece,
+                                      const dt_develop_blend_params_t *const d,
                                       const float *const a,
                                       const float *const b,
                                       const dt_iop_roi_t *const roi_in,
@@ -910,6 +919,7 @@ void dt_develop_blendif_raw_make_mask(dt_dev_pixelpipe_iop_t *piece,
                                       float *const mask);
 
 void dt_develop_blendif_lab_make_mask(dt_dev_pixelpipe_iop_t *piece,
+                                      const dt_develop_blend_params_t *const d,
                                       const float *const a,
                                       const float *const b,
                                       const dt_iop_roi_t *const roi_in,
@@ -917,6 +927,7 @@ void dt_develop_blendif_lab_make_mask(dt_dev_pixelpipe_iop_t *piece,
                                       float *const mask);
 
 void dt_develop_blendif_rgb_hsl_make_mask(dt_dev_pixelpipe_iop_t *piece,
+                                          const dt_develop_blend_params_t *const d,
                                           const float *const a,
                                           const float *const b,
                                           const dt_iop_roi_t *const roi_in,
@@ -924,6 +935,7 @@ void dt_develop_blendif_rgb_hsl_make_mask(dt_dev_pixelpipe_iop_t *piece,
                                           float *const mask);
 
 void dt_develop_blendif_rgb_jzczhz_make_mask(dt_dev_pixelpipe_iop_t *piece,
+                                             const dt_develop_blend_params_t *const d,
                                              const float *const a,
                                              const float *const b,
                                              const dt_iop_roi_t *const roi_in,
