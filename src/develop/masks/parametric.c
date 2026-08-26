@@ -34,14 +34,13 @@
  * its UI are untouched, so existing edits render identically. A parametric
  * form only ever exists in edits created after this feature.
  *
- * Rendering reuses the existing per-colorspace make_mask functions by
- * temporarily pointing the piece's blendop data at this form's blendif config.
- * Those functions read the module's input/output image, which is exposed to
- * the group renderer through the transient blend_refine_* context on piece
- * (set in dt_develop_blend_process). In the OpenCL pipe the images live on the
- * device and are not exposed here, so the parametric mask falls back to fully
- * opaque (mask = 1) on GPU -- a known limitation shared with per-shape
- * feathering. */
+ * Rendering reuses the existing per-colorspace make_mask functions, passing
+ * this form's blendif config to them as an explicit argument. Those functions
+ * read the module's input/output image, which is exposed to the group renderer
+ * through the transient blend_refine_* context on piece (set in
+ * dt_develop_blend_process). In the OpenCL pipe the images live on the device
+ * and are not exposed here, so the parametric mask falls back to fully opaque
+ * (mask = 1) on GPU -- a known limitation shared with per-shape feathering. */
 
 // localized channel label for a single-channel form ("Lightness", "chroma", ...),
 // or a generic fallback for the legacy multi-channel form (no single-channel
@@ -164,10 +163,26 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
     return 1;
   }
 
-  // temporarily expose this form's blendif config as the piece's blendop data,
-  // with full opacity (the group compositor applies the form opacity later).
+  // Evaluate this form's own blendif config, at full opacity (the group
+  // compositor applies the form opacity later). It is built as a scratch copy
+  // of the piece's params so everything the form does not itself define
+  // (blend_cst above all) keeps the module's value, and handed to the make_mask
+  // functions as an explicit argument.
+  //
+  // This used to be installed onto the piece instead -- pointing
+  // piece->blendop_data at this stack local for the duration of the call and
+  // restoring it afterwards -- because make_mask read its config off the piece.
+  // Nothing reads blendop_data concurrently on the path this runs on, so it
+  // worked, but it left a shared pipe struct momentarily pointing into a stack
+  // frame, and it stayed correct only as long as nobody ever added an early
+  // return between the two assignments.
+  //
+  // The const cast below is now only to match the piece parameter these
+  // functions share with the classic blend path (blend.c passes a non-const
+  // piece); nothing here mutates the piece any more. Making that parameter
+  // const would have to go through dt_develop_blendif_init_masking_profile too.
   dt_dev_pixelpipe_iop_t *const pc = (dt_dev_pixelpipe_iop_t *)piece;
-  dt_develop_blend_params_t *const saved = pc->blendop_data;
+  const dt_develop_blend_params_t *const saved = piece->blendop_data;
   if(!saved) return 1;
 
   dt_develop_blend_params_t tmp = *saved;
@@ -195,7 +210,6 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   // while the module is in flexi/drawn mode (no CONDITIONAL bit), so force the
   // bit on for this scratch copy; otherwise every form would render as opaque.
   tmp.mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL;
-  pc->blendop_data = &tmp;
 
   const dt_iop_roi_t *const rin =
     piece->blend_refine_roi_in ? piece->blend_refine_roi_in : roi;
@@ -209,22 +223,21 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   switch(saved->blend_cst)
   {
     case DEVELOP_BLEND_CS_LAB:
-      dt_develop_blendif_lab_make_mask(pc, a, b, rin, rout, buffer);
+      dt_develop_blendif_lab_make_mask(pc, &tmp, a, b, rin, rout, buffer);
       break;
     case DEVELOP_BLEND_CS_RGB_DISPLAY:
-      dt_develop_blendif_rgb_hsl_make_mask(pc, a, b, rin, rout, buffer);
+      dt_develop_blendif_rgb_hsl_make_mask(pc, &tmp, a, b, rin, rout, buffer);
       break;
     case DEVELOP_BLEND_CS_RGB_SCENE:
-      dt_develop_blendif_rgb_jzczhz_make_mask(pc, a, b, rin, rout, buffer);
+      dt_develop_blendif_rgb_jzczhz_make_mask(pc, &tmp, a, b, rin, rout, buffer);
       break;
     case DEVELOP_BLEND_CS_RAW:
-      dt_develop_blendif_raw_make_mask(pc, a, b, rin, rout, buffer);
+      dt_develop_blendif_raw_make_mask(pc, &tmp, a, b, rin, rout, buffer);
       break;
     default:
       break;
   }
 
-  pc->blendop_data = saved;
   return 1;
 }
 

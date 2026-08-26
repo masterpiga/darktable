@@ -489,3 +489,442 @@ Builds clean; flexi suite 37/37. As with §5 this is a GUI path the CLI never
 executes, so the suite only proves rendering is unaffected. **Needs a manual
 check**: set a whole-mask refinement, hit reset mask, confirm both the image and
 the six sliders come back neutral.
+
+---
+
+## §7 — Phase 2, step 2: first file extraction (merged §2.2)
+
+**Status**: done, verified as a pure move
+
+### Measuring the seams first
+
+The merged report proposes splitting `blend_gui.c` into seven files. Before
+committing to those boundaries I measured what each would actually cost, since
+splitting a C translation unit means every cross-boundary `static` function has
+to be published in a shared internal header. Cost = symbols that must enter that
+header:
+
+| candidate block | lines | needs from rest | exports to rest | header symbols |
+|---|---|---|---|---|
+| group-layout presets (as bounded by its section comment) | 779 | 15 | 10 | 25 |
+| **group-layout presets (its real cluster)** | **389** | **8** | **1** | **9** |
+| per-row parametric editor | 2847 | 71 | 6 | 77 |
+| shortcuts + init/cleanup | 1525 | 44 | 3 | 47 |
+| classic blendif + blend modes | 2693 | 35 | 31 | 66, bidirectional |
+
+Two things this changes about the plan:
+
+- **The section comments lie about cohesion.** The block under
+  `// ---- group-layout presets` runs 779 lines, but only its first 389 are
+  presets; the rest are unrelated panel helpers (`_group_count`,
+  `_recompute_insert_hint`, `_update_refine_sensitivity`, ...) that happen to
+  sit beneath the heading. Splitting on the comments would have dragged them
+  along and doubled the seam.
+- **`classic blendif` is the worst first candidate, not the obvious one.** It is
+  the most self-evidently "separate" subsystem by name, but its coupling is
+  bidirectional (35 in, 31 out), so it should be done last, not first.
+
+### What was extracted
+
+The real presets cluster -> `src/develop/masks_gui_presets.c` (430 lines): group
+layout capture/apply, preset load/save/delete against `data.presets`, and the
+preset menu. Registered in `src/CMakeLists.txt`.
+
+New `src/develop/blend_gui_internal.h` (106 lines) holds the seam: the nine
+shared symbols plus `dt_masks_empty_group_t`, whose layout the presets code
+needs. Its header comment states the rule -- a symbol lands there only because a
+split separated its definition from a caller, and goes back to `static` if that
+stops being true -- so the file does not silently become a dumping ground.
+
+Nine functions lost `static` as a result. That is the unavoidable price of
+splitting a TU in C and is why measuring the seam first matters: at 9 symbols
+this is cheap, at 77 it would not have been.
+
+### Verified as a pure move
+
+Compared the extracted block against `HEAD`'s copy line by line: **366 lines
+identical, 1 differing** -- the `static` removed from the single exported
+function. Nothing was rewritten in transit, including eight pre-existing
+over-90-column lines and one non-ASCII ellipsis in a translatable string
+(`"save current layout as preset…"`, the §8 finding). Those were deliberately
+left alone: reflowing them would destroy the property that makes this diff
+checkable as a move. They remain filed, not fixed.
+
+### Verification
+
+- full build clean, no new warnings
+- flexi suite 37/37
+- integration renders not re-run: the extracted code is GUI-only and touches no
+  pixel path, and the move is byte-verified above
+
+`blend_gui.c`: 16,452 -> 16,029 lines. A small dent, deliberately -- the point of
+this step was to establish the internal-header pattern and the seam measurements
+on the cheapest possible case. The next extraction (shortcuts + init/cleanup, 47
+symbols, or the parametric row editor, 77) is now a mechanical repeat, and the
+table above says what each costs.
+
+---
+
+## §9 -- Phase 2, extraction 2: flexi panel hosting
+
+The §7 entry ended by naming "shortcuts + init/cleanup, 47 symbols" as the next
+candidate. Re-measuring against the post-§7 file said that was wrong, so it was
+not done.
+
+### The suffix split does not work here
+
+Splitting the file's tail (line 14505 to EOF, ~1,526 lines) costs **51 needs + 3
+exports = 54 symbols**, not the 47 estimated in §7. The cause is structural, not
+an estimation error: that tail is mostly `dt_iop_gui_init_masks` and
+`dt_iop_gui_init_blending`, which `g_signal_connect` essentially *every* callback
+in the file. Widget construction is the hub of a GTK panel, so any block
+containing it depends on almost everything else by definition. No amount of
+boundary-nudging fixes that -- the construction functions must be extracted last,
+after the things they wire up have already left, or not at all.
+
+Measured alternatives (`needs` = defined outside, used inside; `exports` =
+defined inside, used outside):
+
+| block | lines | needs | exports | total |
+|---|---|---|---|---|
+| shortcuts only (14505-14644) | 140 | 12 | 1 | 13 |
+| **flexi panel hosting (two ranges)** | **307** | **1** | **5** | **6** |
+| empty (staged) groups | 583 | 23 | 16 | 39 |
+| blend-modes region | 888 | 27 | 23 | 50 |
+| per-row parametric editor | 2,847 | 92 | 10 | 102 |
+
+### What was extracted
+
+Flexi panel hosting -> `src/develop/masks_gui_panel_host.c` (356 lines). The
+cluster was **not contiguous**: 15,347-15,552 (`_masks_flexi_host_reconfigure`,
+`_mask_mode_label`, `_flexi_inline_collapse_clicked`, `_masks_flexi_release`,
+`_masks_flexi_relocate`) plus 1,951-2,048 (`_masks_panel_position_activate`,
+`_add_masks_panel_position_menu`), some 13,000 lines apart. They are one concern
+regardless of where they sat: *which of the three homes* --- embedded in the
+module's expander, the `masks_flexi_host` utility lib, or the separate grid panel
+--- `bd->relocatable_box` currently occupies, and the menu the user picks that
+from. The new file builds no panel content of its own.
+
+Seam: **1 in** (`_reparent_into`), **5 out**. Six symbols for 307 lines is the
+best ratio of anything measured so far, better even than the presets cluster.
+
+Also removed the three stale forward declarations at the old lines 1,000-1,002,
+which existed only because the definitions sat 14,000 lines below their callers.
+That distance was itself the evidence the block did not belong there.
+
+`_masks_flexi_host_reconfigure` **went back to `static`**. Its only out-of-block
+caller (`_masks_panel_position_activate`) moved along with it, so it no longer
+crosses a file boundary. This is the internal header's own stated rule applied
+the first time it came up, rather than letting the header accumulate symbols
+that no longer need to be in it.
+
+### Verified as a pure move
+
+Diffed the moved code against `HEAD`'s copy: **271 of 275 non-blank lines
+identical, 4 differing** -- exactly the four `static` removals. Nothing was
+rewritten in transit.
+
+### Verification
+
+- full build clean
+- flexi suite 37/37
+- integration renders not re-run, for the same reason as §7: GUI-only code, no
+  pixel path touched, move byte-verified
+
+`blend_gui.c`: 16,029 -> 15,720 lines.
+
+### Where this leaves Phase 2
+
+Both remaining file-split candidates are now expensive (39, 50, 102), and the
+init/construction functions cannot move until later. Further splitting has
+reached diminishing returns; the remaining Phase 2 item -- moving localized row
+updates off the full-rebuild path -- is a genuine behavior change with real
+regression risk and **no headless test coverage**, since `darktable-cli` never
+builds the panel. That one needs the app exercised by hand between steps.
+
+---
+
+## §10 -- Phase 2, final item: localized row updates off the rebuild path
+
+The roadmap item read "move localized row updates off the full-rebuild path
+(in-place widget updates using the existing `masks_row_map`)". Auditing the
+actual state of the branch first changed what that meant: **most of it was
+already done**, and the finding as written is largely stale.
+
+Already in place before this entry:
+
+- `_build_masks_list` opens with a **reconcile-by-skip hash**
+  (`_masks_list_signature`), so the ~25 defensive rebuild requests already
+  collapse to a cheap compare when nothing the tree is built from moved.
+- **Opacity** (`_props_row_apply`) never rebuilt: it refreshes the low-opacity
+  badges in place on every drag tick, with a comment saying exactly that.
+- **Selection** (`_update_row_selection`) never rebuilt, from either the canvas
+  or a panel click.
+- **Element solo** and **group solo** both used `_refresh_all_shape_rows`.
+
+So the remaining work was not "build an in-place path" -- it was **finishing an
+in-place path that had been applied unevenly**. Three of the four things fixed
+below are inconsistencies, not missing machinery.
+
+### 1. `_toggle_element_disable` rebuilt the whole list for one bit
+
+The clearest case. Compare two sibling gestures:
+
+| gesture | scope of change | path taken |
+|---|---|---|
+| `_toggle_solo_form` | `HIDDEN` on **every** point | in-place refresh |
+| `_invert_element` | `INVERSE` on **one** point | in-place refresh |
+| `_toggle_element_disable` | `DISABLE` on **one** point | **full rebuild** |
+
+Backwards: the broadest gesture took the cheap path and the narrowest took the
+expensive one. `_invert_element` even carries a comment explaining why it does
+not rebuild ("visibly flashes the panel for what is just one bit", plus the
+re-dock of an open parametric editor) -- `_toggle_element_disable` is the same
+gesture and got neither the treatment nor the reasoning.
+
+Verified before changing it that the in-place updater is a **complete**
+substitute for this state: every `DT_MASKS_STATE_DISABLE` read in the file is
+either inside `_update_shape_row_state` (badge, dimmed handle/name/opacity/
+action icon, insensitive editors), inside `_make_shape_row`'s construction-time
+block -- which is a strict *subset* of it -- or in a menu built fresh on open.
+Nothing in the group headers or the pack pass branches on it.
+
+Incidental find, not fixed: `_make_shape_row`'s construction block dims five
+widgets, `_update_shape_row_state` dims six (it also dims `expand_toggle`). So a
+freshly built row of a disabled element leaves its expand toggle undimmed until
+something refreshes it. The **constructor** is the one that is wrong; filed for
+Phase 3, where the two blocks should collapse into one call.
+
+### 2. The in-place solo path had a hole the rebuild used to cover
+
+`_refresh_all_shape_rows` repaints solo classes and badges but **not** the
+selection. Its callers run it right after `_sync_hidden_to_form_visible`, which
+drops `panel_selected_formid` when the selected element is the one that just
+got hidden. So: solo element A while element B is selected -> B is deselected in
+the model, but B's row keeps its selected border until some unrelated rebuild
+happens to fire.
+
+This is the characteristic failure of a *partial* move off the rebuild path: the
+rebuild repainted everything, so every state an in-place path takes over has to
+be re-derived explicitly, and one was missed. Fixed by settling the selection at
+the end of `_refresh_all_shape_rows`, with a comment saying why it belongs there.
+
+### 3. `_clear_soloedit_if_hidden` rebuilt on a stale premise
+
+Its comment justified the rebuild: *"because the solo-edit toggle button's
+checked state is only set at row-construction time"*. **There is no such button
+any more** -- solo-edit became a check menu item built fresh each time a row's
+actions menu opens, and another comment 500 lines up already says so. The
+justification outlived the widget it was about. Both callers already run
+`_refresh_all_shape_rows` immediately afterwards, so the rebuild was pure
+duplicate work; dropped, and the stale comment replaced with what is actually
+true now.
+
+### 4. `_toggle_soloedit` deferred a rebuild it did not need
+
+Same stale premise. Its rebuild was `g_idle_add`-deferred because the gesture is
+reachable mid-dispatch from a row's own actions menu, and a synchronous rebuild
+would destroy that menu's row underneath it. Correct -- *for a rebuild*.
+Switching to `_refresh_all_shape_rows` removes the hazard rather than deferring
+it: it mutates existing widgets and destroys nothing, which is the exact
+argument `_toggle_solo_group` already makes for calling it synchronously from
+the same kind of menu dispatch.
+
+`_queue_masks_list_rebuild` call sites: 25 -> 22. The 22 that remain are all
+genuine structural changes (add / delete / reorder / regroup / rename / history
+reload), where a rebuild is the right answer.
+
+### Verification -- and its limit
+
+- full build clean, no new warnings
+- flexi suite 37/37
+
+**The suite does not cover any of this, and cannot.** All four changes are
+GUI-only: `darktable-cli` never builds the masks panel, so the tests would stay
+green whether these paths worked or not. Their value here is only as a
+regression check that the edits did not disturb the render path -- which is a
+real thing to confirm, since `_toggle_element_disable` mutates `pt->state` and
+`_clear_soloedit_if_hidden` touches canvas edit mode, but it is **not** evidence
+the panel behaves correctly.
+
+What these need is hands on the running app:
+
+1. toggle an element's disable state -- badge, dimming, and mask render follow,
+   with no panel flash and no open parametric editor collapsing
+2. select element B, then solo element A -- B's row must lose its selected
+   border, not just its highlight
+3. solo-edit from a row's actions menu -- badge moves to the right row, the menu
+   does not misbehave mid-dispatch, canvas editability follows
+4. solo an element whose solo-edit is active -- solo-edit clears, badge updates
+
+Items 2 and 3 are the ones most likely to expose a mistake: 2 is the bug being
+fixed, and 3 changed a deferred call into a synchronous one.
+
+---
+
+## §11 -- Phase 3: explicit blend params for the make_mask evaluators
+
+First Phase 3 item. Picked deliberately for **where it sits**: the masks engine
+(`parametric.c`, `blends/blendif_*.c`) is the one area of this branch with real
+headless test coverage, and it is the upstream Batch 2 payload. After §10 -- four
+GUI changes the suite structurally could not check -- the right next move was
+work that can actually be verified.
+
+### Two other Phase 3 items were checked first and set aside
+
+- **"Move metadata property tables to `develop/masks/masks.c`" (the DRY item).**
+  The comment above `_blend_masks_properties` says it "mirrors
+  `src/libs/masks.c`'s file-local `_masks_properties` exactly ... keep the two
+  in sync if either changes". **`src/libs/masks.c` does not exist on this
+  branch** -- it was deleted in `d01ec1199a` ("Flexi mask panel POC"), and the
+  table was copied out of it. So there is no live duplication to eliminate here;
+  master still has the file, so the duplication is a *merge*-time concern, not a
+  branch-time one. Also verified the surviving table covers all ten
+  `DT_MASKS_PROPERTY_*` enumerators, so it is not silently short. Reduced to a
+  stale comment plus a layering preference -- low value, deferred.
+- **"Pre-resolve raster source module".** Real, but GUI/pipe-lifecycle shaped
+  and not covered by the suite. Deferred behind the testable work.
+
+### The change
+
+`_parametric_get_mask_roi` evaluated a form's blendif config by **mocking the
+pipe struct**: cast away the piece's `const`, point `piece->blendop_data` at a
+stack-local `dt_develop_blend_params_t`, call `make_mask`, then restore the
+pointer. It did that because the four `dt_develop_blendif_*_make_mask()`
+functions each opened with `d = piece->blendop_data` -- their config was an
+implicit, non-negotiable read off the piece.
+
+Audited before changing it: the mock is **balanced and correct today** -- there
+is no early return between the install and the restore, and nothing reads
+`blendop_data` concurrently on this path. The problem is not a live bug, it is
+that a shared pipe struct momentarily points into a stack frame, and correctness
+rests on nobody ever adding a `return` between two statements 30 lines apart.
+
+Fix: make the config an **explicit parameter** of all four `make_mask`
+functions. Classic callers in `blend.c` pass their own `d` (which is literally
+`piece->blendop_data`, so identical semantics); `parametric.c` passes `&tmp` and
+the cast-plus-restore dance is deleted outright.
+
+Chose an added parameter over the obvious alternative of `_with_params` twin
+functions plus thin wrappers. Twins would have kept a second API surface whose
+entire purpose is to read one field off a struct -- and the wrapper form leaves
+the implicit read available to the next caller. Making every caller name its
+params is what actually retires the bug class.
+
+The const cast in `parametric.c` still stands, but only to match the non-const
+`piece` parameter these functions share with the classic path; nothing mutates
+the piece any more. Constifying that would have to go through
+`dt_develop_blendif_init_masking_profile` as well -- shared blend infrastructure,
+wider blast radius, no test benefit. Stopped there and said so in the comment
+rather than half-doing it.
+
+Also corrected the file-header comment, which still described the mocking.
+
+### Verification -- this one is real
+
+Behavior-preserving by construction, so it was checked that way rather than by
+classification:
+
+1. rendered all 37 scenarios + both baselines with the **pre-change** binary
+   (`git stash` -> `./build_dudo.sh` -> render)
+2. restored, rebuilt, rendered again
+3. compared
+
+**39/39 with 0 differing pixels.** Note the files are *not* byte-identical --
+all 39 differ, including `ZBASE_module_off.png`, which this change cannot touch.
+That is PNG metadata, and it is why `count-diff-pixels` is the right instrument
+and `cmp` is not; a `cmp`-based check here would have reported a 39/39 "failure"
+that means nothing.
+
+This covers both affected paths: the classic parametric blend (`blend.c`, A/H/I
+series) and parametric mask forms (`parametric.c`, B/C/D/E/F series).
+
+Full build clean, flexi suite 37/37.
+
+---
+
+## §12 -- Bug: parametric elements survive a blend-colorspace switch
+
+Found by hand-testing §11 (user report): start in Lab, add an "a" parametric
+element, switch to RGB (display) -- the add-buttons correctly become
+`g R G B H S L`, but the element stays, still labeled `a`, still drawing the Lab
+a-channel green->magenta gradient.
+
+**Pre-existing, not caused by §11.** `git show HEAD` confirms the dispatch line
+at fault is identical before the refactor; §11 only changed how the params
+reach `make_mask`.
+
+### Root cause
+
+Two sides disagree about which colorspace a parametric form is in:
+
+- `dt_masks_point_parametric_t.colorspace` records "the colorspace the form was
+  made in". It is written **once at creation** (blend_gui.c) and on legacy
+  migration, and never reconciled afterwards. The whole panel renders the row
+  from it -- hence the stale "a" label and Lab gradient.
+- `_parametric_get_mask_roi` evaluates the form with
+  `switch(saved->blend_cst)` -- the module's *current* colorspace.
+
+The same function contradicts itself: it uses `channels_for_csp(p->colorspace)`
+(the form's own) to mask off disabled sub-channels, then dispatches on the
+module's `blend_cst`. Those two disagree by construction after any switch, and
+the stored channel bits get reinterpreted under a different channel table.
+
+### Why there is no local fix
+
+Evaluating the form in its own `p->colorspace` instead would be **equally
+wrong, in the other direction**: the pixel data handed to `make_mask` is
+whatever `dt_develop_blend_colorspace()` says the module's current `blend_cst`
+requires (RGB for both RGB modes, Lab for Lab). Reading RGB pixels through the
+Lab evaluator is no better than the reverse. The renderer is not the bug -- it
+has no choice. The form is genuinely stale once the colorspace changes.
+
+Three honest options, all design calls rather than cleanups:
+
+1. migrate forms on switch (remap where a counterpart exists, drop where not)
+2. refuse the switch while parametric forms exist
+3. switch, but clear the parametric forms (what the classic path already does
+   to `blendif_parameters`)
+
+Remapping is quietly lossy exactly where it matters -- Lab `a`/`b` have no
+RGB-display counterpart, and those are the channels this was found with. Chose
+**2** (user's call: "seems honest enough").
+
+### Implementation
+
+- `_module_parametric_form_count()` -- one predicate, carrying the explanation
+  of *why* in its comment.
+- `_blendif_change_blend_colorspace()` refuses and logs when the count is
+  non-zero. This is the **authority**: the menu entries are disabled anyway, but
+  a shortcut or a future caller cannot invalidate the forms either. Same
+  one-underlying-function rule as the panel/canvas gesture pairs.
+- The three colorspace entries and "reset to default blend colorspace" are
+  disabled while locked.
+
+**GTK constraint worth recording:** insensitive widgets receive no motion
+events, so a tooltip on a disabled menu item is never shown. The explanation
+therefore lives on the *section header*, which is left sensitive (and relabeled
+"blend colorspace (locked)") purely so it can carry it; it has no activate
+handler, so clicking it just dismisses the menu. This is the reason the obvious
+"disable it and put the reason in its tooltip" does not work as written, and it
+applies to the pre-existing insensitive-menu-item-plus-tooltip pattern elsewhere
+in this file (e.g. the group delete entry), whose tooltips are equally invisible.
+
+### Verification
+
+Build clean, flexi suite 37/37 -- but that is a regression check only. The guard
+is GUI-only and the suite cannot reach it. Needs hand-testing:
+
+1. Lab module, no parametric elements -> colorspace entries enabled, switching
+   works as before
+2. add a parametric element -> header reads "blend colorspace (locked)", carries
+   the explanation on hover, all four entries greyed
+3. delete the element -> entries live again
+
+### Still open
+
+Whether an **already-saved edit** whose stored `blend_cst` disagrees with its
+forms hits the same path on load. The guard added here only blocks the
+interactive gesture; it does not detect or repair an XMP already in that state.
+If such edits exist, this is a data-integrity issue rather than a UI one and
+needs a migration. Not investigated yet.

@@ -991,23 +991,23 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     switch(blend_csp)
     {
       case DEVELOP_BLEND_CS_LAB:
-        dt_develop_blendif_lab_make_mask(piece,
+        dt_develop_blendif_lab_make_mask(piece, d,
                                          (const float *const restrict)ivoid,
                                          (const float *const restrict)ovoid,
                                          roi_in, roi_out, mask);
         break;
       case DEVELOP_BLEND_CS_RGB_DISPLAY:
-        dt_develop_blendif_rgb_hsl_make_mask(piece, (const float *const restrict)ivoid,
+        dt_develop_blendif_rgb_hsl_make_mask(piece, d, (const float *const restrict)ivoid,
                                              (const float *const restrict)ovoid,
                                              roi_in, roi_out, mask);
         break;
       case DEVELOP_BLEND_CS_RGB_SCENE:
-        dt_develop_blendif_rgb_jzczhz_make_mask(piece, (const float *const restrict)ivoid,
+        dt_develop_blendif_rgb_jzczhz_make_mask(piece, d, (const float *const restrict)ivoid,
                                                 (const float *const restrict)ovoid,
                                                 roi_in, roi_out, mask);
         break;
       case DEVELOP_BLEND_CS_RAW:
-        dt_develop_blendif_raw_make_mask(piece, (const float *const restrict)ivoid,
+        dt_develop_blendif_raw_make_mask(piece, d, (const float *const restrict)ivoid,
                                          (const float *const restrict)ovoid,
                                          roi_in, roi_out, mask);
         break;
