@@ -115,6 +115,8 @@ FILE(GLOB SOURCE_FILES
   "control/signal.c"
   "develop/blend.c"
   "develop/blend_gui.c"
+  "develop/masks_gui_presets.c"
+  "develop/masks_gui_panel_host.c"
   "develop/blends/blendif_lab.c"
   "develop/blends/blendif_raw.c"
   "develop/blends/blendif_rgb_hsl.c"

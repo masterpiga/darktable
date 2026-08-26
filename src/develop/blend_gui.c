@@ -18,6 +18,7 @@
 #include "common/gdk_event_utils.h"
 
 #include "develop/blend.h"
+#include "develop/blend_gui_internal.h"
 #include "bauhaus/bauhaus.h"
 #include "common/database.h"
 #include "common/debug.h"
@@ -330,8 +331,8 @@ enum _channel_indexes
   CHANNEL_INDEX_hz = 6,
 };
 
-static dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
-static dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
+dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
+dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
 static void _queue_masks_list_rebuild(dt_iop_module_t *module);
 static void _auto_expand_selected_row(dt_iop_module_t *module, const dt_mask_id_t id);
 
@@ -552,7 +553,7 @@ static void _box_set_visible(GtkBox *box, gboolean visible)
 // re-home a widget into a new parent (no-op if already there), preserving its
 // shown state. Used to share widgets between the classic and flexi mask
 // layouts.
-static void _reparent_into(GtkWidget *w, GtkWidget *parent,
+void _reparent_into(GtkWidget *w, GtkWidget *parent,
                            const gboolean at_end, const gboolean expand)
 {
   if(!w || !parent) return;
@@ -608,9 +609,7 @@ static guint _form_kind(const dt_masks_form_t *form);
 static const char *_kind_name(const guint kind, const gboolean plural);
 // defined further up (module.c-adjacent helpers); forward declared here so
 // the import menu can look up which module (if any) currently uses a form.
-static dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
-static dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
-static void _build_masks_list(dt_iop_module_t *module);
+void _build_masks_list(dt_iop_module_t *module);
 
 // a picked menu entry just replays it on the (permanently hidden, headless)
 // masks_combo: dt_bauhaus_combobox_set fires "value-changed" exactly as a
@@ -986,7 +985,6 @@ typedef struct dt_masks_props_row_editor_t
   gboolean resize_updating;  // guard: programmatic slider change, don't commit
 } dt_masks_props_row_editor_t;
 
-static void _build_masks_list(dt_iop_module_t *module);
 static void _refine_scope_combo_rebuild(dt_iop_module_t *module);
 static void _empty_groups_clear(dt_iop_gui_blend_data_t *bd);
 static void _update_add_target_sensitivity(dt_iop_module_t *module);
@@ -997,17 +995,11 @@ static void _set_form_target_ext(dt_iop_module_t *module, const dt_mask_id_t id,
 static void _set_form_target(dt_iop_module_t *module, const dt_mask_id_t id);
 static int _op_index_for_state(const int state);
 static dt_mask_id_t _group_cid_of_form(dt_masks_form_t *grp, const dt_mask_id_t fid);
-// see full definitions + masks_panel_position conf docs near
-// dt_iop_gui_blending_gain_focus
-static void _masks_flexi_relocate(dt_iop_module_t *module);
-static void _masks_flexi_release(dt_iop_module_t *module);
-static void _masks_flexi_host_reconfigure(void);
 static void _paint_param_inout(cairo_t *cr, const gint x, const gint y,
                                const gint w, const gint h,
                                const gint flags, void *data);
 // appends a "presets" section (group-layout presets) directly to `menu` --
 // see the full definition near _flexi_layout_apply
-static void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module);
 // detach members from a module's mask group without dt_masks_form_remove's
 // nested history/GUI update and its "group just emptied" destruction cascade
 static void _detach_group_members(dt_masks_form_t *grp, GList *fids);
@@ -1793,6 +1785,43 @@ gboolean blend_color_picker_apply(dt_iop_module_t *module,
   return _param_row_picker_apply(module, picker, pipe);
 }
 
+// how many parametric elements the module's mask currently holds.
+//
+// A parametric form stores the channel layout of the colorspace it was authored
+// in (dt_masks_point_parametric_t.colorspace, "the colorspace the form was made
+// in"), but the renderer evaluates every form against the module's *current*
+// blend_cst -- see the switch in _parametric_get_mask_roi (masks/parametric.c),
+// which has to, because the pixel data it is handed is in that colorspace and
+// nothing else. So a form cannot survive a colorspace change: its stored
+// channel bits would be reinterpreted under a different channel table, and the
+// panel would go on displaying "a" with a Lab gradient while the pipe computed
+// some unrelated RGB channel.
+//
+// Neither remapping the channels (Lab a/b have no RGB-display counterpart) nor
+// silently dropping the forms is honest, so the switch is refused while any
+// exist. Callers use this both to disable the menu entries and to explain why.
+static int _module_parametric_form_count(dt_iop_module_t *module)
+{
+  const dt_masks_form_t *const grp = _module_mask_group(module);
+  int n = 0;
+  for(const GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *const pt = l->data;
+    const dt_masks_form_t *const f = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(f && (f->type & DT_MASKS_PARAMETRIC)) n++;
+  }
+  return n;
+}
+
+// shared by every disabled blend-colorspace menu entry
+static const char *_blend_cst_locked_tooltip(void)
+{
+  return _("the blend colorspace cannot be changed while the mask has parametric"
+           " elements: each one stores the channels of the colorspace it was"
+           " created in, and those channels do not exist in another one.\n"
+           "remove the parametric elements first.");
+}
+
 static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
                                                  dt_develop_blend_colorspace_t cst)
 {
@@ -1809,6 +1838,16 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
   }
   if(cst != module->blend_params->blend_cst)
   {
+    // the menu entries that lead here are already disabled in this case (see
+    // _add_blend_colorspace_menu); this is the authority, so that any other
+    // path -- a shortcut, a future caller -- cannot invalidate the forms
+    // either. See _module_parametric_form_count for why the switch is refused.
+    if(_module_parametric_form_count(module))
+    {
+      dt_control_log("%s", _blend_cst_locked_tooltip());
+      return FALSE;
+    }
+
     dt_develop_blend_init_blendif_parameters(module->blend_params, cst);
 
     // look for last history item for this module with the selected
@@ -1951,104 +1990,6 @@ static void _add_masks_panel_options_menu(GtkMenu *menu, dt_iop_module_t *module
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), cr);
 }
 
-static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t *module)
-{
-  // these are plain check items (not radio items) also fire "toggled" for
-  // the item being deactivated -- only act on the one becoming active.
-  // Plain gtk_check_menu_item, not gtk_radio_menu_item: this theme has no
-  // visible styling for GTK's "radio" indicator CSS node (only "check" is
-  // styled, see darktable.css), so a radio group's active item silently
-  // showed no checkmark at all. Mutual exclusion is enforced manually below.
-  if(!gtk_check_menu_item_get_active(mi)) return;
-
-  GtkWidget *submenu = gtk_widget_get_parent(GTK_WIDGET(mi));
-  GList *siblings = gtk_container_get_children(GTK_CONTAINER(submenu));
-  for(GList *l = siblings; l; l = g_list_next(l))
-    if(l->data != mi && GTK_IS_CHECK_MENU_ITEM(l->data))
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(l->data), FALSE);
-  g_list_free(siblings);
-
-  const int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "dt-panel-pos"));
-  dt_conf_set_int("plugins/darkroom/blend/masks_panel_position", pos);
-
-  // update the utility-mode host lib's own visibility for the new position
-  _masks_flexi_host_reconfigure();
-
-  // leaving the separate-panel (left/right) mechanism entirely: force it
-  // fully hidden (not just emptied) rather than leaving an empty panel
-  // visible -- _masks_flexi_relocate()'s own release path only re-applies
-  // whatever visibility it already had, which isn't enough here
-  if(pos != MASKS_PANEL_POS_LEFT && pos != MASKS_PANEL_POS_RIGHT)
-    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
-
-  // decide where this (focused) module's content should live now
-  _masks_flexi_relocate(module);
-
-  // repositioning is a deliberate user action -- make sure the result is
-  // actually visible, regardless of collapse state or whether there's a
-  // mask to show right now
-  switch(pos)
-  {
-    case MASKS_PANEL_POS_LEFT:
-    case MASKS_PANEL_POS_RIGHT:
-      // force-expand and persist: unlike _masks_flexi_relocate's normal
-      // "no mask -> auto-collapse to the corner icon" behavior, explicitly
-      // picking a separate panel should show it open every time
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
-      break;
-    case MASKS_PANEL_POS_UTILITY:
-    {
-      dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-      if(host && host->expander)
-        dtgtk_expander_set_expanded(DTGTK_EXPANDER(host->expander), TRUE);
-      break;
-    }
-    case MASKS_PANEL_POS_EMBEDDED:
-    default:
-      // scrolls the already-expanded, focused module's own panel into
-      // view -- dtgtk_expander_set_expanded(..., TRUE) re-triggers the
-      // scroll-to-view animation even when already expanded (see its
-      // "Quick Access Panel" comment in dtgtk/expander.c)
-      if(module->expander)
-        dtgtk_expander_set_expanded(DTGTK_EXPANDER(module->expander), TRUE);
-      break;
-  }
-}
-
-// appends a "blend mask panel position" section directly to `menu` -- inline check
-// items, not a submenu, so the choice is visible at a glance
-static void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
-{
-  GtkWidget *header = gtk_menu_item_new_with_label(_("blend mask panel position"));
-  gtk_widget_set_sensitive(header, FALSE);
-  gtk_widget_set_tooltip_text(header,
-    _("where the flexi masks panel content (groups, elements, refinements)"
-      " is shown. the on/off toggle and hamburger above always stay here.\n"
-      "moving to/from the utility module or a separate panel takes effect"
-      " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
-
-  static const struct { int pos; const char *label; } items[] = {
-    { MASKS_PANEL_POS_EMBEDDED, N_("embedded within each module (default)") },
-    { MASKS_PANEL_POS_UTILITY,  N_("utility module, left panel") },
-    { MASKS_PANEL_POS_LEFT,     N_("separate panel, left") },
-    { MASKS_PANEL_POS_RIGHT,    N_("separate panel, right") },
-  };
-
-  const int cur_pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
-  for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
-  {
-    GtkWidget *ci = gtk_check_menu_item_new_with_label(_(items[i].label));
-    dt_gui_add_class(ci, "dt_transparent_background");
-    if(items[i].pos == cur_pos)
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ci), TRUE);
-    g_object_set_data(G_OBJECT(ci), "dt-panel-pos", GINT_TO_POINTER(items[i].pos));
-    g_signal_connect(G_OBJECT(ci), "toggled",
-                     G_CALLBACK(_masks_panel_position_activate), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), ci);
-  }
-}
-
 static void _blendif_options_callback(GtkButton *button,
                                       dt_iop_module_t *module)
 {
@@ -2078,11 +2019,25 @@ static void _blendif_options_callback(GtkButton *button,
          || module_cst == DEVELOP_BLEND_CS_RGB_DISPLAY
          || module_cst == DEVELOP_BLEND_CS_RGB_SCENE))
   {
-    mi = gtk_menu_item_new_with_label(_("blend colorspace"));
-    gtk_widget_set_sensitive(mi, FALSE);
+    // parametric elements pin the colorspace they were created in, so every
+    // entry in this section is dead while any exist (see
+    // _module_parametric_form_count). Disable them and say why on the section
+    // header, which is the one widget here that stays hoverable -- GTK does not
+    // deliver motion (hence tooltips) to insensitive widgets, so a tooltip on
+    // the disabled entries themselves would never be seen.
+    const gboolean cst_locked = _module_parametric_form_count(module) > 0;
+
+    mi = gtk_menu_item_new_with_label(cst_locked ? _("blend colorspace (locked)")
+                                                 : _("blend colorspace"));
+    // the header is the only widget in this section left sensitive when locked,
+    // purely so it can carry the explanation; it has no activate handler, so
+    // clicking it just dismisses the menu.
+    gtk_widget_set_sensitive(mi, cst_locked);
+    if(cst_locked) gtk_widget_set_tooltip_text(mi, _blend_cst_locked_tooltip());
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
 
     mi = gtk_menu_item_new_with_label(_("reset to default blend colorspace"));
+    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_NONE), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -2101,6 +2056,7 @@ static void _blendif_options_callback(GtkButton *button,
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
         dt_gui_add_class(mi, "active_menu_item");
       }
+      gtk_widget_set_sensitive(mi, !cst_locked);
       g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                              GINT_TO_POINTER(DEVELOP_BLEND_CS_LAB), NULL);
       g_signal_connect(G_OBJECT(mi), "activate",
@@ -2115,6 +2071,7 @@ static void _blendif_options_callback(GtkButton *button,
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
       dt_gui_add_class(mi, "active_menu_item");
     }
+    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_DISPLAY), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -2128,6 +2085,7 @@ static void _blendif_options_callback(GtkButton *button,
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
       dt_gui_add_class(mi, "active_menu_item");
     }
+    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_SCENE), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -2701,7 +2659,6 @@ void dt_iop_gui_update_masks(dt_iop_module_t *module)
 // (see _blendif_commit). All of this only ever touches new parametric forms /
 // explicit user actions, so legacy edits are unaffected.
 
-static void _build_masks_list(dt_iop_module_t *module);
 
 // destroys and rebuilds the whole mask-list widget tree, including the very
 // widget a drag-and-drop just landed on. Doing that synchronously from inside
@@ -2761,7 +2718,7 @@ static void _toggle_solo_group(dt_iop_module_t *module, const guint key, GList *
 static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id);
 static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t id);
 
-static dt_masks_form_t *_module_mask_group(dt_iop_module_t *module)
+dt_masks_form_t *_module_mask_group(dt_iop_module_t *module)
 {
   if(!module || !module->blend_params) return NULL;
   dt_masks_form_t *grp =
@@ -2769,7 +2726,7 @@ static dt_masks_form_t *_module_mask_group(dt_iop_module_t *module)
   return (grp && (grp->type & DT_MASKS_GROUP)) ? grp : NULL;
 }
 
-static dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id)
+dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id)
 {
   for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
   {
@@ -2849,7 +2806,7 @@ static dt_masks_point_group_t *_refine_first_drawn_point(dt_masks_form_t *grp)
 
 // a group point's effective operator for grouping: a missing operator (the base)
 // reads as union, matching how the list folds runs.
-static dt_masks_state_t _eff_group_op(const int state)
+dt_masks_state_t _eff_group_op(const int state)
 {
   const dt_masks_state_t op = state & DT_MASKS_STATE_OP;
   return op ? op : DT_MASKS_STATE_UNION;
@@ -2861,7 +2818,7 @@ static dt_masks_state_t _eff_group_op(const int state)
 // group_start set, or -- for back-compat with edits made before the field existed --
 // wherever the effective operator changes. Old edits have no break marked and never
 // had two adjacent same-op groups, so detection is bit-identical for them.
-static gboolean _starts_group(GList *l)
+gboolean _starts_group(GList *l)
 {
   if(!l || !l->prev) return TRUE;
   const dt_masks_point_group_t *cur = l->data;
@@ -5354,6 +5311,11 @@ static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd, GtkWidget *row_
   // an already-active solo-edit for the same reason.
 }
 
+// defined below (it needs the per-row/-header selection appliers); declared
+// here so the in-place refresh can also settle the selection, which solo can
+// clear out from under it.
+static void _update_row_selection(dt_iop_gui_blend_data_t *bd);
+
 // refresh every shape/parametric row currently in the list from the module's
 // mask group, in place (see _update_shape_row_state) -- used by solo, which can
 // flip the hidden state of every other row at once.
@@ -5381,6 +5343,16 @@ static void _refresh_all_shape_rows(dt_iop_module_t *module)
   else            dt_gui_remove_class(GTK_WIDGET(bd->masks_list_box), "mask-solo-active");
   _apply_empty_group_dimming(GTK_WIDGET(bd->masks_list_box), solo_active);
   _apply_group_header_dimming(GTK_WIDGET(bd->masks_list_box), solo_active, bd->solo_group_key);
+  // callers reach here after _sync_hidden_to_form_visible, which drops the
+  // panel selection when the selected element is the one that just became
+  // hidden (see its own "a hidden shape must not remain the selected one").
+  // _update_shape_row_state does not paint the selection -- only the solo
+  // class -- so without this the deselected row kept its selected border until
+  // something else forced a rebuild. That gap is exactly what a partial move
+  // off the rebuild path costs: the rebuild used to repaint everything, so
+  // each state an in-place path replaces it for has to be accounted for
+  // explicitly.
+  _update_row_selection(bd);
 }
 
 // every member formid of the run (group) headed by `cid` (the run's own head
@@ -5826,9 +5798,15 @@ static GtkWidget *_make_op_combo(GtkWidget **inner,
 // called after any (element or group) solo change: an active solo-edit whose
 // element just became hidden by the new solo no longer has anything visible
 // on canvas to edit -- it does not make sense to solo-edit something that
-// isn't shown, so drop it and restore full-group canvas editability. A full
-// list rebuild is needed (not the lightweight per-row refresh) because the
-// solo-edit toggle button's checked state is only set at row-construction time.
+// isn't shown, so drop it and restore full-group canvas editability.
+// No refresh of its own: both callers (_toggle_solo_form, _toggle_solo_group)
+// run _refresh_all_shape_rows immediately afterwards, which repaints the
+// cleared row's badge and solo class from bd->soloedit_formid anyway. This
+// used to force a full list rebuild here "because the solo-edit toggle
+// button's checked state is only set at row-construction time" -- there is no
+// such button any more, solo-edit is a check menu item built fresh each time a
+// row's actions menu opens (see _build_shape_actions_menu), so the only thing
+// the state still drives in a row is the badge/class pair above.
 static void _clear_soloedit_if_hidden(dt_iop_module_t *module, dt_masks_form_t *grp)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -5838,7 +5816,6 @@ static void _clear_soloedit_if_hidden(dt_iop_module_t *module, dt_masks_form_t *
   {
     bd->soloedit_formid = INVALID_MASKID;
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-    _queue_masks_list_rebuild(module);
   }
 }
 
@@ -5927,7 +5904,7 @@ static void _masks_clear_solo_state(dt_iop_gui_blend_data_t *bd)
 // still points at the (stale) edit group, so the overlay is not refreshed until
 // the next unrelated action (e.g. adding a shape). Rebuild the on-canvas edit
 // overlay from what remains so the ghost outlines clear immediately.
-static void _refresh_canvas_edit(dt_iop_module_t *module)
+void _refresh_canvas_edit(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd && bd->masks_shown != DT_MASKS_EDIT_OFF)
@@ -5950,7 +5927,16 @@ static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t 
 
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _sync_hidden_to_form_visible(module);
-  _queue_masks_list_rebuild(module);
+  // one bit on one point: refresh that row in place instead of tearing the
+  // whole list down and rebuilding it. _update_shape_row_state renders every
+  // DISABLE-dependent part of a row (status badge, dimmed handle/name/opacity/
+  // action icon, insensitive editors) -- a strict superset of what
+  // _make_shape_row sets from the same bit at construction time -- so a rebuild
+  // has nothing to add here beyond the visible flash and the re-docking of any
+  // open parametric editor. Mirrors _invert_element, which is the same
+  // one-bit-on-one-point gesture and already took this path.
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  _update_shape_row_state(bd, _masks_row_widget(bd, id), pt);
   _refresh_canvas_edit(module);
 }
 
@@ -5958,7 +5944,7 @@ static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t 
 // confirmation and no rebuild of its own -- callers that need those (the plain
 // reset button, group-layout preset apply) add them on top. Factored out so a
 // preset apply can reuse the exact same wipe instead of re-deriving it.
-static void _masks_reset_mask_core(dt_iop_module_t *module)
+void _masks_reset_mask_core(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -7152,38 +7138,8 @@ static int _op_index_for_state(const int state)
 // state (an empty group has nothing to serialize); a shape drawn into one
 // "realizes" it into a real operator-run. Each keeps its place via below_fid, a
 // member id of the real run directly below it (INVALID = bottom of the list).
-typedef struct dt_masks_empty_group_t
-{
-  dt_masks_state_t op;
-  dt_masks_state_t within;  // within-group combine bits (DT_MASKS_STATE_WITHIN subset)
-  dt_mask_id_t below_fid;
-  // opacity a shape realizing this empty group should start at. Normally 1.0
-  // (see dt_masks_gui_form_save_creation); a group restored from a saved
-  // layout preset carries the preset's own remembered opacity instead.
-  float opacity;
-  // group refinement staged before the group has any members. Per-group
-  // refinement normally lives in each member's dt_masks_point_group_t, so an
-  // empty group has nowhere to put it -- without this, selecting the sole
-  // (empty) group of a fresh or just-reset mask silently fell back to global
-  // scope, making "group" and "whole mask" refinement indistinguishable. Held
-  // here and adopted by the run when the group is realized (see the realize
-  // block in _build_masks_list and _masks_shape_to_empty_drop).
-  dt_masks_refinement_t refinement;
-  // the group's displayed number, held here for the same reason real groups
-  // hold theirs in bd->group_ordinals: it is an identity, not a position. 0 =
-  // not assigned yet. Carried across the empty <-> real transitions so a group
-  // that is emptied and refilled keeps the number it had.
-  int ordinal;
-  // custom name (ctrl+click the title, mirrors dt_masks_point_group_t.name on
-  // a real group's members) -- NULL until set. Carried across the empty <->
-  // real transitions the same way refinement/ordinal already are: adopted
-  // onto every member's own pt->name when the group is realized (see
-  // _masks_shape_to_empty_drop and the realize block in _build_masks_list),
-  // and stashed back here from the run's head member when a group empties
-  // out (see _group_reset_members and friends), instead of being silently
-  // dropped as it was before.
-  gchar *name;
-} dt_masks_empty_group_t;
+// dt_masks_empty_group_t now lives in blend_gui_internal.h -- masks_gui_presets.c
+// needs its layout to capture/restore a group-layout preset.
 
 // frees an empty group and its owned name -- use everywhere an empty group is
 // discarded (free(eg) alone would leak eg->name) or as a GDestroyNotify
@@ -7301,7 +7257,7 @@ static const char *_empty_group_name(const void *eg)
   return (g && g->name && g->name[0]) ? g->name : NULL;
 }
 
-static dt_masks_empty_group_t *_empty_group_new(const dt_masks_state_t op,
+dt_masks_empty_group_t *_empty_group_new(const dt_masks_state_t op,
                                                 const dt_masks_state_t within,
                                                 const dt_mask_id_t below_fid)
 {
@@ -7369,395 +7325,6 @@ void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module)
   }
 }
 
-// ---- group-layout presets --------------------------------------------------
-// A "layout" is just the skeleton of a flexi mask: for each group (real or
-// still-empty), its between-group operator, within-group combine mode, and
-// opacity -- nothing else -- no shapes, no channel/raster elements. Captured/
-// applied as a plain array of _flexi_group_entry_t, one entry per group,
-// bottom-to-top (index 0 is the permanent foundation group), matching the
-// bottom-up convention already used by grp->points and bd->empty_groups
-// everywhere else in this file.
-//
-// Presets are stored in the regular presets database table (reusing its schema
-// and INSERT/DELETE machinery directly) under a fixed, fake operation name that
-// no real image operation will ever register -- so they are global, shared by
-// every module's flexi panel, rather than scoped to one iop like ordinary
-// module presets. The higher-level preset GUI/apply helpers in gui/presets.c
-// are not reusable here: they apply a preset by overwriting a module's whole
-// params blob, which is not what a group-layout preset means (it never touches
-// mask elements, let alone the rest of a module's parameters).
-#define FLEXI_GROUP_PRESET_OP "flexi_mask_groups"
-// v1 stored a plain dt_masks_state_t per group (no opacity); v2 added opacity,
-// see _flexi_preset_list_load's version-gated blob decoding.
-#define FLEXI_GROUP_PRESET_VERSION 2
-
-// one captured/restored group: its between-group + within-group state bits,
-// and its opacity (the run's member average when captured from real shapes,
-// or the empty group's own remembered opacity).
-typedef struct _flexi_group_entry_t
-{
-  dt_masks_state_t state;
-  float opacity;
-} _flexi_group_entry_t;
-
-// bottom-to-top ordered snapshot of the module's current group skeleton,
-// mirroring exactly how _build_masks_list merges grp->points runs with
-// bd->empty_groups (unanchored empties at the very bottom, each anchored empty
-// directly above the run it anchors to). Caller frees the returned array.
-static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int *n_out)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  dt_masks_form_t *grp = _module_mask_group(module);
-  GArray *out = g_array_new(FALSE, FALSE, sizeof(_flexi_group_entry_t));
-
-  for(GList *e = bd->empty_groups; e; e = g_list_next(e))
-  {
-    dt_masks_empty_group_t *eg = e->data;
-    const gboolean anchored =
-      grp && dt_is_valid_maskid(eg->below_fid) && _group_point(grp, eg->below_fid);
-    if(!anchored)
-    {
-      const _flexi_group_entry_t ent = { eg->op | eg->within, eg->opacity };
-      g_array_append_val(out, ent);
-    }
-  }
-
-  for(GList *l = grp ? grp->points : NULL; l;)
-  {
-    const dt_masks_state_t op = _eff_group_op(((dt_masks_point_group_t *)l->data)->state);
-    GList *formids = NULL;
-    gboolean all_screen = TRUE, all_isect = TRUE;
-    float opacity_sum = 0.0f;
-    int opacity_n = 0;
-    GList *m = l;
-    for(; m; m = g_list_next(m))
-    {
-      dt_masks_point_group_t *pm = m->data;
-      if(m != l && _starts_group(m))
-        break;
-      if(!dt_masks_get_from_id(darktable.develop, pm->formid))
-        continue;
-      formids = g_list_prepend(formids, GINT_TO_POINTER(pm->formid));
-      if(!(pm->state & DT_MASKS_STATE_SCREEN))
-        all_screen = FALSE;
-      if(!(pm->state & DT_MASKS_STATE_ISECT))
-        all_isect = FALSE;
-      opacity_sum += pm->opacity;
-      opacity_n++;
-    }
-    if(formids)
-    {
-      const dt_masks_state_t within =
-        all_isect ? DT_MASKS_STATE_ISECT : (all_screen ? DT_MASKS_STATE_SCREEN : 0);
-      // the group's own opacity control has no single absolute value of its
-      // own (it is a delta/ratio control, see _props_row_populate) -- the
-      // member average is the representative value a preset can meaningfully
-      // restore.
-      const _flexi_group_entry_t ent =
-        { op | within, opacity_n ? opacity_sum / opacity_n : 1.0f };
-      g_array_append_val(out, ent);
-
-      for(GList *e = bd->empty_groups; e; e = g_list_next(e))
-      {
-        dt_masks_empty_group_t *eg = e->data;
-        gboolean match = FALSE;
-        for(GList *mm = formids; mm; mm = g_list_next(mm))
-          if(GPOINTER_TO_INT(mm->data) == eg->below_fid)
-          {
-            match = TRUE;
-            break;
-          }
-        if(match)
-        {
-          const _flexi_group_entry_t eent = { eg->op | eg->within, eg->opacity };
-          g_array_append_val(out, eent);
-        }
-      }
-    }
-    g_list_free(formids);
-    l = m;
-  }
-
-  *n_out = out->len;
-  return (_flexi_group_entry_t *)g_array_free(out, FALSE);
-}
-
-// replaces the module's whole mask -- shapes AND empty-group skeleton alike --
-// with a fresh skeleton of empty groups matching `entries` (same bottom-to-top
-// encoding as capture). Never asks for confirmation itself; callers that might
-// be discarding real shapes confirm first (see _flexi_preset_item_activate).
-static void _flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  _masks_reset_mask_core(module);
-  dt_masks_empty_group_t *base = NULL;
-  for(int i = 0; i < n; i++)
-  {
-    dt_masks_empty_group_t *eg =
-      _empty_group_new(entries[i].state, entries[i].state, INVALID_MASKID);
-    eg->opacity = entries[i].opacity;
-    bd->empty_groups = g_list_append(bd->empty_groups, eg);
-    if(i == 0)
-      base = eg; // index 0 is the bottom (foundation) group, see capture/apply's
-                 // shared bottom-to-top convention
-  }
-  bd->scaffold_seeded = TRUE;
-  // give the panel an immediate, unambiguous starting point -- with more than
-  // one group, nothing would otherwise be selected until the user clicks one
-  bd->selected_empty = base;
-  _build_masks_list(module);
-  _refresh_canvas_edit(module);
-}
-
-static gboolean _flexi_layout_has_content(dt_iop_module_t *module)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  dt_masks_form_t *grp = _module_mask_group(module);
-  return (grp && grp->points) || bd->empty_groups;
-}
-
-// reads back every user-saved layout preset's name + entry array. Caller frees
-// with _flexi_preset_list_free.
-typedef struct _flexi_preset_t
-{
-  gchar *name;
-  _flexi_group_entry_t *entries;
-  int n;
-} _flexi_preset_t;
-
-static GList *_flexi_preset_list_load(void)
-{
-  GList *out = NULL;
-  sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "SELECT name, op_params, op_version FROM data.presets"
-                              " WHERE operation = ?1 AND writeprotect = 0 ORDER BY name",
-                              -1,
-                              &stmt,
-                              NULL);
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
-  while(sqlite3_step(stmt) == SQLITE_ROW)
-  {
-    const int blob_size = sqlite3_column_bytes(stmt, 1);
-    const int version = sqlite3_column_int(stmt, 2);
-    _flexi_group_entry_t *entries = NULL;
-    int n = 0;
-    if(version >= 2)
-    {
-      // current format: a plain array of _flexi_group_entry_t
-      n = blob_size / (int)sizeof(_flexi_group_entry_t);
-      if(n > 0)
-      {
-        entries = malloc(n * sizeof(_flexi_group_entry_t));
-        memcpy(entries, sqlite3_column_blob(stmt, 1), n * sizeof(_flexi_group_entry_t));
-      }
-    }
-    else
-    {
-      // v1: a plain array of dt_masks_state_t, no opacity -- default to fully opaque
-      n = blob_size / (int)sizeof(dt_masks_state_t);
-      if(n > 0)
-      {
-        const dt_masks_state_t *old = sqlite3_column_blob(stmt, 1);
-        entries = malloc(n * sizeof(_flexi_group_entry_t));
-        for(int i = 0; i < n; i++)
-        {
-          entries[i].state = old[i];
-          entries[i].opacity = 1.0f;
-        }
-      }
-    }
-    if(!entries)
-      continue;
-    _flexi_preset_t *p = malloc(sizeof(_flexi_preset_t));
-    p->name = g_strdup((const gchar *)sqlite3_column_text(stmt, 0));
-    p->entries = entries;
-    p->n = n;
-    out = g_list_append(out, p);
-  }
-  sqlite3_finalize(stmt);
-  return out;
-}
-
-static void _flexi_preset_free(gpointer data)
-{
-  _flexi_preset_t *p = data;
-  g_free(p->name);
-  free(p->entries);
-  free(p);
-}
-
-static void _flexi_preset_list_free(GList *presets)
-{
-  g_list_free_full(presets, _flexi_preset_free);
-}
-
-static void _flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry_t *entries, int n)
-{
-  sqlite3_stmt *stmt;
-  // clang-format off
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-      "INSERT OR REPLACE INTO data.presets"
-      " (name, description, operation, op_version, op_params, enabled,"
-      "  blendop_params, blendop_version, multi_priority, multi_name,"
-      "  model, maker, lens, iso_min, iso_max, exposure_min, exposure_max,"
-      "  aperture_min, aperture_max, focal_length_min, focal_length_max,"
-      "  writeprotect, autoapply, filter, def, format, multi_name_hand_edited)"
-      " VALUES (?1, '', ?2, ?3, ?4, 1, NULL, 0, 0, '', '%', '%', '%', 0, 0, 0, 0,"
-      "         0, 0, 0, 0, 0, 0, 0, 0, 0, 0)",
-      -1, &stmt, NULL);
-  // clang-format on
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, name, -1, SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, FLEXI_GROUP_PRESET_VERSION);
-  DT_DEBUG_SQLITE3_BIND_BLOB(
-    stmt, 4, entries, (int)(n * sizeof(_flexi_group_entry_t)), SQLITE_TRANSIENT);
-  sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
-}
-
-static void _flexi_preset_delete_from_db(const gchar *name)
-{
-  sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(
-    dt_database_get(darktable.db),
-    "DELETE FROM data.presets WHERE operation = ?1 AND name = ?2 AND writeprotect = 0",
-    -1,
-    &stmt,
-    NULL);
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, name, -1, SQLITE_TRANSIENT);
-  sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
-}
-
-// applying a preset discards any real shapes currently in the mask (it only
-// ever restores the group skeleton) -- confirm first, same as the plain reset
-// button, whenever there is anything to lose.
-static void
-_flexi_preset_apply_confirmed(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
-{
-  if(_flexi_layout_has_content(module) &&
-     !dt_gui_show_yes_no_dialog(_("apply mask layout preset?"),
-                                "",
-                                _("this replaces the group layout and removes every shape "
-                                  "currently in this mask. continue?")))
-    return;
-  _flexi_layout_apply(module, entries, n);
-}
-
-static void _flexi_preset_item_activate(GtkWidget *item, dt_iop_module_t *module)
-{
-  const _flexi_group_entry_t *entries = g_object_get_data(G_OBJECT(item), "entries");
-  const int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "n"));
-  if(entries && n > 0)
-    _flexi_preset_apply_confirmed(module, entries, n);
-}
-
-static gboolean
-_flexi_preset_item_press(GtkWidget *item, GdkEventButton *ev, dt_iop_module_t *module)
-{
-  if(ev->button != GDK_BUTTON_SECONDARY)
-    return FALSE;
-  const gchar *name = g_object_get_data(G_OBJECT(item), "preset-name");
-  if(!name)
-    return FALSE;
-  if(dt_gui_show_yes_no_dialog(_("delete preset?"),
-                               "",
-                               _("do you really want to delete the mask layout "
-                                 "preset `%s'?"),
-                               name))
-    _flexi_preset_delete_from_db(name);
-  return TRUE;
-}
-
-static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
-{
-  if(!_flexi_layout_has_content(module))
-  {
-    dt_control_log(_("the mask has no groups yet, nothing to save as a preset"));
-    return;
-  }
-  char *name = dt_gui_show_standalone_string_dialog(
-    _("save mask layout preset"),
-    _("enter a name for this preset\n"
-      "(only the group layout is saved, not the shapes/channels inside it):"),
-    _("preset name"),
-    _("cancel"),
-    _("save"));
-  if(!name)
-    return;
-  if(!*name)
-    dt_control_log(_("please give the preset a name"));
-  else if(!strcmp(name, _("basic")) || !strcmp(name, _("add + subtract + intersect")))
-    dt_control_log(_("`%s' is a reserved preset name, please pick another one"), name);
-  else
-  {
-    int n = 0;
-    _flexi_group_entry_t *entries = _flexi_layout_capture(module, &n);
-    if(n > 0)
-      _flexi_preset_save_to_db(name, entries, n);
-    free(entries);
-  }
-  g_free(name);
-}
-
-// appends a "presets" section (group-layout presets) directly to `menu` --
-// used by _blendif_options_callback, the "blend mask" header's hamburger
-// (formerly its own separate hamburger on the "mask elements" header)
-static void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
-{
-  static const _flexi_group_entry_t _preset_basic[] = { { DT_MASKS_STATE_UNION, 1.0f } };
-  static const _flexi_group_entry_t _preset_ops3[] =
-    { { DT_MASKS_STATE_UNION, 1.0f },
-      { DT_MASKS_STATE_DIFFERENCE, 1.0f },
-      { DT_MASKS_STATE_INTERSECTION, 1.0f } };
-
-  GtkWidget *header = gtk_menu_item_new_with_label(_("group layout presets"));
-  gtk_widget_set_sensitive(header, FALSE);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
-
-  struct
-  {
-    const char *name;
-    const _flexi_group_entry_t *entries;
-    int n;
-  } builtins[] = { { N_("basic"), _preset_basic, 1 },
-                   { N_("add + subtract + intersect"), _preset_ops3, 3 } };
-  for(size_t i = 0; i < G_N_ELEMENTS(builtins); i++)
-  {
-    GtkWidget *item = gtk_menu_item_new_with_label(_(builtins[i].name));
-    g_object_set_data(G_OBJECT(item), "entries", (gpointer)builtins[i].entries);
-    g_object_set_data(G_OBJECT(item), "n", GINT_TO_POINTER(builtins[i].n));
-    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-  }
-
-  GList *user_presets = _flexi_preset_list_load();
-  if(user_presets)
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  for(GList *p = user_presets; p; p = g_list_next(p))
-  {
-    _flexi_preset_t *preset = p->data;
-    GtkWidget *item = gtk_menu_item_new_with_label(preset->name);
-    gtk_widget_set_tooltip_text(item, _("click to apply, right-click to delete"));
-    _flexi_group_entry_t *entries_copy = malloc(preset->n * sizeof(_flexi_group_entry_t));
-    memcpy(entries_copy, preset->entries, preset->n * sizeof(_flexi_group_entry_t));
-    g_object_set_data_full(G_OBJECT(item), "entries", entries_copy, free);
-    g_object_set_data(G_OBJECT(item), "n", GINT_TO_POINTER(preset->n));
-    g_object_set_data_full(G_OBJECT(item), "preset-name", g_strdup(preset->name), g_free);
-    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate), module);
-    g_signal_connect(
-      G_OBJECT(item), "button-press-event", G_CALLBACK(_flexi_preset_item_press), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-  }
-  _flexi_preset_list_free(user_presets);
-
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *save_item = gtk_menu_item_new_with_label(_("save current layout as preset…"));
-  g_signal_connect(G_OBJECT(save_item), "activate", G_CALLBACK(_flexi_preset_save_clicked), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), save_item);
-}
 
 // If `src` is the SOLE member of its group, removing it would leave the group empty.
 // Rather than let the group vanish, build an empty-group placeholder carrying the
@@ -7930,16 +7497,75 @@ static void _stash_base_tooltip(GtkWidget *w)
   g_object_set_data_full(G_OBJECT(w), "dt-base-tooltip", base, g_free);
 }
 
+// append `hint` (may be "") to a widget's construction-time tooltip, replacing
+// whatever hint was appended last time round
+static void _append_tooltip_hint(GtkWidget *w, const char *hint)
+{
+  const char *base = g_object_get_data(G_OBJECT(w), "dt-base-tooltip");
+  if(!base) return;
+  gchar *tt = g_strconcat(base, hint, NULL);
+  gtk_widget_set_tooltip_text(w, tt);
+  g_free(tt);
+}
+
 // re-append (or drop) the disabled-state hint on a widget previously stashed
 // with _stash_base_tooltip, matching its current sensitivity
 static void _restate_tooltip_hint(GtkWidget *w, const gboolean has_target,
                                   const char *no_target_hint)
 {
-  const char *base = g_object_get_data(G_OBJECT(w), "dt-base-tooltip");
-  if(!base) return;
-  gchar *tt = g_strconcat(base, has_target ? "" : no_target_hint, NULL);
-  gtk_widget_set_tooltip_text(w, tt);
-  g_free(tt);
+  _append_tooltip_hint(w, has_target ? "" : no_target_hint);
+}
+
+// Which group a newly added element will land in.
+//
+// Normally the explicit panel selection. But when the mask has exactly one
+// group there is nowhere else an element could go, so that group is the target
+// whether or not it happens to be selected -- making the user click the only
+// candidate first is pure ceremony. `implicit` records which of the two
+// happened, so the add buttons can say which in their tooltips.
+//
+// Single source of truth for both halves of "where does this land": the button
+// sensitivity/tooltips (_update_add_target_sensitivity) and the insertion
+// itself (_recompute_insert_hint). Those derived it separately before, which is
+// exactly how the enabled state and the actual destination drift apart.
+typedef struct dt_masks_add_target_t
+{
+  dt_masks_empty_group_t *empty;  // staged (member-less) group, or NULL
+  dt_mask_id_t cid;               // real group's cid, or INVALID_MASKID
+  gboolean valid;
+  gboolean implicit;              // resolved from "only one group", not a selection
+} dt_masks_add_target_t;
+
+static dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  dt_masks_add_target_t t = { NULL, INVALID_MASKID, FALSE, FALSE };
+
+  if(bd->selected_empty)
+  {
+    t.empty = bd->selected_empty;
+    t.valid = TRUE;
+  }
+  else if(dt_is_valid_maskid(bd->panel_selected_group_cid)
+          && grp && _group_point(grp, bd->panel_selected_group_cid))
+  {
+    t.cid = bd->panel_selected_group_cid;
+    t.valid = TRUE;
+  }
+  else if(_group_count(module) == 1)
+  {
+    // the sole group is either the one staged group or the one real run, whose
+    // cid is its first point in grp->points order -- the same convention
+    // _build_masks_list uses for group headers (see _group_cid_of_form)
+    if(bd->empty_groups)
+      t.empty = bd->empty_groups->data;
+    else if(grp && grp->points)
+      t.cid = ((const dt_masks_point_group_t *)grp->points->data)->formid;
+    t.valid = t.empty != NULL || dt_is_valid_maskid(t.cid);
+    t.implicit = t.valid;
+  }
+  return t;
 }
 
 // whole-mask (global scope) refinement is always reachable: it operates on
@@ -8022,21 +7648,24 @@ static void _update_refine_sensitivity(dt_iop_module_t *module)
 static void _update_add_target_sensitivity(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  // adding a shape / parametric mask / imported shape targets the selected group.
-  // With nothing selected there is no target -- even with only a single group in
-  // total (the panel auto-selects it once on open, see masks_selection_seeded,
-  // but an explicit deselect must actually disable adding, not fall back to an
-  // implicit target) -- so the element-add controls are disabled until a group
-  // is (re)selected.
-  const gboolean has_target =
-    dt_is_valid_maskid(bd->panel_selected_group_cid) || bd->selected_empty;
-  const char *no_target_hint = _("\n(select a group first)");
+  // adding a shape / parametric mask / raster / imported shape targets the group
+  // _resolve_add_target picks: the selected one, or the sole group when there is
+  // only one (nothing to disambiguate). Only a real ambiguity -- several groups,
+  // none selected -- disables the controls.
+  const dt_masks_add_target_t target = _resolve_add_target(module);
+  const gboolean has_target = target.valid;
+  // say where the element will land, not just when it cannot land anywhere
+  const char *hint =
+    !has_target ? _("\n(select a group first: there is more than one, so where"
+                    " the new element goes is ambiguous)")
+    : target.implicit ? _("\n(added to the only group)")
+                      : _("\n(added to the selected group)");
   gtk_widget_set_sensitive(bd->masks_combo, has_target);
   for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
     if(bd->masks_shapes[n])
     {
       gtk_widget_set_sensitive(bd->masks_shapes[n], has_target);
-      _restate_tooltip_hint(bd->masks_shapes[n], has_target, no_target_hint);
+      _append_tooltip_hint(bd->masks_shapes[n], hint);
     }
   if(bd->masks_param_channels_box)
     gtk_widget_set_sensitive(bd->masks_param_channels_box, has_target);
@@ -8048,7 +7677,7 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
         l; l = g_list_delete_link(l, l))
     {
       gtk_widget_set_sensitive(GTK_WIDGET(l->data), has_target);
-      _restate_tooltip_hint(GTK_WIDGET(l->data), has_target, no_target_hint);
+      _append_tooltip_hint(GTK_WIDGET(l->data), hint);
     }
 
   // raster and import/reuse also add an element to the target group, so they
@@ -8058,7 +7687,7 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     gtk_widget_set_sensitive(bd->masks_raster_add_btn, has_target);
     gchar *tt = g_strconcat(_("add a raster mask element: use another module's mask as an element\n"
                               "of this group, combined with the group's operator"),
-                            has_target ? "" : no_target_hint, NULL);
+                            hint, NULL);
     gtk_widget_set_tooltip_text(bd->masks_raster_add_btn, tt);
     g_free(tt);
   }
@@ -8067,7 +7696,7 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     gtk_widget_set_sensitive(bd->masks_import_btn, has_target);
     gchar *tt = g_strconcat(_("import an existing shape, or reuse another\n"
                               "module's mask (click to pick one)"),
-                            has_target ? "" : no_target_hint, NULL);
+                            hint, NULL);
     gtk_widget_set_tooltip_text(bd->masks_import_btn, tt);
     g_free(tt);
   }
@@ -8078,10 +7707,9 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
 }
 
 // recompute the insertion hint read by dt_masks_gui_form_save_creation from the
-// current target (selected empty group, else selected real group; with nothing
-// selected there is no target -- even with a single group, which the panel
-// auto-selects once on open (see masks_selection_seeded) but does not force
-// back on after an explicit deselect).
+// current target. The target itself is resolved by _resolve_add_target, shared
+// with the add-button sensitivity so the destination and the enabled state can
+// never disagree -- including the "only one group, so no selection needed" case.
 static void _recompute_insert_hint(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -8094,9 +7722,11 @@ static void _recompute_insert_hint(dt_iop_module_t *module)
   bd->insert_empty = NULL;
   bd->insert_opacity = 1.0f;
 
-  if(bd->selected_empty)
+  const dt_masks_add_target_t target = _resolve_add_target(module);
+
+  if(target.empty)
   {
-    const dt_masks_empty_group_t *eg = bd->selected_empty;
+    const dt_masks_empty_group_t *eg = target.empty;
     bd->insert_active = TRUE;
     bd->insert_realize_empty = TRUE;
     bd->insert_op = eg->op;
@@ -8110,14 +7740,14 @@ static void _recompute_insert_hint(dt_iop_module_t *module)
       g_list_free(run);
     }
   }
-  else if(dt_is_valid_maskid(bd->panel_selected_group_cid) && grp)
+  else if(dt_is_valid_maskid(target.cid) && grp)
   {
-    const dt_masks_point_group_t *pt = _group_point(grp, bd->panel_selected_group_cid);
+    const dt_masks_point_group_t *pt = _group_point(grp, target.cid);
     if(pt)
     {
       bd->insert_active = TRUE;
       bd->insert_op = pt->state & DT_MASKS_STATE_OP;
-      GList *run = _selected_group_formids(grp, bd->panel_selected_group_cid);
+      GList *run = _selected_group_formids(grp, target.cid);
       if(run)
       {
         bd->insert_after_fid = GPOINTER_TO_INT(run->data);  // top member of the run
@@ -9717,11 +9347,17 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
       _sync_hidden_to_form_visible(module);
     }
   }
-  // deferred: also reachable directly from the row's own actions menu (its
-  // "solo edit" entry, see _shape_menu_toggle_soloedit), still mid-dispatch
-  // on that menu item -- see _group_delete_shapes above for why this must
-  // not be synchronous
-  _queue_masks_list_rebuild(module);
+  // solo-edit changes which shape the canvas lets you edit, never the list
+  // structure: the only thing it drives in the list is the solo badge and the
+  // row's solo class on the old and new rows (see _update_shape_row_state),
+  // both of which _refresh_all_shape_rows repaints from bd->soloedit_formid.
+  // This is also why it no longer has to be deferred -- this is reachable
+  // mid-dispatch from the row's own actions menu ("solo edit", see
+  // _shape_menu_toggle_soloedit), and a full rebuild would have destroyed that
+  // menu's own row underneath it; _refresh_all_shape_rows only mutates
+  // existing widgets, so it is safe synchronously (same reasoning as
+  // _toggle_solo_group).
+  _refresh_all_shape_rows(module);
 }
 
 // change an empty group's operator from its header op chip
@@ -14253,7 +13889,7 @@ static void _masks_panel_pack(dt_iop_module_t *module,
   _refresh_lowop_badges(module);
 }
 
-static void _build_masks_list(dt_iop_module_t *module)
+void _build_masks_list(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd || !bd->masks_list_box) return;
@@ -15766,212 +15402,6 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   gtk_widget_set_visible(bd->masks_options_btn, !module->hide_enable_button);
 
   DT_LEAVE_GUI_UPDATE();
-}
-
-// let the utility-mode host lib re-apply its live visibility (see
-// _reconfigure in masks_flexi_host.c) -- only relevant for
-// MASKS_PANEL_POS_UTILITY, a no-op otherwise (its expander just stays
-// hidden)
-static void _masks_flexi_host_reconfigure(void)
-{
-  dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-  if(host && darktable.develop->proxy.masks_flexi_host.reconfigure)
-    darktable.develop->proxy.masks_flexi_host.reconfigure(host);
-}
-
-
-// human-readable mask type name for the collapsed corner icon's tooltip
-static const char *_mask_mode_label(const uint32_t mask_mode)
-{
-  switch(mask_mode)
-  {
-    case DEVELOP_MASK_DISABLED: return _("no mask");
-    case DEVELOP_MASK_ENABLED: return _("uniformly");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK: return _("drawn mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL: return _("parametric mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK_CONDITIONAL: return _("drawn & parametric mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER: return _("raster mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI: return _("flexi mask");
-    default: return _("mask");
-  }
-}
-
-static void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
-{
-  dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, TRUE, TRUE);
-}
-
-// move bd->relocatable_box back into this module's own expander (the
-// "embedded" home), clearing the host's bookkeeping if this module was the
-// one occupying it. No-op if the box is already home. This only happens
-// when the module stops being eligible to be hosted at all (lost focus,
-// position switched away from utility/left/right, or module torn down) --
-// having no mask does NOT release it anymore, see _masks_flexi_relocate.
-// Whether the box is actually revealed once back home always follows real
-// focus (darktable.develop->gui_module == module), for every position
-// preference: an expanded-but-unfocused module must never show its full
-// blend/mask panel inline, whether it fell back here because the position
-// preference IS "embedded", or because it used to be hosted elsewhere
-// (utility/left/right) and just lost focus -- both are the same case from
-// the user's point of view (BUG, previously only the first was covered).
-static void _masks_flexi_release(dt_iop_module_t *module)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd || !bd->relocatable_box) return;
-  const gboolean show = darktable.develop->gui_module == module;
-
-  const gboolean was_hosted = darktable.develop->proxy.masks_flexi_host.hosted_module == module;
-  if(was_hosted)
-    darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
-
-  if(bd->masks_right_cluster)
-  {
-    if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
-      _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
-    if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-      _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
-  }
-  gtk_widget_set_visible(bd->masks_blend_header, TRUE);
-
-  _reparent_into(GTK_WIDGET(bd->relocatable_box), bd->iopw, FALSE, FALSE);
-  gtk_widget_set_visible(GTK_WIDGET(bd->relocatable_box), show);
-  gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
-  gtk_widget_set_visible(bd->masks_options_btn, TRUE);
-  // back in the module's own content -- restore the embedded inset (see
-  // darktable.css's "#blending-tabs.blending-tabs-embedded")
-  dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
-
-  if(was_hosted)
-  {
-    _masks_flexi_host_reconfigure();
-    // dev->gui_module is already updated to the new focus target (or NULL)
-    // by the time this runs -- see dt_iop_gui_set_focus in imageop.c, which
-    // sets it before calling lose_focus on the outgoing module
-    if(darktable.develop->gui_module)
-    {
-      // another module is about to (or already did) take over hosting --
-      // just re-apply whatever visibility the panel already had, not a new
-      // user choice, so don't persist it
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui,
-                                      dt_ui_flexi_panel_is_collapsed(darktable.gui->ui), FALSE, FALSE);
-    }
-    else
-    {
-      // nothing is focused anymore: there's no content left to host, so
-      // hide the panel and its corner icon entirely instead of leaving an
-      // empty panel visible
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
-    }
-  }
-}
-
-// (re)decide where this module's masking panel content should live, per
-// the current "plugins/darkroom/blend/masks_panel_position" preference:
-// embedded (default) keeps it inline; utility uses the masks_flexi_host lib
-// (LEFT_CENTER); left/right use the genuine extra grid panel owned by
-// gui/gtk.c (dt_ui_flexi_panel_*). Hosting only depends on the module being
-// focused and masking-capable -- NOT on the current mask mode, so the
-// mode-select row stays reachable via the panel/corner-icon even with the
-// mask off (see request: "overlay button ... should show" with no mask).
-// With no mask the panel auto-collapses to just that icon; the collapse is
-// visual only (persist=FALSE) so it doesn't clobber the user's own
-// expand/collapse preference for when a mask *is* active.
-static void _masks_flexi_relocate(dt_iop_module_t *module)
-{
-  if(!module || !module->blend_data) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd->relocatable_box) return;
-
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
-  const uint32_t mask_mode = module->blend_params->mask_mode;
-  const gboolean is_focused = darktable.develop->gui_module == module;
-  const gboolean want_hosted = pos != MASKS_PANEL_POS_EMBEDDED && is_focused;
-
-  GtkWidget *target = NULL;
-  if(want_hosted && pos == MASKS_PANEL_POS_UTILITY)
-  {
-    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-    GtkBox *content_box = darktable.develop->proxy.masks_flexi_host.content_box;
-    if(host && content_box) target = GTK_WIDGET(content_box);
-  }
-  else if(want_hosted)  // LEFT / RIGHT
-  {
-    target = dt_ui_flexi_panel_content(darktable.gui->ui);
-    dt_ui_flexi_panel_set_side(darktable.gui->ui, pos == MASKS_PANEL_POS_RIGHT);
-  }
-
-  if(!target)
-  {
-    // an expanded-but-unfocused module must not show its full blend/mask
-    // panel inline, whatever the position preference (see
-    // _masks_flexi_release, which gates visibility on real focus)
-    _masks_flexi_release(module);
-    return;
-  }
-
-  dt_iop_module_t *prev = darktable.develop->proxy.masks_flexi_host.hosted_module;
-  if(prev && prev != module)
-    _masks_flexi_release(prev);
-
-  darktable.develop->proxy.masks_flexi_host.hosted_module = module;
-  _reparent_into(GTK_WIDGET(bd->relocatable_box), target, FALSE, FALSE);
-  // being hosted implies focused (see want_hosted above); make sure the box
-  // is visible in case an earlier embedded-and-unfocused state left it hidden.
-  gtk_widget_show(GTK_WIDGET(bd->relocatable_box));
-  _masks_flexi_host_reconfigure();
-
-  if(pos == MASKS_PANEL_POS_UTILITY)
-  {
-    GtkBox *actions_box = darktable.develop->proxy.masks_flexi_host.actions_box;
-    if(actions_box)
-    {
-      _reparent_into(bd->suppress, GTK_WIDGET(actions_box), FALSE, FALSE);
-      _reparent_into(bd->showmask, GTK_WIDGET(actions_box), FALSE, FALSE);
-    }
-    gtk_widget_set_visible(bd->masks_blend_header, FALSE);
-  }
-  else
-  {
-    if(bd->masks_right_cluster)
-    {
-      if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
-        _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
-      if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-        _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
-    }
-    gtk_widget_set_visible(bd->masks_blend_header, TRUE);
-    // hosted elsewhere now -- drop the embedded inset, the host already
-    // provides its own (see darktable.css's "#blending-tabs.blending-tabs-embedded")
-    dt_gui_remove_class(bd->masks_blend_header, "blending-tabs-embedded");
-  }
-
-  // in the utility lib, that lib's own header hamburger is repurposed to
-  // this same options menu (see masks_flexi_host.c's view_enter and
-  // dt_iop_gui_blend_masks_options_popup) -- don't show a second, redundant
-  // one in the mode-select row too
-  gtk_widget_set_visible(bd->masks_options_btn, pos != MASKS_PANEL_POS_UTILITY);
-
-  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
-  {
-    dt_ui_flexi_panel_set_icon(darktable.gui->ui, mask_mode != DEVELOP_MASK_DISABLED,
-                               _mask_mode_label(mask_mode));
-    // with no mask there's nothing to show but the mode picker, so collapse
-    // to the corner icon; otherwise apply the user's stored preference --
-    // neither is a fresh user choice, so persist=FALSE either way
-    const gboolean want_collapsed = mask_mode == DEVELOP_MASK_DISABLED
-      ? TRUE
-      : dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
-    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, want_collapsed, TRUE, FALSE);
-
-    // arrow points the direction the panel collapses toward (its docked side)
-    dtgtk_button_set_paint(DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
-                           pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
-    gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
-  }
-  else
-  {
-    gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
-  }
 }
 
 void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module)
