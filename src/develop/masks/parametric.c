@@ -172,6 +172,19 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
 
   dt_develop_blend_params_t tmp = *saved;
   tmp.blendif = p->blendif;
+  if(p->single)
+  {
+    const dt_iop_gui_blendif_channel_t *channels =
+      dt_develop_blendif_channels_for_csp((int)p->colorspace);
+    if(channels)
+    {
+      const dt_iop_gui_blendif_channel_t *ch = &channels[p->channel];
+      if(p->disabled & 1)
+        tmp.blendif &= ~(1u << ch->param_channels[0]);
+      if(p->disabled & 2)
+        tmp.blendif &= ~(1u << ch->param_channels[1]);
+    }
+  }
   memcpy(tmp.blendif_parameters, p->blendif_parameters,
          sizeof(tmp.blendif_parameters));
   memcpy(tmp.blendif_boost_factors, p->blendif_boost_factors,

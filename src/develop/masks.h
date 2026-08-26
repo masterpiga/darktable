@@ -117,17 +117,21 @@ typedef enum dt_masks_state_t
   // stay independently settable. Additive new operator, so legacy edits
   // (which never set it) render identically.
   DT_MASKS_STATE_OP_SCREEN = 1 << 13,
-  // bypass: the group is skipped entirely by the group fold, contributing
-  // nothing to the accumulated mask -- the "temporarily disable this group"
+  // disabled (group-level modifier): the group is skipped entirely by the group fold,
+  // contributing nothing to the accumulated mask -- the "temporarily disable this group"
   // switch. Unlike the operators above it is a MODIFIER, not an alternative:
   // it is set alongside the group's real between-group operator (which stays
-  // in the state untouched), so un-bypassing restores exactly the operator the
-  // group had. It is part of DT_MASKS_STATE_OP so that a bypassed group and an
+  // in the state untouched), so re-enabling restores exactly the operator the
+  // group had. It is part of DT_MASKS_STATE_OP so that a disabled group and an
   // adjacent same-operator live one still read as two distinct runs (see
   // _eff_group_op / _starts_group in blend_gui.c). Use
   // DT_MASKS_STATE_OP_COMBINE wherever the *combining* operator alone is
   // wanted. Additive new bit, 0 in every pre-existing edit.
-  DT_MASKS_STATE_OP_BYPASS = 1 << 14,
+  DT_MASKS_STATE_OP_DISABLE = 1 << 14,
+  DT_MASKS_STATE_OP_BYPASS = DT_MASKS_STATE_OP_DISABLE,
+  // disabled (element-level): this element is skipped by the group fold,
+  // contributing nothing to the group's mask. Defaults off.
+  DT_MASKS_STATE_DISABLE = 1 << 17,
   // invert-output (per-run, "true" group invert): flips this run's own finished
   // sub-mask (1-grp) after its members have folded together and any per-group
   // refinement has been applied, but before it composites onto the accumulator
@@ -140,13 +144,13 @@ typedef enum dt_masks_state_t
   // then unioned is 1 almost everywhere). This is what lets one specific
   // first-class group's own contribution be inverted without touching its
   // members' own state and without affecting any other group in the module.
-  // A MODIFIER like bypass, not an operator of its own: broadcast across every
-  // member of the run (same reason bypass is), so it is part of
-  // DT_MASKS_STATE_OP and participates in run-boundary detection like bypass
+  // A MODIFIER like disable, not an operator of its own: broadcast across every
+  // member of the run (same reason disable is), so it is part of
+  // DT_MASKS_STATE_OP and participates in run-boundary detection like disable
   // does. Additive new bit, 0 in every pre-existing edit.
   DT_MASKS_STATE_OP_INVERT = 1 << 16,
   // the between-group combining operators: exactly one of these is set on a
-  // group's members (bypass/invert are modifiers on top, not one of these)
+  // group's members (disable/invert are modifiers on top, not one of these)
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
                             | DT_MASKS_STATE_INTERSECTION
                             | DT_MASKS_STATE_DIFFERENCE
@@ -155,7 +159,7 @@ typedef enum dt_masks_state_t
                             | DT_MASKS_STATE_MULTIPLY
                             | DT_MASKS_STATE_OP_SCREEN,
   DT_MASKS_STATE_OP = DT_MASKS_STATE_OP_COMBINE
-                     | DT_MASKS_STATE_OP_BYPASS
+                     | DT_MASKS_STATE_OP_DISABLE
                      | DT_MASKS_STATE_OP_INVERT,
   // within-group combine mode: how a group's own members fold together (before
   // the finished sub-mask is composited onto the stack by the group's OP).
