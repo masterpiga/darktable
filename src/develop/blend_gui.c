@@ -330,34 +330,11 @@ enum _channel_indexes
   CHANNEL_INDEX_hz = 6,
 };
 
-static void _blendop_blendif_update_tab(dt_iop_module_t *module, const int tab);
 static dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
 static dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
 static void _queue_masks_list_rebuild(dt_iop_module_t *module);
 static void _auto_expand_selected_row(dt_iop_module_t *module, const dt_mask_id_t id);
 
-static inline dt_iop_colorspace_type_t _blendif_colorpicker_cst(dt_iop_gui_blend_data_t *data)
-{
-  dt_iop_colorspace_type_t cst = dt_iop_color_picker_get_active_cst(data->module);
-  if(cst == IOP_CS_NONE)
-  {
-    switch(data->channel_tabs_csp)
-    {
-      case DEVELOP_BLEND_CS_LAB:
-        cst = IOP_CS_LAB;
-        break;
-      case DEVELOP_BLEND_CS_RGB_DISPLAY:
-      case DEVELOP_BLEND_CS_RGB_SCENE:
-        cst = IOP_CS_RGB;
-        break;
-      case DEVELOP_BLEND_CS_RAW:
-      case DEVELOP_BLEND_CS_NONE:
-        cst = IOP_CS_NONE;
-        break;
-    }
-  }
-  return cst;
-}
 
 static gboolean _blendif_blend_parameter_enabled(dt_develop_blend_colorspace_t csp,
                                                  const dt_develop_blend_mode_t mode)
@@ -387,21 +364,13 @@ static gboolean _blendif_blend_parameter_enabled(dt_develop_blend_colorspace_t c
 // and channel-descriptor array instead of a fixed dt_iop_gui_blend_data_t --
 // shared by the module-wide shared editor (bp/data->channel) and per-row
 // parametric-form editors (p->blendif_boost_factors/dt_develop_blendif_channels_for_csp),
-// see _get_boost_factor below and _param_row_boost_factor (per-row).
+// see _param_row_boost_factor (per-row).
 static inline float _get_boost_factor_ex(const float *blendif_boost_factors,
                                          const dt_iop_gui_blendif_channel_t *channels,
                                          const int channel,
                                          const int in_out)
 {
   return exp2f(blendif_boost_factors[channels[channel].param_channels[in_out]]);
-}
-
-static inline float _get_boost_factor(const dt_iop_gui_blend_data_t *data,
-                                      const int channel,
-                                      const int in_out)
-{
-  return _get_boost_factor_ex(data->module->blend_params->blendif_boost_factors,
-                              data->channel, channel, in_out);
 }
 
 // normalize a raw picked pixel into each channel's [0,1] display range,
@@ -461,17 +430,6 @@ static void _blendif_scale_ex(const float *blendif_boost_factors,
       break;
   }
 #undef BOOST
-}
-
-static void _blendif_scale(dt_iop_gui_blend_data_t *data,
-                           dt_iop_colorspace_type_t cst,
-                           const float *in,
-                           float *out,
-                           const dt_iop_order_iccprofile_info_t *work_profile,
-                           const int in_out)
-{
-  _blendif_scale_ex(data->module->blend_params->blendif_boost_factors, data->channel,
-                    cst, in, out, work_profile, in_out);
 }
 
 static void _blendif_cook(const dt_iop_colorspace_type_t cst,
@@ -1309,54 +1267,15 @@ static void _blendop_masks_combine_callback(GtkWidget *combo,
     {
       bp->blendif |= unused_channels << 16;
     }
-    _blendop_blendif_update_tab(data->module, data->tab);
+    // the shared tabbed editor that used to be refreshed here is gone; the
+    // history item below re-runs gui_update, which repaints the per-row
+    // parametric editors from their own forms
   }
 
   dt_dev_add_history_item(darktable.develop, data->module, TRUE);
 }
 
-static void _blendop_blendif_highlight_changed_tabs(dt_iop_module_t *module)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  dt_develop_blend_params_t *bp = module->blend_params;
-  dt_develop_blend_params_t *dp = module->default_blendop_params;
 
-  for(int tab = 0; bd->channel[tab].label; tab++)
-  {
-    gboolean is_changed = FALSE;
-
-    const dt_iop_gui_blendif_channel_t *channel = &bd->channel[tab];
-
-    for(int in_out = 1; in_out >= 0; in_out--)
-    {
-      const dt_develop_blendif_channels_t ch = channel->param_channels[in_out];
-
-      float *parameters = &(bp->blendif_parameters[4 * ch]);
-      float *defaults = &(dp->blendif_parameters[4 * ch]);
-
-      for(int k = 0; k < 4; k++)
-        is_changed |= parameters[k] != defaults[k];
-
-      // has polarity changed from default?
-      is_changed |= ((bp->blendif ^ dp->blendif) & (1 << (ch + 16)));
-    }
-
-    GtkWidget *label = gtk_notebook_get_tab_label(bd->channel_tabs, gtk_notebook_get_nth_page(bd->channel_tabs, tab));
-    if(is_changed)
-      dt_gui_add_class(label, "changed");
-    else
-      dt_gui_remove_class(label, "changed");
-  }
-}
-
-// commit a classic (legacy multi-channel) blendif edit as a module history
-// item. Flexi single-channel forms no longer share this editor/commit path --
-// each has its own permanently-visible editor writing straight to its own
-// form (see _build_param_row_editor / _param_form_commit).
-static void _blendif_commit(dt_iop_gui_blend_data_t *data)
-{
-  dt_dev_add_history_item(darktable.develop, data->module, TRUE);
-}
 
 static float _log10_scale_callback(GtkWidget *self,
                                   const float inval,
@@ -1414,26 +1333,45 @@ static float _magnifier_scale_callback(GtkWidget *self,
   return outval;
 }
 
+// defined below, next to the other per-row editor helpers
+static const dt_masks_param_row_editor_t *_param_row_editor_resolve(
+    GtkWidget *widget, const dt_iop_gui_blendif_channel_t **channels_out, int *ch_out);
+
+// toggle a slider's alternative (log / magnifier) display scale and restate its
+// head label to match. The slider always belongs to a per-row parametric editor
+// now -- the shared tabbed editor this used to also serve is gone, and with it
+// bd->filter[], whose head labels were NULL here (silently dropping the "(log)"
+// / "(zoom)" suffix this function exists to show).
 static int _blendop_blendif_disp_alternative_worker(GtkWidget *widget,
                                                     dt_iop_module_t *module,
                                                     const int mode,
                                                     float (*scale_callback)(GtkWidget*, float, int),
                                                     const char *label)
 {
-  dt_iop_gui_blend_data_t *data = module->blend_data;
   GtkDarktableGradientSlider *slider = (GtkDarktableGradientSlider *)widget;
-
-  const int in_out = (slider == data->filter[1].slider) ? 1 : 0;
 
   dtgtk_gradient_slider_multivalue_set_scale_callback
     (slider,
      (mode == 1) ? scale_callback : NULL);
 
-  gchar *text = g_strdup_printf("%s%s",
-                                (in_out == 0) ? _("input") : _("output"),
-                                (mode == 1) ? label : "");
-  gtk_label_set_text(data->filter[in_out].head, text);
-  g_free(text);
+  const dt_iop_gui_blendif_channel_t *channels;
+  int ch;
+  const dt_masks_param_row_editor_t *ed =
+    _param_row_editor_resolve(widget, &channels, &ch);
+  if(ed)
+  {
+    const int in_out = (widget == GTK_WIDGET(ed->filter[1].slider)) ? 1 : 0;
+    gchar *text = g_strdup_printf("%s%s",
+                                  (in_out == 0) ? _("input") : _("output"),
+                                  (mode == 1) ? label : "");
+    if(ed->filter[in_out].head)
+      gtk_label_set_text(ed->filter[in_out].head, text);
+    // the compact layout shows a second copy of the same head label beside the
+    // slider (see _apply_param_row_filter_layout); keep the two in step
+    if(ed->filter[in_out].head_compact)
+      gtk_label_set_text(ed->filter[in_out].head_compact, text);
+    g_free(text);
+  }
 
   return (mode == 1) ? 1 : 0;
 }
@@ -1453,12 +1391,6 @@ static int _blendop_blendif_disp_alternative_log(GtkWidget *widget,
 {
   return _blendop_blendif_disp_alternative_worker
     (widget, module, mode, _log10_scale_callback, _(" (log)"));
-}
-
-static void _blendop_blendif_disp_alternative_reset(GtkWidget *widget,
-                                                    dt_iop_module_t *module)
-{
-  (void) _blendop_blendif_disp_alternative_worker(widget, module, 0, NULL, "");
 }
 
 
@@ -1505,176 +1437,7 @@ static inline int _blendif_print_digits_picker(const float value)
   return (value < 10.0f) ? 2 : 1;
 }
 
-static void _update_gradient_slider_pickers(GtkWidget *callback_dummy,
-                                            dt_iop_module_t *module)
-{
-  dt_iop_gui_blend_data_t *data = module->blend_data;
 
-  dt_iop_color_picker_set_cst(module, _blendop_blendif_get_picker_colorspace(data));
-
-  float *raw_mean, *raw_min, *raw_max;
-
-  DT_ENTER_GUI_UPDATE();
-
-  for(int in_out = 1; in_out >= 0; in_out--)
-  {
-    if(in_out)
-    {
-      raw_mean = module->picked_output_color;
-      raw_min = module->picked_output_color_min;
-      raw_max = module->picked_output_color_max;
-    }
-    else
-    {
-      raw_mean = module->picked_color;
-      raw_min = module->picked_color_min;
-      raw_max = module->picked_color_max;
-    }
-
-    if((gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(data->colorpicker))
-        || gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(data->colorpicker_set_values)))
-       && (raw_min[0] != FLT_MAX))
-    {
-      float picker_mean[8], picker_min[8], picker_max[8];
-      float cooked[8];
-
-      const dt_develop_blend_colorspace_t blend_csp = data->channel_tabs_csp;
-      const dt_iop_colorspace_type_t cst = _blendif_colorpicker_cst(data);
-      const dt_iop_order_iccprofile_info_t *work_profile =
-        (blend_csp == DEVELOP_BLEND_CS_RGB_SCENE)
-          ? dt_ioppr_get_pipe_current_profile_info(module, module->dev->full.pipe)
-          : dt_ioppr_get_iop_work_profile_info(module, module->dev->iop);
-
-      _blendif_scale(data, cst, raw_mean, picker_mean, work_profile, in_out);
-      _blendif_scale(data, cst, raw_min, picker_min, work_profile, in_out);
-      _blendif_scale(data, cst, raw_max, picker_max, work_profile, in_out);
-      _blendif_cook(cst, raw_mean, cooked, work_profile);
-
-      gchar *text = g_strdup_printf
-        ("(%.*f)",
-         _blendif_print_digits_picker(cooked[data->tab]), cooked[data->tab]);
-
-      dtgtk_gradient_slider_multivalue_set_picker_meanminmax(
-          data->filter[in_out].slider,
-          CLAMP(picker_mean[data->tab], 0.0f, 1.0f),
-          CLAMP(picker_min[data->tab], 0.0f, 1.0f),
-          CLAMP(picker_max[data->tab], 0.0f, 1.0f));
-      gtk_label_set_text(data->filter[in_out].picker_label, text);
-
-      g_free(text);
-    }
-    else
-    {
-      dtgtk_gradient_slider_multivalue_set_picker(data->filter[in_out].slider, NAN);
-      gtk_label_set_text(data->filter[in_out].picker_label, "");
-    }
-  }
-
-  DT_LEAVE_GUI_UPDATE();
-}
-
-static void _blendop_blendif_update_tab(dt_iop_module_t *module,
-                                        const int tab)
-{
-  dt_iop_gui_blend_data_t *data = module->blend_data;
-  dt_develop_blend_params_t *bp = module->blend_params;
-  dt_develop_blend_params_t *dp = module->default_blendop_params;
-
-  DT_ENTER_GUI_UPDATE();
-
-  const dt_iop_gui_blendif_channel_t *channel = &data->channel[tab];
-
-  for(int in_out = 1; in_out >= 0; in_out--)
-  {
-    const dt_develop_blendif_channels_t ch = channel->param_channels[in_out];
-    dt_iop_gui_blendif_filter_t *sl = &data->filter[in_out];
-
-    float *parameters = &(bp->blendif_parameters[4 * ch]);
-    float *defaults = &(dp->blendif_parameters[4 * ch]);
-
-    const int polarity = !(bp->blendif & (1 << (ch + 16)));
-
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(sl->polarity), polarity);
-
-    dtgtk_gradient_slider_multivalue_set_marker
-      (sl->slider,
-       polarity
-       ? GRADIENT_SLIDER_MARKER_LOWER_OPEN_BIG
-       : GRADIENT_SLIDER_MARKER_UPPER_OPEN_BIG, 0);
-
-    dtgtk_gradient_slider_multivalue_set_marker
-      (sl->slider,
-       polarity
-       ? GRADIENT_SLIDER_MARKER_UPPER_FILLED_BIG
-       : GRADIENT_SLIDER_MARKER_LOWER_FILLED_BIG, 1);
-
-    dtgtk_gradient_slider_multivalue_set_marker
-      (sl->slider,
-       polarity
-       ? GRADIENT_SLIDER_MARKER_UPPER_FILLED_BIG
-       : GRADIENT_SLIDER_MARKER_LOWER_FILLED_BIG, 2);
-
-    dtgtk_gradient_slider_multivalue_set_marker
-      (sl->slider,
-       polarity
-       ? GRADIENT_SLIDER_MARKER_LOWER_OPEN_BIG
-       : GRADIENT_SLIDER_MARKER_UPPER_OPEN_BIG, 3);
-
-    dt_pthread_mutex_lock(&data->lock);
-    for(int k = 0; k < 4; k++)
-    {
-      dtgtk_gradient_slider_multivalue_set_value(sl->slider, parameters[k], k);
-      dtgtk_gradient_slider_multivalue_set_resetvalue(sl->slider, defaults[k], k);
-    }
-    dt_pthread_mutex_unlock(&data->lock);
-
-    const float boost_factor = _get_boost_factor(data, tab, in_out);
-    for(int k = 0; k < 4; k++)
-    {
-      char text[256];
-      channel->scale_print(parameters[k], boost_factor, text, sizeof(text));
-      gtk_label_set_text(sl->label[k], text);
-    }
-
-    dtgtk_gradient_slider_multivalue_clear_stops(sl->slider);
-
-    for(int k = 0; k < channel->numberstops; k++)
-    {
-      dtgtk_gradient_slider_multivalue_set_stop
-        (sl->slider, channel->colorstops[k].stoppoint,
-         channel->colorstops[k].color);
-    }
-
-    dtgtk_gradient_slider_multivalue_set_increment(sl->slider, channel->increment);
-
-    if(channel->altdisplay)
-    {
-      data->altmode[tab][in_out] =
-        channel->altdisplay(GTK_WIDGET(sl->slider), module, data->altmode[tab][in_out]);
-    }
-    else
-    {
-      _blendop_blendif_disp_alternative_reset(GTK_WIDGET(sl->slider), module);
-    }
-  }
-
-  _update_gradient_slider_pickers(NULL, module);
-
-  const gboolean boost_factor_enabled = channel->boost_factor_enabled;
-  float boost_factor = 0.0f;
-  if(boost_factor_enabled)
-  {
-    boost_factor =
-      bp->blendif_boost_factors[channel->param_channels[0]] - channel->boost_factor_offset;
-  }
-  gtk_widget_set_sensitive(GTK_WIDGET(data->channel_boost_factor_slider),
-                           boost_factor_enabled);
-  dt_bauhaus_slider_set(GTK_WIDGET(data->channel_boost_factor_slider), boost_factor);
-
-  DT_LEAVE_GUI_UPDATE();
-
-  _blendop_blendif_highlight_changed_tabs(module);
-}
 
 
 
@@ -2018,164 +1781,16 @@ static void _blendop_masks_polarity_callback(GtkGestureSingle *gesture,
   dt_control_queue_redraw_widget(togglebutton);
 }
 
+// A blend-level color pick. The two shared-editor pickers this used to also
+// serve (bd->colorpicker / bd->colorpicker_set_values) went away with the
+// classic tabbed blendif editor and were never rebuilt, so both were NULL and
+// neither branch could ever match a real picker widget. Every pick that
+// reaches this now belongs to a parametric row's own editor.
 gboolean blend_color_picker_apply(dt_iop_module_t *module,
                                   GtkWidget *picker,
                                   dt_dev_pixelpipe_t *pipe)
 {
-  dt_iop_gui_blend_data_t *data = module->blend_data;
-
-  if(picker == data->colorpicker_set_values)
-  {
-    DT_TRY_GUI_UPDATE(TRUE);
-
-    dt_develop_blend_params_t *bp = module->blend_params;
-
-    const int tab = data->tab;
-    dt_aligned_pixel_t raw_min, raw_max;
-    float picker_min[8] DT_ALIGNED_PIXEL, picker_max[8] DT_ALIGNED_PIXEL;
-    dt_aligned_pixel_t picker_values;
-
-    // output-channel editing was dropped along with the classic tabbed
-    // blendif editor (flexi has no UI to reach it), so this always resolves
-    // to the input channel now
-    const int in_out = 0;
-
-    if(in_out)
-    {
-      for(size_t i = 0; i < 4; i++)
-      {
-        raw_min[i] = module->picked_output_color_min[i];
-        raw_max[i] = module->picked_output_color_max[i];
-      }
-    }
-    else
-    {
-      for(size_t i = 0; i < 4; i++)
-      {
-        raw_min[i] = module->picked_color_min[i];
-        raw_max[i] = module->picked_color_max[i];
-      }
-    }
-
-    const dt_iop_gui_blendif_channel_t *channel = &data->channel[data->tab];
-    dt_develop_blendif_channels_t ch = channel->param_channels[in_out];
-    dt_iop_gui_blendif_filter_t *sl = &data->filter[in_out];
-
-    float *parameters = &(bp->blendif_parameters[4 * ch]);
-
-    const dt_develop_blend_colorspace_t blend_csp = data->channel_tabs_csp;
-    const dt_iop_colorspace_type_t cst = _blendif_colorpicker_cst(data);
-    const dt_iop_order_iccprofile_info_t *work_profile =
-      (blend_csp == DEVELOP_BLEND_CS_RGB_SCENE)
-        ? dt_ioppr_get_pipe_current_profile_info(module, pipe)
-        : dt_ioppr_get_iop_work_profile_info(module, module->dev->iop);
-
-    gboolean reverse_hues = FALSE;
-    if(cst == IOP_CS_HSL && tab == CHANNEL_INDEX_H)
-    {
-      if((raw_max[3] - raw_min[3]) < (raw_max[0] - raw_min[0])
-         && raw_min[3] < 0.5f && raw_max[3] > 0.5f)
-      {
-        raw_max[0] = raw_max[3] < 0.5f ? raw_max[3] + 0.5f : raw_max[3] - 0.5f;
-        raw_min[0] = raw_min[3] < 0.5f ? raw_min[3] + 0.5f : raw_min[3] - 0.5f;
-        reverse_hues = TRUE;
-      }
-    }
-    else if((cst == IOP_CS_LCH
-             && tab == CHANNEL_INDEX_h)
-            || (cst == IOP_CS_JZCZHZ
-                && tab == CHANNEL_INDEX_hz))
-    {
-      if((raw_max[3] - raw_min[3]) < (raw_max[2] - raw_min[2])
-         && raw_min[3] < 0.5f && raw_max[3] > 0.5f)
-      {
-        raw_max[2] = raw_max[3] < 0.5f ? raw_max[3] + 0.5f : raw_max[3] - 0.5f;
-        raw_min[2] = raw_min[3] < 0.5f ? raw_min[3] + 0.5f : raw_min[3] - 0.5f;
-        reverse_hues = TRUE;
-      }
-    }
-
-    _blendif_scale(data, cst, raw_min, picker_min, work_profile, in_out);
-    _blendif_scale(data, cst, raw_max, picker_max, work_profile, in_out);
-
-    const float feather = 0.01f;
-
-    if(picker_min[tab] > picker_max[tab])
-    {
-      const float tmp = picker_min[tab];
-      picker_min[tab] = picker_max[tab];
-      picker_max[tab] = tmp;
-    }
-
-    picker_values[0] = CLAMP(picker_min[tab] - feather, 0.f, 1.f);
-    picker_values[1] = CLAMP(picker_min[tab] + feather, 0.f, 1.f);
-    picker_values[2] = CLAMP(picker_max[tab] - feather, 0.f, 1.f);
-    picker_values[3] = CLAMP(picker_max[tab] + feather, 0.f, 1.f);
-
-    if(picker_values[1] > picker_values[2])
-    {
-      picker_values[1] = CLAMP(picker_min[tab], 0.f, 1.f);
-      picker_values[2] = CLAMP(picker_max[tab], 0.f, 1.f);
-    }
-
-    picker_values[0] = CLAMP(picker_values[0], 0.f, picker_values[1]);
-    picker_values[3] = CLAMP(picker_values[3], picker_values[2], 1.f);
-
-    dt_pthread_mutex_lock(&data->lock);
-    for(int k = 0; k < 4; k++)
-      dtgtk_gradient_slider_multivalue_set_value(sl->slider, picker_values[k], k);
-    dt_pthread_mutex_unlock(&data->lock);
-
-    // update picked values
-    _update_gradient_slider_pickers(NULL, module);
-
-    const float boost_factor = _get_boost_factor(data, data->tab, in_out);
-    for(int k = 0; k < 4; k++)
-    {
-      char text[256];
-      channel->scale_print
-        (dtgtk_gradient_slider_multivalue_get_value(sl->slider, k),
-         boost_factor, text, sizeof(text));
-      gtk_label_set_text(sl->label[k], text);
-    }
-
-    DT_LEAVE_GUI_UPDATE();
-
-    // save values to parameters
-    dt_pthread_mutex_lock(&data->lock);
-    for(int k = 0; k < 4; k++)
-      parameters[k] = dtgtk_gradient_slider_multivalue_get_value(sl->slider, k);
-    dt_pthread_mutex_unlock(&data->lock);
-
-    // de-activate processing of this channel if maximum span is selected
-    if(parameters[1] == 0.0f && parameters[2] == 1.0f)
-      bp->blendif &= ~(1 << ch);
-    else
-      bp->blendif |= (1 << ch);
-
-    // set the polarity of the channel to include the picked values
-    if(reverse_hues == ((bp->mask_combine & DEVELOP_COMBINE_INV) == DEVELOP_COMBINE_INV))
-      bp->blendif &= ~(1 << (16 + ch));
-    else
-      bp->blendif |= 1 << (16 + ch);
-
-    // commit through _blendif_commit so a parametric *form* receives the picked
-    // values (a plain module history item would not reach the form, and the
-    // update below re-derives the scratch bp from the form -- losing the pick)
-    _blendif_commit(data);
-    _blendop_blendif_update_tab(module, tab);
-
-    return TRUE;
-  }
-  else if(picker == data->colorpicker)
-  {
-    DT_GUARD_GUI_UPDATE(TRUE);
-
-    _update_gradient_slider_pickers(NULL, module);
-
-    return TRUE;
-  }
-  else return _param_row_picker_apply(module, picker, pipe); // maybe a per-row picker instead
+  return _param_row_picker_apply(module, picker, pipe);
 }
 
 static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
@@ -2224,9 +1839,13 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
     dt_dev_add_new_history_item(darktable.develop, module, FALSE);
     dt_iop_gui_update(module);
 
-    if(cst_old != _blendop_blendif_get_picker_colorspace(bd) &&
-       (gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->colorpicker)) ||
-        gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->colorpicker_set_values))))
+    // re-arm a picker that is currently up, so it samples in the new
+    // colorspace. This used to test bd->colorpicker/bd->colorpicker_set_values
+    // directly, but those belonged to the removed shared editor and were NULL:
+    // the pickers that can be live now are a parametric row's own, so ask the
+    // picker proxy which module is picking instead of naming widgets.
+    if(cst_old != _blendop_blendif_get_picker_colorspace(bd)
+       && dt_iop_color_picker_get_active_cst(module) != IOP_CS_NONE)
     {
       dt_iop_color_picker_set_cst(bd->module, _blendop_blendif_get_picker_colorspace(bd));
       dt_dev_reprocess_all(bd->module->dev);
@@ -3451,13 +3070,15 @@ static inline gpointer _refine_scope_key(dt_iop_gui_blend_data_t *bd)
 {
   if(!bd) return GUINT_TO_POINTER(0);
   if(bd->masks_refine_scope_kind == REFINE_SCOPE_ELEMENT)
-    return GUINT_TO_POINTER((guint32)bd->masks_refine_scope_formid);
+    return GUINT_TO_POINTER(dt_masks_refine_key_element(bd->masks_refine_scope_formid));
   else if(bd->masks_refine_scope_kind == REFINE_SCOPE_GROUP)
-    return GUINT_TO_POINTER((guint32)bd->masks_refine_scope_formid | 0x80000000U);
+    return GUINT_TO_POINTER(dt_masks_refine_key_group(bd->masks_refine_scope_formid));
   else if(bd->masks_refine_scope_kind == REFINE_SCOPE_EMPTY_GROUP)
+    // a staged group has no members and no id, so it is keyed by its own
+    // address. It never reaches the renderer (see dt_masks_refine_bypass_commit).
     return (gpointer)bd->selected_empty;
   else
-    return GUINT_TO_POINTER(0);
+    return GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL);
 }
 
 static void _refine_update_expanded_state(dt_iop_module_t *module)
@@ -3713,6 +3334,38 @@ static void _refine_control_changed(GtkWidget *w, dt_iop_gui_blend_data_t *bd)
 // fields at once); for the per-form scopes the controls are zeroed and the
 // neutral (enabled==0) refinement is broadcast, restoring the byte-identical
 // renderer fast path.
+// clear the module-wide ("whole mask") refinement back to neutral, in the
+// caller's blend_params. Returns TRUE if `details` was non-zero: crossing it to
+// zero has to rebuild the scharr-derived detail mask, which an ordinary history
+// item does not force, so the caller owes a dt_dev_reprocess_all.
+// Shared by the refinement panel's own reset button and "reset mask" -- the two
+// must clear exactly the same fields, or resetting the mask leaves a
+// whole-mask refinement behind that nothing on screen still accounts for.
+static gboolean _refine_clear_global(dt_iop_module_t *module)
+{
+  dt_develop_blend_params_t *bp = module->blend_params;
+  const gboolean had_details = bp->details != 0.0f;
+  bp->details = 0.0f;
+  bp->feathering_guide = _refine_guide_values[0];
+  bp->feathering_radius = 0.0f;
+  bp->blur_radius = 0.0f;
+  bp->brightness = 0.0f;
+  bp->contrast = 0.0f;
+  return had_details;
+}
+
+// is any module-wide refinement actually set? (so "reset mask" can skip
+// committing a history item when there is nothing to clear)
+static gboolean _refine_global_is_set(const dt_iop_module_t *module)
+{
+  const dt_develop_blend_params_t *bp = module->blend_params;
+  return bp->details != 0.0f
+    || bp->feathering_radius != 0.0f
+    || bp->blur_radius != 0.0f
+    || bp->brightness != 0.0f
+    || bp->contrast != 0.0f;
+}
+
 static void _refine_reset_clicked(GtkWidget *btn, dt_iop_gui_blend_data_t *bd)
 {
   if(DT_IN_GUI_UPDATE() || !bd || !bd->blend_inited || bd->masks_refine_updating)
@@ -3725,14 +3378,7 @@ static void _refine_reset_clicked(GtkWidget *btn, dt_iop_gui_blend_data_t *bd)
 
   if(bd->masks_refine_scope_kind == REFINE_SCOPE_GLOBAL)
   {
-    dt_develop_blend_params_t *bp = bd->module->blend_params;
-    const gboolean had_details = bp->details != 0.0f;
-    bp->details = 0.0f;
-    bp->feathering_guide = _refine_guide_values[0];
-    bp->feathering_radius = 0.0f;
-    bp->blur_radius = 0.0f;
-    bp->brightness = 0.0f;
-    bp->contrast = 0.0f;
+    const gboolean had_details = _refine_clear_global(bd->module);
     dt_dev_add_history_item(darktable.develop, bd->module, TRUE);
     // details crossing to zero needs the same full reprocess the slider path does
     if(had_details)
@@ -6337,6 +5983,29 @@ static void _masks_reset_mask_core(dt_iop_module_t *module)
   bd->panel_selected_group_cid = INVALID_MASKID;
   bd->panel_selected_formid = INVALID_MASKID;
   _masks_clear_solo_state(bd);
+
+  // per-element and per-group refinements died with the shapes above (they live
+  // in dt_masks_point_group_t), but the module-wide one lives in blend_params
+  // and used to survive a reset: the mask was gone while its whole-mask
+  // refinement stayed applied, with nothing left in the panel pointing at it.
+  if(_refine_global_is_set(module))
+  {
+    const gboolean had_details = _refine_clear_global(module);
+    dt_dev_add_history_item(darktable.develop, module, TRUE);
+    if(had_details)  // see _refine_clear_global
+    {
+      dt_dev_reprocess_all(module->dev);
+      dt_control_queue_redraw();
+    }
+  }
+
+  // the refinement panel's own per-formid scratch (which rows are bypassed,
+  // which are expanded) is keyed by ids that no longer exist after the wipe
+  if(bd->masks_refine_bypassed) g_hash_table_remove_all(bd->masks_refine_bypassed);
+  if(bd->masks_refine_expanded) g_hash_table_remove_all(bd->masks_refine_expanded);
+  if(bd->masks_props_expanded) g_hash_table_remove_all(bd->masks_props_expanded);
+  bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
+  bd->masks_refine_scope_formid = INVALID_MASKID;
 }
 
 // "reset mask": remove every shape and restore the virgin add/intersect/subtract
@@ -6353,6 +6022,10 @@ static void _masks_reset_mask(GtkWidget *btn, dt_iop_module_t *module)
 
   _masks_reset_mask_core(module);
   _build_masks_list(module);
+  // repopulate the refinement controls from whatever scope the reset settled
+  // on -- the six sliders would otherwise keep displaying the values that were
+  // just cleared out from under them
+  _flexi_refine_follow_selection(module->blend_data);
   _refresh_canvas_edit(module);
 }
 
@@ -11718,8 +11391,8 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
 }
 
 // refresh this row's own slider markers/values/labels/boost-slider display from
-// its form's current values -- the per-row equivalent of _blendop_blendif_update_tab,
-// scoped to one form's one channel (no bp scratch, no bd->tab).
+// its form's current values -- what the classic tabbed editor's own per-tab
+// refresh used to do, scoped to one form's one channel (no bp scratch, no tab).
 static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
 {
   const dt_masks_point_parametric_t *p = _param_row_point(ed);
@@ -13798,92 +13471,23 @@ static dt_hash_t _masks_list_signature(dt_iop_module_t *module)
   return sig;
 }
 
-static void _build_masks_list(dt_iop_module_t *module)
+// Model-side reconciliation for the mask panel: settle everything the panel
+// derives from -- realizing a just-drawn shape into its staged group, seeding
+// the foundation group, renumbering groups, dropping stale solo state and
+// picking an initial selection -- before a single widget is built. Touches no
+// widgets.
+//
+// Split out of _build_masks_list, which interleaved this with widget packing.
+// That interleaving is why "drawing a shape takes effect" really meant "a
+// rebuild happened to run": these mutations sat on the panel's render path
+// rather than at the point of the edit.
+//
+// Returns FALSE when there is nothing to render at all.
+static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
+                                       dt_masks_form_t *grp,
+                                       const gboolean flexi)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd || !bd->masks_list_box) return;
-  if(bd->masks_rebuild_suppressed) return;
-
-  if(bd->masks_rebuild_idle_id)
-  {
-    g_source_remove(bd->masks_rebuild_idle_id);
-    bd->masks_rebuild_idle_id = 0;
-  }
-  bd->masks_rebuild_pending = FALSE;
-
-  // reconcile-by-skip: if nothing the tree is built from has changed since the
-  // last build, the rebuilt tree would be identical -- skip the whole teardown/
-  // rebuild. Turns the many defensive/duplicate rebuild requests (see the ~30
-  // call sites) into a cheap hash compare. DT_INVALID_HASH (fresh bd) never
-  // matches, so the first build always runs.
-  const dt_hash_t sig = _masks_list_signature(module);
-  if(sig != DT_INVALID_HASH && sig == bd->masks_list_sig)
-  {
-    dt_print(DT_DEBUG_MASKS,
-             "[masks] build skipped (signature unchanged, 0x%llx)",
-             (unsigned long long)sig);
-    return;
-  }
-  bd->masks_list_sig = sig;
-
-  // rebuilding destroys the rows without delivering leave events, so clear any
-  // pending hover feedback to avoid a highlight sticking on the canvas
-  if(darktable.develop->form_gui)
-  {
-    g_list_free(darktable.develop->form_gui->panel_hover_formids);
-    darktable.develop->form_gui->panel_hover_formids = NULL;
-    darktable.develop->form_gui->canvas_hover_formid = INVALID_MASKID;
-  }
-
-  // A parametric row owns two color-picker buttons (see _build_param_row_editor),
-  // and the wipe below destroys them. darktable.lib->proxy.colorpicker.picker_proxy
-  // is a GLOBAL that keeps pointing at whichever picker was last activated,
-  // including its ->colorpick widget -- so a rebuild while one of this panel's
-  // pickers is active leaves that global holding a destroyed GtkWidget. The next
-  // click on ANY picker then runs _color_picker_reset(prior_picker) on it
-  // (DTGTK_IS_TOGGLEBUTTON reads the finalized GObject's class pointer) and
-  // segfaults. This is unique to this panel: every other picker in darktable is
-  // built once in gui_init and outlives everything, so nothing upstream ever had
-  // to invalidate the global. Repro: activate a parametric row's picker, add a
-  // second channel (rebuild), click the new row's picker.
-  //
-  // Must run BEFORE the wipe -- dt_iop_color_picker_reset unsets the picker's own
-  // toggle widget, which has to still exist.
-  dt_iop_color_picker_reset(module, FALSE);
-
-  // the "add group" button (masks_new_op_box) now lives permanently in
-  // masks_toolbar (see its field comment in blend.h), not in this list, so
-  // the unconditional wipe below no longer needs to spare it first.
-  dt_gui_container_remove_children(GTK_CONTAINER(bd->masks_list_box));
-
-  // the pending-row sliders (if any) are children of masks_list_box and were
-  // just destroyed by the wipe above -- forget the stale pointers so
-  // dt_iop_gui_blend_sync_pending_ai_sliders can tell "no active session" from
-  // "the row just hasn't been (re)built yet" apart. _make_pending_shape_row
-  // repopulates these below if a pending row is actually built this pass.
-  bd->pending_ai_smoothing_slider = NULL;
-  bd->pending_ai_cleanup_slider = NULL;
-
-  // reset the formid -> row index; it is repopulated as _make_shape_row builds
-  // each row below. Cleared here (before any new rows) so it never holds a
-  // pointer to a just-destroyed row.
-  if(!bd->masks_row_map)
-    bd->masks_row_map = g_hash_table_new(g_direct_hash, g_direct_equal);
-  else
-    g_hash_table_remove_all(bd->masks_row_map);
-
-  // module->blend_params is transiently reset to defaults and then walked back
-  // up through the module's own history by dt_dev_pixelpipe_synch_all() (once
-  // per pipe, main + preview) while holding dev->history_mutex the whole time
-  // -- an unrelated masks edit on another module can trigger that walk on the
-  // GUI thread via a nested pixelpipe_change while this rebuild is deferred via
-  // g_idle_add, so an unguarded read here can catch mask_id/mask_mode mid-reset
-  // and render the panel as if the mask were empty. Taking the same (recursive)
-  // mutex for just this snapshot guarantees we only ever see a settled value.
-  dt_pthread_mutex_lock(&darktable.develop->history_mutex);
-  dt_masks_form_t *grp = _module_mask_group(module);
-  const gboolean flexi = module->blend_params->mask_mode & DEVELOP_MASK_FLEXI;
-  dt_pthread_mutex_unlock(&darktable.develop->history_mutex);
 
   // realize: a shape was just drawn into the selected empty group. Drop the empty
   // group, re-anchor the empties that sat above it onto the new run, and select
@@ -14009,12 +13613,7 @@ static void _build_masks_list(dt_iop_module_t *module)
            module->op, module->blend_params->mask_id, grp ? "ok" : "NULL",
            grp ? g_list_length(grp->points) : -1,
            g_list_length(bd->empty_groups), flexi ? 1 : 0, have_content ? 1 : 0);
-  if(!have_content)
-  {
-    gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), FALSE);
-    _recompute_insert_hint(module);
-    return;
-  }
+  if(!have_content) return FALSE;
 
   // a group can be deselected (selection toggles), so the panel may legitimately
   // have nothing selected -- even when there is only one group in total, so
@@ -14050,6 +13649,17 @@ static void _build_masks_list(dt_iop_module_t *module)
   // the pending-row placement below to target the right group/empty group.
   // Idempotent/side-effect-free to call twice in one pass.
   _recompute_insert_hint(module);
+  return TRUE;
+}
+
+// Widget-side: build the panel's row tree from the already-reconciled model.
+// Every mutation this used to perform now happens in _masks_panel_reconcile
+// above, so this only reads.
+static void _masks_panel_pack(dt_iop_module_t *module,
+                              dt_masks_form_t *grp,
+                              const gboolean flexi)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
 
   // the single shape currently being drawn on canvas for this module (if
   // any) -- not a real grp->points member yet, rendered as a disposable
@@ -14641,6 +14251,103 @@ static void _build_masks_list(dt_iop_module_t *module)
   // show_all pass above (which cannot force them on, they carry no_show_all) and
   // after every row is registered in bd->masks_row_map
   _refresh_lowop_badges(module);
+}
+
+static void _build_masks_list(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->masks_list_box) return;
+  if(bd->masks_rebuild_suppressed) return;
+
+  if(bd->masks_rebuild_idle_id)
+  {
+    g_source_remove(bd->masks_rebuild_idle_id);
+    bd->masks_rebuild_idle_id = 0;
+  }
+  bd->masks_rebuild_pending = FALSE;
+
+  // reconcile-by-skip: if nothing the tree is built from has changed since the
+  // last build, the rebuilt tree would be identical -- skip the whole teardown/
+  // rebuild. Turns the many defensive/duplicate rebuild requests (see the ~30
+  // call sites) into a cheap hash compare. DT_INVALID_HASH (fresh bd) never
+  // matches, so the first build always runs.
+  const dt_hash_t sig = _masks_list_signature(module);
+  if(sig != DT_INVALID_HASH && sig == bd->masks_list_sig)
+  {
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] build skipped (signature unchanged, 0x%llx)",
+             (unsigned long long)sig);
+    return;
+  }
+  bd->masks_list_sig = sig;
+
+  // rebuilding destroys the rows without delivering leave events, so clear any
+  // pending hover feedback to avoid a highlight sticking on the canvas
+  if(darktable.develop->form_gui)
+  {
+    g_list_free(darktable.develop->form_gui->panel_hover_formids);
+    darktable.develop->form_gui->panel_hover_formids = NULL;
+    darktable.develop->form_gui->canvas_hover_formid = INVALID_MASKID;
+  }
+
+  // A parametric row owns two color-picker buttons (see _build_param_row_editor),
+  // and the wipe below destroys them. darktable.lib->proxy.colorpicker.picker_proxy
+  // is a GLOBAL that keeps pointing at whichever picker was last activated,
+  // including its ->colorpick widget -- so a rebuild while one of this panel's
+  // pickers is active leaves that global holding a destroyed GtkWidget. The next
+  // click on ANY picker then runs _color_picker_reset(prior_picker) on it
+  // (DTGTK_IS_TOGGLEBUTTON reads the finalized GObject's class pointer) and
+  // segfaults. This is unique to this panel: every other picker in darktable is
+  // built once in gui_init and outlives everything, so nothing upstream ever had
+  // to invalidate the global. Repro: activate a parametric row's picker, add a
+  // second channel (rebuild), click the new row's picker.
+  //
+  // Must run BEFORE the wipe -- dt_iop_color_picker_reset unsets the picker's own
+  // toggle widget, which has to still exist.
+  dt_iop_color_picker_reset(module, FALSE);
+
+  // the "add group" button (masks_new_op_box) now lives permanently in
+  // masks_toolbar (see its field comment in blend.h), not in this list, so
+  // the unconditional wipe below no longer needs to spare it first.
+  dt_gui_container_remove_children(GTK_CONTAINER(bd->masks_list_box));
+
+  // the pending-row sliders (if any) are children of masks_list_box and were
+  // just destroyed by the wipe above -- forget the stale pointers so
+  // dt_iop_gui_blend_sync_pending_ai_sliders can tell "no active session" from
+  // "the row just hasn't been (re)built yet" apart. _make_pending_shape_row
+  // repopulates these below if a pending row is actually built this pass.
+  bd->pending_ai_smoothing_slider = NULL;
+  bd->pending_ai_cleanup_slider = NULL;
+
+  // reset the formid -> row index; it is repopulated as _make_shape_row builds
+  // each row below. Cleared here (before any new rows) so it never holds a
+  // pointer to a just-destroyed row.
+  if(!bd->masks_row_map)
+    bd->masks_row_map = g_hash_table_new(g_direct_hash, g_direct_equal);
+  else
+    g_hash_table_remove_all(bd->masks_row_map);
+
+  // module->blend_params is transiently reset to defaults and then walked back
+  // up through the module's own history by dt_dev_pixelpipe_synch_all() (once
+  // per pipe, main + preview) while holding dev->history_mutex the whole time
+  // -- an unrelated masks edit on another module can trigger that walk on the
+  // GUI thread via a nested pixelpipe_change while this rebuild is deferred via
+  // g_idle_add, so an unguarded read here can catch mask_id/mask_mode mid-reset
+  // and render the panel as if the mask were empty. Taking the same (recursive)
+  // mutex for just this snapshot guarantees we only ever see a settled value.
+  dt_pthread_mutex_lock(&darktable.develop->history_mutex);
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const gboolean flexi = module->blend_params->mask_mode & DEVELOP_MASK_FLEXI;
+  dt_pthread_mutex_unlock(&darktable.develop->history_mutex);
+
+  if(!_masks_panel_reconcile(module, grp, flexi))
+  {
+    gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), FALSE);
+    _recompute_insert_hint(module);
+    return;
+  }
+
+  _masks_panel_pack(module, grp, flexi);
 }
 
 // expand/collapse a same-kind element cluster. Shared by the triangle button
@@ -15512,12 +15219,9 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // anymore.
     gtk_box_pack_end(GTK_BOX(groups_hdr), bd->masks_reset_mask_btn, FALSE, FALSE, 0);
 
-    // the elements (shapes) of each group are now nested directly under that group's
-    // header inside masks_list_box (built by _build_masks_list / _pack_group_elements),
-    // so there is no longer a separate "elements" section header or list box.
-    bd->masks_elements_header = NULL;
-    bd->masks_elements_title = NULL;
-    bd->masks_elements_box = NULL;
+    // NB: each group's elements (shapes) are nested directly under that group's
+    // header inside masks_list_box (built by _build_masks_list /
+    // _pack_group_elements); there is no separate "elements" section.
 
     // ---- shapes box: the shape-add buttons, wrapped so the whole group is
     // re-homed as a unit between the classic shapes row and the flexi
@@ -15615,8 +15319,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->insert_realize_empty = FALSE;
     bd->insert_realized_fid = INVALID_MASKID;
     bd->solo_formid = INVALID_MASKID;
-    bd->masks_param_op = NULL;
-    bd->masks_param_op_box = NULL;
 
     // "add raster": an icon button (the same raster-mask glyph the rows use),
     // its own toolbar cluster -- a raster element brings in another module's
@@ -16685,8 +16387,6 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     g_signal_connect(G_OBJECT(bd->masks_refine_bypass_btn), "toggled",
                      G_CALLBACK(_refine_bypass_toggled), module);
     gtk_box_pack_end(GTK_BOX(inner_header_row), bd->masks_refine_bypass_btn, FALSE, FALSE, 0);
-
-    bd->masks_refine_bypass_all_btn = NULL;  // retired (dropped per user request)
 
     bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
     bd->masks_refine_scope_formid = INVALID_MASKID;
