@@ -2469,6 +2469,10 @@ void dt_iop_commit_params(dt_iop_module_t *module,
 {
   memcpy(piece->blendop_data, blendop_params, sizeof(dt_develop_blend_params_t));
 
+  // copy the GUI-owned refinement bypass preview state into the piece while we
+  // are still on the thread that owns it; the renderer reads only this copy
+  dt_masks_refine_bypass_commit(module, piece);
+
   /* We have to take blending parameters into account for the hash if
       a) there is some blending active detected via the mask_mode or
       b) we have a blending module in focus so we have valid cachelines
@@ -2538,12 +2542,11 @@ void dt_iop_commit_params(dt_iop_module_t *module,
         phash = dt_masks_group_hash(phash, grp);
       }
 
-      const dt_iop_gui_blend_data_t *bd = module->blend_data;
-      if(bd)
-      {
-        const dt_hash_t bph = dt_masks_refine_bypass_hash(bd);
-        phash = dt_hash(phash, &bph, sizeof(dt_hash_t));
-      }
+      // the transient refinement bypass changes what the pipe renders without
+      // changing any parameter, so it has to enter the piece hash. Read from
+      // the snapshot taken above, not from blend_data.
+      const dt_hash_t bph = dt_masks_refine_bypass_hash(&piece->refine_bypass);
+      phash = dt_hash(phash, &bph, sizeof(dt_hash_t));
     }
   }
   piece->hash = phash;

@@ -473,6 +473,7 @@ void dt_dev_pixelpipe_cleanup_nodes(dt_dev_pixelpipe_t *pipe)
     g_hash_table_destroy(piece->raster_masks);
     piece->raster_masks = NULL;
     _clear_piece_mask_caches(piece);
+    dt_masks_refine_bypass_cleanup(&piece->refine_bypass);
     free(piece);
   }
   g_list_free(pipe->nodes);

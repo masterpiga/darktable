@@ -43,6 +43,20 @@ typedef struct dt_dev_distorted_mask_cache_t
   dt_hash_t src_hash; // hash of source data (e.g. threshold) for invalidation
 } dt_dev_distorted_mask_cache_t;
 
+/** pipe-local snapshot of the flexi mask refinement-bypass preview state.
+ *
+ *  The live state is a GHashTable owned by the module's GUI
+ *  (dt_iop_gui_blend_data_t.masks_refine_bypassed) and mutated on the GTK
+ *  thread. Pixelpipe worker threads must not touch it, so it is copied here
+ *  by dt_masks_refine_bypass_commit() during commit_params. Keys are built
+ *  with dt_masks_refine_key_*() (develop/blend.h); the array is sorted so
+ *  lookups can bisect and the hash is order-independent. */
+typedef struct dt_dev_refine_bypass_t
+{
+  guint32 *keys;  // sorted bypass keys, or NULL when nothing is bypassed
+  int nkeys;
+} dt_dev_refine_bypass_t;
+
 typedef struct dt_dev_pixelpipe_iop_t
 {
   struct dt_iop_module_t *module;  // the module in the dev operation stack
@@ -94,6 +108,10 @@ typedef struct dt_dev_pixelpipe_iop_t
   const float *blend_refine_guide_out;
   const dt_iop_roi_t *blend_refine_roi_in;
   const dt_iop_roi_t *blend_refine_roi_out;
+
+  // GUI-owned refinement bypass state, snapshotted at commit time so the
+  // renderer never reads live GTK data from a worker thread
+  dt_dev_refine_bypass_t refine_bypass;
 } dt_dev_pixelpipe_iop_t;
 
 typedef enum dt_dev_pixelpipe_change_t

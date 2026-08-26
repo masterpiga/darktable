@@ -77,8 +77,52 @@ channels with a taper-in 0-30% / taper-off 50-80% curve, and
   migration (break bit lost, or never carried into the new field) shows up
   as a pixel diff instead of silently passing by accident.
 
+- `J*` — mask refinement at each of its three scopes. The same fields
+  (details / feathering / blur / contrast / brightness) apply at three
+  different points in the fold and are not interchangeable: **element**
+  (`dt_masks_point_group_t.refinement`, `enabled=1`) on one member's own mask
+  before it composites; **group** (same storage, `enabled=2`, broadcast onto
+  every member of the run) once on the group's finished sub-mask; **global**
+  (`dt_develop_blend_params_t.blur_radius` etc.) once on the whole mask after
+  every group has composited. Blur is the probe: purely spatial, no guide
+  image or scharr buffer needed, and order-sensitive, so blur-then-union and
+  union-then-blur are distinguishable images.
+
+  Two things about this set are easy to get wrong and are worth knowing:
+
+  - **`J1` and `J5` render identically, on purpose.** With a single group,
+    the base group seeds the accumulator directly, so "this group's finished
+    sub-mask" and "the whole mask" are the same buffer, and group scope
+    collapses onto global scope. `J7`/`J8` are the pair that actually pins
+    group scope down: two groups, refinement on the first one only, at group
+    scope vs global scope. Those differ by ~17k pixels.
+  - **Element and group scope cannot coexist on one run.** Setting group
+    scope broadcasts one refinement onto every member, overwriting their
+    element ones, so a mixed run is not a state the GUI can produce. A case
+    that marks the head `ELEMENT` and the tail `GROUP` tests nothing: group
+    scope is read off the run head, so the tail's marking is simply inert.
+
+  `J2` vs `J3` (element refinement on the run head vs on a non-head member)
+  covers a bug this branch already fixed once — the renderer used to read the
+  head's refinement unconditionally, which both leaked the head's own element
+  refinement across its whole group and dropped every other member's.
+
 Not exhaustive by design — a sufficiently large cross-section to catch
 inconsistencies, not every permutation.
+
+### Do these tests actually fail?
+
+They were validated by mutation, not by assuming a green run means coverage:
+
+| Mutation to `_group_get_mask_roi_flexi` | Caught by |
+|---|---|
+| group-scope refinement never applied | `J5`, `J6`, `J7` |
+| run head's refinement read unconditionally (the historical leak) | `J2`, `J4`, `H1`, `H2` |
+
+Both mutations left the other 30+ scenarios green, so the failures are
+attributable rather than blanket. Worth repeating for any new case: a
+reference image generated from current behaviour proves nothing until you have
+seen it go red.
 
 ## Running
 

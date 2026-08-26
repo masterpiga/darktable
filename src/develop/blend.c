@@ -302,20 +302,126 @@ static void _refine_with_detail_mask(dt_iop_module_t *self,
   dt_control_log(_("detail mask blending error"));
 }
 
+// ---------------------------------------------------------------------------
+// refinement bypass: pipe-local snapshot of a GUI-only preview toggle.
+//
+// The live set lives in the module's blend_data and is mutated on the GTK
+// thread; reading it from a pixelpipe worker would race both the inserts and
+// the teardown at darkroom exit. It is copied into the piece by
+// dt_masks_refine_bypass_commit() below, which commit_params calls on the
+// owning thread. Never serialized: a module without a GUI snapshots as empty,
+// so export/CLI/thumbnail renders are unaffected.
+
+// binary search over the sorted key array
+gboolean dt_masks_refine_bypass_lookup(const dt_dev_refine_bypass_t *const bypass,
+                                       const guint32 key)
+{
+  if(!bypass || !bypass->keys) return FALSE;
+  int lo = 0, hi = bypass->nkeys - 1;
+  while(lo <= hi)
+  {
+    const int mid = lo + (hi - lo) / 2;
+    if(bypass->keys[mid] == key) return TRUE;
+    if(bypass->keys[mid] < key) lo = mid + 1;
+    else hi = mid - 1;
+  }
+  return FALSE;
+}
+
+dt_hash_t dt_masks_refine_bypass_hash(const dt_dev_refine_bypass_t *const bypass)
+{
+  if(!bypass || !bypass->nkeys) return DT_INITHASH;
+  // the array is sorted, so hashing it in order is already canonical
+  return dt_hash(DT_INITHASH, bypass->keys, sizeof(guint32) * bypass->nkeys);
+}
+
+void dt_masks_refine_bypass_cleanup(dt_dev_refine_bypass_t *const bypass)
+{
+  if(!bypass) return;
+  g_free(bypass->keys);
+  bypass->keys = NULL;
+  bypass->nkeys = 0;
+}
+
+static int _refine_key_compare(const void *a, const void *b)
+{
+  const guint32 ka = *(const guint32 *)a;
+  const guint32 kb = *(const guint32 *)b;
+  return (ka > kb) - (ka < kb);
+}
+
+void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
+                                   dt_dev_pixelpipe_iop_t *const piece)
+{
+  dt_masks_refine_bypass_cleanup(&piece->refine_bypass);
+
+  const dt_iop_gui_blend_data_t *const bd = module ? module->blend_data : NULL;
+  if(!bd || !bd->masks_refine_bypassed) return;
+
+  // Read the params being committed (already memcpy'd into the piece by our
+  // caller), NEVER module->blend_params. dt_dev_pixelpipe_synch_all commits
+  // every piece's *defaults* first and only then replays history, and
+  // dt_iop_commit_blend_params -- which is what writes module->blend_params --
+  // runs after this function. So during a replay module->blend_params still
+  // holds the defaults: mask_mode without the FLEXI bit and mask_id
+  // NO_MASKID, which silently emptied every snapshot and made the bypass
+  // toggle do nothing at all.
+  const dt_develop_blend_params_t *const bp = piece->blendop_data;
+  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return;
+  if(!g_hash_table_size(bd->masks_refine_bypassed)) return;
+
+  GHashTable *const set = bd->masks_refine_bypassed;
+  // Query the keys the renderer can actually use rather than iterating the
+  // table: it also holds entries for staged (member-less) groups, keyed by
+  // their dt_masks_empty_group_t pointer, which must never be mistaken for a
+  // mask id (see the field comment in blend.h).
+  dt_masks_form_t *const grp =
+    dt_masks_get_from_id(darktable.develop, bp->mask_id);
+  const int nmembers = (grp && (grp->type & DT_MASKS_GROUP))
+    ? g_list_length(grp->points) : 0;
+
+  guint32 *keys = g_malloc_n(2 * nmembers + 1, sizeof(guint32));
+  int n = 0;
+
+  if(g_hash_table_lookup(set, GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL)))
+    keys[n++] = DT_MASKS_REFINE_KEY_GLOBAL;
+
+  for(GList *l = nmembers ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *const pt = l->data;
+    const guint32 ek = dt_masks_refine_key_element(pt->formid);
+    const guint32 gk = dt_masks_refine_key_group(pt->formid);
+    // a group is keyed by its bottom member, so only run heads ever match the
+    // group key -- testing every member costs one lookup and needs no run
+    // boundary logic here
+    if(g_hash_table_lookup(set, GUINT_TO_POINTER(ek))) keys[n++] = ek;
+    if(g_hash_table_lookup(set, GUINT_TO_POINTER(gk))) keys[n++] = gk;
+  }
+
+  if(n == 0)
+  {
+    g_free(keys);
+    return;
+  }
+
+  qsort(keys, n, sizeof(guint32), _refine_key_compare);
+  piece->refine_bypass.keys = keys;
+  piece->refine_bypass.nkeys = n;
+
+  dt_print(DT_DEBUG_MASKS,
+           "[masks] refine bypass '%s': %d of %d table entries apply to this"
+           " mask (mask_id=%d, %d members)",
+           module->op, n, g_hash_table_size(set), bp->mask_id, nmembers);
+}
+
 // flexi-only, transient: the GUI can temporarily bypass the whole-mask (global)
-// refinement pass. refine_bypass_all suspends every refinement; refine_bypass_group
-// suspends the global pass only when no group is selected (i.e. the bypass target
-// is the whole mask). Never serialized, so exports are never affected.
-static gboolean _flexi_global_refine_bypassed(const dt_iop_module_t *const self,
+// refinement pass.
+static gboolean _flexi_global_refine_bypassed(const dt_dev_pixelpipe_iop_t *const piece,
                                               const dt_develop_blend_params_t *const bp)
 {
   if(!(bp->mask_mode & DEVELOP_MASK_FLEXI)) return FALSE;
-  const dt_iop_gui_blend_data_t *const bd = self ? self->blend_data : NULL;
-  if(!bd) return FALSE;
-  if(bd->refine_bypass_all) return TRUE;
-  if(bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER(0)))
-    return TRUE;
-  return bd->refine_bypass_group && !dt_is_valid_maskid(bd->panel_selected_group_cid);
+  return dt_masks_refine_bypass_lookup(&piece->refine_bypass,
+                                       DT_MASKS_REFINE_KEY_GLOBAL);
 }
 
 // defined further down (near the OpenCL blend path); used by the CPU path too
@@ -663,7 +769,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
 
   // obtaining the list of mask operations to perform. A transient flexi bypass of
   // the whole-mask refinement skips the post-operations and the detail refine.
-  const gboolean global_refine_bypass = _flexi_global_refine_bypassed(self, d);
+  const gboolean global_refine_bypass = _flexi_global_refine_bypassed(piece, d);
   _develop_mask_post_processing post_operations[3];
   const size_t post_operations_size =
     global_refine_bypass ? 0 : _get_post_operations(d, piece, post_operations);
@@ -792,12 +898,8 @@ void dt_develop_blend_process(dt_iop_module_t *self,
       if(cacheable)
       {
         mkey = dt_masks_group_hash(DT_INITHASH, form);
-        const dt_iop_gui_blend_data_t *bd = self->blend_data;
-        if(bd)
-        {
-          const dt_hash_t bph = dt_masks_refine_bypass_hash(bd);
-          mkey = dt_hash(mkey, &bph, sizeof(dt_hash_t));
-        }
+        const dt_hash_t bph = dt_masks_refine_bypass_hash(&piece->refine_bypass);
+        mkey = dt_hash(mkey, &bph, sizeof(dt_hash_t));
         mkey = dt_hash(mkey, roi_out, sizeof(dt_iop_roi_t));
       }
 
@@ -1237,7 +1339,7 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
 
   // obtaining the list of mask operations to perform (transient flexi bypass of
   // the whole-mask refinement skips the post-operations and the detail refine)
-  const gboolean global_refine_bypass = _flexi_global_refine_bypassed(self, d);
+  const gboolean global_refine_bypass = _flexi_global_refine_bypassed(piece, d);
   _develop_mask_post_processing post_operations[3];
   const size_t post_operations_size =
     global_refine_bypass ? 0 : _get_post_operations(d, piece, post_operations);

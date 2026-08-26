@@ -1136,6 +1136,12 @@ int dt_init(int argc,
   // the real library.db/configdir/xmp sidecars, no flag required -- testers
   // just double-click the app. --no-flexi-test-mode below is an escape hatch
   // for developers who checked out this same commit and want the real db.
+  //
+  // DO NOT "clean this up" by defaulting it to FALSE or deleting it. Defaulting
+  // to TRUE is the whole point: it is the safeguard that keeps a tester's real
+  // photo library out of reach of an experimental branch, and it protects
+  // people who never read a command line. It reads like leftover scaffolding
+  // and has been proposed for removal on those grounds before; it is not.
   darktable.flexi_test_mode = TRUE;
   GSList *config_override = NULL;
 

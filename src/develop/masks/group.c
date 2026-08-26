@@ -1160,15 +1160,11 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
 
   memset(buffer, 0, npixels * sizeof(float));
 
-  // transient (non-serialized, flexi-only) refinement bypass: the GUI sets these
-  // flags on the module's blend_data and triggers a reprocess. bypass_all skips
-  // every group's refinement; bypass_cid skips just the selected group's run
-  // (identified by its bottom member = run head = the group id).
-  const dt_iop_gui_blend_data_t *const bd =
-    module ? (const dt_iop_gui_blend_data_t *)module->blend_data : NULL;
-  const gboolean bypass_all = bd && bd->refine_bypass_all;
-  const dt_mask_id_t bypass_cid =
-    (bd && bd->refine_bypass_group) ? bd->panel_selected_group_cid : INVALID_MASKID;
+  // transient (non-serialized, flexi-only) refinement bypass: the GUI toggles
+  // it on the module's blend_data and triggers a reprocess, which re-commits
+  // the pipe-local snapshot read here (see dt_masks_refine_bypass_commit).
+  // Never read blend_data directly from this thread.
+  const dt_dev_refine_bypass_t *const bypass = &piece->refine_bypass;
 
   int nb_groups = 0;  // how many groups have composited into `buffer`
   GList *fpts = form->points;
@@ -1257,9 +1253,9 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         // this member's own refinement, applied to its raw mask before inversion
         // and compositing -- the same point the classic renderer applies it (see
         // _group_get_mask_roi below). No-op unless this member carries one.
-        gboolean elem_bypassed = FALSE;
-        if(bd && bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER((guint32)m->formid)))
-          elem_bypassed = TRUE;
+        const gboolean elem_bypassed =
+          dt_masks_refine_bypass_lookup(bypass,
+                                        dt_masks_refine_key_element(m->formid));
         if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
           dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
                                             (dt_dev_pixelpipe_iop_t *)piece,
@@ -1295,11 +1291,12 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     if(bypassed) continue;         // disabled group → contributes nothing
     if(nb_members == 0) continue;  // empty group → identity
 
-    // per-group refinement, applied once to the finished sub-mask (skipped when
-    // this group -- or every group -- is bypassed for preview)
+    // per-group refinement, applied once to the finished sub-mask (skipped
+    // while this group is bypassed for preview). A group is keyed by its
+    // bottom member, which is this run's head.
     const gboolean group_bypassed =
-      bypass_all || (dt_is_valid_maskid(bypass_cid) && head->formid == bypass_cid)
-      || (bd && bd->masks_refine_bypassed && g_hash_table_lookup(bd->masks_refine_bypassed, GUINT_TO_POINTER((guint32)head->formid | 0x80000000U)));
+      dt_masks_refine_bypass_lookup(bypass,
+                                    dt_masks_refine_key_group(head->formid));
     if(group_refine.enabled && !group_bypassed)
       dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
                                         (dt_dev_pixelpipe_iop_t *)piece,
