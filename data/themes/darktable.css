@@ -990,25 +990,13 @@ dialog .sidebar row:selected:hover label,
 .mask-boost-factor-box
 {
   margin-top: 0.14em;
+  margin-right: 22px;
 }
 
 /* the input/output gradient sliders inside a parametric row's own editor. */
-.mask-param-row-editor .dt_gslider_multivalue
+.mask-param-slider
 {
-  min-height: 1.8em;
-  padding: 0;
-  padding-left: 0.25em;
-}
-
-/* the same slider, docked onto the row's own header bar instead while
-   collapsed (see _update_param_row_header_dock) -- own rule, not reusing
-   .mask-param-row-editor above, since that one also carries a left/right
-   margin meant for the below-row editor that would shift this slider away
-   from the name label instead of sitting flush against it. */
-.mask-param-header-slot .dt_gslider_multivalue
-{
-  min-height: 1.8em;
-  margin: 0 6px;
+  min-height: 1.2em;
   padding: 0;
 }
 
@@ -1019,6 +1007,7 @@ dialog .sidebar row:selected:hover label,
   margin-top: 3px;
   margin-bottom: 3px;
   margin-left: 8px;
+  margin-right: 22px;
   padding-left: 6px;
 }
 
@@ -1043,8 +1032,19 @@ dialog .sidebar row:selected:hover label,
   padding: 2px 4px 4px 4px;
 }
 
+/* channel labels ("input" / "output") in parametric editor rows */
+.mask-param-channel-label
+{
+  min-width: 3.2em;
+  padding-right: 4px;
+}
+
 button.mask-refine-bypass-btn
 {
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  margin: 0;
   background-color: transparent;
   border: none;
   opacity: 0.5;
@@ -1111,6 +1111,39 @@ button.mask-enable-toggle:checked
   padding: 1px 4px;
   border-radius: 3px;
   color: alpha(@text_color, 0.85);
+}
+
+.mask-row-trailing-no-expander
+{
+  margin-right: 18px;
+}
+
+/* expander button on row headers */
+button.mask-row-expander
+{
+  min-width: 14px;
+  min-height: 14px;
+  padding: 0;
+  margin: 0 1px 0 2px;
+  background-color: transparent;
+  border: none;
+}
+
+button.mask-row-expander:not(:checked)
+{
+  color: @button_fg;
+  opacity: 0.6;
+}
+
+button.mask-row-expander:checked
+{
+  color: @field_active_fg;
+  opacity: 1.0;
+}
+
+button.mask-row-expander:hover
+{
+  opacity: 1.0;
 }
 
 .mask-inline-opacity-value:hover
@@ -1297,11 +1330,36 @@ button.mask-enable-toggle:checked
   min-height: 0;
 }
 
-/* within-group combine chooser: it sits right next to the (hexpand, unmargined)
-   group/element label, so give it a little breathing room on its left */
-.mask-within-combo
+.mask-within-combo,
+.mask-group-lead-handle,
+.mask-param-picker-box
 {
-  margin-left: 4px;
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  margin: 0;
+}
+
+.mask-param-picker-box button,
+.mask-group-lead-handle button,
+.mask-within-combo button
+{
+  min-width: 18px;
+  min-height: 18px;
+  padding: 0;
+  margin: 0;
+}
+
+.mask-lead-static,
+.mask-lead-static:hover,
+.mask-lead-static button,
+.mask-lead-static button:hover,
+button.mask-lead-static,
+button.mask-lead-static:hover
+{
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
 }
 
 /* spacing between the add-shapes toolbar and the group / element lists */

@@ -257,6 +257,7 @@ typedef struct dt_masks_point_parametric_t
   uint32_t in_out;                             // GUI only: 0 = show input slider only, 1 = show output slider too
   uint32_t invert;                             // polarity, coupled to the form's invert
   uint32_t compact;                            // GUI only: 1 = compact display (see _apply_param_row_filter_layout)
+  uint32_t disabled;                           // bit 0: input channel disabled, bit 1: output channel disabled
 } dt_masks_point_parametric_t;
 
 /** point struct for a DT_MASKS_RASTER form: references another module's output

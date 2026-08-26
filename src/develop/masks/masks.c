@@ -429,8 +429,10 @@ void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form)
 static float _new_shape_default_opacity(const dt_masks_type_t type)
 {
   if(type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)) return 1.0f;
-  if(dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky")) return 1.0f;
-  return dt_conf_get_float("plugins/darkroom/masks/opacity");
+  const float op = dt_conf_get_float("plugins/darkroom/masks/opacity");
+  if(dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"))
+    dt_conf_set_float("plugins/darkroom/masks/opacity", 1.0f);
+  return op;
 }
 
 void dt_masks_group_insert_member(dt_develop_t *dev,
@@ -512,6 +514,19 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
   }
   // we save the group
   dt_dev_add_masks_history_item(dev, module, TRUE);
+  if(gui)
+  {
+    gui->panel_selected_formid = form->formid;
+  }
+  else if(dev && dev->form_gui)
+  {
+    dev->form_gui->panel_selected_formid = form->formid;
+  }
+  if(module && module->blend_data)
+  {
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    bd->panel_selected_formid = form->formid;
+  }
   // we update module gui
   if(gui) dt_masks_iop_update(module);
 }
@@ -535,7 +550,16 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
   if(module) dt_masks_group_insert_member(dev, module, form, gui);
 
   // show the form if needed
-  if(gui) dev->form_gui->formid = form->formid;
+  if(gui)
+  {
+    dev->form_gui->formid = form->formid;
+    dev->form_gui->panel_selected_formid = form->formid;
+  }
+  if(module && module->blend_data)
+  {
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    bd->panel_selected_formid = form->formid;
+  }
 }
 
 int dt_masks_form_duplicate(dt_develop_t *dev, const dt_mask_id_t formid)
@@ -1602,6 +1626,8 @@ void dt_masks_clear_form_gui(const dt_develop_t *dev)
   dev->form_gui->point_border_dragging = dev->form_gui->seg_dragging =
     dev->form_gui->feather_dragging = dev->form_gui->point_dragging = -1;
   dev->form_gui->creation_closing_form = dev->form_gui->creation = FALSE;
+  if(dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"))
+    dt_conf_set_float("plugins/darkroom/masks/opacity", 1.0f);
   dev->form_gui->pressure_sensitivity = DT_MASKS_PRESSURE_OFF;
   dev->form_gui->creation_module = NULL;
   dev->form_gui->point_edited = -1;
@@ -1956,6 +1982,13 @@ static void _menu_add_exist(dt_iop_module_t *module,
   // we add the form in this group, then (flexi) move it into the target group
   dt_masks_point_group_t *grpt = dt_masks_group_add_form(grp, form);
   _flexi_reposition_imported(module, grp, grpt, form);
+  if(darktable.develop->form_gui)
+    darktable.develop->form_gui->panel_selected_formid = formid;
+  if(module && module->blend_data)
+  {
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    bd->panel_selected_formid = formid;
+  }
   // we save the group
   // and we ensure that we are in edit mode
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);

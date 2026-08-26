@@ -487,9 +487,9 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *frm = dt_masks_get_from_id(darktable.develop, fpt->formid);
-    // a hidden shape is not editable on the canvas: skip it when picking the
+    // a hidden or disabled shape is not editable on the canvas: skip it when picking the
     // form under the cursor (it also draws no outline).
-    if(fpt->state & DT_MASKS_STATE_HIDDEN) { pos++; continue; }
+    if(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) { pos++; continue; }
     int inside, inside_border, near, inside_source;
     float dist = FLT_MAX;
     inside = inside_border = inside_source = 0;
@@ -601,10 +601,10 @@ void dt_group_events_post_expose(cairo_t *cr,
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return;
-    // a hidden shape draws no outline/handles on the canvas (matches the
+    // a hidden or disabled shape draws no outline/handles on the canvas (matches the
     // renderer, which excludes it from the composite). keep pos in step with
     // gui->points by skipping only the draw call.
-    if(sel->functions && !(fpt->state & DT_MASKS_STATE_HIDDEN))
+    if(sel->functions && !(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
     {
       // decide whether this shape draws its own highlight (feather + anchors) by
       // posing as the selected group member for the duration of its post_expose
@@ -704,8 +704,8 @@ int dt_masks_group_get_mask(const dt_iop_module_t *const module,
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *sel = dt_masks_get_from_id_ext(piece->pipe->forms, fpt->formid);
-    // a hidden shape (hide / solo controls) contributes nothing
-    if(sel && !(fpt->state & DT_MASKS_STATE_HIDDEN))
+    // a hidden or disabled shape contributes nothing
+    if(sel && !(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
     {
       ok[pos] = dt_masks_get_mask(module, piece, sel, &bufs[pos],
                                   &w[pos], &h[pos], &px[pos], &py[pos]);
@@ -1238,7 +1238,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
          && (((m->state & DT_MASKS_STATE_OP) != group_op) || m->group_start))
         break;
       nb_seen++;
-      if(bypassed)  // nothing to render, just walk to the end of the run
+      if(bypassed || (m->state & DT_MASKS_STATE_DISABLE))  // nothing to render, just walk to the end of the run
       {
         fpts = g_list_next(fpts);
         continue;
@@ -1395,8 +1395,8 @@ int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
   for(GList *fpts = form->points; fpts; fpts = g_list_next(fpts))
   {
     dt_masks_point_group_t *fpt = fpts->data;
-    // a hidden shape contributes nothing (hide / solo controls)
-    if(fpt->state & DT_MASKS_STATE_HIDDEN) continue;
+    // a hidden or disabled shape contributes nothing
+    if(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
     dt_masks_form_t *sel = dt_masks_get_from_id_ext(piece->pipe->forms, fpt->formid);
 
     if(sel)
