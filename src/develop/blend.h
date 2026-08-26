@@ -435,8 +435,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkBox *masks_box;
   GtkBox *raster_box;
 
-  GtkWidget *colorpicker;
-  GtkWidget *colorpicker_set_values;
   dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
   GtkWidget *suppress;
@@ -459,7 +457,6 @@ typedef struct dt_iop_gui_blend_data_t
   int altmode[8][2];
   dt_dev_pixelpipe_display_mask_t save_for_leave;
   guint timeout_handle;
-  GtkNotebook *channel_tabs;
   // single-channel parametric editing chrome (flexi): blendif_invert = the
   // "invert all channels" header button (hidden when a single-channel form is
   // bound, where it is meaningless). The in/out toggle itself lives on the
@@ -467,15 +464,6 @@ typedef struct dt_iop_gui_blend_data_t
   // this editor chrome.
   GtkWidget *blendif_invert;
   int param_output_saved;
-  // blendif_section/blendif_header: legacy classic multi-channel editor
-  // chrome. Construction removed along with dt_iop_gui_init_blendif; these
-  // fields are permanently NULL now (kept for struct-layout stability).
-  GtkWidget *blendif_section;
-  GtkWidget *blendif_header;
-
-  // channel_boost_factor_slider/boost_box: same as above, permanently NULL.
-  GtkWidget *channel_boost_factor_slider;
-  GtkWidget *boost_box;
   GtkWidget *details_slider;
 
   GtkWidget *masks_combo;
@@ -527,16 +515,8 @@ typedef struct dt_iop_gui_blend_data_t
   // masks_reset_mask_btn: "reset mask" action on the import-shape row (clears all
   // shapes + re-seeds the scaffold). masks_import_label is unused (the combo label).
   GtkWidget *masks_reset_mask_btn;
-  // unused since parametric masks became ordinary group members (kept so the
-  // struct layout / any stale references stay valid; always NULL now).
-  GtkWidget *masks_param_op;
-  GtkWidget *masks_param_op_box;
   // flexi-only "groups" section divider (above the toolbar/list; holds reset).
-
-  // masks_elements_header is retired (kept NULL): each group's elements are nested
-  // under its own header inside masks_list_box, so there is no separate section.
   GtkWidget *masks_groups_header;
-  GtkWidget *masks_elements_header;
   // shared rows re-homed between the classic two-row toolbar and the compact flexi
   // layout (see _masks_apply_layout): masks_combo_row = classic combo header
   // ([combo][invert]); masks_shapes_row = classic shapes row ([edit][shapes_box]).
@@ -602,10 +582,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *pending_ai_cleanup_slider;
   float pending_ai_smoothing_last;
   float pending_ai_cleanup_last;
-  // retired (kept NULL): the elements used to live in a separate box/title under an
-  // "elements" header; they are now nested under each group header in masks_list_box.
-  GtkWidget *masks_elements_box;
-  GtkWidget *masks_elements_title;
   // blendif_home: the container the shared classic (legacy multi-channel)
   // parametric editor lives in. Flexi never reparents it anymore -- each
   // parametric row owns its own editor instead (see _build_param_row_editor).
@@ -770,14 +746,14 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_refine_toggle_btn;
   GtkBox *masks_refine_sliders_box;
   GHashTable *masks_refine_expanded;
+  // transient (non-serialized, flexi-only) refinement bypass set: which
+  // refinement passes the user is previewing "off". Keyed by
+  // dt_masks_refine_key_*() below, except for a staged (member-less) group,
+  // which is keyed by its own dt_masks_empty_group_t pointer -- it has no
+  // members, so it never reaches the renderer. Owned and mutated on the GTK
+  // thread only; the pixelpipe reads the snapshot taken at commit time
+  // (dt_dev_refine_bypass_t, see dt_masks_refine_bypass_commit) instead.
   GHashTable *masks_refine_bypassed;
-  // transient (non-serialized, flexi-only) refinement bypass flags, read by the
-  // flexi renderer (group.c) and the global refinement pass (blend.c):
-  //   refine_bypass_group: suspend refinement of the selected group, or of the
-  //     whole-mask (global) pass when no group is selected.
-  GtkWidget *masks_refine_bypass_all_btn;
-  gboolean refine_bypass_group;
-  gboolean refine_bypass_all;
 
   GHashTable *masks_props_expanded;
   GHashTable *group_ordinals;
@@ -789,30 +765,40 @@ typedef struct dt_iop_gui_blend_data_t
   dt_pthread_mutex_t lock;
 } dt_iop_gui_blend_data_t;
 
-static inline dt_hash_t dt_masks_refine_bypass_hash(const dt_iop_gui_blend_data_t *bd)
+// keys into the refinement-bypass set (bd->masks_refine_bypassed above, and the
+// pipe-local snapshot built from it). Three disjoint spaces share one table: the
+// whole-mask (global) pass, one element's own refinement, and one group's. The
+// group space is distinguished by the top bit, which no mask id ever uses --
+// dt_mask_id_t is an int32_t and ids are small positive numbers.
+#define DT_MASKS_REFINE_KEY_GROUP_FLAG (0x80000000U)
+#define DT_MASKS_REFINE_KEY_GLOBAL     (0U)
+
+static inline guint32 dt_masks_refine_key_element(const dt_mask_id_t id)
 {
-  if(!bd) return 0;
-  dt_hash_t h = dt_hash(DT_INITHASH, &bd->refine_bypass_all, sizeof(gboolean));
-  h = dt_hash(h, &bd->refine_bypass_group, sizeof(gboolean));
-  if(bd->masks_refine_bypassed)
-  {
-    GHashTableIter iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&iter, bd->masks_refine_bypassed);
-    dt_hash_t xor_hash = 0;
-    while(g_hash_table_iter_next(&iter, &key, &value))
-    {
-      if(GPOINTER_TO_INT(value))
-      {
-        guint32 k = (guint32)GPOINTER_TO_UINT(key);
-        dt_hash_t eh = dt_hash(DT_INITHASH, &k, sizeof(guint32));
-        xor_hash ^= eh;
-      }
-    }
-    h = dt_hash(h, &xor_hash, sizeof(dt_hash_t));
-  }
-  return h;
+  return (guint32)id;
 }
+
+static inline guint32 dt_masks_refine_key_group(const dt_mask_id_t cid)
+{
+  return (guint32)cid | DT_MASKS_REFINE_KEY_GROUP_FLAG;
+}
+
+/** copy the module's refinement-bypass set into the piece, on the thread that
+    owns the GUI state. Must be called from commit_params (GTK/history thread);
+    a module with no GUI (export, CLI, thumbnails) snapshots as empty, which is
+    the correct "nothing bypassed" state for a preview-only feature. */
+void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
+                                   dt_dev_pixelpipe_iop_t *const piece);
+
+/** release a snapshot's key array */
+void dt_masks_refine_bypass_cleanup(dt_dev_refine_bypass_t *const bypass);
+
+/** is `key` (see dt_masks_refine_key_*) bypassed in this snapshot? */
+gboolean dt_masks_refine_bypass_lookup(const dt_dev_refine_bypass_t *const bypass,
+                                       const guint32 key);
+
+/** hash of a snapshot, for mask cache invalidation */
+dt_hash_t dt_masks_refine_bypass_hash(const dt_dev_refine_bypass_t *const bypass);
 
 
 /** global init of blendops */
