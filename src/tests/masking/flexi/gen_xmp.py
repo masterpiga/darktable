@@ -54,6 +54,11 @@ DT_MASKS_GROUP = 1 << 2
 DEVELOP_MASKS_VERSION = 8
 DT_MASKS_POINT_STATE_USER = 2
 
+# dt_masks_refine_scope_t (src/develop/masks.h)
+DT_MASKS_REFINE_OFF = 0
+DT_MASKS_REFINE_ELEMENT = 1
+DT_MASKS_REFINE_GROUP = 2
+
 BLEND_FMT = "<3i2f2ifIfIffffI2I" + "64f" + "16f" + "20siii"
 # mask_mode(I) blend_cst(i) blend_mode(I) blend_parameter(f) opacity(f)
 # mask_combine(I) mask_id(i) blendif(I) feathering_radius(f)
@@ -68,7 +73,12 @@ def pack_blend_params(mask_mode=0, blend_cst=0,
                        blend_mode=DEVELOP_BLEND_NORMAL2, blend_parameter=0.0,
                        opacity=100.0, mask_combine=DEVELOP_COMBINE_NORM,
                        mask_id=0, blendif=0, blendif_parameters=None,
-                       blendif_boost_factors=None):
+                       blendif_boost_factors=None,
+                       feathering_radius=0.0, blur_radius=0.0,
+                       contrast=0.0, brightness=0.0, details=0.0):
+    """feathering_radius/blur_radius/contrast/brightness/details are the
+    module-wide ("global") mask refinements, applied once to the finished
+    group mask -- as opposed to the per-member ones in pack_group_member."""
     if blendif_parameters is None:
         blendif_parameters = [0.0, 0.0, 1.0, 1.0] * DEVELOP_BLENDIF_SIZE
     if blendif_boost_factors is None:
@@ -79,9 +89,9 @@ def pack_blend_params(mask_mode=0, blend_cst=0,
         BLEND_FMT,
         mask_mode, blend_cst, blend_mode, blend_parameter, opacity,
         mask_combine, mask_id, blendif,
-        0.0,  # feathering_radius
+        feathering_radius,
         1,    # feathering_guide (DEVELOP_MASK_GUIDE_IN_BEFORE_BLUR)
-        0.0, 0.0, 0.0, 0.0,  # blur_radius, contrast, brightness, details
+        blur_radius, contrast, brightness, details,
         0,    # feather_version
         0, 0,  # reserved[2]
         *blendif_parameters,
@@ -579,6 +589,166 @@ def build_group_start_scenario():
     return path
 
 
+# ---------------------------------------------------------------------------
+# J: mask refinement at each of its three scopes.
+#
+# The same refinement fields (details / feathering / blur / contrast /
+# brightness) can be applied at three different points in the fold, and the
+# whole point of the scope enum is that these are NOT interchangeable:
+#
+#   ELEMENT (dt_masks_point_group_t.refinement, enabled=1)
+#       applied to one member's own mask, before it composites into its group
+#   GROUP   (same storage, enabled=2, broadcast onto every member of the run)
+#       applied once to the group's finished sub-mask, after its members fold
+#   GLOBAL  (dt_develop_blend_params_t.blur_radius etc.)
+#       applied once to the whole mask, after every group has composited
+#
+# Blur is used as the probe because it is purely spatial and needs no guide
+# image or detail (scharr) buffer, so the scenarios stay deterministic and
+# cheap. Order matters for it: blurring two shapes and then unioning them is
+# not the same image as unioning them and then blurring, which is exactly what
+# makes J4 (element on both) and J5 (group) distinguishable. If those two ever
+# render identically, a scope has stopped being honoured -- see
+# _group_get_mask_roi_flexi in src/develop/masks/group.c.
+#
+# J2 vs J3 covers a bug this branch already fixed once: group-scope refinement
+# is stored broadcast, so the renderer used to read the run head's copy
+# unconditionally and apply it group-wide, which both leaked the head's own
+# ELEMENT refinement over its whole group and dropped every non-head member's.
+# They must differ, and neither may equal J4.
+# ---------------------------------------------------------------------------
+_J_BLUR = 9.0        # gaussian blur radius on the mask
+_J_CONTRAST = 0.35   # mask contrast, to make the blur's effect easier to see
+
+
+def _j_refine(scope):
+    return dict(refine_enabled=scope, blur_radius=_J_BLUR, contrast=_J_CONTRAST)
+
+
+def build_refinement_scenarios():
+    """One union group of two overlapping shapes (the shared circle+square
+    geometry), rendered with refinement applied at each scope in turn."""
+    global DEVELOP_MASKS_VERSION
+    written = []
+    base = 998000
+    cases = [
+        # (name, circle_refine_scope, square_refine_scope, global_kwargs)
+        ("J1_refine_global", None, None,
+         dict(blur_radius=_J_BLUR, contrast=_J_CONTRAST)),
+        ("J2_refine_element_head", DT_MASKS_REFINE_ELEMENT, None, {}),
+        ("J3_refine_element_tail", None, DT_MASKS_REFINE_ELEMENT, {}),
+        ("J4_refine_element_both", DT_MASKS_REFINE_ELEMENT,
+         DT_MASKS_REFINE_ELEMENT, {}),
+        ("J5_refine_group", DT_MASKS_REFINE_GROUP, DT_MASKS_REFINE_GROUP, {}),
+        # group + global stacked. NB: element and group scope cannot coexist on
+        # one run -- setting group scope broadcasts one refinement onto every
+        # member, overwriting their element ones, so a mixed run is not a state
+        # the GUI can produce. An earlier version of this case marked the head
+        # ELEMENT and the tail GROUP, which rendered as neither: group scope is
+        # read off the run head, so the tail's marking was simply inert and the
+        # case silently tested nothing.
+        ("J6_refine_group_and_global", DT_MASKS_REFINE_GROUP,
+         DT_MASKS_REFINE_GROUP,
+         dict(blur_radius=_J_BLUR, contrast=_J_CONTRAST)),
+    ]
+    for i, (name, circle_scope, square_scope, global_kw) in enumerate(cases):
+        ids = MaskIds(base + i * 10)
+        # the head of the run is the first member in points order (the circle);
+        # both members carry the same union operator so they form one group
+        op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION
+        members = (
+            pack_group_member_v9(ids.circle, ids.group, op,
+                                  **(_j_refine(circle_scope) if circle_scope else {}))
+            + pack_group_member_v9(ids.path, ids.group, op,
+                                    **(_j_refine(square_scope) if square_scope else {}))
+        )
+        masks_rows = [
+            (ids.circle, DT_MASKS_CIRCLE, "circle #1",
+             pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
+            (ids.path, DT_MASKS_PATH, "square #1",
+             pack_path(SQUARE_CORNERS).hex(), len(SQUARE_CORNERS)),
+            (ids.group, DT_MASKS_GROUP, "grp exposure", members.hex(), 2),
+        ]
+        exposure_num = len(PIPELINE)
+        masks_rows = [(exposure_num,) + r for r in masks_rows]
+
+        bp = pack_blend_params(
+            mask_mode=DEVELOP_MASK_MASK | DEVELOP_MASK_ENABLED,
+            blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+            mask_combine=DEVELOP_COMBINE_NORM,
+            mask_id=ids.group,
+            blendif=0,
+            **global_kw,
+        )
+
+        saved = DEVELOP_MASKS_VERSION
+        DEVELOP_MASKS_VERSION = 9  # same v9 -> v10 load path as I1
+        try:
+            path = build_xmp(name, bp, masks_rows)
+        finally:
+            DEVELOP_MASKS_VERSION = saved
+        written.append((name, path))
+
+    # Two groups, refinement on the FIRST group only, at group scope (J7) and
+    # at global scope (J8) with identical values. Necessary because with a
+    # single group the two scopes coincide exactly -- the base group seeds the
+    # accumulator directly, so "this group's finished sub-mask" and "the whole
+    # mask" are the same buffer, and J1 renders pixel-identical to J5. Only
+    # once a second group composites on top does group scope become
+    # observable: J7 refines group A alone and then unions B onto the result,
+    # J8 refines the union of both. If J7 and J8 ever match, group-scope
+    # refinement has collapsed into the global pass.
+    ids = MaskIds(base + 900)
+    circleB_id, squareB_id = ids.circle + 100, ids.path + 100
+    op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION
+    shape_rows = [
+        (ids.circle, DT_MASKS_CIRCLE, "circle #1",
+         pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
+        (ids.path, DT_MASKS_PATH, "square #1",
+         pack_path(SQUARE_CORNERS).hex(), len(SQUARE_CORNERS)),
+        (circleB_id, DT_MASKS_CIRCLE, "circle #2",
+         pack_circle(CIRCLE2_CX, CIRCLE2_CY, CIRCLE2_R, CIRCLE2_BORDER).hex(), 1),
+        (squareB_id, DT_MASKS_PATH, "square #2",
+         pack_path(SQUARE2_CORNERS).hex(), len(SQUARE2_CORNERS)),
+    ]
+    for name, group_scoped in (("J7_refine_group_of_two", True),
+                               ("J8_refine_global_of_two", False)):
+        # group A carries the refinement broadcast on both its members (the
+        # renderer reads it off the run head); group B carries none. The
+        # GROUP_BREAK on circle #2 is what keeps two same-operator runs apart.
+        ref = _j_refine(DT_MASKS_REFINE_GROUP) if group_scoped else {}
+        members = (
+            pack_group_member_v9(ids.circle, ids.group, op, **ref)
+            + pack_group_member_v9(ids.path, ids.group, op, **ref)
+            + pack_group_member_v9(circleB_id, ids.group,
+                                    op | DT_MASKS_STATE_GROUP_BREAK)
+            + pack_group_member_v9(squareB_id, ids.group, op)
+        )
+        exposure_num = len(PIPELINE)
+        masks_rows = [(exposure_num,) + r for r in shape_rows]
+        masks_rows.append((exposure_num, ids.group, DT_MASKS_GROUP,
+                            "grp exposure", members.hex(), 4))
+        global_kw = ({} if group_scoped
+                     else dict(blur_radius=_J_BLUR, contrast=_J_CONTRAST))
+        bp = pack_blend_params(
+            mask_mode=DEVELOP_MASK_MASK | DEVELOP_MASK_ENABLED,
+            blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+            mask_combine=DEVELOP_COMBINE_NORM,
+            mask_id=ids.group,
+            blendif=0,
+            **global_kw,
+        )
+        saved = DEVELOP_MASKS_VERSION
+        DEVELOP_MASKS_VERSION = 9
+        try:
+            path = build_xmp(name, bp, masks_rows)
+        finally:
+            DEVELOP_MASKS_VERSION = saved
+        written.append((name, path))
+
+    return written
+
+
 BASELINE_DIR = os.path.join(os.path.dirname(__file__), "baselines")
 
 
@@ -639,6 +809,10 @@ def main():
     path = build_group_start_scenario()
     generated.append("I1_two_adjacent_intersect_groups")
     print(f"wrote {path}")
+
+    for name, path in build_refinement_scenarios():
+        generated.append(name)
+        print(f"wrote {path}")
 
     print(f"\n{len(generated)} scenarios generated: {', '.join(generated)}")
 

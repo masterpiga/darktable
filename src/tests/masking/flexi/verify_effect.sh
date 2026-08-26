@@ -55,6 +55,14 @@ expected_classification()
         H1_drawn_opacity_refinement|H2_combined_opacity_refinement| \
         I1_two_adjacent_intersect_groups)
             echo PARTIAL ;;
+        # J: refinement at each scope. Refinement reshapes an already-shaped
+        # mask, so every one of these must stay spatially varying -- a J case
+        # that collapses to a constant means the refinement swallowed the mask
+        # rather than refining it.
+        J1_refine_global|J2_refine_element_head|J3_refine_element_tail|\
+        J4_refine_element_both|J5_refine_group|J6_refine_group_and_global|\
+        J7_refine_group_of_two|J8_refine_global_of_two)
+            echo PARTIAL ;;
         D1_maskspos_no_drawn_content|E2_pure_incl_and_inv)
             echo CONSTANT_ZERO ;;
         D2_parametric_incl|E1_pure_incl_only|E3_content_incl_only| \
