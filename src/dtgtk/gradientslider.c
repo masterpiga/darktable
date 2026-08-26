@@ -770,12 +770,12 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
 
     cairo_set_source_rgba(cr, color.red, color.green, color.blue, 0.33);
 
-    cairo_rectangle(cr, vx_min, y1, fmax((float)vx_max - vx_min, 0.0f), gheight);
+    cairo_rectangle(cr, vx_min, starty + y1, fmax((float)vx_max - vx_min, 0.0f), gheight);
     cairo_fill(cr);
 
     cairo_set_source_rgba(cr, color.red, color.green, color.blue, 1.0);
 
-    cairo_move_to(cr, vx_avg, y1);
+    cairo_move_to(cr, vx_avg, starty + y1);
     cairo_rel_line_to(cr, 0, gheight);
     cairo_set_antialias(cr, CAIRO_ANTIALIAS_NONE);
     cairo_set_line_width(cr, 1.0);
@@ -799,8 +799,8 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
     const int x1 = _scale_to_screen(widget, gslider->position[1]);
     const int x2 = _scale_to_screen(widget, gslider->position[2]);
     const int x3 = _scale_to_screen(widget, gslider->position[3]);
-    const int top = y1;
-    const int bottom = cheight - y1;
+    const int top = starty + y1;
+    const int bottom = starty + cheight - y1;
 
     cairo_set_antialias(cr, CAIRO_ANTIALIAS_DEFAULT);
     cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, 0.55);
@@ -865,7 +865,7 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
 
     if(mk & 0x04) /* upper handle, sits on the bar's top edge */
     {
-      const double cy = y1 + ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
+      const double cy = (starty + y1) + ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
       _draw_gradient_marker_shape(cr, vx, cy, r, TRUE, shape);
       if(mk & 0x01)
       {
@@ -894,7 +894,7 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
 
     if(mk & 0x02) /* lower handle, sits on the bar's bottom edge */
     {
-      const double cy = (cheight - y1) - ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
+      const double cy = (starty + cheight - y1) - ((shape == DT_BAUHAUS_MARKER_TRIANGLE) ? (r * 0.5) : r);
       _draw_gradient_marker_shape(cr, vx, cy, r, FALSE, shape);
       if(mk & 0x01)
       {

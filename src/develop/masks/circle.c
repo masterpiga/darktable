@@ -133,7 +133,7 @@ static int _circle_events_mouse_scrolled(dt_iop_module_t *module,
          MIN_CIRCLE_BORDER, max_mask_border);
 
       dt_conf_set_float(DT_MASKS_CONF(form->type, circle, border), masks_border);
-      dt_toast_log(_("feather size: %3.2f%%"), masks_border*100.0f);
+      dt_toast_log(_("fade-out border: %3.2f%%"), masks_border*100.0f);
     }
     else if(dt_modifier_is(state, 0))
     {
@@ -177,7 +177,7 @@ static int _circle_events_mouse_scrolled(dt_iop_module_t *module,
         dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
         dt_masks_gui_form_create(form, gui, index, module);
         dt_conf_set_float(DT_MASKS_CONF(form->type, circle, border), circle->border);
-        dt_toast_log(_("feather size: %3.2f%%"), circle->border*100.0f);
+        dt_toast_log(_("fade-out border: %3.2f%%"), circle->border*100.0f);
       }
       else if(gui->edit_mode == DT_MASKS_EDIT_FULL)
       {
@@ -1396,7 +1396,7 @@ static GSList *_circle_setup_mouse_actions(const struct dt_masks_form_t *const f
   lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL,
                                      0, _("[CIRCLE] change size"));
   lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL,
-                                     GDK_SHIFT_MASK, _("[CIRCLE] change feather size"));
+                                     GDK_SHIFT_MASK, _("[CIRCLE] change fade-out border"));
   lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL,
                                      GDK_CONTROL_MASK, _("[CIRCLE] change opacity"));
   return lm;
@@ -1422,7 +1422,7 @@ static void _circle_set_hint_message(const dt_masks_form_gui_t *const gui,
 {
   // circle has same controls on creation and on edit
   g_snprintf(msgbuf, msgbuf_len,
-             _("<b>size</b>: scroll, <b>feather size</b>: shift+scroll\n"
+             _("<b>size</b>: scroll, <b>fade-out border</b>: shift+scroll\n"
                "<b>opacity</b>: ctrl+scroll (%d%%)"), opacity);
 }
 

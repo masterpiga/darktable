@@ -2739,10 +2739,27 @@ static void _ui_init_bottom_panel_size(GtkWidget *widget)
   g_free(key);
 }
 
+static void _ui_init_flexi_panel_size(GtkWidget *widget)
+{
+  if(!widget) return;
+  gchar *key = _panels_get_panel_path(DT_UI_PANEL_FLEXI, "_size");
+  int s = 300; // default flexi panel size
+  if(key && dt_conf_key_exists(key))
+    s = CLAMP(dt_conf_get_int(key),
+              darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width"),
+              darktable.gui->dpi_factor * dt_conf_get_int("max_panel_width"));
+  gtk_widget_set_size_request(widget, s, -1);
+
+  g_free(key);
+}
+
 void dt_ui_restore_panels(const dt_ui_t *ui)
 {
   /* restore bottom panel size */
   _ui_init_bottom_panel_size(ui->panels[DT_UI_PANEL_BOTTOM]);
+
+  /* restore flexi panel size */
+  _ui_init_flexi_panel_size(ui->panels[DT_UI_PANEL_FLEXI]);
 
   /* restore from a previous collapse all panel state if enabled */
   gchar *key = _panels_get_view_path("panel_collaps_state");
@@ -3789,9 +3806,9 @@ static void _flexi_update_corner_icon_tooltip(dt_ui_t *ui)
   // dt_iop_gui_blend_mask_enable checks, so this matches what clicking the
   // icon will actually do.
   gchar *tooltip = ui->flexi_corner_icon_active
-    ? g_strdup_printf(_("mask editor -- %s\nclick to expand"),
+    ? g_strdup_printf(_("blend mask - %s\nclick to expand"),
         ui->flexi_corner_icon_mask_label ? ui->flexi_corner_icon_mask_label : _("no mask"))
-    : g_strdup(_("mask editor -- off\nclick to enable the mask and expand"));
+    : g_strdup(_("blend mask - off\nclick to enable the mask and expand"));
   gtk_widget_set_tooltip_text(ui->flexi_corner_icon, tooltip);
   g_free(tooltip);
 }
@@ -3895,6 +3912,7 @@ void dt_ui_flexi_panel_set_collapsed(dt_ui_t *ui,
   if(!ui->flexi_panel_overlay) return;
 
   if(persist) dt_conf_set_bool("plugins/darkroom/blend/masks_panel_collapsed", collapsed);
+  if(!collapsed) _ui_init_flexi_panel_size(ui->panels[DT_UI_PANEL_FLEXI]);
   gtk_widget_set_visible(ui->flexi_panel_overlay, !collapsed);
 
   const gboolean show_icon = collapsed && has_content;
@@ -6271,6 +6289,8 @@ GdkCursor *dt_gui_cursor_new_for_name(GdkDisplay *display, const char *cursor_na
     else if(!strcmp(cursor_name, "cell"))      type = GDK_PLUS;
     else if(!strcmp(cursor_name, "help"))      type = GDK_QUESTION_ARROW;
     else if(!strcmp(cursor_name, "ns-resize")) type = GDK_DOUBLE_ARROW;
+    else if(!strcmp(cursor_name, "ew-resize")
+            || !strcmp(cursor_name, "col-resize")) type = GDK_SB_H_DOUBLE_ARROW;
     cursor = gdk_cursor_new_for_display(display, type);
   }
 #endif
