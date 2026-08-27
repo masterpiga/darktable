@@ -6917,12 +6917,21 @@ static void _set_form_target(dt_iop_module_t *module, const dt_mask_id_t id)
 // selected element deselects it (toggle), mirroring the group header's own
 // title-click behaviour (see _select_group) -- only the title click routes
 // through here, see _set_form_target above for the select-only variant.
+//
+// Deselecting an element drops back to its GROUP being selected, rather than to
+// nothing. Selection has two levels (group, then element within it), so element
+// and group are not two independent things a click has to clear separately:
+// stepping out of an element lands you in its group, and clicking that group
+// again clears everything. Every state is therefore one click away -- which it
+// was not when this cleared both at once, since re-selecting the group after
+// deselecting an element then took a second click.
 static void _select_form(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd->panel_selected_formid == id)
   {
-    _set_group_target(module, INVALID_MASKID);
+    dt_masks_form_t *grp = _module_mask_group(module);
+    _set_group_target(module, _group_cid_of_form(grp, id));
     return;
   }
   _set_form_target(module, id);
@@ -9059,6 +9068,37 @@ _group_header_release(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   const int opstate = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "group-op"));
   _select_group(module, cid, opstate);
   return FALSE;
+}
+
+// The group's BODY (its block) uses the two handlers above verbatim, so the body
+// and the header cannot disagree about what a click means. But the header -- and
+// every element row and editor -- sits INSIDE the block, and all of their
+// handlers return FALSE so the drag source can arm. GTK therefore bubbles those
+// clicks up to the block, where running the same toggle a second time undoes the
+// first: clicking a group header selected the group and then instantly
+// deselected it, so the header looked completely inert.
+//
+// Filter by delivery instead of by widget: act only on events GDK delivered to
+// the block's OWN window, which is exactly the group body that no child covers
+// -- the padding, the indent left of the element rows, the gaps between them.
+// Anything a child already saw is left alone, and still reaches its own handler.
+static gboolean _event_on_own_window(GtkWidget *w, const GdkEventButton *e)
+{
+  return e->window == gtk_widget_get_window(w);
+}
+
+static gboolean
+_group_block_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
+{
+  if(!_event_on_own_window(w, e)) return FALSE;
+  return _group_header_press(w, e, module);
+}
+
+static gboolean
+_group_block_release(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
+{
+  if(!_event_on_own_window(w, e)) return FALSE;
+  return _group_header_release(w, e, module);
 }
 
 // solo a whole group: show only its member shapes, hiding all others.
@@ -13187,6 +13227,38 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
 // box that drives the canvas hover and carries the selection highlight. Returns
 // the row's vertical container; a parametric row packs its own always-visible
 // editor into it (see _build_param_row_editor).
+// Make `w` respond to a click exactly as this element's row header does: the
+// SAME two handlers, plus the three context keys they read off the widget they
+// fire on. Used for every surface that is "inside the element but not its
+// header" -- the row header event box itself, and the docked parametric /
+// properties editors below it.
+//
+// Without this, a click on an element's expanded editor area was consumed by no
+// one and bubbled up to the enclosing group's block, so clicking inside an
+// element selected its GROUP. Element rows and their editors are separate
+// windowed widgets (row_vbox between them is a windowless GtkBox, which only
+// ever sees events its children did not take), so each surface has to be wired
+// individually -- but to the same handlers, never to a second idea of what a
+// click on an element means.
+static void _wire_element_click_surface(GtkWidget *w,
+                                        dt_iop_module_t *module,
+                                        const dt_mask_id_t fid,
+                                        GtkWidget *handle,
+                                        GtkWidget *name_evbox)
+{
+  // _row_click_press/_release read all three off `w`: the id to act on, the
+  // handle the right-click actions menu anchors to, and the entry ctrl+click
+  // rename swaps in. Neither uses the event's coordinates, so it does not
+  // matter that these surfaces have different origins.
+  g_object_set_data(G_OBJECT(w), "formid", GINT_TO_POINTER(fid));
+  g_object_set_data(G_OBJECT(w), "handle-widget", handle);
+  g_object_set_data(G_OBJECT(w), "name-evbox", name_evbox);
+  g_signal_connect(G_OBJECT(w), "button-press-event",
+                   G_CALLBACK(_row_click_press), module);
+  g_signal_connect(G_OBJECT(w), "button-release-event",
+                   G_CALLBACK(_row_click_release), module);
+}
+
 static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                                   dt_masks_point_group_t *fpt,
                                   dt_masks_form_t *form,
@@ -13485,12 +13557,10 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   GtkWidget *row_evbox = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(row_evbox), TRUE);
   gtk_container_add(GTK_CONTAINER(row_evbox), row);
-  g_object_set_data(G_OBJECT(row_evbox), "formid", GINT_TO_POINTER(fid));
   // so a click landing in a gap between this row's own controls (see
   // _row_click_press/_row_click_release) has the exact same effect as
   // clicking the handle/name directly.
-  g_object_set_data(G_OBJECT(row_evbox), "handle-widget", handle);
-  g_object_set_data(G_OBJECT(row_evbox), "name-evbox", evbox);
+  _wire_element_click_surface(row_evbox, module, fid, handle, evbox);
   gtk_widget_set_tooltip_text(row_evbox, row_tip);
   g_free(row_tip); // last of the three widgets that needed it (handle, evbox, row_evbox)
   // hovering this row highlights just this shape on the canvas
@@ -13502,10 +13572,6 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                    module);
   g_signal_connect(G_OBJECT(row_evbox), "leave-notify-event", G_CALLBACK(_row_crossing),
                    module);
-  g_signal_connect(G_OBJECT(row_evbox), "button-press-event",
-                   G_CALLBACK(_row_click_press), module);
-  g_signal_connect(G_OBJECT(row_evbox), "button-release-event",
-                   G_CALLBACK(_row_click_release), module);
   // also a drop target (same reasoning as evbox above): the gaps must accept a
   // group/empty-group/shape drop too, not just reject it and block bubbling.
   if(group_formids)
@@ -13590,6 +13656,8 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                      G_CALLBACK(_row_crossing), module);
     g_signal_connect(G_OBJECT(param_evbox), "leave-notify-event",
                      G_CALLBACK(_row_crossing), module);
+    // clicking the editor's own background selects this element, not its group
+    _wire_element_click_surface(param_evbox, module, fid, handle, evbox);
     gtk_box_pack_start(GTK_BOX(row_vbox), param_evbox, FALSE, FALSE, 0);
     // "param-editor-box" must keep pointing at the editor itself (not the
     // hover wrapper): _masks_param_inout_toggled / _masks_param_compact_press
@@ -13616,6 +13684,8 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                      G_CALLBACK(_row_crossing), module);
     g_signal_connect(G_OBJECT(props_evbox), "leave-notify-event",
                      G_CALLBACK(_row_crossing), module);
+    // same as the parametric editor above: this is still inside the element
+    _wire_element_click_surface(props_evbox, module, fid, handle, evbox);
     gtk_box_pack_start(GTK_BOX(row_vbox), props_evbox, FALSE, FALSE, 0);
   }
 
@@ -14452,12 +14522,29 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     // render bottom-up (bottom member at the bottom). The whole block (not just the
     // header) is what "header-widget" points at below, so a selected group shades
     // its entire body, not just its header row.
-    GtkWidget *group_block = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    // An event box, not a plain GtkBox: a GtkBox is windowless and receives no
+    // events at all, so clicking a group's body anywhere outside its header row
+    // -- the padding, the indent to the left of the element rows, the gaps
+    // between them -- used to do nothing. The block owns the group's whole
+    // visual extent, so that is the area that should select it.
+    //
+    // The event box IS group_block (rather than a wrapper around it) on purpose:
+    // everything below still refers to group_block for its CSS classes, its drop
+    // target and drop-indicator classes, and its position among masks_list_box's
+    // children -- which _canonical_drop_frame walks to find a group's neighbour
+    // (see the one-insertion-slot work). Wrapping would have inserted a level
+    // between the block and that sibling list and broken the drop indicator.
+    // Children with their own windows (hdr_evbox, each row's own evbox) still
+    // consume their clicks first; only what falls through reaches here.
+    GtkWidget *group_block = gtk_event_box_new();
+    gtk_event_box_set_visible_window(GTK_EVENT_BOX(group_block), TRUE);
+    GtkWidget *block_inner = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(group_block), block_inner);
     // id mirrors the class for direct CSS targeting alongside the existing
     // class-based rules (shared by every real group's own block instance)
     gtk_widget_set_name(group_block, "mask-group-block");
     dt_gui_add_class(group_block, "mask-group-block");
-    gtk_box_pack_start(GTK_BOX(group_block), hdr_evbox, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(block_inner), hdr_evbox, FALSE, FALSE, 0);
     g_object_set_data(G_OBJECT(hdr_evbox), "header-widget", group_block);
     // "header-widget" above targets the whole block (selection shades the
     // group's entire body); solo-suppression dimming (_apply_group_header_dimming)
@@ -14516,6 +14603,22 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     g_signal_connect(G_OBJECT(group_block), "drag-leave", G_CALLBACK(_group_drop_leave),
                      group_block);
 
+    // clicking the group's body selects/deselects it exactly as clicking its
+    // header does -- the SAME two handlers, not a second implementation of
+    // "what a click on a group means", so the two surfaces cannot drift apart
+    // (ctrl+click rename and right-click actions come along for free, which is
+    // the point). They read their context off the widget, so the block needs
+    // the same keys the header carries; "group-formids" is already set above.
+    g_object_set_data(G_OBJECT(group_block), "group-key", GUINT_TO_POINTER(cid));
+    g_object_set_data(G_OBJECT(group_block), "group-op", GINT_TO_POINTER(opstate));
+    g_object_set_data(G_OBJECT(group_block), "title-label-box", lbl_box);
+    if(is_base_group)
+      g_object_set_data(G_OBJECT(group_block), "is-base-group", GINT_TO_POINTER(1));
+    g_signal_connect(G_OBJECT(group_block), "button-press-event",
+                     G_CALLBACK(_group_block_press), module);
+    g_signal_connect(G_OBJECT(group_block), "button-release-event",
+                     G_CALLBACK(_group_block_release), module);
+
     // highlight the whole group block when its group is the selected one
     if(dt_is_valid_maskid(bd->panel_selected_group_cid)
        && (dt_mask_id_t)cid == bd->panel_selected_group_cid)
@@ -14543,7 +14646,7 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
       gtk_box_pack_start(GTK_BOX(elem_box), _make_pending_shape_row(module, pending_form),
                          FALSE, FALSE, 0);
 
-    gtk_box_pack_start(GTK_BOX(group_block), elem_box, FALSE, FALSE, 0);
+    gtk_box_pack_start(GTK_BOX(block_inner), elem_box, FALSE, FALSE, 0);
 
     gtk_box_pack_end(GTK_BOX(bd->masks_list_box), group_block, FALSE, FALSE, 0);
 
