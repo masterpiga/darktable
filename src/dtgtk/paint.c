@@ -1126,16 +1126,92 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
 {
   PREAMBLE(0.9, 1, 0, 0)
 
-  // back sheet, always just an outline
-  cairo_rectangle(cr, 0.0, 0.25, 0.65, 0.65);
-  cairo_stroke(cr);
+  // A domino ("eye") mask: a band across the eyes with two holes, dipping to a
+  // point between them.
+  //
+  // Every choice here is driven by the 16px case, checked by rasterising the
+  // glyph at 16/20/24/32px rather than judging it at editing scale:
+  //
+  // - Domino, not a theatrical face mask. At 16px the box is ~14px. A face is
+  //   TALL, so it stacks eyes above a mouth along its shortest budget and every
+  //   feature lands at ~2px, where the cutouts blur into a grey smear. A domino
+  //   is WIDE: it runs along the axis with the most pixels and separates the
+  //   two holes horizontally, so each stays ~3px and reads.
+  // - Drawn FLAT, deliberately. Rotating it to exploit the diagonal was tried
+  //   and is worse: an eye hole is only ~3px, so once its edges stop landing on
+  //   pixel boundaries it becomes a grey gradient with no dark core, and the
+  //   band's crisp horizontal edges turn into anti-aliased ramps. The rotated
+  //   forms read as a blob at 16px. Diagonal also BUYS nothing geometrically --
+  //   for this aspect ratio (0.92 x 0.67) the largest rotated fit is a shorter
+  //   mask than the flat one, not a longer one.
+  // - Prominence instead comes from filling the box: the band is deep, and the
+  //   whole glyph is scaled by 1/0.92 so its width meets the edges exactly.
+  //
+  // The two states share one contour; only the eyes differ (punched out when
+  // filled, single arcs when stroked -- a stroked outline closes up at 16px).
+  cairo_translate(cr, 0.5, 0.5);
+  cairo_scale(cr, 1.087, 1.087);   // 1/0.92: the contour's own width
+  cairo_translate(cr, -0.5, -0.5);
+  // PREAMBLE set the line width from the matrix as it was before that scale
+  { cairo_matrix_t m2; cairo_get_matrix(cr, &m2);
+    cairo_set_line_width(cr, 1.618 / hypot(m2.xx, m2.yy)); }
 
-  // front sheet -- filled solid once a mask is actually active, outline only
-  // otherwise, so the glyph itself (not just the button background) tells
-  // the two states apart
-  cairo_rectangle(cr, 0.35, 0.0, 0.65, 0.65);
-  if(flags & CPF_ACTIVE) cairo_fill_preserve(cr);
-  cairo_stroke(cr);
+#define _MASK_DOMINO_CONTOUR(cr)                                                \
+  do {                                                                          \
+    cairo_move_to(cr, 0.04, 0.28);                                              \
+    /* brow line, sweeping up over both eyes */                                 \
+    cairo_curve_to(cr, 0.30, 0.15, 0.70, 0.15, 0.96, 0.28);                     \
+    /* right cheek down to the outer corner */                                  \
+    cairo_curve_to(cr, 0.94, 0.59, 0.80, 0.84, 0.62, 0.84);                     \
+    /* the nose notch: dip to a point at the centre */                          \
+    cairo_curve_to(cr, 0.54, 0.84, 0.52, 0.72, 0.50, 0.72);                     \
+    cairo_curve_to(cr, 0.48, 0.72, 0.46, 0.84, 0.38, 0.84);                     \
+    /* left cheek back up to the start */                                       \
+    cairo_curve_to(cr, 0.20, 0.84, 0.06, 0.59, 0.04, 0.28);                     \
+    cairo_close_path(cr);                                                       \
+  } while(0)
+
+  if(flags & CPF_ACTIVE)
+  {
+    cairo_new_path(cr);
+    _MASK_DOMINO_CONTOUR(cr);
+
+    // left eye hole
+    cairo_new_sub_path(cr);
+    cairo_move_to(cr, 0.12, 0.46);
+    cairo_curve_to(cr, 0.20, 0.34, 0.37, 0.36, 0.42, 0.50);
+    cairo_curve_to(cr, 0.34, 0.58, 0.17, 0.56, 0.12, 0.46);
+    cairo_close_path(cr);
+
+    // right eye hole (mirrored)
+    cairo_new_sub_path(cr);
+    cairo_move_to(cr, 0.88, 0.46);
+    cairo_curve_to(cr, 0.80, 0.34, 0.63, 0.36, 0.58, 0.50);
+    cairo_curve_to(cr, 0.66, 0.58, 0.83, 0.56, 0.88, 0.46);
+    cairo_close_path(cr);
+
+    // even-odd so the eyes punch through the filled band
+    cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
+    cairo_fill(cr);
+  }
+  else
+  {
+    cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+
+    cairo_new_path(cr);
+    _MASK_DOMINO_CONTOUR(cr);
+    cairo_stroke(cr);
+
+    cairo_move_to(cr, 0.12, 0.46);
+    cairo_curve_to(cr, 0.20, 0.34, 0.37, 0.36, 0.42, 0.50);
+    cairo_stroke(cr);
+
+    cairo_move_to(cr, 0.88, 0.46);
+    cairo_curve_to(cr, 0.80, 0.34, 0.63, 0.36, 0.58, 0.50);
+    cairo_stroke(cr);
+  }
+
+#undef _MASK_DOMINO_CONTOUR
 
   FINISH
 }
