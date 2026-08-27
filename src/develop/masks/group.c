@@ -22,6 +22,7 @@
 #include "develop/blend.h"
 #include "develop/imageop.h"
 #include "develop/masks.h"
+#include "develop/masks/group_internal.h"
 
 // a flattened scratch-group entry's own parentid is the id of its *real*
 // structural parent (see dt_masks_group_ungroup, masks/masks.c), not
@@ -894,11 +895,11 @@ error:
   return 0;
 }
 
-static void _combine_masks_union(float *const restrict dest,
-                                 float *const restrict newmask,
-                                 const size_t npixels,
-                                 const float opacity,
-                                 const int inverted)
+void _combine_masks_union(float *const restrict dest,
+                          float *const restrict newmask,
+                          const size_t npixels,
+                          const float opacity,
+                          const int inverted)
 {
   if(inverted)
   {
@@ -920,11 +921,11 @@ static void _combine_masks_union(float *const restrict dest,
   }
 }
 
-static void _combine_masks_intersect(float *const restrict dest,
-                                     float *const restrict newmask,
-                                     const size_t npixels,
-                                     const float opacity,
-                                     const int inverted)
+void _combine_masks_intersect(float *const restrict dest,
+                              float *const restrict newmask,
+                              const size_t npixels,
+                              const float opacity,
+                              const int inverted)
 {
   if(inverted)
   {
@@ -953,33 +954,7 @@ static inline int both_positive(const float val1, const float val2)
   return (val1 > 0.0f) && (val2 > 0.0f);
 }
 
-static void _combine_masks_difference(float *const restrict dest,
-                                      float *const restrict newmask,
-                                      const size_t npixels,
-                                      const float opacity,
-                                      const int inverted)
-{
-  if(inverted)
-  {
-    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(size_t index = 0; index < npixels; index++)
-    {
-      const float mask = opacity * (1.0f - newmask[index]);
-      dest[index] *= (1.0f - mask * both_positive(dest[index],mask));
-    }
-  }
-  else
-  {
-    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(size_t index = 0; index < npixels; index++)
-    {
-      const float mask = opacity * newmask[index];
-      dest[index] *= (1.0f - mask * both_positive(dest[index],mask));
-    }
-  }
-}
-
-static void _combine_masks_sum(float *const restrict dest,
+void _combine_masks_difference(float *const restrict dest,
                                float *const restrict newmask,
                                const size_t npixels,
                                const float opacity,
@@ -991,6 +966,32 @@ static void _combine_masks_sum(float *const restrict dest,
     for(size_t index = 0; index < npixels; index++)
     {
       const float mask = opacity * (1.0f - newmask[index]);
+      dest[index] *= (1.0f - mask * both_positive(dest[index],mask));
+    }
+  }
+  else
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(size_t index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * newmask[index];
+      dest[index] *= (1.0f - mask * both_positive(dest[index],mask));
+    }
+  }
+}
+
+void _combine_masks_sum(float *const restrict dest,
+                        float *const restrict newmask,
+                        const size_t npixels,
+                        const float opacity,
+                        const int inverted)
+{
+  if(inverted)
+  {
+    DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
+    for(size_t index = 0; index < npixels; index++)
+    {
+      const float mask = opacity * (1.0f - newmask[index]);
       dest[index] = MIN(1.0f, dest[index] + mask);
     }
   }
@@ -1005,11 +1006,11 @@ static void _combine_masks_sum(float *const restrict dest,
   }
 }
 
-static void _combine_masks_exclusion(float *const restrict dest,
-                                     float *const restrict newmask,
-                                     const size_t npixels,
-                                     const float opacity,
-                                     const int inverted)
+void _combine_masks_exclusion(float *const restrict dest,
+                              float *const restrict newmask,
+                              const size_t npixels,
+                              const float opacity,
+                              const int inverted)
 {
   if(inverted)
   {
@@ -1038,11 +1039,11 @@ static void _combine_masks_exclusion(float *const restrict dest,
   }
 }
 
-static void _combine_masks_multiply(float *const restrict dest,
-                                    float *const restrict newmask,
-                                    const size_t npixels,
-                                    const float opacity,
-                                    const int inverted)
+void _combine_masks_multiply(float *const restrict dest,
+                             float *const restrict newmask,
+                             const size_t npixels,
+                             const float opacity,
+                             const int inverted)
 {
   // multiply the running accumulator by this shape, the way legacy parametric
   // masks combine. Onto the empty base this is degenerate (0), so the
@@ -1071,11 +1072,11 @@ static void _combine_masks_multiply(float *const restrict dest,
 // the empty mask as identity, but it is *not* idempotent, so feathered overlaps
 // build up smoothly instead of leaving the crease that max() produces. Used as
 // the optional within-group combiner on the flexi group-fold path.
-static void _combine_masks_screen(float *const restrict dest,
-                                  float *const restrict newmask,
-                                  const size_t npixels,
-                                  const float opacity,
-                                  const int inverted)
+void _combine_masks_screen(float *const restrict dest,
+                           float *const restrict newmask,
+                           const size_t npixels,
+                           const float opacity,
+                           const int inverted)
 {
   if(inverted)
   {
@@ -1104,10 +1105,10 @@ static void _combine_masks_screen(float *const restrict dest,
 // op=1, inverted=0). Never called for the base (bottom) group -- its own
 // operator is never evaluated at all, see the base-group handling in
 // _group_get_mask_roi_flexi.
-static void _flexi_apply_group_op(float *const restrict buffer,
-                                  float *const restrict grp,
-                                  const size_t npixels,
-                                  const guint group_op)
+void _flexi_apply_group_op(float *const restrict buffer,
+                           float *const restrict grp,
+                           const size_t npixels,
+                           const guint group_op)
 {
   if(group_op & DT_MASKS_STATE_UNION)
     _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
@@ -1131,8 +1132,8 @@ static void _flexi_apply_group_op(float *const restrict buffer,
 // mask member that changes nothing, used to keep a parametric channel still
 // sitting at its full/base range from counting as an "active" group member
 // (see the nb_members bookkeeping in _group_get_mask_roi_flexi below).
-static gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
-                                            const size_t npixels)
+gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
+                                     const size_t npixels)
 {
   for(size_t i = 0; i < npixels; i++)
     if(buffer[i] < 0.9999f) return FALSE;
