@@ -1023,8 +1023,7 @@ _register_vectorized_forms(dt_iop_module_t *module,
     for(GList *l = dev->forms; l; l = g_list_next(l))
     {
       const dt_masks_form_t *ff = l->data;
-      if(strncmp(ff->name, path_prefix, strlen(path_prefix)) == 0)
-        path_nb++;
+      if(strncmp(ff->name, path_prefix, strlen(path_prefix)) == 0) path_nb++;
     }
     snprintf(f->name, sizeof(f->name), "%s #%d", path_prefix, (int)path_nb);
 
@@ -1050,8 +1049,7 @@ _register_vectorized_forms(dt_iop_module_t *module,
   for(GList *l = dev->forms; l; l = g_list_next(l))
   {
     const dt_masks_form_t *f = l->data;
-    if(strncmp(f->name, bundle_prefix, strlen(bundle_prefix)) == 0)
-      bundle_nb++;
+    if(strncmp(f->name, bundle_prefix, strlen(bundle_prefix)) == 0) bundle_nb++;
     if(strncmp(f->name, path_prefix, strlen(path_prefix)) == 0)
       path_nb++;
   }
@@ -1088,7 +1086,7 @@ _register_vectorized_forms(dt_iop_module_t *module,
     grpt->formid = f->formid;
     grpt->parentid = bundle->formid;
     grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
-      | (sign == '-' ? DT_MASKS_STATE_DIFFERENCE : DT_MASKS_STATE_UNION);
+                  | (sign == '-' ? DT_MASKS_STATE_DIFFERENCE : DT_MASKS_STATE_UNION);
     grpt->opacity = 1.0f;
     grpt->group_opacity = 1.0f;
     bundle->points = g_list_append(bundle->points, grpt);
@@ -1324,8 +1322,10 @@ static int _object_events_button_pressed(dt_iop_module_t *module,
     if(new_grp)
     {
       dt_develop_t *dev = darktable.develop;
-      if(module) dt_masks_group_insert_member(dev, module, new_grp, gui);
-      else       dt_dev_add_masks_history_item(dev, module, TRUE);
+      if(module)
+        dt_masks_group_insert_member(dev, module, new_grp, gui);
+      else
+        dt_dev_add_masks_history_item(dev, module, TRUE);
     }
 
     // cleanup and exit creation mode
@@ -1873,200 +1873,203 @@ static void _object_set_form_name(dt_masks_form_t *const form,
 // Only reached outside interactive creation (gui->creation == FALSE); the
 // switch statement above this in _object_modify_property owns that case.
 static void _object_bundle_modify_property(dt_masks_form_t *const form,
-                                            const dt_masks_property_t prop,
-                                            const float old_val,
-                                            const float new_val,
-                                            float *sum,
-                                            int *count,
-                                            float *min,
-                                            float *max)
+                                           const dt_masks_property_t prop,
+                                           const float old_val,
+                                           const float new_val,
+                                           float *sum,
+                                           int *count,
+                                           float *min,
+                                           float *max)
 {
   const float ratio = (!old_val || !new_val) ? 1.0f : new_val / old_val;
 
   switch(prop)
   {
-    case DT_MASKS_PROPERTY_FEATHER:
-      // pure per-child delegation: a hole path's own border already softens
-      // on the geometrically-correct side, same as any single subtract
-      // shape today, so no sign-awareness is needed here.
+  case DT_MASKS_PROPERTY_FEATHER:
+    // pure per-child delegation: a hole path's own border already softens
+    // on the geometrically-correct side, same as any single subtract
+    // shape today, so no sign-awareness is needed here.
+    for(GList *l = form->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
+      if(child && child->functions && child->functions->modify_property)
+        child->functions->modify_property(child, prop, old_val, new_val, sum, count, min,
+                                          max);
+    }
+    break;
+
+  case DT_MASKS_PROPERTY_SIZE:
+  case DT_MASKS_PROPERTY_ROTATION:
+  {
+    // one shared center for the whole bundle: the arithmetic mean of every
+    // child's own corner points, pooled -- good enough for the concentric
+    // shapes an AI segmentation produces (outer boundary + hole), avoids a
+    // pooled-polygon shoelace calculation.
+    double cx = 0.0, cy = 0.0;
+    int npts = 0;
+    for(GList *l = form->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      const dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
+      if(!child) continue;
+      for(GList *p = child->points; p; p = g_list_next(p))
+      {
+        const dt_masks_point_path_t *pp = p->data;
+        cx += pp->corner[0];
+        cy += pp->corner[1];
+        npts++;
+      }
+    }
+    if(npts == 0) break;
+    cx /= npts;
+    cy /= npts;
+
+    // a genuine geometry change invalidates every child's own shrink/grow
+    // baseline (see _object_bundle_resize below) -- its points are about
+    // to be mutated directly here, bypassing path.c's own property-change
+    // cases, which normally do this invalidation themselves.
+    const gboolean geom_changed = (new_val != old_val);
+    if(geom_changed)
+      for(GList *l = form->points; l; l = g_list_next(l))
+      {
+        const dt_masks_point_group_t *pt = l->data;
+        dt_masks_path_resize_invalidate(pt->formid);
+      }
+
+    if(prop == DT_MASKS_PROPERTY_SIZE)
+    {
+      // an approximate linear "size" measure for the whole bundle: sum of
+      // each child's own polygon area (shoelace, the same formula
+      // _path_modify_property's own SIZE case uses), sqrt'd into a linear
+      // scale. Needed for two things _path_modify_property's case also
+      // does with its own per-path surf: (1) clamp the ratio so the
+      // bundle can't be scaled to nothing or blown up unboundedly, and
+      // (2) report a genuine non-zero absolute reading back through *sum
+      // -- SIZE is a *relative* property (_blend_masks_properties), so
+      // blend_gui.c's _props_row_apply multiplies the slider's soft range
+      // by sum/count; reporting new_val (0 at rest, like ROTATION's own
+      // absolute-dial convention) instead collapses that range to zero,
+      // leaving the slider with no visible label or handle.
+      double area_sum = 0.0;
+      for(GList *l = form->points; l; l = g_list_next(l))
+      {
+        const dt_masks_point_group_t *pt = l->data;
+        const dt_masks_form_t *child =
+          dt_masks_get_from_id(darktable.develop, pt->formid);
+        if(!child) continue;
+        double a = 0.0;
+        for(GList *p = child->points; p; p = g_list_next(p))
+        {
+          GList *next = g_list_next(p);
+          if(!next) next = child->points;
+          const float *c1 = ((dt_masks_point_path_t *)p->data)->corner;
+          const float *c2 = ((dt_masks_point_path_t *)next->data)->corner;
+          a += c1[0] * c2[1] - c2[0] * c1[1];
+        }
+        area_sum += fabs(a);
+      }
+      float surf = (area_sum > 0.0) ? sqrtf((float)area_sum) : 0.0f;
+      const float r0 =
+        (surf > 0.0f) ? fminf(fmaxf(ratio, 0.001f / surf), 2.0f / surf) : ratio;
+
+      // positive (union) children scale by `r0`; hole (difference)
+      // children scale by `1/r0` -- shrinking the bundle (ratio < 1)
+      // shrinks the outer boundary and grows the hole.
       for(GList *l = form->points; l; l = g_list_next(l))
       {
         const dt_masks_point_group_t *pt = l->data;
         dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
-        if(child && child->functions && child->functions->modify_property)
-          child->functions->modify_property(child, prop, old_val, new_val, sum, count, min, max);
-      }
-      break;
-
-    case DT_MASKS_PROPERTY_SIZE:
-    case DT_MASKS_PROPERTY_ROTATION:
-    {
-      // one shared center for the whole bundle: the arithmetic mean of every
-      // child's own corner points, pooled -- good enough for the concentric
-      // shapes an AI segmentation produces (outer boundary + hole), avoids a
-      // pooled-polygon shoelace calculation.
-      double cx = 0.0, cy = 0.0;
-      int npts = 0;
-      for(GList *l = form->points; l; l = g_list_next(l))
-      {
-        const dt_masks_point_group_t *pt = l->data;
-        const dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
         if(!child) continue;
+        const float r = (pt->state & DT_MASKS_STATE_DIFFERENCE) ? 1.0f / r0 : r0;
         for(GList *p = child->points; p; p = g_list_next(p))
         {
-          const dt_masks_point_path_t *pp = p->data;
-          cx += pp->corner[0];
-          cy += pp->corner[1];
-          npts++;
+          dt_masks_point_path_t *point = p->data;
+          const float x = (point->corner[0] - (float)cx) * r;
+          const float y = (point->corner[1] - (float)cy) * r;
+          const float ct1x = (point->ctrl1[0] - point->corner[0]) * r;
+          const float ct1y = (point->ctrl1[1] - point->corner[1]) * r;
+          const float ct2x = (point->ctrl2[0] - point->corner[0]) * r;
+          const float ct2y = (point->ctrl2[1] - point->corner[1]) * r;
+          point->corner[0] = (float)cx + x;
+          point->corner[1] = (float)cy + y;
+          point->ctrl1[0] = point->corner[0] + ct1x;
+          point->ctrl1[1] = point->corner[1] + ct1y;
+          point->ctrl2[0] = point->corner[0] + ct2x;
+          point->ctrl2[1] = point->corner[1] + ct2y;
         }
       }
-      if(npts == 0) break;
-      cx /= npts;
-      cy /= npts;
 
-      // a genuine geometry change invalidates every child's own shrink/grow
-      // baseline (see _object_bundle_resize below) -- its points are about
-      // to be mutated directly here, bypassing path.c's own property-change
-      // cases, which normally do this invalidation themselves.
-      const gboolean geom_changed = (new_val != old_val);
-      if(geom_changed)
-        for(GList *l = form->points; l; l = g_list_next(l))
-        {
-          const dt_masks_point_group_t *pt = l->data;
-          dt_masks_path_resize_invalidate(pt->formid);
-        }
-
-      if(prop == DT_MASKS_PROPERTY_SIZE)
+      if(surf > 0.0f)
       {
-        // an approximate linear "size" measure for the whole bundle: sum of
-        // each child's own polygon area (shoelace, the same formula
-        // _path_modify_property's own SIZE case uses), sqrt'd into a linear
-        // scale. Needed for two things _path_modify_property's case also
-        // does with its own per-path surf: (1) clamp the ratio so the
-        // bundle can't be scaled to nothing or blown up unboundedly, and
-        // (2) report a genuine non-zero absolute reading back through *sum
-        // -- SIZE is a *relative* property (_blend_masks_properties), so
-        // blend_gui.c's _props_row_apply multiplies the slider's soft range
-        // by sum/count; reporting new_val (0 at rest, like ROTATION's own
-        // absolute-dial convention) instead collapses that range to zero,
-        // leaving the slider with no visible label or handle.
-        double area_sum = 0.0;
-        for(GList *l = form->points; l; l = g_list_next(l))
-        {
-          const dt_masks_point_group_t *pt = l->data;
-          const dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
-          if(!child) continue;
-          double a = 0.0;
-          for(GList *p = child->points; p; p = g_list_next(p))
-          {
-            GList *next = g_list_next(p);
-            if(!next) next = child->points;
-            const float *c1 = ((dt_masks_point_path_t *)p->data)->corner;
-            const float *c2 = ((dt_masks_point_path_t *)next->data)->corner;
-            a += c1[0] * c2[1] - c2[0] * c1[1];
-          }
-          area_sum += fabs(a);
-        }
-        float surf = (area_sum > 0.0) ? sqrtf((float)area_sum) : 0.0f;
-        const float r0 = (surf > 0.0f) ? fminf(fmaxf(ratio, 0.001f / surf), 2.0f / surf) : ratio;
+        surf *= r0;
+        *max = fminf(*max, 2.0f / surf);
+        *min = fmaxf(*min, 0.001f / surf);
+        *sum += surf / 2.0f;
+      }
+      ++*count;
+    }
+    else // DT_MASKS_PROPERTY_ROTATION
+    {
+      // rotate every child about the one shared bundle center. Done
+      // directly in form (backtransformed, normalized) space -- unlike a
+      // standalone path's own ROTATION case (dt_masks_rotate_ctrl_points),
+      // which pivots in on-screen space using the interactive display
+      // buffer (gui->points), not available here since Phase 1 does not
+      // extend the on-canvas dispatcher to DT_MASKS_OBJECT (see Phase 2) --
+      // but a corner's x and y are each normalized by a *different* image
+      // dimension (see _register_vectorized_forms: corner[0]/iwidth,
+      // corner[1]/iheight), so that normalized space is not isotropic: a
+      // plain rotation matrix applied directly there shears the shape once
+      // converted back to real pixels (observed live: rotating skewed the
+      // outer boundary and every hole). Convert to actual image-pixel
+      // space first, rotate rigidly there, then convert back -- the same
+      // fix SIZE's scaling does not need, since a uniform per-axis scale
+      // commutes with the (also per-axis) normalization and stays diagonal.
+      // matching path.c's own ROTATION case: report the dial value and
+      // count this property as applicable unconditionally (below), even
+      // on the rare call where the image size isn't available yet (e.g.
+      // a populate-time probe before the preview pipe has ever run) --
+      // only the geometry transform itself is skipped in that case,
+      // exactly as path.c's own case silently skips its gpt-based
+      // transform but still falls through to the same two lines.
+      float dwidth, dheight, iwidth, iheight;
+      dt_masks_get_image_size(&dwidth, &dheight, &iwidth, &iheight);
+      if(iwidth > 0.0f && iheight > 0.0f && new_val != old_val)
+      {
+        const float cx_px = (float)cx * iwidth;
+        const float cy_px = (float)cy * iheight;
 
-        // positive (union) children scale by `r0`; hole (difference)
-        // children scale by `1/r0` -- shrinking the bundle (ratio < 1)
-        // shrinks the outer boundary and grows the hole.
+        const float a = deg2radf(new_val - old_val);
+        const float c = cosf(a), s = sinf(a);
         for(GList *l = form->points; l; l = g_list_next(l))
         {
           const dt_masks_point_group_t *pt = l->data;
           dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
           if(!child) continue;
-          const float r = (pt->state & DT_MASKS_STATE_DIFFERENCE) ? 1.0f / r0 : r0;
           for(GList *p = child->points; p; p = g_list_next(p))
           {
             dt_masks_point_path_t *point = p->data;
-            const float x = (point->corner[0] - (float)cx) * r;
-            const float y = (point->corner[1] - (float)cy) * r;
-            const float ct1x = (point->ctrl1[0] - point->corner[0]) * r;
-            const float ct1y = (point->ctrl1[1] - point->corner[1]) * r;
-            const float ct2x = (point->ctrl2[0] - point->corner[0]) * r;
-            const float ct2y = (point->ctrl2[1] - point->corner[1]) * r;
-            point->corner[0] = (float)cx + x;
-            point->corner[1] = (float)cy + y;
-            point->ctrl1[0] = point->corner[0] + ct1x;
-            point->ctrl1[1] = point->corner[1] + ct1y;
-            point->ctrl2[0] = point->corner[0] + ct2x;
-            point->ctrl2[1] = point->corner[1] + ct2y;
-          }
-        }
-
-        if(surf > 0.0f)
-        {
-          surf *= r0;
-          *max = fminf(*max, 2.0f / surf);
-          *min = fmaxf(*min, 0.001f / surf);
-          *sum += surf / 2.0f;
-        }
-        ++*count;
-      }
-      else // DT_MASKS_PROPERTY_ROTATION
-      {
-        // rotate every child about the one shared bundle center. Done
-        // directly in form (backtransformed, normalized) space -- unlike a
-        // standalone path's own ROTATION case (dt_masks_rotate_ctrl_points),
-        // which pivots in on-screen space using the interactive display
-        // buffer (gui->points), not available here since Phase 1 does not
-        // extend the on-canvas dispatcher to DT_MASKS_OBJECT (see Phase 2) --
-        // but a corner's x and y are each normalized by a *different* image
-        // dimension (see _register_vectorized_forms: corner[0]/iwidth,
-        // corner[1]/iheight), so that normalized space is not isotropic: a
-        // plain rotation matrix applied directly there shears the shape once
-        // converted back to real pixels (observed live: rotating skewed the
-        // outer boundary and every hole). Convert to actual image-pixel
-        // space first, rotate rigidly there, then convert back -- the same
-        // fix SIZE's scaling does not need, since a uniform per-axis scale
-        // commutes with the (also per-axis) normalization and stays diagonal.
-        // matching path.c's own ROTATION case: report the dial value and
-        // count this property as applicable unconditionally (below), even
-        // on the rare call where the image size isn't available yet (e.g.
-        // a populate-time probe before the preview pipe has ever run) --
-        // only the geometry transform itself is skipped in that case,
-        // exactly as path.c's own case silently skips its gpt-based
-        // transform but still falls through to the same two lines.
-        float dwidth, dheight, iwidth, iheight;
-        dt_masks_get_image_size(&dwidth, &dheight, &iwidth, &iheight);
-        if(iwidth > 0.0f && iheight > 0.0f && new_val != old_val)
-        {
-          const float cx_px = (float)cx * iwidth;
-          const float cy_px = (float)cy * iheight;
-
-          const float a = deg2radf(new_val - old_val);
-          const float c = cosf(a), s = sinf(a);
-          for(GList *l = form->points; l; l = g_list_next(l))
-          {
-            const dt_masks_point_group_t *pt = l->data;
-            dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
-            if(!child) continue;
-            for(GList *p = child->points; p; p = g_list_next(p))
+            float *const coords[3] = { point->corner, point->ctrl1, point->ctrl2 };
+            for(int k = 0; k < 3; k++)
             {
-              dt_masks_point_path_t *point = p->data;
-              float *const coords[3] = { point->corner, point->ctrl1, point->ctrl2 };
-              for(int k = 0; k < 3; k++)
-              {
-                const float px = coords[k][0] * iwidth;
-                const float py = coords[k][1] * iheight;
-                const float rx = px - cx_px;
-                const float ry = py - cy_px;
-                coords[k][0] = (cx_px + rx * c - ry * s) / iwidth;
-                coords[k][1] = (cy_px + rx * s + ry * c) / iheight;
-              }
+              const float px = coords[k][0] * iwidth;
+              const float py = coords[k][1] * iheight;
+              const float rx = px - cx_px;
+              const float ry = py - cy_px;
+              coords[k][0] = (cx_px + rx * c - ry * s) / iwidth;
+              coords[k][1] = (cy_px + rx * s + ry * c) / iheight;
             }
           }
         }
-        *sum += new_val;
-        ++*count;
       }
-      break;
+      *sum += new_val;
+      ++*count;
     }
+    break;
+  }
 
-    default:;
+  default:;
   }
 }
 
@@ -2089,8 +2092,7 @@ static gboolean _object_bundle_resize(dt_masks_form_t *const form,
     dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
     if(!child || !child->functions || !child->functions->resize) continue;
     const int child_amount = (pt->state & DT_MASKS_STATE_DIFFERENCE) ? -amount : amount;
-    if(child->functions->resize(child, child_amount, use_percent))
-      any_ok = TRUE;
+    if(child->functions->resize(child, child_amount, use_percent)) any_ok = TRUE;
   }
   return any_ok;
 }
@@ -2246,8 +2248,8 @@ static void _object_modify_property(dt_masks_form_t *const form,
 // _object_modify_property's creation branch (above) never dereferences its
 // `form` argument, only `gui`/`_get_data(gui)`, so passing NULL here is safe.
 void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
-                                              const float old_val,
-                                              const float new_val)
+                                             const float old_val,
+                                             const float new_val)
 {
   dt_masks_form_gui_t *gui = darktable.develop->form_gui;
   if(!gui || !gui->creation) return;

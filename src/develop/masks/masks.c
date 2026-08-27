@@ -445,7 +445,7 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
   if(!grp)
   {
     // we create a new group
-    if(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
+    if(form->type & (DT_MASKS_CLONE | DT_MASKS_NON_CLONE))
       grp = _group_create(dev, module, DT_MASKS_GROUP | DT_MASKS_CLONE);
     else
       grp = _group_create(dev, module, DT_MASKS_GROUP);
@@ -471,7 +471,7 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
     bd && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) && bd->insert_active;
   if(flexi_insert)
   {
-    grpt->state |= (dt_masks_state_t)bd->insert_op;   // 0 = the base add group
+    grpt->state |= (dt_masks_state_t)bd->insert_op; // 0 = the base add group
     grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
     if(dt_is_valid_maskid(bd->insert_after_fid))
     {
@@ -479,9 +479,14 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
       int pos = -1, k = 0;
       for(GList *l = grp->points; l; l = g_list_next(l), k++)
         if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
-        { pos = k; break; }
-      if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
-      else         grp->points = g_list_append(grp->points, grpt);
+        {
+          pos = k;
+          break;
+        }
+      if(pos >= 0)
+        grp->points = g_list_insert(grp->points, grpt, pos + 1);
+      else
+        grp->points = g_list_append(grp->points, grpt);
     }
     else
     {
@@ -508,8 +513,7 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
   }
   else
   {
-    if(grp->points)
-      grpt->state |= dt_masks_get_default_operator(form);
+    if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
     grp->points = g_list_append(grp->points, grpt);
   }
   // we save the group
@@ -1014,7 +1018,6 @@ static int dt_masks_legacy_params_v9_to_v10(dt_develop_t *dev, void *params)
   return 0;
 }
 
-
 int dt_masks_legacy_params(dt_develop_t *dev,
                            void *params,
                            const int old_version,
@@ -1222,10 +1225,14 @@ void dt_masks_read_masks_history(dt_develop_t *dev, const dt_imgid_t imgid)
       size_t read_size = point_size;
       if(type & DT_MASKS_GROUP)
       {
-        if(form->version < 7)       read_size = offsetof(dt_masks_point_group_t, refinement);
-        else if(form->version < 8)  read_size = offsetof(dt_masks_point_group_t, name);
-        else if(form->version < 9)  read_size = offsetof(dt_masks_point_group_t, group_opacity);
-        else if(form->version < 10) read_size = offsetof(dt_masks_point_group_t, group_start);
+        if(form->version < 7)
+          read_size = offsetof(dt_masks_point_group_t, refinement);
+        else if(form->version < 8)
+          read_size = offsetof(dt_masks_point_group_t, name);
+        else if(form->version < 9)
+          read_size = offsetof(dt_masks_point_group_t, group_opacity);
+        else if(form->version < 10)
+          read_size = offsetof(dt_masks_point_group_t, group_start);
       }
 
       for(int i = 0; i < nb_points; i++)
@@ -1886,10 +1893,9 @@ void dt_masks_iop_edit_toggle_callback(GtkToggleButton *togglebutton,
   }
 
   // reset the gui
-  dt_masks_set_edit_mode(module,
-                         (bd->masks_shown == DT_MASKS_EDIT_OFF
-                          ? DT_MASKS_EDIT_FULL
-                          : DT_MASKS_EDIT_OFF));
+  dt_masks_set_edit_mode(
+    module,
+    (bd->masks_shown == DT_MASKS_EDIT_OFF ? DT_MASKS_EDIT_FULL : DT_MASKS_EDIT_OFF));
 }
 
 static void _menu_no_masks(dt_iop_module_t *module)
@@ -1926,7 +1932,8 @@ static void _menu_add_shape(dt_iop_module_t *module,
 // hint so it lands in the selected (or single default) group, mirroring how a freshly
 // drawn shape is placed in dt_masks_gui_form_save_creation. No-op outside flexi or
 // when no hint is active, so the classic path stays byte-identical.
-static void _flexi_reposition_imported(dt_iop_module_t *module, dt_masks_form_t *grp,
+static void _flexi_reposition_imported(dt_iop_module_t *module,
+                                       dt_masks_form_t *grp,
                                        dt_masks_point_group_t *grpt,
                                        const dt_masks_form_t *form)
 {
@@ -1946,12 +1953,17 @@ static void _flexi_reposition_imported(dt_iop_module_t *module, dt_masks_form_t 
     int pos = -1, k = 0;
     for(GList *l = grp->points; l; l = g_list_next(l), k++)
       if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
-      { pos = k; break; }
-    if(pos >= 0) grp->points = g_list_insert(grp->points, grpt, pos + 1);
-    else         grp->points = g_list_append(grp->points, grpt);
+      {
+        pos = k;
+        break;
+      }
+    if(pos >= 0)
+      grp->points = g_list_insert(grp->points, grpt, pos + 1);
+    else
+      grp->points = g_list_append(grp->points, grpt);
   }
   else
-    grp->points = g_list_prepend(grp->points, grpt);  // bottom-anchored -> base
+    grp->points = g_list_prepend(grp->points, grpt); // bottom-anchored -> base
 
   // realizing an empty group: tell the panel which form filled it, and mark the new
   // single-member group as a head so it stays distinct from a same-op neighbour
@@ -2452,12 +2464,12 @@ dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form)
     const char *pop = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
     if(pop && *pop)
     {
-      if(!strcmp(pop, "union"))        return DT_MASKS_STATE_UNION;
+      if(!strcmp(pop, "union")) return DT_MASKS_STATE_UNION;
       if(!strcmp(pop, "intersection")) return DT_MASKS_STATE_INTERSECTION;
-      if(!strcmp(pop, "difference"))   return DT_MASKS_STATE_DIFFERENCE;
-      if(!strcmp(pop, "sum"))          return DT_MASKS_STATE_SUM;
-      if(!strcmp(pop, "exclusion"))    return DT_MASKS_STATE_EXCLUSION;
-      if(!strcmp(pop, "multiply"))     return DT_MASKS_STATE_MULTIPLY;
+      if(!strcmp(pop, "difference")) return DT_MASKS_STATE_DIFFERENCE;
+      if(!strcmp(pop, "sum")) return DT_MASKS_STATE_SUM;
+      if(!strcmp(pop, "exclusion")) return DT_MASKS_STATE_EXCLUSION;
+      if(!strcmp(pop, "multiply")) return DT_MASKS_STATE_MULTIPLY;
     }
     return DT_MASKS_STATE_MULTIPLY;
   }
@@ -2469,19 +2481,17 @@ dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form)
   const char *op = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
   if(op && *op)
   {
-    if(!strcmp(op, "union"))        return DT_MASKS_STATE_UNION;
+    if(!strcmp(op, "union")) return DT_MASKS_STATE_UNION;
     if(!strcmp(op, "intersection")) return DT_MASKS_STATE_INTERSECTION;
-    if(!strcmp(op, "difference"))   return DT_MASKS_STATE_DIFFERENCE;
-    if(!strcmp(op, "sum"))          return DT_MASKS_STATE_SUM;
-    if(!strcmp(op, "exclusion"))    return DT_MASKS_STATE_EXCLUSION;
-    if(!strcmp(op, "multiply"))     return DT_MASKS_STATE_MULTIPLY;
+    if(!strcmp(op, "difference")) return DT_MASKS_STATE_DIFFERENCE;
+    if(!strcmp(op, "sum")) return DT_MASKS_STATE_SUM;
+    if(!strcmp(op, "exclusion")) return DT_MASKS_STATE_EXCLUSION;
+    if(!strcmp(op, "multiply")) return DT_MASKS_STATE_MULTIPLY;
   }
   // "automatic" / unset → historic default
-  const dt_masks_state_t st = (form && form->type == DT_MASKS_BRUSH)
-    ? DT_MASKS_STATE_SUM
-    : DT_MASKS_STATE_UNION;
-  dt_print(DT_DEBUG_MASKS,
-           "[masks] default operator for new form (pref='%s') -> 0x%x",
+  const dt_masks_state_t st =
+    (form && form->type == DT_MASKS_BRUSH) ? DT_MASKS_STATE_SUM : DT_MASKS_STATE_UNION;
+  dt_print(DT_DEBUG_MASKS, "[masks] default operator for new form (pref='%s') -> 0x%x",
            (op && *op) ? op : "automatic", st);
   return st;
 }
@@ -2529,8 +2539,10 @@ void dt_masks_group_set_state(dt_masks_form_t *grp,
   {
     dt_masks_point_group_t *pt = l->data;
     if(!_id_in_list(formids, pt->formid)) continue;
-    if(set) pt->state |= bits;
-    else    pt->state &= ~bits;
+    if(set)
+      pt->state |= bits;
+    else
+      pt->state &= ~bits;
   }
 }
 
@@ -2547,8 +2559,10 @@ void dt_masks_group_isolate_state(dt_masks_form_t *grp,
     // every point as a non-member, which would set the bits everywhere and
     // hide the entire group instead.
     const gboolean keep = !formids || _id_in_list(formids, pt->formid);
-    if(keep) pt->state &= ~bits;
-    else     pt->state |= bits;
+    if(keep)
+      pt->state &= ~bits;
+    else
+      pt->state |= bits;
   }
 }
 

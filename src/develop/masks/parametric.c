@@ -56,9 +56,9 @@ const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form)
     const dt_iop_gui_blendif_channel_t *channels =
       dt_develop_blendif_channels_for_csp((int)p->colorspace);
     int nch = 0;
-    if(channels) while(channels[nch].label) nch++;
-    if(channels && (int)p->channel < nch)
-      return _(channels[p->channel].label);
+    if(channels)
+      while(channels[nch].label) nch++;
+    if(channels && (int)p->channel < nch) return _(channels[p->channel].label);
   }
   return _("parametric");
 }
@@ -67,8 +67,8 @@ static void _parametric_set_form_name(dt_masks_form_t *const form, const size_t 
 {
   // a single-channel form's name leads with its channel -- "parametric" in
   // front of that is redundant, unlike the legacy multi-channel form
-  snprintf(form->name, sizeof(form->name), "%s #%d",
-           dt_masks_parametric_type_label(form), (int)nb);
+  snprintf(form->name, sizeof(form->name), "%s #%d", dt_masks_parametric_type_label(form),
+           (int)nb);
 }
 
 static GSList *_parametric_setup_mouse_actions(const dt_masks_form_t *const form)
@@ -214,14 +214,11 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
     if(channels)
     {
       const dt_iop_gui_blendif_channel_t *ch = &channels[p->channel];
-      if(p->disabled & 1)
-        tmp.blendif &= ~(1u << ch->param_channels[0]);
-      if(p->disabled & 2)
-        tmp.blendif &= ~(1u << ch->param_channels[1]);
+      if(p->disabled & 1) tmp.blendif &= ~(1u << ch->param_channels[0]);
+      if(p->disabled & 2) tmp.blendif &= ~(1u << ch->param_channels[1]);
     }
   }
-  memcpy(tmp.blendif_parameters, p->blendif_parameters,
-         sizeof(tmp.blendif_parameters));
+  memcpy(tmp.blendif_parameters, p->blendif_parameters, sizeof(tmp.blendif_parameters));
   memcpy(tmp.blendif_boost_factors, p->blendif_boost_factors,
          sizeof(tmp.blendif_boost_factors));
   tmp.opacity = 100.0f;
@@ -236,26 +233,24 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   const dt_iop_roi_t *const rout =
     piece->blend_refine_roi_out ? piece->blend_refine_roi_out : roi;
 
-  dt_print(DT_DEBUG_MASKS,
-           "[masks] parametric form %d: make_mask csp=%d blendif=0x%x",
+  dt_print(DT_DEBUG_MASKS, "[masks] parametric form %d: make_mask csp=%d blendif=0x%x",
            form->formid, saved->blend_cst, p->blendif);
 
   switch(saved->blend_cst)
   {
-    case DEVELOP_BLEND_CS_LAB:
-      dt_develop_blendif_lab_make_mask(pc, &tmp, a, b, rin, rout, buffer);
-      break;
-    case DEVELOP_BLEND_CS_RGB_DISPLAY:
-      dt_develop_blendif_rgb_hsl_make_mask(pc, &tmp, a, b, rin, rout, buffer);
-      break;
-    case DEVELOP_BLEND_CS_RGB_SCENE:
-      dt_develop_blendif_rgb_jzczhz_make_mask(pc, &tmp, a, b, rin, rout, buffer);
-      break;
-    case DEVELOP_BLEND_CS_RAW:
-      dt_develop_blendif_raw_make_mask(pc, &tmp, a, b, rin, rout, buffer);
-      break;
-    default:
-      break;
+  case DEVELOP_BLEND_CS_LAB:
+    dt_develop_blendif_lab_make_mask(pc, &tmp, a, b, rin, rout, buffer);
+    break;
+  case DEVELOP_BLEND_CS_RGB_DISPLAY:
+    dt_develop_blendif_rgb_hsl_make_mask(pc, &tmp, a, b, rin, rout, buffer);
+    break;
+  case DEVELOP_BLEND_CS_RGB_SCENE:
+    dt_develop_blendif_rgb_jzczhz_make_mask(pc, &tmp, a, b, rin, rout, buffer);
+    break;
+  case DEVELOP_BLEND_CS_RAW:
+    dt_develop_blendif_raw_make_mask(pc, &tmp, a, b, rin, rout, buffer);
+    break;
+  default: break;
   }
 
   return 1;

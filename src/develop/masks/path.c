@@ -5375,8 +5375,8 @@ static GSList *_path_setup_mouse_actions(const dt_masks_form_t *const form)
   lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL, 0, _("[PATH] grow/shrink"));
   lm = dt_mouse_action_create_simple(
     lm, DT_MOUSE_ACTION_SCROLL, GDK_CONTROL_MASK | GDK_SHIFT_MASK, _("[PATH] resize"));
-  lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL,
-                                     GDK_SHIFT_MASK, _("[PATH] change fade-out border"));
+  lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL, GDK_SHIFT_MASK,
+                                     _("[PATH] change fade-out border"));
   lm = dt_mouse_action_create_simple(lm, DT_MOUSE_ACTION_SCROLL,
                                      GDK_CONTROL_MASK, _("[PATH] change opacity"));
   return lm;
@@ -5432,12 +5432,12 @@ static void _path_set_hint_message(const dt_masks_form_gui_t *const gui,
               msgbuf_len);
   else if(gui->form_selected)
   {
-    g_snprintf(msgbuf,
-               msgbuf_len,
-               _("<b>grow/shrink</b>: scroll, <b>resize</b>: ctrl+shift+scroll\n"
-                 "<b>fade-out border</b>: shift+scroll, <b>opacity</b>: ctrl+scroll (%d%%), "
-                 "<b>rotate</b>: ctrl+drag"),
-               opacity);
+    g_snprintf(
+      msgbuf, msgbuf_len,
+      _("<b>grow/shrink</b>: scroll, <b>resize</b>: ctrl+shift+scroll\n"
+        "<b>fade-out border</b>: shift+scroll, <b>opacity</b>: ctrl+scroll (%d%%), "
+        "<b>rotate</b>: ctrl+drag"),
+      opacity);
     // joint rotation of both shapes only makes sense when there is a source
     // (clone/heal forms, e.g. in the retouch module)
     if(form->type & DT_MASKS_CLONE)
