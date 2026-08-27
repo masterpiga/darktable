@@ -101,7 +101,8 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
     }
     if(bundle && !dt_modifier_is(state, GDK_CONTROL_MASK))
     {
-      if(dt_modifier_is(state, GDK_SHIFT_MASK) && bundle->functions && bundle->functions->modify_property)
+      if(dt_modifier_is(state, GDK_SHIFT_MASK) && bundle->functions
+         && bundle->functions->modify_property)
       {
         // shift+scroll (feather): drives the bundle's own FEATHER case
         // (_object_bundle_modify_property) directly, exactly as the panel's
@@ -121,8 +122,8 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
         return 1;
       }
       else if(dt_modifier_is(state, GDK_CONTROL_MASK | GDK_SHIFT_MASK)
-              && gui->edit_mode == DT_MASKS_EDIT_FULL
-              && bundle->functions && bundle->functions->modify_property)
+              && gui->edit_mode == DT_MASKS_EDIT_FULL && bundle->functions
+              && bundle->functions->modify_property)
       {
         // ctrl+shift (legacy centroid resize, path.c's _path_resize_centroid)
         // is the exact same affine scale-about-center operation as the
@@ -141,14 +142,14 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
         dt_control_queue_redraw_center();
         return 1;
       }
-      else if(gui->edit_mode == DT_MASKS_EDIT_FULL
-              && bundle->functions && bundle->functions->resize && bundle->functions->resize_get)
+      else if(gui->edit_mode == DT_MASKS_EDIT_FULL && bundle->functions
+              && bundle->functions->resize && bundle->functions->resize_get)
       {
         // plain scroll (grow/shrink): drives the bundle's own coordinated
         // resize (same cached-baseline mechanism as the panel's "shrink or
         // grow" slider, see _object_bundle_resize/object.c).
-        const gboolean use_percent =
-          !g_strcmp0(dt_conf_get_string_const("masks/path_resize_unit"), "% of path size");
+        const gboolean use_percent = !g_strcmp0(
+          dt_conf_get_string_const("masks/path_resize_unit"), "% of path size");
         float amount = 0.0f;
         bundle->functions->resize_get(bundle, use_percent, &amount);
         const int new_amount = (int)roundf(amount) + (up ? 1 : -1);
@@ -164,8 +165,8 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
     }
     // anything not handled above (ordinary, non-bundle members) falls
     // straight through to the child's own handler, unchanged.
-    return sel->functions->mouse_scrolled(module, pzx, pzy, up, state, sel,
-                                          fpt->parentid, gui, gui->group_edited);
+    return sel->functions->mouse_scrolled(module, pzx, pzy, up, state, sel, fpt->parentid,
+                                          gui, gui->group_edited);
   }
   return 0;
 }
@@ -225,8 +226,9 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
                                     gui, gui->group_edited);
       }
 
-      const int ret = sel->functions->button_pressed(module, pzx, pzy, pressure, which, type, state, sel,
-                                                     fpt->parentid, gui, gui->group_edited);
+      const int ret =
+        sel->functions->button_pressed(module, pzx, pzy, pressure, which, type, state,
+                                       sel, fpt->parentid, gui, gui->group_edited);
       // a plain click just selected this child individually (dt_masks_select_form,
       // called from inside the child's own button_pressed) -- if it belongs to
       // an AI-mask bundle, promote that selection to the whole bundle instead,
@@ -268,8 +270,8 @@ static int _group_events_button_released(dt_iop_module_t *module,
     // the same way scroll-driven feather/size/opacity already do per tick.
     const gboolean was_rotating = gui->form_rotating;
     const dt_masks_form_t *bundle = was_rotating ? _bundle_parent_of(fpt) : NULL;
-    const int ret = sel->functions->button_released(module, pzx, pzy, which, state, sel, fpt->parentid,
-                                                     gui, gui->group_edited);
+    const int ret = sel->functions->button_released(
+      module, pzx, pzy, which, state, sel, fpt->parentid, gui, gui->group_edited);
     if(bundle) dt_masks_iop_update(module);
     return ret;
   }
@@ -408,8 +410,7 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     if(gui->form_rotating)
     {
       dt_masks_form_t *rot_bundle = _bundle_parent_of(fpt);
-      if(rot_bundle)
-        return _bundle_rotate_step(module, rot_bundle, form, gui, pzx, pzy);
+      if(rot_bundle) return _bundle_rotate_step(module, rot_bundle, form, gui, pzx, pzy);
     }
 
     // a whole-shape (body) drag on a bundle child should translate the whole
@@ -451,9 +452,12 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
           for(GList *pp = sib->points; pp; pp = g_list_next(pp))
           {
             dt_masks_point_path_t *pt = pp->data;
-            pt->corner[0] += dx; pt->corner[1] += dy;
-            pt->ctrl1[0] += dx; pt->ctrl1[1] += dy;
-            pt->ctrl2[0] += dx; pt->ctrl2[1] += dy;
+            pt->corner[0] += dx;
+            pt->corner[1] += dy;
+            pt->ctrl1[0] += dx;
+            pt->ctrl1[1] += dy;
+            pt->ctrl2[0] += dx;
+            pt->ctrl2[1] += dy;
           }
         }
         _bundle_refresh_children(form, bundle, gui, module);
@@ -489,7 +493,11 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     dt_masks_form_t *frm = dt_masks_get_from_id(darktable.develop, fpt->formid);
     // a hidden or disabled shape is not editable on the canvas: skip it when picking the
     // form under the cursor (it also draws no outline).
-    if(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) { pos++; continue; }
+    if(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
+    {
+      pos++;
+      continue;
+    }
     int inside, inside_border, near, inside_source;
     float dist = FLT_MAX;
     inside = inside_border = inside_source = 0;
@@ -676,13 +684,13 @@ static void _inverse_mask(const dt_iop_module_t *const module,
 }
 
 int dt_masks_group_get_mask(const dt_iop_module_t *const module,
-                           const dt_dev_pixelpipe_iop_t *const piece,
-                           dt_masks_form_t *const form,
-                           float **buffer,
-                           int *width,
-                           int *height,
-                           int *posx,
-                           int *posy)
+                            const dt_dev_pixelpipe_iop_t *const piece,
+                            dt_masks_form_t *const form,
+                            float **buffer,
+                            int *width,
+                            int *height,
+                            int *posx,
+                            int *posy)
 {
   // we allocate buffers and values
   const guint nb = g_list_length(form->points);
@@ -755,7 +763,7 @@ int dt_masks_group_get_mask(const dt_iop_module_t *const module,
   gboolean first_visible = TRUE;
   for(int i = 0; i < nb; i++)
   {
-    if(!ok[i]) continue;  // hidden/missing form: nothing to composite
+    if(!ok[i]) continue; // hidden/missing form: nothing to composite
     double start = dt_get_debug_wtime();
     if(!first_visible && (states[i] & (DT_MASKS_STATE_UNION | DT_MASKS_STATE_SUM)))
     {
@@ -829,9 +837,7 @@ int dt_masks_group_get_mask(const dt_iop_module_t *const module,
         for(int x = 0; x < r - l; x++)
         {
           float b2 = 0.0f;
-          if(y + t - py[i] >= 0
-             && y + t - py[i] < h[i]
-             && x + l - px[i] >= 0
+          if(y + t - py[i] >= 0 && y + t - py[i] < h[i] && x + l - px[i] >= 0
              && x + l - px[i] < w[i])
             b2 = bufs[i][(y + t - py[i]) * w[i] + x + l - px[i]];
           (*buffer)[y * (r - l) + x] *= b2 * op[i];
@@ -1149,8 +1155,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   const int height = roi->height;
   const size_t npixels = (size_t)width * height;
 
-  float *const restrict bufs = dt_alloc_align_float(npixels);  // one raw shape
-  float *const restrict grp  = dt_alloc_align_float(npixels);  // group sub-mask
+  float *const restrict bufs = dt_alloc_align_float(npixels); // one raw shape
+  float *const restrict grp = dt_alloc_align_float(npixels);  // group sub-mask
   if(bufs == NULL || grp == NULL)
   {
     dt_free_align(bufs);
@@ -1166,7 +1172,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   // Never read blend_data directly from this thread.
   const dt_dev_refine_bypass_t *const bypass = &piece->refine_bypass;
 
-  int nb_groups = 0;  // how many groups have composited into `buffer`
+  int nb_groups = 0; // how many groups have composited into `buffer`
   GList *fpts = form->points;
   while(fpts)
   {
@@ -1190,7 +1196,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // screen (soft union), intersect (min), or multiply (true per-pixel
     // product). Read from the run head, which carries the broadcast flag.
     const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
-    const gboolean isect  = (head->state & DT_MASKS_STATE_ISECT) != 0;
+    const gboolean isect = (head->state & DT_MASKS_STATE_ISECT) != 0;
     const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
     // per-group refinement is broadcast onto every member, so the head carries a
     // copy. Only a GROUP-scoped one applies to the whole group -- an ELEMENT one
@@ -1200,8 +1206,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // was dropped, and soloing a member made its own refinement work only because
     // hiding the rest promoted it to head.
     dt_masks_refinement_t group_refine = { 0 };
-    if(head->refinement.enabled == DT_MASKS_REFINE_GROUP)
-      group_refine = head->refinement;
+    if(head->refinement.enabled == DT_MASKS_REFINE_GROUP) group_refine = head->refinement;
 
     // build the group sub-mask by folding all consecutive visible members that
     // share this operator. Intersect and multiply seed at 1.0 (everything,
@@ -1215,8 +1220,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       else
         memset(grp, 0, npixels * sizeof(float));
     }
-    int nb_members = 0;  // members whose mask actually folded into `grp`
-    int nb_seen = 0;     // members belonging to this run, renderable or not
+    int nb_members = 0; // members whose mask actually folded into `grp`
+    int nb_seen = 0;    // members belonging to this run, renderable or not
     while(fpts)
     {
       dt_masks_point_group_t *const m = fpts->data;
@@ -1230,11 +1235,11 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       // run-boundary test counts every member seen, not just the ones that
       // rendered: a bypassed group renders none of them, and even in a live
       // group an unrenderable head must not let the next group's head slip in.
-      if(nb_seen > 0
-         && (((m->state & DT_MASKS_STATE_OP) != group_op) || m->group_start))
+      if(nb_seen > 0 && (((m->state & DT_MASKS_STATE_OP) != group_op) || m->group_start))
         break;
       nb_seen++;
-      if(bypassed || (m->state & DT_MASKS_STATE_DISABLE))  // nothing to render, just walk to the end of the run
+      if(bypassed || (m->state & DT_MASKS_STATE_DISABLE)) // nothing to render, just walk
+                                                          // to the end of the run
       {
         fpts = g_list_next(fpts);
         continue;
@@ -1254,19 +1259,22 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         // and compositing -- the same point the classic renderer applies it (see
         // _group_get_mask_roi below). No-op unless this member carries one.
         const gboolean elem_bypassed =
-          dt_masks_refine_bypass_lookup(bypass,
-                                        dt_masks_refine_key_element(m->formid));
+          dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_element(m->formid));
         if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
           dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
-                                            (dt_dev_pixelpipe_iop_t *)piece,
-                                            bufs, roi, &m->refinement);
+                                            (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
+                                            &m->refinement);
 
         const float op = m->opacity;
         const int inverted = (m->state & DT_MASKS_STATE_INVERSE);
-        if(isect)                _combine_masks_intersect(grp, bufs, npixels, op, inverted);
-        else if(screen)          _combine_masks_screen   (grp, bufs, npixels, op, inverted);
-        else if(within_multiply) _combine_masks_multiply (grp, bufs, npixels, op, inverted);
-        else                     _combine_masks_union    (grp, bufs, npixels, op, inverted);
+        if(isect)
+          _combine_masks_intersect(grp, bufs, npixels, op, inverted);
+        else if(screen)
+          _combine_masks_screen(grp, bufs, npixels, op, inverted);
+        else if(within_multiply)
+          _combine_masks_multiply(grp, bufs, npixels, op, inverted);
+        else
+          _combine_masks_union(grp, bufs, npixels, op, inverted);
         // a parametric channel still sitting at its base/full-range state (or
         // one whose refinement scope happens to cover nothing) renders as a
         // uniform, fully-opaque buffer -- exactly a no-op, indistinguishable
@@ -1288,19 +1296,18 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       fpts = g_list_next(fpts);
     }
 
-    if(bypassed) continue;         // disabled group → contributes nothing
-    if(nb_members == 0) continue;  // empty group → identity
+    if(bypassed) continue;        // disabled group → contributes nothing
+    if(nb_members == 0) continue; // empty group → identity
 
     // per-group refinement, applied once to the finished sub-mask (skipped
     // while this group is bypassed for preview). A group is keyed by its
     // bottom member, which is this run's head.
     const gboolean group_bypassed =
-      dt_masks_refine_bypass_lookup(bypass,
-                                    dt_masks_refine_key_group(head->formid));
+      dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_group(head->formid));
     if(group_refine.enabled && !group_bypassed)
       dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
-                                        (dt_dev_pixelpipe_iop_t *)piece,
-                                        grp, roi, &group_refine);
+                                        (dt_dev_pixelpipe_iop_t *)piece, grp, roi,
+                                        &group_refine);
 
     // invert-output (true group invert, see DT_MASKS_STATE_OP_INVERT):
     // applied to this run's finished sub-mask, after its members have folded
@@ -1358,10 +1365,10 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
 }
 
 int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
-                               const dt_dev_pixelpipe_iop_t *const restrict piece,
-                               dt_masks_form_t *const form,
-                               const dt_iop_roi_t *const roi,
-                               float *const restrict buffer)
+                                const dt_dev_pixelpipe_iop_t *const restrict piece,
+                                dt_masks_form_t *const form,
+                                const dt_iop_roi_t *const roi,
+                                float *const restrict buffer)
 {
   if(!form->points) return 0;
 
@@ -1424,8 +1431,8 @@ int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
         // has refinement enabled, so existing masks render unchanged.
         if(fpt->refinement.enabled)
           dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
-                                            (dt_dev_pixelpipe_iop_t *)piece,
-                                            bufs, roi, &fpt->refinement);
+                                            (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
+                                            &fpt->refinement);
 
         // first see if we need to invert this shape
         const int inverted = (state & DT_MASKS_STATE_INVERSE);
@@ -1577,9 +1584,8 @@ const dt_masks_functions_t dt_masks_functions_group = {
   .mouse_scrolled = _group_events_mouse_scrolled,
   .button_pressed = _group_events_button_pressed,
   .button_released = _group_events_button_released,
-//TODO:  .post_expose = _group_events_post_expose
+  // TODO:  .post_expose = _group_events_post_expose
 };
-
 
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
