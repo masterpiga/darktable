@@ -2638,6 +2638,13 @@ dt_hash_t dt_masks_group_hash(dt_hash_t hash, dt_masks_form_t *form)
         // state & opacity
         hash = dt_hash(hash, &grpt->state, sizeof(int));
         hash = dt_hash(hash, &grpt->opacity, sizeof(float));
+        // group-level opacity (masks v9) multiplies the group's finished
+        // sub-mask in the group renderer (see _group_get_mask_roi_flexi in
+        // group.c), so it is a rendering input exactly as the per-shape
+        // opacity above is. Left out, dragging the group opacity slider
+        // produced no visible change until some unrelated edit forced a
+        // reprocess. Zero-filled on pre-v9 blobs, so neutral for old edits.
+        hash = dt_hash(hash, &grpt->group_opacity, sizeof(float));
         // per-shape/per-group refinement (masks v7) is a rendering input consumed
         // by the group renderer, so it must feed the pixelpipe cache hash too;
         // zero-filled for legacy blobs, so this is neutral for old edits.

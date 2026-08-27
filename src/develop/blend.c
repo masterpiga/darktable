@@ -424,9 +424,38 @@ static gboolean _flexi_global_refine_bypassed(const dt_dev_pixelpipe_iop_t *cons
                                        DT_MASKS_REFINE_KEY_GLOBAL);
 }
 
-// defined further down (near the OpenCL blend path); used by the CPU path too
+// Does rendering this drawn/flexi mask group need the host-side guide images
+// (the in/out pixel buffers)? Two consumers need them inside the CPU group
+// renderer: (a) parametric-as-form members, whose blendif is evaluated against
+// the guide image, and (b) per-shape/per-group guided-filter feathering. On the
+// OpenCL pipe the guides live on the device, so when this returns TRUE the
+// caller must read them back to host before rendering; otherwise a parametric
+// form would render fully opaque and per-shape feathering would be skipped.
+// Returns FALSE for the common case (plain drawn shapes, no per-shape feather),
+// preserving the no-readback fast path.
 static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
-                                         const dt_dev_pixelpipe_iop_t *const piece);
+                                         const dt_dev_pixelpipe_iop_t *const piece)
+{
+  if(!form) return FALSE;
+  for(const GList *l = form->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *const grpt = l->data;
+    // per-shape/per-group guided-filter feathering reads the guide image
+    if(grpt->refinement.enabled
+       && grpt->refinement.feathering_radius > 0.1f
+       && piece->colors >= 3)
+      return TRUE;
+    const dt_masks_form_t *const f =
+      dt_masks_get_from_id_ext(piece->pipe->forms, grpt->formid);
+    if(!f) continue;
+    // a parametric form evaluates blendif against the guide image
+    if(f->type & DT_MASKS_PARAMETRIC) return TRUE;
+    // recurse into nested groups
+    if((f->type & DT_MASKS_GROUP) && _group_needs_host_guides(f, piece))
+      return TRUE;
+  }
+  return FALSE;
+}
 
 static size_t _get_post_operations(const dt_develop_blend_params_t *const bp,
                                    const dt_dev_pixelpipe_iop_t *const piece,
@@ -1228,38 +1257,6 @@ static inline void _blend_process_cl_exchange(cl_mem *a, cl_mem *b)
   *b = tmp;
 }
 
-// Does rendering this drawn/flexi mask group need the host-side guide images
-// (the in/out pixel buffers)? Two consumers need them inside the CPU group
-// renderer: (a) parametric-as-form members, whose blendif is evaluated against
-// the guide image, and (b) per-shape/per-group guided-filter feathering. On the
-// OpenCL pipe the guides live on the device, so when this returns TRUE the
-// caller must read them back to host before rendering; otherwise a parametric
-// form would render fully opaque and per-shape feathering would be skipped.
-// Returns FALSE for the common case (plain drawn shapes, no per-shape feather),
-// preserving the no-readback fast path.
-static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
-                                         const dt_dev_pixelpipe_iop_t *const piece)
-{
-  if(!form) return FALSE;
-  for(const GList *l = form->points; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *const grpt = l->data;
-    // per-shape/per-group guided-filter feathering reads the guide image
-    if(grpt->refinement.enabled
-       && grpt->refinement.feathering_radius > 0.1f
-       && piece->colors >= 3)
-      return TRUE;
-    const dt_masks_form_t *const f =
-      dt_masks_get_from_id_ext(piece->pipe->forms, grpt->formid);
-    if(!f) continue;
-    // a parametric form evaluates blendif against the guide image
-    if(f->type & DT_MASKS_PARAMETRIC) return TRUE;
-    // recurse into nested groups
-    if((f->type & DT_MASKS_GROUP) && _group_needs_host_guides(f, piece))
-      return TRUE;
-  }
-  return FALSE;
-}
 
 /* we test in pixelpipe processing if this required */
 gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
