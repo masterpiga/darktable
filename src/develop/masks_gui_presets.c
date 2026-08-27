@@ -418,7 +418,7 @@ void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
   _flexi_preset_list_free(user_presets);
 
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *save_item = gtk_menu_item_new_with_label(_("save current layout as preset…"));
+  GtkWidget *save_item = gtk_menu_item_new_with_label(_("save current layout as preset..."));
   g_signal_connect(G_OBJECT(save_item), "activate", G_CALLBACK(_flexi_preset_save_clicked), module);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), save_item);
 }
