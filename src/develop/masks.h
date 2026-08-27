@@ -27,6 +27,12 @@
 
 #include <assert.h>
 
+#ifdef __cplusplus
+#ifndef _Static_assert
+#define _Static_assert static_assert
+#endif
+#endif
+
 #define DEVELOP_MASKS_VERSION (10)
 
 G_BEGIN_DECLS
