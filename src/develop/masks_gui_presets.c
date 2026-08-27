@@ -97,15 +97,11 @@ static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int 
     for(; m; m = g_list_next(m))
     {
       dt_masks_point_group_t *pm = m->data;
-      if(m != l && _starts_group(m))
-        break;
-      if(!dt_masks_get_from_id(darktable.develop, pm->formid))
-        continue;
+      if(m != l && _starts_group(m)) break;
+      if(!dt_masks_get_from_id(darktable.develop, pm->formid)) continue;
       formids = g_list_prepend(formids, GINT_TO_POINTER(pm->formid));
-      if(!(pm->state & DT_MASKS_STATE_SCREEN))
-        all_screen = FALSE;
-      if(!(pm->state & DT_MASKS_STATE_ISECT))
-        all_isect = FALSE;
+      if(!(pm->state & DT_MASKS_STATE_SCREEN)) all_screen = FALSE;
+      if(!(pm->state & DT_MASKS_STATE_ISECT)) all_isect = FALSE;
       opacity_sum += pm->opacity;
       opacity_n++;
     }
@@ -117,8 +113,8 @@ static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int 
       // own (it is a delta/ratio control, see _props_row_populate) -- the
       // member average is the representative value a preset can meaningfully
       // restore.
-      const _flexi_group_entry_t ent =
-        { op | within, opacity_n ? opacity_sum / opacity_n : 1.0f };
+      const _flexi_group_entry_t ent = { op | within,
+                                         opacity_n ? opacity_sum / opacity_n : 1.0f };
       g_array_append_val(out, ent);
 
       for(GList *e = bd->empty_groups; e; e = g_list_next(e))
@@ -150,7 +146,8 @@ static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int 
 // with a fresh skeleton of empty groups matching `entries` (same bottom-to-top
 // encoding as capture). Never asks for confirmation itself; callers that might
 // be discarding real shapes confirm first (see _flexi_preset_item_activate).
-static void _flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
+static void
+_flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   _masks_reset_mask_core(module);
@@ -196,9 +193,7 @@ static GList *_flexi_preset_list_load(void)
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
                               "SELECT name, op_params, op_version FROM data.presets"
                               " WHERE operation = ?1 AND writeprotect = 0 ORDER BY name",
-                              -1,
-                              &stmt,
-                              NULL);
+                              -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
   while(sqlite3_step(stmt) == SQLITE_ROW)
   {
@@ -231,8 +226,7 @@ static GList *_flexi_preset_list_load(void)
         }
       }
     }
-    if(!entries)
-      continue;
+    if(!entries) continue;
     _flexi_preset_t *p = malloc(sizeof(_flexi_preset_t));
     p->name = g_strdup((const gchar *)sqlite3_column_text(stmt, 0));
     p->entries = entries;
@@ -256,7 +250,8 @@ static void _flexi_preset_list_free(GList *presets)
   g_list_free_full(presets, _flexi_preset_free);
 }
 
-static void _flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry_t *entries, int n)
+static void
+_flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry_t *entries, int n)
 {
   sqlite3_stmt *stmt;
   // clang-format off
@@ -274,8 +269,8 @@ static void _flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, name, -1, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, FLEXI_GROUP_PRESET_VERSION);
-  DT_DEBUG_SQLITE3_BIND_BLOB(
-    stmt, 4, entries, (int)(n * sizeof(_flexi_group_entry_t)), SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 4, entries, (int)(n * sizeof(_flexi_group_entry_t)),
+                             SQLITE_TRANSIENT);
   sqlite3_step(stmt);
   sqlite3_finalize(stmt);
 }
@@ -286,9 +281,7 @@ static void _flexi_preset_delete_from_db(const gchar *name)
   DT_DEBUG_SQLITE3_PREPARE_V2(
     dt_database_get(darktable.db),
     "DELETE FROM data.presets WHERE operation = ?1 AND name = ?2 AND writeprotect = 0",
-    -1,
-    &stmt,
-    NULL);
+    -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, name, -1, SQLITE_TRANSIENT);
   sqlite3_step(stmt);
@@ -298,14 +291,15 @@ static void _flexi_preset_delete_from_db(const gchar *name)
 // applying a preset discards any real shapes currently in the mask (it only
 // ever restores the group skeleton) -- confirm first, same as the plain reset
 // button, whenever there is anything to lose.
-static void
-_flexi_preset_apply_confirmed(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
+static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
+                                          const _flexi_group_entry_t *entries,
+                                          int n)
 {
-  if(_flexi_layout_has_content(module) &&
-     !dt_gui_show_yes_no_dialog(_("apply mask layout preset?"),
-                                "",
-                                _("this replaces the group layout and removes every shape "
-                                  "currently in this mask. continue?")))
+  if(_flexi_layout_has_content(module)
+     && !dt_gui_show_yes_no_dialog(
+       _("apply mask layout preset?"), "",
+       _("this replaces the group layout and removes every shape "
+         "currently in this mask. continue?")))
     return;
   _flexi_layout_apply(module, entries, n);
 }
@@ -314,20 +308,16 @@ static void _flexi_preset_item_activate(GtkWidget *item, dt_iop_module_t *module
 {
   const _flexi_group_entry_t *entries = g_object_get_data(G_OBJECT(item), "entries");
   const int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "n"));
-  if(entries && n > 0)
-    _flexi_preset_apply_confirmed(module, entries, n);
+  if(entries && n > 0) _flexi_preset_apply_confirmed(module, entries, n);
 }
 
 static gboolean
 _flexi_preset_item_press(GtkWidget *item, GdkEventButton *ev, dt_iop_module_t *module)
 {
-  if(ev->button != GDK_BUTTON_SECONDARY)
-    return FALSE;
+  if(ev->button != GDK_BUTTON_SECONDARY) return FALSE;
   const gchar *name = g_object_get_data(G_OBJECT(item), "preset-name");
-  if(!name)
-    return FALSE;
-  if(dt_gui_show_yes_no_dialog(_("delete preset?"),
-                               "",
+  if(!name) return FALSE;
+  if(dt_gui_show_yes_no_dialog(_("delete preset?"), "",
                                _("do you really want to delete the mask layout "
                                  "preset `%s'?"),
                                name))
@@ -346,11 +336,8 @@ static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
     _("save mask layout preset"),
     _("enter a name for this preset\n"
       "(only the group layout is saved, not the shapes/channels inside it):"),
-    _("preset name"),
-    _("cancel"),
-    _("save"));
-  if(!name)
-    return;
+    _("preset name"), _("cancel"), _("save"));
+  if(!name) return;
   if(!*name)
     dt_control_log(_("please give the preset a name"));
   else if(!strcmp(name, _("basic")) || !strcmp(name, _("add + subtract + intersect")))
@@ -359,8 +346,7 @@ static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
   {
     int n = 0;
     _flexi_group_entry_t *entries = _flexi_layout_capture(module, &n);
-    if(n > 0)
-      _flexi_preset_save_to_db(name, entries, n);
+    if(n > 0) _flexi_preset_save_to_db(name, entries, n);
     free(entries);
   }
   g_free(name);
@@ -372,10 +358,11 @@ static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
 void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
 {
   static const _flexi_group_entry_t _preset_basic[] = { { DT_MASKS_STATE_UNION, 1.0f } };
-  static const _flexi_group_entry_t _preset_ops3[] =
-    { { DT_MASKS_STATE_UNION, 1.0f },
-      { DT_MASKS_STATE_DIFFERENCE, 1.0f },
-      { DT_MASKS_STATE_INTERSECTION, 1.0f } };
+  static const _flexi_group_entry_t _preset_ops3[] = {
+    { DT_MASKS_STATE_UNION, 1.0f },
+    { DT_MASKS_STATE_DIFFERENCE, 1.0f },
+    { DT_MASKS_STATE_INTERSECTION, 1.0f }
+  };
 
   GtkWidget *header = gtk_menu_item_new_with_label(_("group layout presets"));
   gtk_widget_set_sensitive(header, FALSE);
@@ -393,7 +380,8 @@ void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
     GtkWidget *item = gtk_menu_item_new_with_label(_(builtins[i].name));
     g_object_set_data(G_OBJECT(item), "entries", (gpointer)builtins[i].entries);
     g_object_set_data(G_OBJECT(item), "n", GINT_TO_POINTER(builtins[i].n));
-    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate), module);
+    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate),
+                     module);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
   }
 
@@ -410,16 +398,19 @@ void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
     g_object_set_data_full(G_OBJECT(item), "entries", entries_copy, free);
     g_object_set_data(G_OBJECT(item), "n", GINT_TO_POINTER(preset->n));
     g_object_set_data_full(G_OBJECT(item), "preset-name", g_strdup(preset->name), g_free);
-    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate), module);
-    g_signal_connect(
-      G_OBJECT(item), "button-press-event", G_CALLBACK(_flexi_preset_item_press), module);
+    g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate),
+                     module);
+    g_signal_connect(G_OBJECT(item), "button-press-event",
+                     G_CALLBACK(_flexi_preset_item_press), module);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
   }
   _flexi_preset_list_free(user_presets);
 
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *save_item = gtk_menu_item_new_with_label(_("save current layout as preset..."));
-  g_signal_connect(G_OBJECT(save_item), "activate", G_CALLBACK(_flexi_preset_save_clicked), module);
+  GtkWidget *save_item =
+    gtk_menu_item_new_with_label(_("save current layout as preset..."));
+  g_signal_connect(G_OBJECT(save_item), "activate",
+                   G_CALLBACK(_flexi_preset_save_clicked), module);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), save_item);
 }
 

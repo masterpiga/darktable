@@ -41,7 +41,6 @@
 #include "gui/gtk.h"
 #include "libs/lib.h"
 
-
 // let the utility-mode host lib re-apply its live visibility (see
 // _reconfigure in masks_flexi_host.c) -- only relevant for
 // MASKS_PANEL_POS_UTILITY, a no-op otherwise (its expander just stays
@@ -53,20 +52,20 @@ static void _masks_flexi_host_reconfigure(void)
     darktable.develop->proxy.masks_flexi_host.reconfigure(host);
 }
 
-
 // human-readable mask type name for the collapsed corner icon's tooltip
 static const char *_mask_mode_label(const uint32_t mask_mode)
 {
   switch(mask_mode)
   {
-    case DEVELOP_MASK_DISABLED: return _("no mask");
-    case DEVELOP_MASK_ENABLED: return _("uniformly");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK: return _("drawn mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL: return _("parametric mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK_CONDITIONAL: return _("drawn & parametric mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER: return _("raster mask");
-    case DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI: return _("flexi mask");
-    default: return _("mask");
+  case DEVELOP_MASK_DISABLED: return _("no mask");
+  case DEVELOP_MASK_ENABLED: return _("uniformly");
+  case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK: return _("drawn mask");
+  case DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL: return _("parametric mask");
+  case DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK_CONDITIONAL:
+    return _("drawn & parametric mask");
+  case DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER: return _("raster mask");
+  case DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI: return _("flexi mask");
+  default: return _("mask");
   }
 }
 
@@ -94,9 +93,9 @@ void _masks_flexi_release(dt_iop_module_t *module)
   if(!bd || !bd->relocatable_box) return;
   const gboolean show = darktable.develop->gui_module == module;
 
-  const gboolean was_hosted = darktable.develop->proxy.masks_flexi_host.hosted_module == module;
-  if(was_hosted)
-    darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
+  const gboolean was_hosted =
+    darktable.develop->proxy.masks_flexi_host.hosted_module == module;
+  if(was_hosted) darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
 
   if(bd->masks_right_cluster)
   {
@@ -127,7 +126,8 @@ void _masks_flexi_release(dt_iop_module_t *module)
       // just re-apply whatever visibility the panel already had, not a new
       // user choice, so don't persist it
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui,
-                                      dt_ui_flexi_panel_is_collapsed(darktable.gui->ui), FALSE, FALSE);
+                                      dt_ui_flexi_panel_is_collapsed(darktable.gui->ui),
+                                      FALSE, FALSE);
     }
     else
     {
@@ -168,7 +168,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     GtkBox *content_box = darktable.develop->proxy.masks_flexi_host.content_box;
     if(host && content_box) target = GTK_WIDGET(content_box);
   }
-  else if(want_hosted)  // LEFT / RIGHT
+  else if(want_hosted) // LEFT / RIGHT
   {
     target = dt_ui_flexi_panel_content(darktable.gui->ui);
     dt_ui_flexi_panel_set_side(darktable.gui->ui, pos == MASKS_PANEL_POS_RIGHT);
@@ -184,8 +184,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   }
 
   dt_iop_module_t *prev = darktable.develop->proxy.masks_flexi_host.hosted_module;
-  if(prev && prev != module)
-    _masks_flexi_release(prev);
+  if(prev && prev != module) _masks_flexi_release(prev);
 
   darktable.develop->proxy.masks_flexi_host.hosted_module = module;
   _reparent_into(GTK_WIDGET(bd->relocatable_box), target, FALSE, FALSE);
@@ -232,14 +231,16 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     // with no mask there's nothing to show but the mode picker, so collapse
     // to the corner icon; otherwise apply the user's stored preference --
     // neither is a fresh user choice, so persist=FALSE either way
-    const gboolean want_collapsed = mask_mode == DEVELOP_MASK_DISABLED
-      ? TRUE
-      : dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
+    const gboolean want_collapsed =
+      mask_mode == DEVELOP_MASK_DISABLED
+        ? TRUE
+        : dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, want_collapsed, TRUE, FALSE);
 
     // arrow points the direction the panel collapses toward (its docked side)
-    dtgtk_button_set_paint(DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
-                           pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
+    dtgtk_button_set_paint(
+      DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
+      pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
   }
   else
@@ -288,29 +289,29 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
   // mask to show right now
   switch(pos)
   {
-    case MASKS_PANEL_POS_LEFT:
-    case MASKS_PANEL_POS_RIGHT:
-      // force-expand and persist: unlike _masks_flexi_relocate's normal
-      // "no mask -> auto-collapse to the corner icon" behavior, explicitly
-      // picking a separate panel should show it open every time
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
-      break;
-    case MASKS_PANEL_POS_UTILITY:
-    {
-      dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-      if(host && host->expander)
-        dtgtk_expander_set_expanded(DTGTK_EXPANDER(host->expander), TRUE);
-      break;
-    }
-    case MASKS_PANEL_POS_EMBEDDED:
-    default:
-      // scrolls the already-expanded, focused module's own panel into
-      // view -- dtgtk_expander_set_expanded(..., TRUE) re-triggers the
-      // scroll-to-view animation even when already expanded (see its
-      // "Quick Access Panel" comment in dtgtk/expander.c)
-      if(module->expander)
-        dtgtk_expander_set_expanded(DTGTK_EXPANDER(module->expander), TRUE);
-      break;
+  case MASKS_PANEL_POS_LEFT:
+  case MASKS_PANEL_POS_RIGHT:
+    // force-expand and persist: unlike _masks_flexi_relocate's normal
+    // "no mask -> auto-collapse to the corner icon" behavior, explicitly
+    // picking a separate panel should show it open every time
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
+    break;
+  case MASKS_PANEL_POS_UTILITY:
+  {
+    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
+    if(host && host->expander)
+      dtgtk_expander_set_expanded(DTGTK_EXPANDER(host->expander), TRUE);
+    break;
+  }
+  case MASKS_PANEL_POS_EMBEDDED:
+  default:
+    // scrolls the already-expanded, focused module's own panel into
+    // view -- dtgtk_expander_set_expanded(..., TRUE) re-triggers the
+    // scroll-to-view animation even when already expanded (see its
+    // "Quick Access Panel" comment in dtgtk/expander.c)
+    if(module->expander)
+      dtgtk_expander_set_expanded(DTGTK_EXPANDER(module->expander), TRUE);
+    break;
   }
 }
 
@@ -320,18 +321,22 @@ void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
 {
   GtkWidget *header = gtk_menu_item_new_with_label(_("blend mask panel position"));
   gtk_widget_set_sensitive(header, FALSE);
-  gtk_widget_set_tooltip_text(header,
-    _("where the flexi masks panel content (groups, elements, refinements)"
-      " is shown. the on/off toggle and hamburger above always stay here.\n"
-      "moving to/from the utility module or a separate panel takes effect"
-      " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
+  gtk_widget_set_tooltip_text(
+    header, _("where the flexi masks panel content (groups, elements, refinements)"
+              " is shown. the on/off toggle and hamburger above always stay here.\n"
+              "moving to/from the utility module or a separate panel takes effect"
+              " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
 
-  static const struct { int pos; const char *label; } items[] = {
+  static const struct
+  {
+    int pos;
+    const char *label;
+  } items[] = {
     { MASKS_PANEL_POS_EMBEDDED, N_("embedded within each module (default)") },
-    { MASKS_PANEL_POS_UTILITY,  N_("utility module, left panel") },
-    { MASKS_PANEL_POS_LEFT,     N_("separate panel, left") },
-    { MASKS_PANEL_POS_RIGHT,    N_("separate panel, right") },
+    { MASKS_PANEL_POS_UTILITY, N_("utility module, left panel") },
+    { MASKS_PANEL_POS_LEFT, N_("separate panel, left") },
+    { MASKS_PANEL_POS_RIGHT, N_("separate panel, right") },
   };
 
   const int cur_pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
@@ -342,12 +347,11 @@ void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
     if(items[i].pos == cur_pos)
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ci), TRUE);
     g_object_set_data(G_OBJECT(ci), "dt-panel-pos", GINT_TO_POINTER(items[i].pos));
-    g_signal_connect(G_OBJECT(ci), "toggled",
-                     G_CALLBACK(_masks_panel_position_activate), module);
+    g_signal_connect(G_OBJECT(ci), "toggled", G_CALLBACK(_masks_panel_position_activate),
+                     module);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), ci);
   }
 }
-
 
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py

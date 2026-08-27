@@ -134,8 +134,7 @@ static dt_iop_module_t *_raster_resolve_source(const dt_iop_module_t *const modu
   for(GList *iter = module->dev->iop; iter; iter = g_list_next(iter))
   {
     dt_iop_module_t *iop = iter->data;
-    if(dt_iop_module_is(iop, p->source) && iop->multi_priority == p->instance)
-      return iop;
+    if(dt_iop_module_is(iop, p->source) && iop->multi_priority == p->instance) return iop;
   }
   return NULL;
 }
@@ -152,8 +151,7 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
   dt_iop_module_t *source = _raster_resolve_source(module, p);
   if(!source)
   {
-    dt_print(DT_DEBUG_MASKS,
-             "[masks] raster form %d: source '%s' not found in pipe",
+    dt_print(DT_DEBUG_MASKS, "[masks] raster form %d: source '%s' not found in pipe",
              form->formid, p->source);
     return 0;
   }
@@ -163,13 +161,11 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
   // the mask is not (yet) available. free_mask tells us whether the buffer was
   // freshly allocated (distorted) and must be released.
   gboolean free_mask = FALSE;
-  float *raster = dt_dev_get_raster_mask((dt_dev_pixelpipe_iop_t *)piece,
-                                         source, p->id,
+  float *raster = dt_dev_get_raster_mask((dt_dev_pixelpipe_iop_t *)piece, source, p->id,
                                          module, &free_mask);
   if(!raster)
   {
-    dt_print(DT_DEBUG_MASKS,
-             "[masks] raster form %d: no raster mask from '%s' id=%d",
+    dt_print(DT_DEBUG_MASKS, "[masks] raster form %d: no raster mask from '%s' id=%d",
              form->formid, p->source, p->id);
     return 0;
   }

@@ -91,7 +91,7 @@
 // ---------------------------------------------------------------------------
 
 static dt_masks_point_group_t *_new_group_point(const dt_mask_id_t formid,
-                                                 const int state)
+                                                const int state)
 {
   dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
   if(!pt) return NULL;
@@ -119,9 +119,8 @@ static void _migration_failed(const dt_iop_module_t *module, const char *why);
 // history-stack position is known -- writes it straight into
 // main.masks_history too (see the file header comment for why both are
 // needed depending on the caller).
-static void _persist_form(dt_iop_module_t *module,
-                          dt_masks_form_t *form,
-                          const int history_num)
+static void
+_persist_form(dt_iop_module_t *module, dt_masks_form_t *form, const int history_num)
 {
   module->dev->forms = g_list_append(module->dev->forms, form);
   if(history_num >= 0)
@@ -174,7 +173,8 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
   const dt_iop_gui_blendif_channel_t *channels =
     dt_develop_blendif_channels_for_csp((int)blend_cst);
   int nch = 0;
-  if(channels) while(channels[nch].label) nch++;
+  if(channels)
+    while(channels[nch].label) nch++;
 
   int active_ch[DEVELOP_BLENDIF_SIZE];
   gboolean active_out[DEVELOP_BLENDIF_SIZE];
@@ -198,7 +198,8 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
   for(int i = 0; i < n_active; i++)
   {
     dt_masks_form_t *form = dt_masks_create(DT_MASKS_PARAMETRIC);
-    dt_masks_point_parametric_t *p = form ? calloc(1, sizeof(dt_masks_point_parametric_t)) : NULL;
+    dt_masks_point_parametric_t *p =
+      form ? calloc(1, sizeof(dt_masks_point_parametric_t)) : NULL;
     if(!form || !p)
     {
       dt_masks_free_form(form);
@@ -209,10 +210,12 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
     }
     // keep only this one channel's own active + polarity bits
     const uint32_t ch_mask = (1u << channels[active_ch[i]].param_channels[0])
-                            | (1u << channels[active_ch[i]].param_channels[1]);
+                             | (1u << channels[active_ch[i]].param_channels[1]);
     p->blendif = blendif & (ch_mask | (ch_mask << 16));
-    memcpy(p->blendif_parameters, blendif_parameters, 4 * DEVELOP_BLENDIF_SIZE * sizeof(float));
-    memcpy(p->blendif_boost_factors, blendif_boost_factors, DEVELOP_BLENDIF_SIZE * sizeof(float));
+    memcpy(p->blendif_parameters, blendif_parameters,
+           4 * DEVELOP_BLENDIF_SIZE * sizeof(float));
+    memcpy(p->blendif_boost_factors, blendif_boost_factors,
+           DEVELOP_BLENDIF_SIZE * sizeof(float));
     p->colorspace = (uint32_t)blend_cst;
     p->single = 1;
     p->channel = (uint32_t)active_ch[i];
@@ -243,10 +246,9 @@ static gboolean _append_channel_points(GList *forms,
   for(GList *l = forms; l; l = g_list_next(l))
   {
     const dt_masks_form_t *form = l->data;
-    dt_masks_point_group_t *pt = _new_group_point
-      (form->formid,
-       DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | extra_state
-       | (within_multiply ? DT_MASKS_STATE_WITHIN_MULTIPLY : 0));
+    dt_masks_point_group_t *pt = _new_group_point(
+      form->formid, DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | extra_state
+                      | (within_multiply ? DT_MASKS_STATE_WITHIN_MULTIPLY : 0));
     if(!pt)
     {
       g_list_free_full(added, free);
@@ -295,10 +297,10 @@ static uint32_t _channel_polarity_mask(const int32_t blend_cst)
 {
   switch(blend_cst)
   {
-    case DEVELOP_BLEND_CS_LAB: return DEVELOP_BLENDIF_Lab_MASK;
-    case DEVELOP_BLEND_CS_RGB_DISPLAY:
-    case DEVELOP_BLEND_CS_RGB_SCENE: return DEVELOP_BLENDIF_RGB_MASK;
-    default: return 0;  // RAW (and anything else): INCL has no channel-polarity effect there
+  case DEVELOP_BLEND_CS_LAB: return DEVELOP_BLENDIF_Lab_MASK;
+  case DEVELOP_BLEND_CS_RGB_DISPLAY:
+  case DEVELOP_BLEND_CS_RGB_SCENE: return DEVELOP_BLENDIF_RGB_MASK;
+  default: return 0; // RAW (and anything else): INCL has no channel-polarity effect there
   }
 }
 
@@ -354,7 +356,7 @@ static dt_cond_branch_t _classify_conditional(const int32_t blend_cst,
                                               const gboolean incl)
 {
   const uint32_t mask = _channel_polarity_mask(blend_cst);
-  if(!mask) return DT_COND_PASSTHROUGH;  // RAW: no canceling-channel mechanism at all
+  if(!mask) return DT_COND_PASSTHROUGH; // RAW: no canceling-channel mechanism at all
 
   const uint32_t any_channel_active = blendif & mask;
   const uint32_t flipped = blendif ^ (incl ? (mask << 16) : 0);
@@ -367,9 +369,10 @@ static dt_cond_branch_t _classify_conditional(const int32_t blend_cst,
 
 static void _migration_failed(const dt_iop_module_t *module, const char *why)
 {
-  dt_print(DT_DEBUG_ALWAYS,
-           "[masks] classic->flexi migration failed for module '%s': %s", module->op, why);
-  dt_control_log(_("%s: failed to migrate mask to flexi, mask kept in classic mode"), module->op);
+  dt_print(DT_DEBUG_ALWAYS, "[masks] classic->flexi migration failed for module '%s': %s",
+           module->op, why);
+  dt_control_log(_("%s: failed to migrate mask to flexi, mask kept in classic mode"),
+                 module->op);
 }
 
 // does `mask_id` resolve to a form with actual content? Mirrors exactly the
@@ -408,8 +411,7 @@ static gboolean _mask_id_has_content(dt_iop_module_t *module,
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, module->dev->image_storage.id);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, mask_id);
   gboolean has_content = FALSE;
-  if(sqlite3_step(stmt) == SQLITE_ROW)
-    has_content = sqlite3_column_int(stmt, 0) > 0;
+  if(sqlite3_step(stmt) == SQLITE_ROW) has_content = sqlite3_column_int(stmt, 0) > 0;
   sqlite3_finalize(stmt);
   return has_content;
 }
@@ -445,8 +447,10 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
   // dt_develop_blend_process() *before* make_mask() even runs) -- they only
   // happen to agree when a real channel is active (DT_COND_REAL below).
   gboolean opaque;
-  if(branch == DT_COND_CONSTANT) opaque = (incl != inv);
-  else if(branch == DT_COND_PASSTHROUGH) opaque = (incl == inv);
+  if(branch == DT_COND_CONSTANT)
+    opaque = (incl != inv);
+  else if(branch == DT_COND_PASSTHROUGH)
+    opaque = (incl == inv);
   if(branch != DT_COND_REAL)
   {
     _clear_toplevel_blendif(n);
@@ -474,9 +478,9 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
     o->blendif ^ (incl ? (_channel_polarity_mask(o->blend_cst) << 16) : 0);
 
   gboolean built_ok = FALSE;
-  GList *param_forms = _build_channel_forms
-    (module, o->blend_cst, flipped_blendif,
-     o->blendif_parameters, o->blendif_boost_factors, &built_ok);
+  GList *param_forms =
+    _build_channel_forms(module, o->blend_cst, flipped_blendif, o->blendif_parameters,
+                         o->blendif_boost_factors, &built_ok);
   if(!built_ok)
   {
     dt_masks_free_form(grp);
@@ -618,8 +622,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   {
     const gboolean masks_pos = (o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
     const gboolean incl = (o->mask_combine & DEVELOP_COMBINE_INCL) != 0;
-    if(masks_pos == incl)
-      return _migrate_parametric_only(module, o, n, history_num);
+    if(masks_pos == incl) return _migrate_parametric_only(module, o, n, history_num);
 
     const gboolean inv = (o->mask_combine & DEVELOP_COMBINE_INV) != 0;
     const gboolean opaque = (incl != inv);
@@ -678,8 +681,10 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
       _clear_toplevel_blendif(n);
       n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
       // n->mask_id is already o->mask_id -- reused verbatim.
-      if(masks_pos != inv) n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
-      else n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
+      if(masks_pos != inv)
+        n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
+      else
+        n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
       return TRUE;
     }
 
@@ -714,9 +719,9 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
     o->blendif ^ (incl ? (_channel_polarity_mask(o->blend_cst) << 16) : 0);
 
   gboolean built_ok = FALSE;
-  GList *param_forms = _build_channel_forms
-    (module, o->blend_cst, flipped_blendif,
-     o->blendif_parameters, o->blendif_boost_factors, &built_ok);
+  GList *param_forms =
+    _build_channel_forms(module, o->blend_cst, flipped_blendif, o->blendif_parameters,
+                         o->blendif_boost_factors, &built_ok);
   if(!built_ok)
   {
     dt_masks_free_form(top_grp);
@@ -758,7 +763,8 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   //    canceling-channel collapse), and the two classic inclusive-formula
   //    variants are exactly the non-inclusive ones with drawn and composite
   //    both additionally flipped.
-  const gboolean invert_drawn = ((o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0) ^ incl;
+  const gboolean invert_drawn =
+    ((o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0) ^ incl;
   const gboolean invert_composite = ((o->mask_combine & DEVELOP_COMBINE_INV) != 0) ^ incl;
   int drawn_state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
   if(invert_drawn) drawn_state |= DT_MASKS_STATE_INVERSE;
@@ -780,8 +786,8 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   // *between*-group operator, multiplying its own (possibly multi-channel,
   // WITHIN_MULTIPLY-folded) result into the accumulator drawn_pt already
   // copied in as the first run.
-  if(!_append_channel_points(param_forms, top_grp->formid,
-                             DT_MASKS_STATE_MULTIPLY, &top_grp->points))
+  if(!_append_channel_points(param_forms, top_grp->formid, DT_MASKS_STATE_MULTIPLY,
+                             &top_grp->points))
   {
     dt_masks_free_form(top_grp);
     g_list_free_full(param_forms, (GDestroyNotify)dt_masks_free_form);
@@ -823,10 +829,11 @@ static gboolean _dispatch(dt_iop_module_t *module,
   if(o->mask_mode & DEVELOP_MASK_RASTER)
   {
     if((o->mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL)))
-      dt_print(DT_DEBUG_ALWAYS,
-               "[masks] module '%s': non-standard mask_mode 0x%x (RASTER combined with "
-               "MASK/CONDITIONAL) -- migrating as pure raster, matching how it already renders",
-               module->op, o->mask_mode);
+      dt_print(
+        DT_DEBUG_ALWAYS,
+        "[masks] module '%s': non-standard mask_mode 0x%x (RASTER combined with "
+        "MASK/CONDITIONAL) -- migrating as pure raster, matching how it already renders",
+        module->op, o->mask_mode);
     ok = _migrate_raster(module, o, n, history_num);
   }
   else if((o->mask_mode & DEVELOP_MASK_MASK) && (o->mask_mode & DEVELOP_MASK_CONDITIONAL))
@@ -867,8 +874,8 @@ static gboolean _dispatch(dt_iop_module_t *module,
 typedef struct _pending_flexi_migration_t
 {
   dt_iop_module_t *module;
-  dt_develop_blend_params_t classic;  // bp's original, pre-migration snapshot
-  dt_develop_blend_params_t *bp;      // the live params to update once resolved
+  dt_develop_blend_params_t classic; // bp's original, pre-migration snapshot
+  dt_develop_blend_params_t *bp;     // the live params to update once resolved
 } _pending_flexi_migration_t;
 
 gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
@@ -887,7 +894,8 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
   // explicitly rather than leaving a raw classic value in bp. Keeps "every
   // module's mask_mode is DISABLED or a flexi state" a true invariant with
   // no exception, which the mode-select UI relies on.
-  if(!(bp->mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL | DEVELOP_MASK_RASTER)))
+  if(!(bp->mask_mode
+       & (DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL | DEVELOP_MASK_RASTER)))
   {
     if(bp->mask_mode & DEVELOP_MASK_ENABLED)
     {
@@ -966,7 +974,7 @@ static int _current_masks_history_num(const dt_develop_t *dev)
                               -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, dev->image_storage.id);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, dev->history_end);
-  int num = dev->history_end - 1;  // fallback: no masks data exists yet at all
+  int num = dev->history_end - 1; // fallback: no masks data exists yet at all
   if(sqlite3_step(stmt) == SQLITE_ROW && sqlite3_column_type(stmt, 0) != SQLITE_NULL)
     num = sqlite3_column_int(stmt, 0);
   sqlite3_finalize(stmt);
