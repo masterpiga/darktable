@@ -41,6 +41,7 @@
 #include "control/conf.h"
 #include "develop/blend.h"
 #include "develop/develop.h"
+#include "dtgtk/expander.h"
 #include "gui/gtk.h"
 #include "libs/lib.h"
 #include "libs/lib_api.h"
@@ -51,6 +52,7 @@ typedef struct dt_lib_masks_flexi_host_t
 {
   GtkBox *content_box;
   GtkBox *actions_box;
+  GtkBox *toggle_box;
 } dt_lib_masks_flexi_host_t;
 
 static void _reconfigure(dt_lib_module_t *self);
@@ -114,12 +116,14 @@ void gui_init(dt_lib_module_t *self)
 
   d->content_box = GTK_BOX(dt_gui_vbox());
   d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+  d->toggle_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
   self->widget = GTK_WIDGET(d->content_box);
   gtk_widget_show_all(self->widget);
 
   darktable.develop->proxy.masks_flexi_host.module = self;
   darktable.develop->proxy.masks_flexi_host.content_box = d->content_box;
   darktable.develop->proxy.masks_flexi_host.actions_box = d->actions_box;
+  darktable.develop->proxy.masks_flexi_host.toggle_box = d->toggle_box;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = _reconfigure;
 
@@ -137,6 +141,16 @@ void view_enter(dt_lib_module_t *self,
   // self->expander now exists (view.c just built it) -- apply the initial
   // visual state for the current masks_panel_position
   _reconfigure(self);
+
+  dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
+  if(self->expander && d && d->toggle_box && !gtk_widget_get_parent(GTK_WIDGET(d->toggle_box)))
+  {
+    GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
+    gtk_box_pack_start(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
+    // position 2: right after the module label (1)
+    gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->toggle_box), 2);
+    gtk_widget_show(GTK_WIDGET(d->toggle_box));
+  }
 
   if(self->reset_button)
     gtk_widget_set_visible(self->reset_button, FALSE);
@@ -168,6 +182,7 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.masks_flexi_host.module = NULL;
   darktable.develop->proxy.masks_flexi_host.content_box = NULL;
   darktable.develop->proxy.masks_flexi_host.actions_box = NULL;
+  darktable.develop->proxy.masks_flexi_host.toggle_box = NULL;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = NULL;
 

@@ -556,6 +556,7 @@ typedef struct dt_iop_gui_blend_data_t
   // button -- unrelated to the "mask elements" header above.
   GtkWidget *masks_blend_header;
   GtkWidget *masks_right_cluster;
+  GtkWidget *masks_left_cluster;
   // the flexi group list: each group's header followed by that group's element rows,
   // nested (indented) directly under it (built by _pack_group_elements).
   GtkBox *masks_list_box;
