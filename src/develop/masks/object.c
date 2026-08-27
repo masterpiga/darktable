@@ -2169,7 +2169,8 @@ static void _object_modify_property(dt_masks_form_t *const form,
   }
 
   // always increment *count - the framework hides the slider when
-  // count==0 (see libs/masks.c gtk_widget_set_visible)
+  // count==0 (the gtk_widget_set_visible in the mask manager this branch
+  // removed, src/libs/masks.c -- provenance only, the file is gone)
   switch(prop)
   {
     case DT_MASKS_PROPERTY_SIZE:
