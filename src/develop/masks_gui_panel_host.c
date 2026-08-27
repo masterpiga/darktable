@@ -104,6 +104,11 @@ void _masks_flexi_release(dt_iop_module_t *module)
     if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
       _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
   }
+  if(bd->masks_left_cluster)
+  {
+    if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_left_cluster)
+      _reparent_into(bd->mask_enable_toggle, bd->masks_left_cluster, FALSE, FALSE);
+  }
   gtk_widget_set_visible(bd->masks_blend_header, TRUE);
 
   _reparent_into(GTK_WIDGET(bd->relocatable_box), bd->iopw, FALSE, FALSE);
@@ -195,6 +200,9 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   if(pos == MASKS_PANEL_POS_UTILITY)
   {
+    GtkBox *toggle_box = darktable.develop->proxy.masks_flexi_host.toggle_box;
+    if(toggle_box)
+      _reparent_into(bd->mask_enable_toggle, GTK_WIDGET(toggle_box), FALSE, FALSE);
     GtkBox *actions_box = darktable.develop->proxy.masks_flexi_host.actions_box;
     if(actions_box)
     {
@@ -202,6 +210,10 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       _reparent_into(bd->showmask, GTK_WIDGET(actions_box), FALSE, FALSE);
     }
     gtk_widget_set_visible(bd->masks_blend_header, FALSE);
+
+    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
+    if(host)
+      dt_lib_gui_set_expanded(host, mask_mode != DEVELOP_MASK_DISABLED);
   }
   else
   {
@@ -211,6 +223,11 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
         _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
       if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
         _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
+    }
+    if(bd->masks_left_cluster)
+    {
+      if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_left_cluster)
+        _reparent_into(bd->mask_enable_toggle, bd->masks_left_cluster, FALSE, FALSE);
     }
     gtk_widget_set_visible(bd->masks_blend_header, TRUE);
     // hosted elsewhere now -- drop the embedded inset, the host already
@@ -299,8 +316,8 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
   case MASKS_PANEL_POS_UTILITY:
   {
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-    if(host && host->expander)
-      dtgtk_expander_set_expanded(DTGTK_EXPANDER(host->expander), TRUE);
+    if(host)
+      dt_lib_gui_set_expanded(host, TRUE);
     break;
   }
   case MASKS_PANEL_POS_EMBEDDED:
@@ -323,7 +340,7 @@ void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
   gtk_widget_set_sensitive(header, FALSE);
   gtk_widget_set_tooltip_text(
     header, _("where the flexi masks panel content (groups, elements, refinements)"
-              " is shown. the on/off toggle and hamburger above always stay here.\n"
+              " is shown.\n"
               "moving to/from the utility module or a separate panel takes effect"
               " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
