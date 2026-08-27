@@ -1898,3 +1898,220 @@ files.** `git clang-format` does exactly that.
   corrupt editor configuration. Explicitly checked, not assumed.
 - No file in the repo was reformatted; only `.clang-format` changed, and it
   remains untracked.
+
+---
+
+## §31 - Behavioural test suite for the flexi panel
+
+Goal: pin the panel's behaviour (DnD, selection, grouping, cache invalidation)
+so the classic-restore refactor and the file split cannot silently break it.
+
+**Approach: unit-test the model, do not simulate GTK.** The panel's group model
+turned out to be almost entirely pure -- `_group_keys_snapshot/apply`,
+`_selected_group_formids`, `_group_cid_of_form`, `_group_partition_heads` touch
+no widget and no global except `darktable.develop`. So the mock is a
+`dt_develop_t` with a forms list, a module, and a `blend_data`. No `gtk_init`,
+no display, no DB, no pixelpipe. Runs in 0.2s.
+
+GTK event simulation was considered and rejected: needs a display in CI, and
+injection tests are flaky enough that they get disabled rather than fixed. The
+GTK-only failure modes (event bubbling, CSS, packing) are a documented manual
+checklist instead -- see the suite README.
+
+**The seam.** Gesture handlers split into a GTK half (decode the event, commit
+afterwards) and a model half (perform the gesture). Both the handler and the
+test call the same model function, so there is no second implementation to
+drift. Worked example: `_masks_row_drag_received` ->
+`_model_drop_element_onto_element`. Same principle as the panel-slider /
+canvas-gesture unification.
+
+**Layout strings** (`"u:1,2 | i:3"`) make scenarios readable and serialise
+through `_starts_group`, so an assertion tests the partition the user sees
+rather than the raw `group_start` flags.
+
+**Files:** `src/tests/unittests/masks/{README.md,CMakeLists.txt,
+flexi_fixture.{h,c},test_flexi_model.c,test_flexi_cache.c}`; five model
+functions de-static'd into `blend_gui_internal.h`.
+
+### Three real bugs found while building it
+
+1. **Non-OpenCL builds were broken.** `_group_needs_host_guides` is called from
+   the CPU blend path (`blend.c:895`) but its definition sat inside
+   `#ifdef HAVE_OPENCL`. Any `-DUSE_OPENCL=OFF` build failed to compile.
+   Surfaced immediately by configuring the test build without OpenCL. Fixed by
+   moving the definition out of the OpenCL block, where the forward declaration
+   already was.
+
+2. **`group_opacity` was missing from `dt_masks_group_hash`.** It multiplies the
+   group's finished sub-mask in `_group_get_mask_roi_flexi` (`group.c:1329`),
+   so it is a rendering input -- but it never entered the pixelpipe cache key.
+   Dragging the group-opacity slider produced no visible change until an
+   unrelated edit forced a reprocess. Caught by `test_flexi_cache` on its first
+   run; fixed. All three callers are runtime cache keys, nothing persisted, so
+   extending the hash is safe.
+
+3. **`unittests/` does not link against cmocka 2.x.** cmocka 1.x's config
+   exports a bare `cmocka` target; 2.x exports only `cmocka::cmocka`. Every
+   existing `add_cmocka_test(... LINK_LIBRARIES cmocka)` fails to link on 2.x.
+   The new CMakeLists picks whichever exists; the pre-existing ones were left
+   alone (own fix, arguably upstream).
+
+### Mutation-tested, not just green
+
+Removing the `_group_keys_apply` call from the extracted drop function
+reproduces the exact reported bug -- moving an element from group A to group B
+yields `u:2 | i:1 | i:3,4`, a **third** group. The suite catches it.
+
+Notably only the *below*-drop direction caught it: dropping above the target
+appends to the run's end and survives the same fault unnoticed. The group-count
+test now exercises both directions.
+
+**Status:** 65 tests across three suites, all passing, wired into `ctest -R flexi`.
+
+### Second pass - breadth
+
+- **Selection state machine** (7 tests). Extracted the *decision* from the
+  effects: `_model_click_element` / `_model_click_group` return the selection a
+  click produces; `_select_form` / `_select_group` apply it. Effect functions
+  untouched, so this is a faithful split, not a rewrite. Pins the one-click
+  contract including the recently-changed element-deselect-falls-back-to-group
+  behaviour.
+- **Operator normalisation** (4) - base-point break clearing, union default for
+  operator-less points, operator preserved under bypass, partition preserved
+  (the loop reads neighbour state, so mutating operators in it can misdetect a
+  run boundary).
+- **Solo/mute primitives** (4) - including the NULL-keep-list inversion:
+  `formids == NULL` means "solo off, clear everywhere", not "keep nothing".
+- **Negative cache cases** (6) - solo-EDIT, selection, cluster collapse/expand,
+  canvas edit mode, solo bookkeeping and empty-group placeholders must NOT
+  invalidate. Solo-edit vs solo/mute is the pair worth pinning: one is an
+  editing scope, the other a rendering input.
+- **`test_flexi_persistence`** (10) - mask blob version migration. Highest-risk
+  surface found: runs against data nobody can regenerate, fails silently, and is
+  the one place a zero-filled field is not automatically safe (`group_opacity`
+  is multiplicative, so the read-time zero-fill would blank every pre-v9 group).
+  Mutation-verified: removing the v8->v9 fixup fires two tests.
+
+### Third pass - all known gaps closed
+
+**160 tests across seven suites**, all passing, `ctest -R flexi` in ~2s.
+
+New seams extracted (handler = decode + commit; model = the gesture):
+`_model_drop_element_onto_group`, `_model_drop_element_onto_empty`,
+`_model_click_element`/`_model_click_group`, `_model_toggle_solo_form`/
+`_model_toggle_solo_group`/`_model_toggle_soloedit`, `_model_badge_kind`,
+`_model_param_row_visibility`. Plus de-static'd: `_masks_cluster_move`,
+`_masks_reorder_groups`, `_masks_visual_group_order`, `_capture_emptied_group`,
+`_run_extent`, the ordinal/prune family, `_parametric_form_is_noop`,
+`_param_channel_is_used`, `_normalize_group_operators`.
+
+New suites:
+- **test_flexi_dnd** (27) - group-header drops, empty-group realisation
+  (ordinal/name/refinement carry-over), cluster moves, whole-group reorder
+  including staged groups and re-anchoring.
+- **test_flexi_groups** (29) - solo/group-solo/solo-edit mutual exclusivity and
+  single-solo-at-a-time, DISABLE independence, group numbering, stale-solo and
+  ordinal pruning, refinement scope + disjoint bypass key spaces.
+- **test_flexi_panel** (21) - low-opacity and no-op badges, adaptive parametric
+  row display, panel preferences (needs a scratch `darktable.conf`; see
+  `flexi_conf_init`).
+- **test_flexi_migrate** (18) - the classic->flexi case table, all 16 bit
+  combinations swept, including the GUI-unreachable RASTER+MASK/CONDITIONAL
+  cases and the degenerate-parametric collapse.
+
+**Seam violation fixed:** `_masks_cluster_move` committed history inside the
+model (it took dev->history_mutex), unlike every other extraction. Moved the
+commit out to its two GTK callers.
+
+### §32 - masks_revamp_flexi_migration_plan.md corrected against the code
+
+Writing the structural migration tests surfaced that the plan doc was written
+ahead of the implementation and never reconciled. Six divergences, all fixed in
+the doc (the code was right in every case):
+
+1. **Status** said "proposed, unimplemented". It has shipped.
+2. **Where it hooks in.** The doc attaches the migration to the
+   `old_version == 14` branch. It actually runs at the *tail of every* version
+   branch, so a v9 edit migrates as surely as a v14 one.
+3. **Idempotency rationale was wrong** as a consequence of (2): the doc's
+   "only fires for old_version == 14 data" argument does not hold. What
+   actually guarantees it is case 8's FLEXI guard.
+4. **Case 1** (bare ENABLED): doc said leave it as plain ENABLED, "setting
+   FLEXI would add a bit with nothing to point at". Code sets ENABLED|FLEXI
+   with mask_id = NO_MASKID, so "every mask_mode is DISABLED or a flexi state"
+   is exception-free -- which the mode-select UI relies on.
+5. **Case 3, twice over.** (a) The doc says an all-default blendif "is still
+   synthesized, not optimized away"; the code collapses it, correctly -- these
+   configs never reach the per-channel curve in classic at all, so synthesizing
+   a form would fabricate a mask where classic had none, and invert it in the
+   INCL != INV case. (b) The doc says one `single = 0` multi-channel form; the
+   code builds one single-channel form *per active channel*, joined by
+   WITHIN_MULTIPLY, so each channel is separately editable in the panel.
+6. **Case 4** was a one-liner in the doc and is a three-branch decision tree in
+   the code. Added §3.1 documenting `_classify_conditional`'s REAL / CONSTANT /
+   PASSTHROUGH split, which both cases 3 and 4 route through.
+
+Also corrected: §5's persistence design (the plan's per-row
+`_migrate_persist_form` does not survive a reload -- hence
+`dev->pending_flexi_migrations` and `dt_masks_finish_flexi_migrations()`),
+the proposed-but-never-written `dt_masks_tree_uses_raster()` helper (the
+concern was real and is handled by `_reconcile_raster_form_users()` instead),
+the fail-closed rule's one genuine exception (deferral-record allocation
+failure clears the mask rather than staying classic), and §6, which now
+describes the two suites that exist and what each reaches that the other
+cannot.
+
+Every corrected claim was re-verified against the source afterwards.
+
+**Left alone deliberately:** the degenerate-parametric collapse leaves
+`mask_mode == ENABLED` without the FLEXI bit, so migrating such an edit twice
+gives 0x1 then 0x11. No classic bit survives either way, and the doc now
+describes the behaviour accurately -- but whether ENABLED and ENABLED|FLEXI
+render identically with no form is a renderer question, so the code was not
+changed to "fix" the asymmetry.
+
+### §33 - the operators themselves, and the bypass snapshot
+
+Second sweep for testable-but-untested surfaces. Two found, both significant.
+
+**test_flexi_compose (21).** `_combine_masks_*` -- the arithmetic behind every
+operator the panel exposes -- had never been tested directly, only inferred
+from rendered images. Exported via a new `masks/group_internal.h` (mirrors
+`blend_gui_internal.h`). Beyond per-operator value checks, this pins the
+properties the design *states as fact*: the group-fold operators
+(union/screen) are commutative and associative, which is the whole
+justification for a group being an unordered bag of shapes; difference is
+asserted NOT to be; each operator's identity element, which is what makes
+skipping an empty group correct -- notably that intersection's identity is an
+all-ONE mask, so an empty intersect group must never composite as all-zero;
+and that every operator keeps the mask in [0,1] across opacity and invert.
+Mutation-verified (intersection MIN -> MAX fires 2 tests).
+
+**Refinement-bypass snapshot (8, in test_flexi_groups).**
+`dt_masks_refine_bypass_lookup` is a binary search over an array
+`dt_masks_refine_bypass_commit` qsorts -- an unguarded sorted-array
+precondition. Now covered: sortedness at scale (24 keys straddling the
+top-bit boundary between the element and group key spaces), staged-group keys
+(pointer-keyed) never leaking into the snapshot, flexi-only gating, empty
+lookups, and hash canonicality (same set, different insertion order -> same
+hash). Mutation-verified (removing the qsort fires the at-scale test).
+
+**Process note.** The first qsort mutation run reported PASS -- but the build
+had not actually rerun (output was redirected to /dev/null and the restore
+raced it). Re-run with visible build output it failed correctly. A mutation
+that "doesn't fire" must be re-checked before being believed.
+
+**Also fixed:** the cmocka 1.x/2.x target-name split, centrally this time.
+`unittests/ai` already used `cmocka::cmocka` while `unittests/` and
+`unittests/iop` used bare `cmocka`, so the tree was internally inconsistent
+and a full `cmake --build` failed on cmocka 2.x. The top-level CMakeLists now
+aliases whichever name exists to the other, and the masks CMakeLists dropped
+its local workaround.
+
+**Pre-existing, not fixed:** `test_filmicrgb` cannot link on macOS -- it uses
+`AddCMockaMockTest`'s `--wrap` symbol interposition, which is GNU ld only
+(`ld: unknown options: --wrap=...`). Unrelated to this work; it means a bare
+`cmake --build build-test` still fails at that target on macOS while every
+other test target builds and passes.
+
+**Status: 189 tests across eight suites**, all passing.
