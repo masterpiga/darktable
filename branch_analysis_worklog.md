@@ -928,3 +928,973 @@ forms hits the same path on load. The guard added here only blocks the
 interactive gesture; it does not detect or repair an XMP already in that state.
 If such edits exist, this is a data-integrity issue rather than a UI one and
 needs a migration. Not investigated yet.
+
+---
+
+## §13 -- UX: a sole group needs no selection to add elements
+
+User request. Adding an element required a group to be selected even when the
+mask had exactly one group -- the only place an element could possibly go. Now
+the add controls are disabled only on a real ambiguity: several groups, none
+selected.
+
+### One resolver, two consumers
+
+`_update_add_target_sensitivity` (button enabled state + tooltips) and
+`_recompute_insert_hint` (where the element actually lands) each derived the
+target independently, from the same two fields. Teaching both about the new
+sole-group case would have left two copies of the rule -- and the failure mode
+is nasty and silent: a button that says it can add while the insertion path
+disagrees about the destination, or vice versa.
+
+Added `_resolve_add_target()` returning a small struct (staged group / real
+group cid / valid / implicit), and made both consume it. Resolution order:
+selected empty group, else selected real group, else -- when `_group_count() ==
+1` -- the sole group, flagged `implicit`. The sole real run's cid is its first
+point in `grp->points` order, the same convention `_build_masks_list` uses for
+group headers.
+
+This is the same rule as the panel-slider/canvas-gesture pairs: when one
+operation has two triggers, both call the identical underlying function rather
+than reconciling parallel formulas after the fact.
+
+### Tooltips
+
+Previously the hint only appeared when adding was impossible ("(select a group
+first)"). Now the buttons always say where the element will go:
+
+- selection: "(added to the selected group)"
+- sole group, nothing selected: "(added to the only group)"
+- disabled: "(select a group first: there is more than one, so where the new
+  element goes is ambiguous)" -- says *why* it is ambiguous, not just that a
+  selection is missing
+
+Applies uniformly to the shape buttons, the parametric channel buttons, raster
+add and import/reuse -- the raster and import tooltips were built inline with
+their own copy of the old two-state logic and now take the same hint string.
+
+Factored `_append_tooltip_hint()` out of `_restate_tooltip_hint()` rather than
+changing the latter's signature: it has an unrelated second caller (the refine
+section label) whose two-state semantics are still correct.
+
+### Verification
+
+Build clean, flexi suite 37/37 (regression check only -- GUI-only change).
+User-tested in the app.
+
+---
+
+## §14 -- The colorspace mismatch can also arrive from disk
+
+Follow-up to §12's open question: can a *saved edit* already be in the bad
+state, where a parametric form's `p->colorspace` disagrees with the module's
+`blend_cst`? §12 blocked the interactive gesture; that says nothing about load.
+
+### Yes, by one path -- and no gesture is involved
+
+`dt_iop_commit_blend_params` (imageop.c) resolves the colorspace at **load**
+time when the stored value is `DEVELOP_BLEND_CS_NONE`:
+
+```c
+if(blendop_params->blend_cst == DEVELOP_BLEND_CS_NONE)
+  module->blend_params->blend_cst =
+    dt_develop_blend_default_module_blend_colorspace(module);
+```
+
+and that default runs through `dt_is_scene_referred()` -- **a user preference**.
+For an `IOP_CS_RGB` module it yields RGB_SCENE or RGB_DISPLAY accordingly. So an
+edit carrying `blend_cst == NONE` plus parametric forms resolves to a
+*preference-dependent* colorspace: the same XMP renders differently on a
+display-referred and a scene-referred machine, and the forms' stored channel
+bits are read through whichever table the preference picked.
+
+This block is **upstream** -- verified present in `master` at the same place, so
+the resolution rule is not a branch bug. What is new is that this branch put
+colorspace-bound *forms* behind it.
+
+### How reachable, honestly
+
+Probably not very, and I could not construct it. Forms are only created after
+`blend_cst` has been resolved to a concrete value, `p->colorspace` is written
+from that resolved value, and history items copy the resolved
+`module->blend_params` -- so a freshly written XMP should carry a concrete
+`blend_cst`. `migrate_legacy.c` likewise sets `p->colorspace` from the resolved
+`blend_cst`.
+
+The residual gap is a history item recorded *before* commit resolved the value:
+that item keeps `NONE`, and the resolution then happens again -- against the
+current preference -- on every subsequent load. Whether that ordering actually
+occurs is unproven either way.
+
+### What was done, and what was deliberately not
+
+Added a `DT_DEBUG_MASKS` diagnostic in `_parametric_get_mask_roi` that fires
+when `p->colorspace != saved->blend_cst`, naming both values.
+
+**The render is deliberately unchanged.** The tempting "fix" -- skip the form,
+or return a neutral mask -- would alter existing edits on a path that has not
+been shown to be reachable, and "neutral" is not even well defined here: a mask
+of 1.0 unioned into a group selects the whole frame, which is a large visible
+change, not a safe fallback. A log line that makes the state diagnosable is the
+honest trade until someone demonstrates a real edit in this condition.
+
+### If it ever needs fixing properly
+
+The durable fix is upstream-shaped and out of scope for this pass: stop
+resolving `blend_cst` from a preference at load, and instead migrate `NONE` to a
+concrete value once, at the point the edit is first read, so the file rather
+than the machine decides. That is a change to shared blend behavior affecting
+every module, not just masked ones.
+
+Build clean, flexi suite 37/37 (the diagnostic is inert in the tests -- they
+never produce a mismatch, which is itself the expected result).
+
+---
+
+## §15 -- CORRECTION to §14: the from-disk mismatch was never demonstrated
+
+§14 claimed a stored `blend_cst == DEVELOP_BLEND_CS_NONE` could reach a masked
+module and make one XMP render two ways. An upstream fix was written against
+`master` on the strength of that. **Two of the supporting claims were wrong**,
+and both erred in the same direction, so the conclusion has to be withdrawn.
+
+### Wrong claim 1: "all 37 scenario XMPs carry blend_cst = NONE"
+
+A parsing error. The script used `re.search`, taking the **first**
+`blendop_params` in each file rather than the entry belonging to the masked
+module. Parsed per operation:
+
+```
+colorin    mask_mode=0x0  blend_cst=0
+colorout   mask_mode=0x0  blend_cst=0
+gamma      mask_mode=0x0  blend_cst=0
+flip       mask_mode=0x0  blend_cst=0
+exposure   mask_mode=0x5  blend_cst=4   <- the only masked module
+```
+
+The masked module always carries an explicit colorspace. The zeros belong to
+pipeline scaffolding with `mask_mode == 0`, where `blend_cst` is never read.
+
+### Wrong claim 2: "proven -- the same XMP resolves to 4 or 3 by preference"
+
+The probe lines showing 4 vs 3 were **default-params** commits
+(`blendop_params == module->default_blendop_params`), which follow the workflow
+preference *by design* and are not stored data. Re-probing with the source
+distinguished, the stored commit is `blend_cst=4` under **both** workflows.
+
+The earlier "0 changed pixels across both workflows" result was therefore not
+evidence that the channel tables coincide -- it was simply nothing differing.
+
+### What actually stands
+
+Only the code fact: `dt_iop_commit_blend_params` does resolve a stored `NONE`
+against `dt_is_scene_referred()`, which is inconsistent with the pre-v10 rule
+(`_blend_default_module_blend_colorspace(module, 0)`) a few hundred lines away
+in the same subsystem. **No case was found where that is reachable with a mask
+attached**, and with no mask the value is never read.
+
+### Consequence for the patch
+
+The fix builds clean, passes 37/37, and changes 0 pixels -- but it would alter
+rendering for stored-NONE-with-blending edits, which is exactly the category
+§14 itself refused to touch on the grounds that changing unproven-reachable
+cases is the worse trade. Shipping it would contradict that reasoning, and
+upstream would rightly ask for a repro that does not exist.
+
+So: **reverted from this branch** (it was only applied here to build and test
+it). It survives uncommitted on a `master` worktree for reference. The right
+upstream move is an issue/question -- "commit resolves against a live
+preference, legacy conversion pins display-referred; is stored NONE with
+blending reachable?" -- not a behavioral patch.
+
+The §14 diagnostic in `parametric.c` **stays**: it costs nothing, changes no
+rendering, and if the state ever does occur it turns a silent wrong mask into a
+log line. Its comment is accurate about the mechanism even though the state
+remains hypothetical.
+
+### Method note
+
+Both errors came from trusting a quick extraction instead of checking it: a
+regex that silently matched the wrong record, and a log filter that silently
+mixed two different call sites. In both cases the result *looked* like the
+hypothesis. Grep and probe output are evidence only once you have confirmed
+they are measuring the thing you named.
+
+---
+
+## §16 -- Phase 3: one builder for both group-header event boxes
+
+The report's DRY item read "Cloned headers (empty vs real) & shape rows (pending
+vs real)". Measured both halves before touching either; **only one of them was
+real**.
+
+### The "cloned rows" half does not hold
+
+`_make_pending_shape_row` (284 lines) vs `_make_shape_row` (456 lines):
+**10 substantial identical lines** out of 206/272 non-comment lines -- roughly
+5%, and all of it trivial (label ellipsize/xalign, the outer container's CSS
+class, `return row_vbox`). The two build genuinely different things. Unifying
+them would mean inventing a shared abstraction over code that is not shared,
+which costs more than it saves. **Not done**, and the finding is withdrawn.
+
+### The "cloned headers" half is real, and worth it
+
+`_pack_empty_group_header` vs the real-group header block inside
+`_masks_panel_pack`: **20 substantial identical lines** out of 148/154 -- and
+unlike the rows, they form one coherent cluster rather than scattered
+boilerplate: the header event box, its two identity tags, and the whole
+drag-and-drop skeleton (drop-target list, drag action, drag-begin, the
+conditional drag-source arm).
+
+That is the part where duplication actually bites. A drop-target list one entry
+short, or a missing `drag-begin`, is invisible until someone drags the right
+thing onto the wrong header kind -- exactly the class of bug that survives
+review and testing.
+
+### What was extracted
+
+`_make_group_header_evbox(module, hdr, lbl_box, press, release, drag_received,
+source_targets, drag_get)`. It owns the invariant core: event box creation and
+visible window, `gtk_container_add`, the `title-label-box` (ctrl+click rename)
+and `group-header-widget` (solo dimming) tags, press/release connects,
+`gtk_drag_dest_set` with `_mask_hdr_dnd`, `drag-data-received`, and the optional
+drag-source arm (`gtk_drag_source_set` + `drag-data-get` + `drag-begin`).
+`source_targets == NULL` means "not a drag source", which is how both kinds
+already expressed "a lone group has nowhere to reorder to" (`group_movable` /
+`_group_count(module) >= 2`).
+
+Needed `g_signal_connect_data` rather than `g_signal_connect` for the
+caller-supplied handlers -- the checked macro only accepts a literal
+`G_CALLBACK(func)`, never a variable. The file already had that same note on
+`_make_op_combo`.
+
+### One difference deliberately left at the call sites
+
+`drag-motion`/`drag-leave` are **not** in the helper. The two kinds highlight
+different widgets on purpose: a real group highlights its whole `group_block`,
+so the group-reorder insertion line spans the group's full body rather than just
+its header row (its own comment says so); a staged group has only its header.
+For a real group that widget does not even exist yet at the point the event box
+is built. Folding this into the helper would have meant either reordering the
+real header's construction or passing a widget that is sometimes NULL -- both
+worse than leaving a two-line connect visible at each call site, where the
+difference is the point.
+
+Noted, not changed: a staged group's block *does* contain more than its header
+(the pending-shape placeholder row), so by the real header's own reasoning its
+hover highlight arguably belongs on the block too. That is a behavior change
+with no test coverage, so it is filed rather than folded in.
+
+### Verification
+
+- full build clean
+- flexi suite 37/37 (regression check only -- this is GUI-only)
+- confirmed no `gtk_drag_dest_set`/`gtk_drag_source_set` on a header event box
+  survives outside the helper
+
+Needs hand-testing, since the suite cannot reach any of it: drag a group header
+to reorder; drag a shape onto another group's header; drag a staged (empty)
+group header; drop a group onto a staged group; ctrl+click both header kinds to
+rename; right-click both for their menus. The lone-group case matters too -- with
+exactly one group, neither header kind should be draggable.
+
+---
+
+## §17 -- Bug: group drop indicator flips at every internal boundary
+
+User report: dragging a group upward past another group, the landing indicator
+switched between "above" and "below" several times within that one group --
+below over the body's lower half, above over its upper half, below again over
+the header's lower half, above over its top half. Expected: one group, one
+switch, at its middle.
+
+### Cause
+
+`_group_drop_motion` decided above/below with
+
+```c
+const int h = gtk_widget_get_allocated_height(w);
+const gboolean above = (h > 0 && y < h / 2);
+```
+
+where `w` is the widget that *received* the motion event. A group is covered by
+several drop targets stacked vertically -- its header event box, its block, each
+element row, each cluster header -- all wired to this same handler, and each
+reporting `y` relative to itself. So each one contributed its own independent
+flip point. The user was not seeing one target misbehave; they were seeing four
+targets each behaving correctly in isolation.
+
+The three group-reorder *receive* handlers repeated the identical expression, so
+the drop landed wherever the sub-widget under the pointer said -- the move agreed
+with the flickering line, which is why this never looked like a mismatch between
+preview and result.
+
+### Fix
+
+Two helpers, and the decision made exactly once:
+
+- `_group_frame_of(w)` -- the frame a group-level drop target belongs to,
+  resolving `"group-frame"` (element rows, cluster headers) then
+  `"header-widget"` (both header kinds). Every sub-widget of a group resolves to
+  the same group block, which is what makes the group *one* target instead of a
+  stack of them.
+- `_group_drop_above(w, y)` -- translates `y` into that frame
+  (`gtk_widget_translate_coordinates`, falling back to the receiving widget if
+  it cannot answer) and compares against the frame's midpoint.
+
+`_group_drop_motion` and all three receive handlers now call
+`_group_drop_above`, so the insertion line and the move cannot disagree by
+construction. This is the same rule as the panel/canvas gesture pairs: one
+operation, one underlying function, never parallel formulas.
+
+### Also fixed: the staged group drew and measured on different rectangles
+
+A staged (empty) group's header connected its hover highlight with `hdr` while
+`_group_drop_above` resolves `"header-widget"` -> the block. Drawing the line on
+one rectangle and deciding above/below from another would have reintroduced the
+same class of inconsistency for that header kind. Its motion/leave connects
+moved below the block's creation and now pass `block`, matching a real group.
+
+That is the item §16 filed and deliberately did not fold in ("a staged group's
+block does contain more than its header"). It stopped being a speculative
+tidy-up once the frame became load-bearing for the drop decision, so it was done
+here with a reason rather than on taste.
+
+### Left alone
+
+Three `allocated_height` midpoints remain and are correct: dropping a shape or a
+cluster onto an element *row*, and an element hovering a row. Those are genuinely
+row-level decisions ("above or below this element"), where the receiving widget
+is the right rectangle.
+
+### Verification
+
+Build clean, flexi suite 37/37 -- regression check only; DnD is entirely
+GUI-only and unreachable from `darktable-cli`.
+
+Needs hand-testing: drag a group slowly up and down past another group and
+confirm the indicator switches exactly once, at that group's middle, whether the
+pointer is over its header, its body, or one of its element rows; the same past a
+staged (empty) group; and that the drop lands where the line said. Worth checking
+over a collapsed group too, where the block is barely taller than the header.
+
+---
+
+## §18 -- One insertion slot, one indicator
+
+Follow-up to §17. With the flip-flopping fixed, the gap between two adjacent
+groups still read as *two* drop targets: hovering the upper group's lower half
+drew a line on its bottom edge, hovering the lower group's upper half drew one
+on the lower group's top edge, ~4px away across the block margin. One slot, two
+visuals, and the line appeared to jump as the pointer crossed the boundary.
+
+### The gap has two names
+
+"Below the upper group" and "above the lower group" are the same insertion slot.
+Nothing was wrong with either -- they simply each rendered on their own block.
+
+`_canonical_drop_frame(f, &above)` collapses the two names to one: a slot is
+always drawn as the **top edge of the group below it**. Crossing between two
+groups now changes nothing on screen, because both sides resolve to the same
+widget and the same class. Only the bottom-most slot, which has no group below
+it, stays a "below" on the last group's own bottom edge.
+
+The list packs blocks with `gtk_box_pack_end`, so `gtk_container_get_children`
+returns them bottom-first and the block visually below `f` is the one
+immediately *before* it -- noted in the code, since it reads backwards.
+
+**Presentational only.** The drop still acts on the group actually under the
+pointer with its own above/below; the two describe the same gap, so the group
+lands in the same place either way. `_group_drop_above` and the receive handlers
+are untouched, so §17's guarantee (line and move cannot disagree) still holds
+and the model logic carries no new risk.
+
+### Consequence: clearing had to widen
+
+The line can now be worn by a *neighbouring* block, so clearing only the frame
+the event arrived on would strand it. `_clear_group_drop_classes()` clears the
+frame and its siblings; both the motion and leave handlers use it.
+
+### Also fixed: the indicator shifted the layout
+
+`.mask-group-block` had `border: none`, and the drop rules applied
+`border-top: 2px solid` -- so showing the indicator *grew* the block by 2px and
+pushed every group below it down. Every change of drop target reflowed the list,
+which added to the "two targets fighting" feel.
+
+`.mask-panel-row` already avoids exactly this, and its comment says so ("The
+base row already carries a 2px transparent border, so colouring one edge does
+not shift the layout"). The group block simply never got the same treatment.
+It now reserves transparent 2px top/bottom borders and the drop rules set only
+`border-*-color`. The 4px gap between groups is now those two borders instead of
+`margin-top: 4px`, so overall spacing is unchanged.
+
+Dropped the now-inert `.mask-group-block:first-child { margin-top: 0 }`. Worth
+noting it was probably not doing what it looked like anyway: with `pack_end`,
+`:first-child` is the *bottom* block, not the top one.
+
+### Correction: the first attempt had the sibling order backwards
+
+The first version found the neighbour by position in the child list, assuming
+`gtk_box_pack_end` meant `gtk_container_get_children` returns blocks
+bottom-first. It returns them top-first, so the lookup ran the wrong way: the
+*top* block found no neighbour and fell back to its own bottom edge, while the
+lower block stayed on its top edge -- reproducing the very two-line effect the
+change was meant to remove. Two user screenshots of the two pointer positions
+pinned it exactly.
+
+Fixed by dropping the assumption instead of inverting it: the neighbour is now
+resolved from **widget allocations** -- the visible sibling whose vertical
+midpoint is nearest below `f`'s. Same length, and it states where things are
+rather than inferring it from packing order, which is easy to get backwards and
+invisible in review.
+
+### Verification
+
+Build clean, flexi suite 37/37 (regression check only). Confirmed the rebuilt
+CSS is installed to the app bundle, not just edited in the source tree -- a
+theme change that is not installed silently does nothing.
+
+Needs hand-testing: between two groups, one line only, not moving as the pointer
+crosses the boundary; the slot above the topmost group and below the bottom-most
+still reachable; no leftover line on a neighbour after moving away or dropping;
+group spacing unchanged at rest; no vertical jitter when the indicator appears.
+
+## §19 -- GLib/GTK criticals in the panel rebuild path
+
+Three assertions were flooding the terminal (hundreds per session). Two are now
+fixed; both were pre-existing, not introduced by this session's work.
+
+### `g_signal_connect_data: assertion 'c_handler != NULL' failed`
+
+`_make_op_combo` connected its `press` handler unconditionally, but every caller
+passes `is_base ? NULL : _handler` -- the base group has no operator, so it has
+no press handler. Fires once per base group per rebuild. Guarded with
+`if(press) g_signal_connect_data(...)` (the `g_signal_connect` macro only accepts
+a literal `G_CALLBACK(func)`, hence the `_data` variant for a variable).
+
+### `gtk_box_pack: assertion '_gtk_widget_get_parent (child) == NULL' failed`
+
+`_make_shape_row` packed `row_evbox` into `row_vbox` **twice** -- once right
+after creating `row_vbox`, and again ~35 lines later at the end of the
+`g_object_set_data` tagging block. GTK refused the second pack, so nothing was
+visibly wrong; it just complained once per element row per rebuild. Removed the
+second call.
+
+### Method note
+
+Reading did not find either one; the `lldb` backtrace did, in one shot. Two
+things had to be right for it to work:
+
+- `G_DEBUG=fatal-criticals`, **not** `fatal-warnings`. The latter aborts inside
+  `gtk_parse_args` on GTK's own benign startup warning, before any darktable
+  panel code runs -- and continuing just re-traps there forever, which is what
+  made the first attempt look like a dead end.
+- Remembering the build is Release + LTO, so frame #5 (`_masks_panel_pack`) is
+  really *everything inlined into it* -- `_make_shape_row`, `_pack_group_elements`,
+  `_pack_empty_group_header`, and so on. Searching only the literal body of
+  `_masks_panel_pack` found nothing, correctly, and was the wrong search.
+
+### Still open: `gdk_atom_intern: assertion 'atom_name != NULL' failed`
+
+Not diagnosed. Ruled out: every `gtk_drag_dest_set` / `gtk_drag_source_set` in
+the panel uses a literal, fully-populated `GtkTargetEntry[]`; darktable's only
+direct `gdk_atom_intern` call site (`common/colorspaces.c`) always passes a
+valid string. Its timestamp is also ~6s away from the other two, so it belongs
+to a different action. Most likely GDK-quartz-internal (macOS pasteboard type
+names). Left alone -- harmless, and not ours.
+
+## §22 -- Phase 3: DnD consolidation -- mostly already done, one real defect found
+
+### The roadmap's numbers do not hold
+
+It calls for unifying "~23 handlers / ~650 lines". Measured: **15 handlers, 291
+lines**. Sizes, largest first: `_masks_row_drag_received` 67,
+`_group_drop_motion` 48, `_masks_group_drag_received` 31,
+`_element_drop_motion` 26, `_masks_header_drag_received` 16, then nine handlers
+of 7-14 lines each.
+
+### The payload dispatcher already exists
+
+The item asks for a "unified payload/dispatcher". That is exactly what the three
+`*_drag_received` entry points already are -- a 3x4 matrix keyed on the
+negotiated payload type:
+
+| target \ payload | ROW | GROUP | EMPTY | CLUSTER |
+|---|---|---|---|---|
+| group header | `_shape_to_group_drop` | `_group_drag_received` | `_empty_reorder_drop` | `_cluster_to_group_drop` |
+| element row | `_row_drag_received` | `_group_drag_received` | `_empty_reorder_drop` | `_cluster_row_drop` |
+| empty header | `_shape_to_empty_drop` | `_group_to_empty_drop` | `_empty_reorder_drop` | `_cluster_to_empty_drop` |
+
+Turning that into a literal table was considered and rejected: the eight drop
+functions take four different signatures (some need x and y, some only y, some
+neither, one also needs `info`). A table forces one uniform signature with
+mostly-ignored parameters -- more code, and it hides which coordinates each drop
+actually depends on. The if/else chains stay.
+
+### What was actually wrong: the classifier ran twice per motion event
+
+Both motion handlers hand-rolled the same "what is hovering me" test:
+
+```c
+const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
+gchar *name = (target != GDK_NONE) ? gdk_atom_name(target) : NULL;
+const gboolean is_reorder = name && (!strcmp(name, "dt-mask-group") || ...);
+```
+
+and `_element_drop_motion` did it, then delegated to `_group_drop_motion`, which
+**did it again for the same event**. `gtk_drag_dest_find_target` negotiates
+against the drag pasteboard -- on quartz a full type-list round trip -- and this
+runs on every pointer motion during a drag. So hovering an element row cost two
+pasteboard negotiations per motion event instead of one.
+
+This is also the source of the `gdk_atom_intern: assertion 'atom_name != NULL'`
+critical from §19: `gtk_drag_dest_find_target` is the frame directly below
+`_gtk_quartz_pasteboard_types_to_atom_list` in that backtrace. The assertion is
+still GTK's bug and still harmless, but element-row hovers now emit half as
+much of it.
+
+Fixed by extracting the classification once:
+
+```c
+typedef enum { DND_HOVER_OTHER, DND_HOVER_REORDER, DND_HOVER_ELEMENT } dt_masks_dnd_hover_t;
+static dt_masks_dnd_hover_t _dnd_hover_kind(GtkWidget *w, GdkDragContext *dc);
+static gboolean _group_drop_motion_kind(GtkWidget *w, gint y, GtkWidget *f,
+                                        dt_masks_dnd_hover_t kind);
+```
+
+`_group_drop_motion` keeps its GTK callback signature and is now a two-line
+wrapper that classifies and delegates; `_element_drop_motion` classifies once
+and calls `_group_drop_motion_kind` directly with the kind it already has.
+Behaviour is identical -- the callee was classifying the *same* widget, so it
+always reached the same answer.
+
+### Target names are now named constants
+
+`DND_TARGET_{ROW,GROUP,EMPTY,CLUSTER}`. Each string was written twice: once in a
+`GtkTargetEntry` table, once in a `strcmp` in the classifier. A typo in either
+copy fails silently -- as a drag that simply never matches -- which is the worst
+possible failure mode for a literal. (This overlaps Phase 4's named-constants
+item; done here because the classifier refactor touched every one of them.)
+
+### Verification
+
+Build clean, no diagnostics in `blend_gui.c`. Flexi suite 37/37 -- again
+meaningless for this change, which is entirely GUI. Needs hand testing: drag an
+element over a collapsed group (must still auto-expand), drag a group over
+another group's element rows (must still show the reorder line, not a
+highlight), drag a cluster header, and drag an empty group -- i.e. one pass over
+each of the three rows of the matrix above.
+
+## §23 -- User-reported: an element dropped on a group lands in a NEW group
+
+Reported once, not reproducible: "started with 2 groups, moved one element from
+A to B, the element ended up in C". Target was the bottom (base) group.
+
+### What it is not
+
+- **Not the empty-group placeholder.** `_capture_emptied_group` only fires when
+  the dragged element was the *sole* member of its run, and it leaves a
+  placeholder for the *source* group, not a new group around the moved element.
+  (It does have its own wart -- an unanchored placeholder, i.e. one whose run was
+  bottom-most, renders in `_masks_panel_pack`'s `bottom_empties` pass at the very
+  bottom of the list rather than staying put. Separate issue, noted below.)
+- **Not an operator mismatch.** Both element-drop paths
+  (`_masks_row_drag_received`, `_masks_shape_to_group_drop`) do
+  `sp->state = (sp->state & ~DT_MASKS_STATE_OP) | (dp->state & DT_MASKS_STATE_OP)`,
+  so `_eff_group_op(src) == _eff_group_op(dst)` exactly. A run boundary cannot
+  come from the operator.
+- **Not a stray drop on the list background.** There are exactly five
+  `gtk_drag_dest_set` targets in the panel (name evbox, row evbox, group block,
+  cluster box, group header). `masks_list_box` itself is not one, so a drop that
+  misses them all is simply refused.
+
+### The one mechanism left
+
+`_starts_group` splits a run either on an operator change or on `group_start`.
+Operator is ruled out, so the split must be a `group_start` stamped by
+`_group_keys_apply` -- which happens iff `keys[src]` differs from the key of the
+point below it.
+
+Both paths set `keys[src] = keys[dst]`. So the failure requires **`dst` not to be
+in the run the user was pointing at**. `dst` is read from the widget's
+`"group-formids"`, which is refreshed only by a full panel rebuild -- and rebuilds
+are `g_idle`-deferred (`_queue_masks_list_rebuild`), including the one each drop
+itself queues. A stale `dst` hands `src` a foreign key, `_group_keys_apply` stamps
+`group_start` on it, and it lands in a group of its own.
+
+That is a hypothesis, not a demonstration. I could not construct the timing by
+reading, and inventing a fix for an unproven cause is how §14 went wrong.
+
+### Instrumented instead of guessed
+
+`_verify_element_joined(grp, src, dst, where)` runs after
+`_normalize_group_operators` in both drop paths, compares
+`_group_cid_of_form(src)` against `_group_cid_of_form(dst)`, and on mismatch
+prints at `DT_DEBUG_ALWAYS` (so no `-d masks` needed) the whole `grp->points`
+layout -- index, formid, operator bits, `group_start`, and which entries are the
+moved element and the target. Cost is two run lookups per drop.
+
+Next occurrence gives the exact state, and the hypothesis above is then either
+confirmed or killed in one shot.
+
+### Separate finding, left unfixed pending a decision
+
+The two element-drop paths disagree about the base shape.
+`_masks_shape_to_group_drop` guards its insertion index with
+`if(at < 1) at = 1;  // never displace the base shape from the bottom`.
+`_masks_row_drag_received` has no such guard: dropping on the bottom half of the
+bottom-most row inserts at index 0 and makes the dropped element the new
+structural base. That may be intended -- a row drop is positional ("land exactly
+here") while a header drop only means "join this group" -- so it was not
+"fixed" on a guess.
+
+## §24 -- Phase 3: DT_UI_PANEL_FLEXI joins the panel width arbitration
+
+Two halves of one bug, both fixed.
+
+**Left/right drags ignored the flexi column.** `_panel_set_side_panel_width`
+(gtk.c) subtracts every *other* visible panel's width from what a drag may
+claim, so the centre never drops below `min_center_width` -- but its
+`side_panels[]` listed only `DT_UI_PANEL_LEFT` and `DT_UI_PANEL_RIGHT`. The
+flexi panel is packed inside `centerrow` next to `centergrid`
+(`_init_main_table`), so it takes width from the same centre. Added it to the
+array (plus a NULL guard on the widget lookup, which the L/R entries did not
+need).
+
+**The flexi handle did no arbitration at all.** `_flexi_handle_motion_callback`
+clamped to `min_panel_width`..`max_panel_width` and nothing else -- no window
+width, no other panels, no `min_center_width` -- so that one handle could
+squeeze the canvas to nothing. It now calls `_panel_set_side_panel_width`
+directly. The two already shared the `panel_drag_start_size` convention (set on
+press by `_flexi_handle_button_callback`), so it dropped straight in.
+
+The block comment above the flexi handlers explicitly claimed this exclusion was
+deliberate ("Deliberately not touching ... L/R-only width-arbitration logic").
+Corrected: everything else about the flexi panel is self-contained, but width
+arbitration cannot be, because all three columns take width from one centre.
+
+Needs hand testing: widen flexi until the canvas hits its floor (must stop, not
+keep going); widen left/right with flexi open (must account for it); flexi on
+the right side (`flexi_panel_right`, the sign flip); and collapsed flexi (must
+not reserve width).
+
+## §25 -- Phase 3: the property tables -- the fork is gone, the citations were not
+
+The roadmap wants `_blend_masks_properties` moved to `src/develop/masks/masks.c`
+because it is a "fork of the deleted src/libs/masks.c" carrying "9 stale
+citations".
+
+**The citations were real: 9 of them, and `src/libs/masks.c` does not exist.**
+This branch deleted that lib when the flexi panel replaced the mask manager. So
+the table's own instruction -- "keep the two in sync if either changes" -- named
+a file that cannot be consulted or changed. Eight references in `blend_gui.c`
+and one in `masks/object.c` all pointed at it as if it were live code.
+
+Reworded rather than deleted: the provenance ("this reproduces the old manager's
+delta protocol / resize slider / paint function") is exactly what an upstream
+reviewer needs, and losing it would make several non-obvious behaviours look
+arbitrary. They now read "the removed mask manager's ...", with one anchor
+comment at the table stating what that was and that there is nothing left to
+sync against. The table is now described as authoritative, not a mirror.
+
+**The move to masks.c was NOT done.** It is slider presentation metadata (label,
+format string, display min/max) with exactly one consumer, in the file being
+split. `masks/masks.c` is the data-model side; putting GUI slider metadata there
+would export it for nobody. When Phase 2 eventually moves the props-row editor
+into its own file, the table travels with it -- that is the move worth making,
+and doing it now would land it in the wrong place twice.
+
+### Verification
+
+Build clean, flexi suite 37/37 (regression check only -- §24 is window layout
+and §25 is comments, neither reachable from the export pipe).
+
+## §26 -- REGRESSION from §24: negative panel width (user-reported)
+
+"Make the window much smaller while the flexi panel is on" produced a flood of
+`Gtk-CRITICAL: gtk_widget_set_size_request: assertion 'width >= -1' failed`.
+
+**This one was mine.** §24 routed the flexi resize handle through
+`_panel_set_side_panel_width`, whose ceiling is
+`max_w = app_window_w - used_w`. That expression goes **negative** once the
+window is narrower than the panels it already holds. `CLAMP(x, low, high)` with
+`high < low` returns garbage, which `dt_ui_panel_set_size` then applies (the
+assertion) once per motion event.
+
+Not a window-resize path, despite how it looks: the flexi panel sits flush
+against the window edge, so grabbing the window border to resize can land the
+press on `panel-handle-flexi` instead. `panel_handle_dragging` goes TRUE and
+every motion of the "window resize" is really a panel drag.
+
+I had flagged exactly this ceiling-below-floor case when handing §24 over for
+testing, and chose not to guard it pre-emptively because it also changes
+left/right behaviour. That was the wrong call: the guard *is* the correct
+behaviour for all three, and the flexi panel's position at the window edge makes
+it trivially reachable. Pre-existing for left/right, newly easy for flexi.
+
+Two fixes:
+
+1. **Root cause** -- `max_w = MAX(max_w, min_w)` in `_panel_set_side_panel_width`.
+   When the panels genuinely cannot all fit, refusing to shrink past
+   `min_panel_width` is the honest answer; a negative width is not.
+2. **Choke point** -- `dt_ui_panel_set_size` now returns early on `s < 0`. It is
+   the one place that both applies a size and **persists it to conf**, so a bad
+   value survives a restart. It also takes an unvalidated int straight from Lua
+   (`dt_lua_gui_panel_set_size`), which no amount of fixing callers covers.
+
+Checked the user's `darktablerc`: no panel `*_size` key holds a negative (none
+are stored at all), so nothing was persisted. `_ui_init_flexi_panel_size` CLAMPs
+on restore anyway, so flexi self-heals even if one had been. Note
+`dt_ui_panel_get_size` does *not* clamp, and `_init_main_table` uses it before
+`dt_ui_restore_panels` runs -- a stored negative would have fired one assertion
+at startup. Moot now that nothing can write one.
+
+Retest: repeat §24's four cases, then grab the window edge next to the flexi
+panel and shrink the window hard. Expect zero criticals and the panel pinned at
+min_panel_width rather than collapsing.
+
+## §27 -- The canvas can still vanish: arbitration never ran on window resize
+
+User-reported, with a screenshot: (1) start with a large window, (2) widen the
+flexi panel as far as it goes, (3) shrink the window -> the canvas disappears
+completely.
+
+§24/§26 both worked on `_panel_set_side_panel_width`, which only ever runs
+**while a resize handle is being dragged**. Nothing re-checked the invariant when
+the *window* changed size. And a panel's width is a
+`gtk_widget_set_size_request` -- a hard minimum GTK honours at the centre's
+expense -- so the panels simply kept their widths and the centre was allocated
+whatever was left, down to zero.
+
+So §24 was only ever half the fix. It made the drag path honest and left the
+resize path exactly as broken as it found it; the report is the same underlying
+defect arriving through the other door.
+
+`_enforce_center_width()` now runs from `_window_configure` (already connected to
+the main window's configure-event for screen-change detection). It sums the three
+visible side columns, and while the centre would be under `min_center_width`
+shrinks the widest column -- never below `min_panel_width` -- until it fits or
+every column is at its floor.
+
+Deliberate trade, matching `_handle_panel_widths` (which makes the same one when
+a panel is shown that would not fit): **the shrink is permanent**. Panels do not
+grow back when the window is enlarged again. Panel width lost this way is
+recoverable by dragging a handle; a canvas of zero width is not.
+
+Note `dt_ui_panel_set_size` persists to conf on each step, so a slow window drag
+writes the key repeatedly -- `dt_conf_set_int` is an in-memory hash table until
+shutdown, so this costs nothing per event.
+
+Retest: the §24 cases, §26's "grab the window edge next to the flexi panel", and
+now the reported sequence -- large window, flexi as wide as possible, then shrink
+the window hard. The canvas must survive at `min_center_width`, and no
+Gtk-CRITICAL should appear.
+
+## §28 -- Phase 4, part 1: ASCII punctuation, and what the key audit found
+
+### Non-ASCII in translatable strings
+
+Six occurrences. Only three were punctuation:
+
+- `—` (em dash) x2 in `blend_gui.c` -> ` - `
+- `…` (ellipsis) x1 in `masks_gui_presets.c` -> `...`
+
+Checked against the rest of the tree first rather than converting on sight: the
+house convention in `_()` strings is ASCII -- `_("data pending - please repeat")`,
+`_("preferences...")` -- and ` -- ` appears in no translatable string anywhere.
+
+**The three `°` (degree sign) occurrences were deliberately left.** That is a
+unit symbol, not punctuation, and it is used in `_()` strings across
+`channelmixerrgb.c`, `ashift.c`, `colorharmonizer.c`. Converting it would be a
+regression, not compliance.
+
+(Method note: the first attempt used `perl -i -pe 's/\x{2014}/-/'` and silently
+matched nothing -- no `-CSD`, so the pattern was compared against raw bytes.
+"No output" from a rewrite tool is not "no occurrences"; it was verified with a
+re-grep, which is what caught it.)
+
+### The widget-key audit found three things worth fixing
+
+Before mass-renaming 389 `g_object_set/get_data` sites onto constants, it was
+cheaper to first diff the key sets -- which is the actual failure this item
+guards against:
+
+```
+distinct keys written: 83     distinct keys read: 79
+```
+
+- **`"skip-auto-expand"` -- read, never written anywhere in the tree.** The guard
+  in `_shape_menu_closed` could never fire. Its comment credited
+  `_shape_menu_toggle_props` with setting it; that function does not exist. The
+  shape actions menu is now disable/solo/solo-edit/invert/rename/break-apart/
+  delete -- the "toggle expanded controls" item was removed (shift+click on the
+  handle or title replaced it), and the setter went with it. Dead code, not a
+  bug. Removed, along with a second stale comment naming the same removed item.
+- **`"disabled-ops"` -- written, never read.** A leftover from when the operator
+  chooser disabled neighbouring operators; `disabled_ops` was a hard-coded 0.
+  Removed with its local.
+- **`"props-editor"` -- written, never read, and CORRECT.** It is a
+  `g_object_set_data_full(..., ed, _props_row_editor_free)`: the point is the
+  destroy-notify, tying the editor's lifetime to the widget. A "written but never
+  read" heuristic flags every ownership handle like this. Left alone.
+
+### The 389-site rename was NOT done
+
+The constants' real benefit is turning a typo into a compile error -- worth
+having. But the defect class they catch is exactly what the audit above found in
+one command, and that audit can be re-run any time. Converting 389 call sites in
+a file under active debugging is high churn for a benefit already banked, and it
+would bury the last few rounds' behavioural fixes in mechanical noise.
+
+Recommended as its own isolated commit containing nothing else, so it can be
+reviewed by inspection and reverted cleanly. Not started.
+
+### Verification
+
+Build clean, flexi suite 37/37. The two removals are dead code (one unreachable
+guard, one unread key); the string edits are user-visible text only.
+
+## §29 -- Phase 4, part 2: dt_masks_state_t bit order and invariant asserts
+
+### Declaration order
+
+The enum declared its bits 0-12, then **15, 13, 14, 17, 16**. Reordered to run
+monotonically 0..17.
+
+**Values were not touched, and could not be** -- every bit is serialized into
+masks blobs and XMP, so a changed value silently reinterprets existing edits.
+Only the order of the declarations moved. Verified mechanically rather than by
+eye: the `NAME = value` pairs were extracted before and after and diffed, and
+came back identical.
+
+### Invariant asserts
+
+One `state` word carries three independent roles at once -- the point's own
+between-group operator plus modifiers (`DT_MASKS_STATE_OP`), its group's
+within-group combine mode (`DT_MASKS_STATE_WITHIN`), and the per-element flags.
+Nothing enforced that those bit sets stay disjoint. Three `_Static_assert`s now
+do:
+
+1. `DT_MASKS_STATE_OP & DT_MASKS_STATE_WITHIN == 0` -- the two roles are carried
+   simultaneously by a group's own state and must stay independently settable.
+2. `DT_MASKS_STATE_OP_COMBINE & (OP_DISABLE | OP_INVERT) == 0` -- otherwise
+   `OP_COMBINE` stops isolating the combining operator from its modifiers.
+3. `DT_MASKS_STATE_GROUP_BREAK & (OP | WITHIN) == 0` -- bit 11 is historic and
+   migration-only, which makes it *look* like a free bit to reclaim. It is not:
+   pre-v10 blobs still carry the marker there and
+   `dt_masks_legacy_params_v9_to_v10()` still reads it.
+
+Compile-time is the right place: a collision fails silently at runtime (it reads
+as an unrelated feature switching itself on), and because the bits are
+serialized a clash can never be fixed by reassigning the value -- it would need
+a migration.
+
+### The asserts were verified to actually fire
+
+`gui/gtk.h` contains a bare `#undef _Static_assert` (part of its
+`g_signal_connect` signal-name checking), and `masks.h` includes it *before*
+these asserts -- so "the build passed" was not evidence the asserts existed.
+Proved it by temporarily moving `GROUP_BREAK` from bit 11 to bit 13 (colliding
+with `OP_SCREEN`) and rebuilding:
+
+```
+error: static assertion failed due to requirement
+'(DT_MASKS_STATE_GROUP_BREAK & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0':
+the historic GROUP_BREAK bit has been reused by a live flag; ...
+```
+
+Then restored. An assertion nobody has seen fail is indistinguishable from a
+comment.
+
+### Not done: "group-key macros"
+
+The roadmap's third sub-item. The group key is a `dt_mask_id_t` (a run's head
+formid) passed as `guint` through `g_object_set_data`; the macros would wrap
+`GUINT_TO_POINTER`/`GPOINTER_TO_UINT` at those sites. That is the same 389-site
+widget-key churn deferred in §28 and belongs in the same isolated commit, not
+scattered here.
+
+### Verification
+
+Build clean, flexi suite 37/37. The reorder is declaration-only (values diffed
+identical); the asserts are compile-time and were demonstrated to fire.
+
+## §30 -- Calibrating .clang-format instead of abandoning it
+
+The 90-column item was initially dropped as not worth hand-reflowing ~485 lines.
+`git clang-format` is the right tool for it, but running it as configured would
+have made things worse. Three facts found before touching anything:
+
+1. **Upstream deliberately deleted `.clang-format`** in `46b054cf15` (Pascal
+   Obry, 2025-12-05): *"We do not want to use clang-format until a proper set of
+   rules are setup which follows the dt style."* That commit is an ancestor of
+   HEAD.
+2. **The file here is untracked**, hidden from `git status` via
+   `.git/info/exclude`. It is a local editor aid, not a project file.
+3. **It contradicted the documented rules.** `ColumnLimit: 100` vs AGENTS.md's
+   "lines under 90". A dry run on `masks/parametric.c` showed it *joining* a
+   correctly-wrapped `snprintf` into a line of exactly **100 characters** -- it
+   would have created violations while appearing to enforce style -- and
+   exploding the pervasive `if(inside) *inside = FALSE;` idiom into two lines.
+
+Rather than delete it (it is in daily use), it was calibrated.
+
+### Method
+
+Six pristine upstream files (`exposure.c`, `darktable.c`, `blend.c`,
+`masks/circle.c`, `image.c`, `imageop.c`, ~16k lines) were taken **from the merge
+base**, so the reference is real dt house style and not this branch's own code.
+Each candidate option was scored by total changed lines, individually and then
+cumulatively.
+
+```
+current config (ColumnLimit 100) : 5390
+same at ColumnLimit 90           : 5592
+calibrated                       : 4489
+```
+
+Adopted, each both measurable and a real idiom:
+
+| option | effect |
+|---|---|
+| `ColumnLimit: 90` | matches AGENTS.md (correctness, not churn) |
+| `AllowShortIfStatementsOnASingleLine: WithoutElse` | -281 |
+| `BinPackArguments: true` | -620 |
+| `BreakBeforeBinaryOperators: NonAssignment` | -166 (`&&` starts the line) |
+| `AllowShortCaseLabelsOnASingleLine: true` | -36 |
+| `AllowShortLoopsOnASingleLine: true` | 0 on corpus, but fixes the exact churn seen in the dry run |
+
+Rejected: `BinPackParameters: true` (+484 -- calls pack, *declarations do not*,
+a distinction worth having measured rather than assumed), `ContinuationIndentWidth: 4`
+(+222), `IndentCaseLabels: true` (+208), `AlignAfterOpenBracket: DontAlign` (+1261),
+`AlignTrailingComments: false` (+2).
+
+Also rejected **despite scoring better**, because the gain was statistical noise
+against a real convention: `BreakBeforeTernaryOperators: false` (-58 = 0.4%, but
+puts `?`/`:` at line end when dt starts lines with them), `AlignOperands: DontAlign`
+(-26), `MaxEmptyLinesToKeep: 2` (-19, and 1 is the actual convention).
+
+### The residual ~4.5k is not tunable away, and that is the real lesson
+
+What is left is upstream code that is simply not consistently formatted:
+`*inside_border= TRUE`, `masks_size*100.0f`, `dt_masks_change_size\n  (up, ...)`.
+clang-format is *right* about those -- they just are not what the surrounding
+file does. No config reproduces inconsistency. This is precisely why upstream
+dropped the file, and why the rule is: **format the lines you touch, never whole
+files.** `git clang-format` does exactly that.
+
+### Verified
+
+- Config parses as `Language: C` (`--assume-filename=x.c`).
+- `BinPackArguments` is genuinely live, not a silently-ignored deprecated key in
+  clang-format 23 -- checked behaviourally by flipping it and diffing the output,
+  since it no longer appears in `--dump-config`.
+- Formatting `masks/parametric.c` now yields **0 lines over 90** (excluding
+  modelines) and preserves the short-if idiom.
+- **The trailing modeline block** (`// modelines:` / `// kate:` / `// vim:`,
+  maintained by `tools/update_modelines.py`) is left byte-identical across the
+  whole corpus. Those lines exceed 90 columns by necessity; reflowing them would
+  corrupt editor configuration. Explicitly checked, not assumed.
+- No file in the repo was reformatted; only `.clang-format` changed, and it
+  remains untracked.

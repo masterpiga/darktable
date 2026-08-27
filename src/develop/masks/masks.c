@@ -2511,6 +2511,47 @@ dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
   return NULL;
 }
 
+// Is `formid` one of the ids in `formids` (a GList of GINT_TO_POINTER ids)?
+static gboolean _id_in_list(GList *formids, const dt_mask_id_t formid)
+{
+  for(GList *l = formids; l; l = g_list_next(l))
+    if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
+  return FALSE;
+}
+
+void dt_masks_group_set_state(dt_masks_form_t *grp,
+                              GList *formids,
+                              const dt_masks_state_t bits,
+                              const gboolean set)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    if(!_id_in_list(formids, pt->formid)) continue;
+    if(set) pt->state |= bits;
+    else    pt->state &= ~bits;
+  }
+}
+
+void dt_masks_group_isolate_state(dt_masks_form_t *grp,
+                                  GList *formids,
+                                  const dt_masks_state_t bits)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    // formids == NULL is the "solo off" case: nothing is singled out any more,
+    // so the bits come off everywhere. Note this is NOT the same as treating
+    // every point as a non-member, which would set the bits everywhere and
+    // hide the entire group instead.
+    const gboolean keep = !formids || _id_in_list(formids, pt->formid);
+    if(keep) pt->state &= ~bits;
+    else     pt->state |= bits;
+  }
+}
+
 void dt_masks_group_ungroup(dt_masks_form_t *dest_grp,
                             dt_masks_form_t *grp)
 {

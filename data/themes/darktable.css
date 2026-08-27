@@ -816,7 +816,11 @@ dialog .sidebar row:selected:hover label,
 
 .mask-group-block.mask-list-row-selected
 {
-  border: none;
+  /* border-color, not "border: none": the block reserves a transparent 2px
+     border for the drop indicator (see .mask-group-block below), and removing
+     the border outright would collapse it and shift the list by 4px every time
+     a group is selected. */
+  border-color: transparent;
   background-image: none;
 }
 
@@ -874,26 +878,31 @@ dialog .sidebar row:selected:hover label,
    the start of a new group on its own. */
 .mask-group-block
 {
-  margin-top: 4px;
-  border: none;
-}
-
-.mask-group-block:first-child
-{
+  /* the gap between groups is these two transparent borders (2px + 2px),
+     not a margin: reserving the insertion line's border up front means
+     showing it only colours an existing edge, instead of adding one and
+     growing the block by 2px -- which shifted every group below it every
+     time the drop indicator moved. Same trick .mask-panel-row already
+     uses for the row-level indicator above. */
   margin-top: 0;
+  border-top: 2px solid transparent;
+  border-bottom: 2px solid transparent;
 }
 
 /* group reorder DnD: a bright insertion line spanning the whole group block
    (header + its elements), not just the header row, so it reads as landing
-   above/below the group (see _group_drop_motion / _group_drop_leave) */
+   above/below the group (see _group_drop_motion / _group_drop_leave). The gap
+   between two groups is one slot with two names ("below the upper", "above the
+   lower"); _canonical_drop_frame collapses them onto the lower group's top
+   edge, so only one of these ever lights up for a given gap. */
 .mask-group-block.mask-list-row-drop-above
 {
-  border-top: 2px solid #ffffff;
+  border-top-color: #ffffff;
 }
 
 .mask-group-block.mask-list-row-drop-below
 {
-  border-bottom: 2px solid #ffffff;
+  border-bottom-color: #ffffff;
 }
 
 .mask-group-block.mask-list-row-drop

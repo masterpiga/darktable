@@ -98,16 +98,6 @@ typedef enum dt_masks_state_t
   // a group's members like SCREEN. Additive new flag, so legacy edits (which
   // never set it) render identically; only consulted on the flexi group fold.
   DT_MASKS_STATE_ISECT = 1 << 12,
-  // within-group counterpart to the between-group DT_MASKS_STATE_MULTIPLY:
-  // members fold together by true per-pixel multiplication (dest *= member)
-  // instead of ISECT's min() -- the two agree only for hard 0/1 membership,
-  // not for feathered/fractional values, so this is what exactly reproduces
-  // classic's own multi-channel parametric combination (`mask *= factor` per
-  // channel) as a group of single-channel elements (see migrate_legacy.c).
-  // Mutually exclusive with SCREEN/ISECT (see DT_MASKS_STATE_WITHIN).
-  // Additive new flag, so legacy edits (which never set it) render
-  // identically; only consulted on the flexi group-fold path.
-  DT_MASKS_STATE_WITHIN_MULTIPLY = 1 << 15,
   // between-group operator counterpart to DT_MASKS_STATE_SCREEN: composites a
   // finished group sub-mask onto the accumulator with the soft union a+b-ab
   // instead of max, so two groups with feathered edges blend across their
@@ -129,9 +119,16 @@ typedef enum dt_masks_state_t
   // wanted. Additive new bit, 0 in every pre-existing edit.
   DT_MASKS_STATE_OP_DISABLE = 1 << 14,
   DT_MASKS_STATE_OP_BYPASS = DT_MASKS_STATE_OP_DISABLE,
-  // disabled (element-level): this element is skipped by the group fold,
-  // contributing nothing to the group's mask. Defaults off.
-  DT_MASKS_STATE_DISABLE = 1 << 17,
+  // within-group counterpart to the between-group DT_MASKS_STATE_MULTIPLY:
+  // members fold together by true per-pixel multiplication (dest *= member)
+  // instead of ISECT's min() -- the two agree only for hard 0/1 membership,
+  // not for feathered/fractional values, so this is what exactly reproduces
+  // classic's own multi-channel parametric combination (`mask *= factor` per
+  // channel) as a group of single-channel elements (see migrate_legacy.c).
+  // Mutually exclusive with SCREEN/ISECT (see DT_MASKS_STATE_WITHIN).
+  // Additive new flag, so legacy edits (which never set it) render
+  // identically; only consulted on the flexi group-fold path.
+  DT_MASKS_STATE_WITHIN_MULTIPLY = 1 << 15,
   // invert-output (per-run, "true" group invert): flips this run's own finished
   // sub-mask (1-grp) after its members have folded together and any per-group
   // refinement has been applied, but before it composites onto the accumulator
@@ -149,6 +146,9 @@ typedef enum dt_masks_state_t
   // DT_MASKS_STATE_OP and participates in run-boundary detection like disable
   // does. Additive new bit, 0 in every pre-existing edit.
   DT_MASKS_STATE_OP_INVERT = 1 << 16,
+  // disabled (element-level): this element is skipped by the group fold,
+  // contributing nothing to the group's mask. Defaults off.
+  DT_MASKS_STATE_DISABLE = 1 << 17,
   // the between-group combining operators: exactly one of these is set on a
   // group's members (disable/invert are modifiers on top, not one of these)
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
@@ -168,6 +168,29 @@ typedef enum dt_masks_state_t
                         | DT_MASKS_STATE_ISECT
                         | DT_MASKS_STATE_WITHIN_MULTIPLY
 } dt_masks_state_t;
+
+// One `state` word carries three INDEPENDENT roles at once, so their bit sets
+// must never overlap:
+//   - the point's own between-group operator + modifiers (DT_MASKS_STATE_OP)
+//   - its group's within-group combine mode      (DT_MASKS_STATE_WITHIN)
+//   - per-element flags (USE/SHOW/INVERSE/HIDDEN/DISABLE)
+// A collision would not fail loudly; it would read as some unrelated feature
+// silently switching itself on. And every one of these bits is SERIALIZED (in
+// masks blobs and XMP), so a clashing value can never simply be reassigned to
+// fix it -- the migration would have to be written instead. Hence compile-time.
+_Static_assert((DT_MASKS_STATE_OP & DT_MASKS_STATE_WITHIN) == 0,
+               "between-group operator bits overlap the within-group combine bits");
+_Static_assert((DT_MASKS_STATE_OP_COMBINE
+                & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT)) == 0,
+               "the combining operators overlap the disable/invert modifiers;"
+               " DT_MASKS_STATE_OP_COMBINE would stop isolating the operator");
+// DT_MASKS_STATE_GROUP_BREAK (bit 11) is historic and migration-only, which
+// makes it look like a free bit to reuse. It is not: pre-v10 blobs still carry
+// the marker there and dt_masks_legacy_params_v9_to_v10() still reads it.
+_Static_assert((DT_MASKS_STATE_GROUP_BREAK
+                & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
+               "the historic GROUP_BREAK bit has been reused by a live flag;"
+               " pre-v10 edits would be misread by the v9->v10 migration");
 
 typedef enum dt_masks_property_t
 {
@@ -916,6 +939,22 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
 // without going through the rest of that function's GUI-creation-state and
 // history-item side effects (see migrate_legacy.c)
 void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form);
+/** Set (`set`) or clear (`!set`) `bits` on every member of `grp` whose formid
+ * appears in `formids` (a GList of GINT_TO_POINTER ids). Members not named are
+ * left untouched; ids naming no member are ignored. This is the "broadcast one
+ * attribute across a run" primitive -- a group is a maximal same-operator run
+ * of `grp->points`, so its callers pass that run's member ids. */
+void dt_masks_group_set_state(dt_masks_form_t *grp,
+                              GList *formids,
+                              const dt_masks_state_t bits,
+                              const gboolean set);
+/** Solo: clear `bits` on the members named by `formids` and set them on every
+ * other member of `grp`. Passing formids == NULL clears `bits` on every member
+ * (i.e. "solo off"), which is why this is not just the negation of
+ * dt_masks_group_set_state. */
+void dt_masks_group_isolate_state(dt_masks_form_t *grp,
+                                  GList *formids,
+                                  const dt_masks_state_t bits);
 void dt_masks_group_ungroup(dt_masks_form_t *dest_grp, dt_masks_form_t *grp);
 void dt_masks_group_update_name(dt_iop_module_t *module);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,

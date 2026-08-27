@@ -185,6 +185,26 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   const dt_develop_blend_params_t *const saved = piece->blendop_data;
   if(!saved) return 1;
 
+  // A form stores the channel layout of the colorspace it was authored in
+  // (p->colorspace), but can only be evaluated against the module's current one:
+  // that is what the pixel data handed to make_mask is in. The interactive
+  // switch that would create a mismatch is refused (see
+  // _module_parametric_form_count, blend_gui.c), but one can still arrive from
+  // disk: an edit whose stored blend_cst is DEVELOP_BLEND_CS_NONE has its
+  // colorspace resolved at load time from the *workflow preference*, not from
+  // the file (dt_iop_commit_blend_params, imageop.c -- upstream behavior, also
+  // in master). Such an edit renders differently on a display-referred and a
+  // scene-referred machine, with nothing in the UI saying so.
+  //
+  // Diagnostic only, deliberately: the mask is still computed as before. Making
+  // this case render differently would change existing edits on a path that has
+  // not been shown to be reachable, which is a worse trade than a log line.
+  if(p->colorspace != (uint32_t)saved->blend_cst)
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] parametric form %d: colorspace mismatch (form %u, module %d)"
+             " -- channel bits are being read through the wrong channel table",
+             form->formid, p->colorspace, (int)saved->blend_cst);
+
   dt_develop_blend_params_t tmp = *saved;
   tmp.blendif = p->blendif;
   if(p->single)
