@@ -977,7 +977,7 @@ typedef struct dt_masks_props_row_editor_t
   // reads as "undo edits made in this sitting", closest available proxy for
   // "reset to how it was created" without persisting new per-shape state.
   gboolean relative_baseline_set;
-  // path-only shrink/grow control, mirroring src/libs/masks.c's own resize_amount
+  // path-only shrink/grow control, mirroring the removed mask manager's own resize_amount
   // (see the block near _blend_masks_properties below) -- NULL for a group row
   // or an opacity-only row, and hidden at runtime for anything but a path.
   GtkWidget *resize_widget;
@@ -3550,10 +3550,16 @@ static void _set_solo_status_badge(GtkWidget *badge, int status);
 // machinery (modify_property/dt_masks_form_change_opacity) generalized to take
 // an explicit per-row target instead of a single global scope.
 //
-// This metadata table mirrors src/libs/masks.c's file-local _masks_properties
-// exactly (name/format/min/max/relative/boolean per dt_masks_property_t). It
-// can't be shared directly since the original is `static const` in another
-// translation unit; keep the two in sync if either changes.
+// NOTE ON PROVENANCE. Comments in this file refer to "the removed mask
+// manager": that is src/libs/masks.c, the lib this branch DELETED when the
+// flexi panel replaced it. Those references record which behaviour a piece of
+// code was written to reproduce -- they are not pointers to code you can go and
+// read, and there is nothing left to keep in sync with.
+//
+// This metadata table began as a copy of that lib's file-local
+// _masks_properties (name/format/min/max/relative/boolean per
+// dt_masks_property_t). It is now the only copy, so it is authoritative rather
+// than a mirror.
 static const struct
 {
   gchar *name;
@@ -3575,7 +3581,7 @@ static const struct
 };
 
 // apply a single property's new value to every form in `target_formids`,
-// following the exact delta protocol src/libs/masks.c's _property_changed
+// following the exact delta protocol the removed mask manager's _property_changed
 // uses: modify_property takes (old_val -> new_val) and derives its own
 // ratio/delta internally, so *last_value must be the previously *committed*
 // value for this specific row/control, never the shape's raw current
@@ -3719,7 +3725,7 @@ static void _props_row_apply(dt_iop_module_t *module, GList *target_formids,
 // Quad for the shrink/grow slider's unit toggle: always shows "%" inside a
 // button-like square frame. Its active state (drawn brighter by bauhaus) tells
 // whether % mode is engaged; the slider's own value format spells out the
-// unit. Exact copy of src/libs/masks.c's own _paint_resize_unit -- file-local
+// unit. Exact copy of the removed mask manager's own _paint_resize_unit -- file-local
 // static there, so duplicated here rather than shared across the two TUs.
 static void _props_paint_resize_unit(cairo_t *cr, const gint x, const gint y,
                                      const gint w, const gint h,
@@ -3750,7 +3756,7 @@ static void _props_paint_resize_unit(cairo_t *cr, const gint x, const gint y,
 }
 
 // Set the shape to the slider's absolute offset and commit one history item --
-// mirrors src/libs/masks.c's own _resize_commit exactly, but scoped directly to
+// mirrors the removed mask manager's own _resize_commit exactly, but scoped directly to
 // this row's single shape (no "which selected path" ambiguity to resolve: the
 // row already names one shape by construction).
 static void _props_resize_commit(dt_masks_props_row_editor_t *ed)
@@ -3920,7 +3926,7 @@ static void _props_row_control_changed(GtkWidget *widget, dt_masks_props_row_edi
 
   // a size/feather/rotation edit reshapes the path and drops its shrink/grow
   // baseline (see path.c); refresh the resize slider so it reads back 0 --
-  // mirrors src/libs/masks.c's own _property_changed "reshaped" handling.
+  // mirrors the removed mask manager's own _property_changed "reshaped" handling.
   if(ed->resize_widget
      && (prop == DT_MASKS_PROPERTY_SIZE || prop == DT_MASKS_PROPERTY_FEATHER
          || prop == DT_MASKS_PROPERTY_ROTATION))
@@ -4023,7 +4029,7 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module, const dt_mask
     dt_gui_box_add(box, w);
   }
 
-  // path-only shrink/grow (outset/inset) control -- mirrors src/libs/masks.c's
+  // path-only shrink/grow (outset/inset) control -- mirrors the removed mask manager's
   // own "shrink or grow" slider exactly (same conf-stored unit, same debounced
   // resize()/resize_get() calls into path.c's cache), just scoped to this row's
   // single shape instead of "whichever single path is selected". A group or
@@ -4051,7 +4057,7 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module, const dt_mask
       dt_bauhaus_widget_set_quad_active(w, !g_strcmp0(unit, "% of path size"));
     }
     dt_bauhaus_widget_set_quad_tooltip(w,
-        _("shrink/grow unit: image pixels (px) or % of path size — click to toggle"));
+        _("shrink/grow unit: image pixels (px) or % of path size - click to toggle"));
     g_signal_connect(G_OBJECT(w), "quad-pressed", G_CALLBACK(_props_resize_unit_quad), ed);
 
     ed->resize_widget = w;
@@ -4954,9 +4960,18 @@ static GtkWidget *_masks_row_widget(dt_iop_gui_blend_data_t *bd, const dt_mask_i
   return w;
 }
 
+// The panel's four DnD payload types. Named here because each one is written
+// twice -- once in a GtkTargetEntry table below, once in the hover classifier
+// (_dnd_hover_kind) that compares the negotiated target's name back against it.
+// A typo in either copy fails silently, as a drag that simply never matches.
+#define DND_TARGET_ROW     "dt-mask-row"
+#define DND_TARGET_GROUP   "dt-mask-group"
+#define DND_TARGET_EMPTY   "dt-mask-empty"
+#define DND_TARGET_CLUSTER "dt-mask-cluster"
+
 // drag-and-drop reordering of rows. Each row's name widget is both a drag
 // source and a drop target carrying the form id; dropping reorders grp->points.
-static const GtkTargetEntry _mask_row_dnd[] = { { (gchar *)"dt-mask-row", GTK_TARGET_SAME_APP, 0 } };
+static const GtkTargetEntry _mask_row_dnd[] = { { (gchar *)DND_TARGET_ROW, GTK_TARGET_SAME_APP, 0 } };
 
 // every badge kind (solo/solo-edit/low-opacity) is now always mapped, part of
 // one fixed-size 3-cell stack packed into a row/header's own box (see
@@ -5786,7 +5801,14 @@ static GtkWidget *_make_op_combo(GtkWidget **inner,
   gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 0);
   // use g_signal_connect_data directly: the checked g_signal_connect macro only
   // accepts a literal G_CALLBACK(func), not a GCallback variable.
-  g_signal_connect_data(G_OBJECT(btn), "button-press-event", press, btn, NULL, 0);
+  //
+  // `press` is NULL for the base group, whose between-group operator cannot be
+  // changed (see the is_base/is_base_group callers) -- it is a plain icon then,
+  // with nothing to connect. Connecting NULL unconditionally made GLib log
+  // "g_signal_connect_data: assertion 'c_handler != NULL' failed" for every base
+  // group on every panel rebuild.
+  if(press)
+    g_signal_connect_data(G_OBJECT(btn), "button-press-event", press, btn, NULL, 0);
   // the wrapper box carries no_show_all (its visibility is driven by mode_flexi),
   // which also stops show_all from reaching the child: show it explicitly so the
   // box is not empty once it is made visible.
@@ -5834,20 +5856,16 @@ static void _toggle_solo_form(dt_iop_module_t *module, const dt_mask_id_t id)
 
   if(bd->solo_formid == id)
   {
-    for(GList *l = grp->points; l; l = g_list_next(l))
-      ((dt_masks_point_group_t *)l->data)->state &= ~DT_MASKS_STATE_HIDDEN;
+    dt_masks_group_isolate_state(grp, NULL, DT_MASKS_STATE_HIDDEN);
     bd->solo_formid = INVALID_MASKID;
     bd->solo_group_key = 0;
     dt_print(DT_DEBUG_MASKS, "[masks] solo off");
   }
   else
   {
-    for(GList *l = grp->points; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = l->data;
-      if(pt->formid == id) pt->state &= ~DT_MASKS_STATE_HIDDEN;
-      else                 pt->state |= DT_MASKS_STATE_HIDDEN;
-    }
+    GList *one = g_list_prepend(NULL, GINT_TO_POINTER(id));
+    dt_masks_group_isolate_state(grp, one, DT_MASKS_STATE_HIDDEN);
+    g_list_free(one);
     bd->solo_formid = id;
     bd->solo_group_key = 0;
     dt_print(DT_DEBUG_MASKS, "[masks] solo form %d", id);
@@ -6024,6 +6042,47 @@ static void _masks_row_drag_get(GtkWidget *w, GdkDragContext *ctx,
                          (const guchar *)&id, sizeof(id));
 }
 
+// Post-condition shared by the two "move an element to a group" drops: the
+// moved element must end up in the SAME run as the drop target. Both paths make
+// that true by construction -- they copy the target's operator AND its partition
+// key (see _group_keys_snapshot, which keys every run by its head formid) -- so
+// a failure here means src and dst disagreed about which run dst is in. The one
+// way that can happen is `dst` having been read from stale widget data: the
+// "group-formids" a row/header carries is only refreshed by a full panel
+// rebuild, and rebuilds are g_idle-deferred (_queue_masks_list_rebuild). A stale
+// dst hands src a foreign key, _group_keys_apply stamps a group_start on it, and
+// the element lands in a group of its own instead of joining the target.
+//
+// User-reported once, not reproducible: "moved an element from A to B and it
+// ended up in C" (target was the bottom group). Left instrumented rather than
+// guessed at -- this is cheap (two run lookups per drop) and prints the whole
+// layout, which is what reconstructing the case actually needs.
+static void _verify_element_joined(dt_masks_form_t *grp,
+                                   const dt_mask_id_t src,
+                                   const dt_mask_id_t dst,
+                                   const char *where)
+{
+  if(!grp) return;
+  const dt_mask_id_t src_cid = _group_cid_of_form(grp, src);
+  const dt_mask_id_t dst_cid = _group_cid_of_form(grp, dst);
+  if(src_cid == dst_cid) return;
+  dt_print(DT_DEBUG_ALWAYS,
+           "[masks] %s: element %d did NOT join target %d"
+           " (landed in run %d, target is run %d) -- please report this layout:",
+           where, src, dst, src_cid, dst_cid);
+  int idx = 0;
+  for(GList *l = grp->points; l; l = g_list_next(l), idx++)
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    dt_print(DT_DEBUG_ALWAYS,
+             "[masks]   [%d] fid=%d op=0x%x group_start=%d%s%s",
+             idx, pt->formid, (unsigned)(pt->state & DT_MASKS_STATE_OP),
+             (int)pt->group_start,
+             pt->formid == src ? "  <- moved" : "",
+             pt->formid == dst ? "  <- target" : "");
+  }
+}
+
 static void _masks_row_drag_received(GtkWidget *w, GdkDragContext *ctx,
                                      gint x, gint y, GtkSelectionData *sel,
                                      guint info, guint time,
@@ -6073,6 +6132,7 @@ static void _masks_row_drag_received(GtkWidget *w, GdkDragContext *ctx,
           bd->empty_groups = g_list_append(bd->empty_groups, emptied);
         }
         _normalize_group_operators(grp);
+        _verify_element_joined(grp, src, dst, "row drop");
         dt_print(DT_DEBUG_MASKS, "[masks] form %d drag-moved near %d", src, dst);
         dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
         // a moved element should stay selected at the end of the drag -- otherwise
@@ -6096,12 +6156,12 @@ static void _masks_row_drag_received(GtkWidget *w, GdkDragContext *ctx,
 // as a unit. A separate target type from the per-shape row DnD so the two don't
 // interfere. Same-op groups that end up adjacent simply merge (inferred runs).
 static const GtkTargetEntry _mask_group_dnd[] =
-  { { (gchar *)"dt-mask-group", GTK_TARGET_SAME_APP, 0 } };
+  { { (gchar *)DND_TARGET_GROUP, GTK_TARGET_SAME_APP, 0 } };
 
 // empty-group drag-and-drop: reorder an empty (staged) group the same way a real
 // group is reordered, so it is not stuck at whatever spot it was created at.
 static const GtkTargetEntry _mask_empty_dnd[] =
-  { { (gchar *)"dt-mask-empty", GTK_TARGET_SAME_APP, 0 } };
+  { { (gchar *)DND_TARGET_EMPTY, GTK_TARGET_SAME_APP, 0 } };
 
 // a same-kind element cluster's own drag-and-drop: moves every one of its
 // members together, as one contiguous block preserving their relative order --
@@ -6109,7 +6169,7 @@ static const GtkTargetEntry _mask_empty_dnd[] =
 // _masks_cluster_move). A separate target type from both the per-shape row
 // and per-group DnD so all three coexist without interfering.
 static const GtkTargetEntry _mask_cluster_dnd[] =
-  { { (gchar *)"dt-mask-cluster", GTK_TARGET_SAME_APP, 0 } };
+  { { (gchar *)DND_TARGET_CLUSTER, GTK_TARGET_SAME_APP, 0 } };
 
 // a group header (real or empty) accepts every kind of drop: a whole real group
 // (reorder), a single shape (drop onto a group to move the shape into it), an
@@ -6117,10 +6177,50 @@ static const GtkTargetEntry _mask_cluster_dnd[] =
 // The receive handler routes on the entry info below.
 enum { DND_MASK_GROUP = 0, DND_MASK_ROW = 1, DND_MASK_EMPTY = 2, DND_MASK_CLUSTER = 3 };
 static const GtkTargetEntry _mask_hdr_dnd[] =
-  { { (gchar *)"dt-mask-group",   GTK_TARGET_SAME_APP, DND_MASK_GROUP },
-    { (gchar *)"dt-mask-row",     GTK_TARGET_SAME_APP, DND_MASK_ROW },
-    { (gchar *)"dt-mask-empty",   GTK_TARGET_SAME_APP, DND_MASK_EMPTY },
-    { (gchar *)"dt-mask-cluster", GTK_TARGET_SAME_APP, DND_MASK_CLUSTER } };
+  { { (gchar *)DND_TARGET_GROUP,   GTK_TARGET_SAME_APP, DND_MASK_GROUP },
+    { (gchar *)DND_TARGET_ROW,     GTK_TARGET_SAME_APP, DND_MASK_ROW },
+    { (gchar *)DND_TARGET_EMPTY,   GTK_TARGET_SAME_APP, DND_MASK_EMPTY },
+    { (gchar *)DND_TARGET_CLUSTER, GTK_TARGET_SAME_APP, DND_MASK_CLUSTER } };
+
+// The frame a group-level drop target belongs to: the widget the insertion line
+// is drawn on, and the rectangle an above/below decision is measured against.
+// A group is covered by several drop targets -- its header event box, its block,
+// each element row, each cluster header -- and they all resolve to the same
+// frame (the group block), which is what makes the group one target rather than
+// a stack of them. Falls back to the widget itself for a target that belongs to
+// no group.
+static GtkWidget *_group_frame_of(GtkWidget *w)
+{
+  GtkWidget *f = g_object_get_data(G_OBJECT(w), "group-frame");
+  if(!f) f = g_object_get_data(G_OBJECT(w), "header-widget");
+  return f ? f : w;
+}
+
+// Where a group-reorder drop lands relative to the group under the pointer:
+// TRUE = above it (later in the bottom-up list), FALSE = below.
+//
+// Measured against the group's frame, never the sub-widget that happened to
+// receive the event -- each of those reports `y` relative to itself, so taking
+// its own midpoint gave every sub-widget its own flip point. Dragging up
+// through a single group then flipped the indicator repeatedly (below over the
+// body's lower half, above over its upper half, below again over the header's
+// lower half, above over its top half) instead of switching once at the
+// group's middle.
+//
+// This is the only place the decision is made: the motion handler that draws
+// the insertion line and the receive handlers that perform the move all call
+// it, so the line and the drop that follows can never disagree.
+static gboolean _group_drop_above(GtkWidget *w, const gint y)
+{
+  GtkWidget *f = _group_frame_of(w);
+  gint fx = 0, fy = y;
+  // translate_coordinates needs a common ancestor and realized widgets; when it
+  // cannot answer, measure against the receiving widget rather than guess
+  if(w != f && !gtk_widget_translate_coordinates(w, f, 0, y, &fx, &fy))
+    f = w, fy = y;
+  const int h = gtk_widget_get_allocated_height(f);
+  return h > 0 && fy < h / 2;
+}
 
 static void _masks_group_drag_get(GtkWidget *w, GdkDragContext *ctx,
                                   GtkSelectionData *sel, guint info, guint time,
@@ -6219,6 +6319,38 @@ static gboolean _masks_cluster_move(dt_iop_module_t *module, GList *member_ids,
                                     const gboolean dst_is_group,
                                     const gboolean above);
 
+// Select the group a drag just moved, once it has landed.
+//
+// Every element-level drop already does this for the element it moved ("a moved
+// element should stay selected at the end of the drag -- otherwise it lands in
+// its new spot with no visible indication of what just moved", see
+// _masks_row_drag_received). Group-level drops did not, so a moved group landed
+// unselected and the selection still pointed at whatever was selected before the
+// drag -- which then silently decided where the next "add group" went.
+//
+// The cid must be re-derived from the run head *after* the reorder; a cid read
+// before it describes the old layout.
+static void _select_moved_group(dt_iop_module_t *module, const dt_mask_id_t cid)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd) return;
+  bd->selected_empty = NULL;
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = cid;
+}
+
+// same, for a staged (empty) group: it has no members, so it is identified by
+// its own pointer rather than a run head
+static void _select_moved_empty_group(dt_iop_module_t *module,
+                                      dt_masks_empty_group_t *eg)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd) return;
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = INVALID_MASKID;
+  bd->selected_empty = eg;
+}
+
 static void _masks_group_drag_received(GtkWidget *w, GdkDragContext *ctx,
                                        gint x, gint y, GtkSelectionData *sel,
                                        guint info, guint time,
@@ -6233,10 +6365,17 @@ static void _masks_group_drag_received(GtkWidget *w, GdkDragContext *ctx,
     dt_masks_form_t *grp = _module_mask_group(module);
     if(grp && dt_is_valid_maskid(dst))
     {
-      const int h = gtk_widget_get_allocated_height(w);
-      const gboolean above = (h > 0 && y < h / 2);
+      const gboolean above = _group_drop_above(w, y);
       ok = _masks_reorder_groups(module, FALSE, _group_cid_of_form(grp, src), NULL,
                                  FALSE, _group_cid_of_form(grp, dst), NULL, above);
+      // a moved group stays selected, exactly as a moved element does (see
+      // _masks_row_drag_received's own note): otherwise it lands in its new
+      // spot with nothing indicating what just moved, and -- worse -- the
+      // selection still points at whatever was selected beforehand, so the next
+      // "add group" anchors above *that* group rather than the one just
+      // dragged. Re-derived from the run head after the reorder, never reused
+      // from before it.
+      if(ok) _select_moved_group(module, _group_cid_of_form(grp, src));
     }
     dt_print(DT_DEBUG_MASKS, "[masks dnd] group received src=%d dst=%d ok=%d", src, dst, ok);
   }
@@ -6299,6 +6438,7 @@ static void _masks_shape_to_group_drop(GtkWidget *w, GdkDragContext *ctx,
           bd->empty_groups = g_list_append(bd->empty_groups, emptied);
         }
         _normalize_group_operators(grp);
+        _verify_element_joined(grp, src, dst, "group-header drop");
         dt_print(DT_DEBUG_MASKS, "[masks] shape %d moved into group of %d", src, dst);
         dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
         // a moved element should stay selected at the end of the drag
@@ -6919,11 +7059,6 @@ static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module, const dt_ma
 // on every menu entry, including future ones).
 static void _shape_menu_closed(GtkWidget *menu, dt_iop_module_t *module)
 {
-  // set by _shape_menu_toggle_props when that's the item that closed the
-  // menu: it already fully manages the expand state itself, so running this
-  // too would be redundant at best (a no-op) and a conflicting second toggle
-  // at worst -- see its own comment.
-  if(g_object_get_data(G_OBJECT(menu), "skip-auto-expand")) return;
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(menu), "formid"));
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd && bd->panel_selected_formid == id) _auto_expand_selected_row(module, id);
@@ -8169,6 +8304,7 @@ static void _stage_new_group(dt_iop_module_t *module, const int op_state,
                                                         : DT_MASKS_STATE_UNION;
   dt_mask_id_t below = INVALID_MASKID;
   GList *after = NULL;         // node in empty_groups to insert the new one next to
+  GList *before_node = NULL;   // ...or to insert it *before*, see the "above a real group" case
   gboolean prepend_bottom = FALSE;  // render as the bottom-most anchor-missing entry
 
   if(bd->selected_empty)
@@ -8182,6 +8318,34 @@ static void _stage_new_group(dt_iop_module_t *module, const int op_state,
     below = below_target
           ? _group_below_cid(grp, bd->panel_selected_group_cid)  // directly below it
           : bd->panel_selected_group_cid;                        // above it
+
+    if(!below_target)
+    {
+      // "above the selected group" has to mean *immediately* above it, but the
+      // anchor alone does not say that: several empty groups can share one
+      // anchor, and _masks_panel_pack renders them in bd->empty_groups order
+      // with gtk_box_pack_end -- so later in the list renders higher. Appending
+      // therefore placed the new group above every empty already anchored to
+      // this run, which with one such empty present landed it at the very top
+      // of the panel instead of directly above the selected group.
+      //
+      // Going in before the first of them puts it lowest of that anchor's
+      // empties, i.e. directly above the run. (The below_target case wants the
+      // opposite -- directly *below* the selected group is the highest slot of
+      // the run beneath it -- which is what appending already gives.)
+      for(GList *e = bd->empty_groups; e; e = g_list_next(e))
+      {
+        const dt_masks_empty_group_t *eg_at = e->data;
+        if(!dt_is_valid_maskid(eg_at->below_fid)) continue;
+        // compare runs, not raw formids: an empty may be anchored to any member
+        // of the run (see the match test in _masks_panel_pack), not just its head
+        if(_group_cid_of_form(grp, eg_at->below_fid) == bd->panel_selected_group_cid)
+        {
+          before_node = e;
+          break;
+        }
+      }
+    }
   }
   else if(below_target)
   {
@@ -8205,6 +8369,10 @@ static void _stage_new_group(dt_iop_module_t *module, const int op_state,
     bd->empty_groups = below_target
                       ? g_list_insert_before(bd->empty_groups, after, eg)
                       : g_list_insert_before(bd->empty_groups, after->next, eg);
+  else if(before_node)
+    // directly above the selected real group, below any empties already
+    // anchored to it (see the loop that found this node)
+    bd->empty_groups = g_list_insert_before(bd->empty_groups, before_node, eg);
   else
     bd->empty_groups = g_list_append(bd->empty_groups, eg);
 
@@ -8664,21 +8832,12 @@ static void _toggle_solo_group(dt_iop_module_t *module, const guint key, GList *
 
   if(bd->solo_group_key == key)
   {
-    for(GList *l = grp->points; l; l = g_list_next(l))
-      ((dt_masks_point_group_t *)l->data)->state &= ~DT_MASKS_STATE_HIDDEN;
+    dt_masks_group_isolate_state(grp, NULL, DT_MASKS_STATE_HIDDEN);
     bd->solo_group_key = 0;
   }
   else
   {
-    for(GList *l = grp->points; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = l->data;
-      gboolean member = FALSE;
-      for(GList *m = members; m; m = g_list_next(m))
-        if(GPOINTER_TO_INT(m->data) == pt->formid) { member = TRUE; break; }
-      if(member) pt->state &= ~DT_MASKS_STATE_HIDDEN;
-      else       pt->state |= DT_MASKS_STATE_HIDDEN;
-    }
+    dt_masks_group_isolate_state(grp, members, DT_MASKS_STATE_HIDDEN);
     bd->solo_formid = INVALID_MASKID;
     bd->solo_group_key = key;
     // same mutual-exclusivity rule as _toggle_solo_form
@@ -8891,18 +9050,16 @@ static void _group_op_apply(dt_iop_module_t *module, GList *formids,
     }
   }
   GList *heads = _group_partition_heads(grp);
-  for(GList *l = formids; l; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = _group_point(grp, GPOINTER_TO_INT(l->data));
-    if(!pt) continue;
-    if(toggle_bypass)
+  if(toggle_bypass)
+    dt_masks_group_set_state(grp, formids, DT_MASKS_STATE_OP_BYPASS, set_bypass);
+  else
+    // not a bit broadcast but a field replacement (the operator is a value in
+    // the DT_MASKS_STATE_OP bits, not a flag), so it stays hand-rolled here
+    for(GList *l = formids; l; l = g_list_next(l))
     {
-      if(set_bypass) pt->state |= DT_MASKS_STATE_OP_BYPASS;
-      else           pt->state &= ~DT_MASKS_STATE_OP_BYPASS;
+      dt_masks_point_group_t *pt = _group_point(grp, GPOINTER_TO_INT(l->data));
+      if(pt) pt->state = (pt->state & ~DT_MASKS_STATE_OP) | op;
     }
-    else
-      pt->state = (pt->state & ~DT_MASKS_STATE_OP) | op;
-  }
   _apply_partition_breaks(grp, heads);
   g_list_free(heads);
   _normalize_group_operators(grp);
@@ -9027,13 +9184,7 @@ static void _group_toggle_output_invert(dt_iop_module_t *module, GList *members)
   const dt_masks_point_group_t *any = _group_point(grp, GPOINTER_TO_INT(members->data));
   if(!any) return;
   const gboolean set_invert = !(any->state & DT_MASKS_STATE_OP_INVERT);
-  for(GList *l = members; l; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = _group_point(grp, GPOINTER_TO_INT(l->data));
-    if(!pt) continue;
-    if(set_invert) pt->state |= DT_MASKS_STATE_OP_INVERT;
-    else           pt->state &= ~DT_MASKS_STATE_OP_INVERT;
-  }
+  dt_masks_group_set_state(grp, members, DT_MASKS_STATE_OP_INVERT, set_invert);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // like _invert_group_members's own switch away from a full rebuild: this
   // touches no row's structure, just this one run's own handle look -- update
@@ -9339,9 +9490,8 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
     // what is editable, not what is shown.
     if(dt_is_valid_maskid(bd->solo_formid) || bd->solo_group_key != 0)
     {
-      dt_masks_form_t *grp = _module_mask_group(module);
-      for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
-        ((dt_masks_point_group_t *)l->data)->state &= ~DT_MASKS_STATE_HIDDEN;
+      dt_masks_group_isolate_state(_module_mask_group(module), NULL,
+                                   DT_MASKS_STATE_HIDDEN);
       bd->solo_formid = INVALID_MASKID;
       bd->solo_group_key = 0;
       _sync_hidden_to_form_visible(module);
@@ -9709,10 +9859,12 @@ static void _masks_group_to_empty_drop(GtkWidget *w, GdkDragContext *ctx,
     dt_masks_form_t *grp = _module_mask_group(module);
     if(grp)
     {
-      const int h = gtk_widget_get_allocated_height(w);
-      const gboolean above = (h > 0 && y < h / 2);
+      const gboolean above = _group_drop_above(w, y);
       ok = _masks_reorder_groups(module, FALSE, _group_cid_of_form(grp, src), NULL,
                                  TRUE, INVALID_MASKID, eg, above);
+      // the moved group stays selected, re-derived after the reorder -- see
+      // _select_moved_group
+      if(ok) _select_moved_group(module, _group_cid_of_form(grp, src));
     }
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
@@ -9735,8 +9887,7 @@ static void _masks_empty_reorder_drop(GtkWidget *w, GdkDragContext *ctx, gint y,
     if(src && g_list_find(bd->empty_groups, src))
     {
       dt_masks_form_t *grp = _module_mask_group(module);
-      const int h = gtk_widget_get_allocated_height(w);
-      const gboolean above = (h > 0 && y < h / 2);
+      const gboolean above = _group_drop_above(w, y);
 
       GList *dst_formids = g_object_get_data(G_OBJECT(w), "group-formids");
       dt_masks_empty_group_t *dst_eg = g_object_get_data(G_OBJECT(w), "eg");
@@ -9747,6 +9898,8 @@ static void _masks_empty_reorder_drop(GtkWidget *w, GdkDragContext *ctx, gint y,
       if(dst_eg || dt_is_valid_maskid(dst_cid))
         ok = _masks_reorder_groups(module, TRUE, INVALID_MASKID, src,
                                    dst_eg != NULL, dst_cid, dst_eg, above);
+      // the moved (staged) group stays selected -- see _select_moved_group
+      if(ok) _select_moved_empty_group(module, src);
     }
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
@@ -9783,52 +9936,156 @@ static void _clear_drop_classes(GtkWidget *f)
   dt_gui_remove_class(f, "mask-list-row-drop-below");
 }
 
+// clear the drop feedback from `f` *and its siblings*. The insertion line is
+// drawn on a canonical neighbour rather than always on the hovered group (see
+// _canonical_drop_frame), so the widget wearing the class is not necessarily
+// the one a later motion/leave event arrives on -- clearing only `f` would
+// strand a line on the group next door.
+static void _clear_group_drop_classes(GtkWidget *f)
+{
+  _clear_drop_classes(f);
+  GtkWidget *parent = gtk_widget_get_parent(f);
+  if(!GTK_IS_CONTAINER(parent)) return;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(parent));
+  for(GList *l = kids; l; l = g_list_next(l))
+    if(l->data != f) _clear_drop_classes(GTK_WIDGET(l->data));
+  g_list_free(kids);
+}
+
+// The gap between two adjacent groups is ONE insertion slot, but it has two
+// names: "below the upper group" and "above the lower group". Drawing each on
+// its own block's edge put two different lines a few pixels apart (the blocks
+// carry a 4px margin between them), so a single slot read as two competing drop
+// targets and the indicator appeared to jump as the pointer crossed the
+// boundary.
+//
+// Collapse the two names to one: a slot is always drawn as the *top* edge of
+// the group below it. Crossing between two groups then changes nothing on
+// screen at all, because both sides resolve to the same widget and the same
+// class. Only the bottom-most slot, which has no group below it, stays a
+// "below" on the last group's own bottom edge.
+//
+// Purely presentational -- the drop itself still acts on the group actually
+// under the pointer with its own above/below (the two describe the same gap, so
+// they move the group to the same place). Nothing about the model changes here.
+static GtkWidget *_canonical_drop_frame(GtkWidget *f, gboolean *above)
+{
+  if(*above) return f;  // already "top edge of the group below the slot"
+
+  GtkWidget *parent = gtk_widget_get_parent(f);
+  if(!GTK_IS_CONTAINER(parent)) return f;
+
+  // Find the neighbour by on-screen geometry, not by position in the child
+  // list. The list packs blocks with gtk_box_pack_end, and reasoning about what
+  // that implies for gtk_container_get_children's order is exactly the kind of
+  // assumption that is easy to get backwards and hard to see in a screenshot --
+  // allocations say where things actually are.
+  GtkAllocation fa;
+  gtk_widget_get_allocation(f, &fa);
+  const int f_mid = fa.y + fa.height / 2;
+
+  GtkWidget *below = NULL;
+  int below_mid = 0;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(parent));
+  for(GList *l = kids; l; l = g_list_next(l))
+  {
+    GtkWidget *s = GTK_WIDGET(l->data);
+    if(s == f || !gtk_widget_get_visible(s)) continue;
+    GtkAllocation sa;
+    gtk_widget_get_allocation(s, &sa);
+    const int s_mid = sa.y + sa.height / 2;
+    if(s_mid <= f_mid) continue;                       // not below f on screen
+    if(!below || s_mid < below_mid) below = s, below_mid = s_mid;  // nearest one
+  }
+  g_list_free(kids);
+
+  if(!below) return f;  // f is the bottom-most group: keep its own bottom edge
+  *above = TRUE;
+  return below;
+}
+
+// What is hovering a drop target: a whole group (real or empty) being
+// reordered, versus a single element (or a same-kind cluster) being moved into
+// a group. The two want opposite feedback -- an insertion line at the edge it
+// would land on, versus a highlight of the whole target group.
+typedef enum
+{
+  DND_HOVER_OTHER = 0,  // negotiated nothing we know: fall back to a plain highlight
+  DND_HOVER_REORDER,    // DND_TARGET_GROUP / DND_TARGET_EMPTY
+  DND_HOVER_ELEMENT     // DND_TARGET_ROW / DND_TARGET_CLUSTER
+} dt_masks_dnd_hover_t;
+
+// NB this is not free: gtk_drag_dest_find_target() negotiates against the drag
+// pasteboard, which on quartz means a full type-list round trip per call. It
+// runs on every motion event, so classify ONCE per event and pass the result
+// down (see _group_drop_motion_kind) rather than re-deriving it in a callee.
+static dt_masks_dnd_hover_t _dnd_hover_kind(GtkWidget *w, GdkDragContext *dc)
+{
+  const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
+  if(target == GDK_NONE) return DND_HOVER_OTHER;
+  gchar *name = gdk_atom_name(target);
+  dt_masks_dnd_hover_t kind = DND_HOVER_OTHER;
+  if(name)
+  {
+    if(!strcmp(name, DND_TARGET_GROUP) || !strcmp(name, DND_TARGET_EMPTY))
+      kind = DND_HOVER_REORDER;
+    else if(!strcmp(name, DND_TARGET_ROW) || !strcmp(name, DND_TARGET_CLUSTER))
+      kind = DND_HOVER_ELEMENT;
+    g_free(name);
+  }
+  return kind;
+}
+
+// The body of _group_drop_motion, taking an already-classified hover kind so a
+// caller that has classified the event itself does not pay for it twice.
+static gboolean _group_drop_motion_kind(GtkWidget *w, gint y, GtkWidget *f,
+                                        const dt_masks_dnd_hover_t kind)
+{
+  // siblings too: a reorder line is drawn on a canonical neighbour, not always
+  // on this frame (see _canonical_drop_frame)
+  _clear_group_drop_classes(f);
+
+  if(kind == DND_HOVER_REORDER)
+  {
+    // rows display bottom-up: the top half means "land above this group". The
+    // decision is _group_drop_above's alone -- the same call the receive
+    // handlers make -- so the line drawn here and the move that follows cannot
+    // disagree.
+    gboolean above = _group_drop_above(w, y);
+    // ...then draw that slot in its canonical place, so the gap between two
+    // groups shows one line rather than one per neighbour
+    GtkWidget *line = _canonical_drop_frame(f, &above);
+    dt_gui_add_class(line, above ? "mask-list-row-drop-above" : "mask-list-row-drop-below");
+  }
+  else
+  {
+    if(kind == DND_HOVER_ELEMENT)
+    {
+      // Auto-expand group if hovering a collapsed group
+      GtkWidget *exp_toggle = g_object_get_data(G_OBJECT(w), "group-expand-toggle");
+      if(exp_toggle && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(exp_toggle)))
+      {
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(exp_toggle), TRUE);
+      }
+    }
+    dt_gui_add_class(f, "mask-list-row-drop");
+  }
+  return FALSE;  // let GTK_DEST_DEFAULT_MOTION still answer the drag status
+}
+
 static gboolean _group_drop_motion(GtkWidget *w, GdkDragContext *dc,
                                    gint x, gint y, guint time, gpointer frame)
 {
   if(!frame) return FALSE;
-  GtkWidget *f = GTK_WIDGET(frame);
-  _clear_drop_classes(f);
-
-  // distinguish what is hovering: a whole group (real or empty) being reordered
-  // (show an insertion line at the top/bottom edge where it would land) versus a
-  // single element being moved into this group (highlight the whole target
-  // group). The reorder offers "dt-mask-group"/"dt-mask-empty"; the element
-  // drag offers "dt-mask-row"/"dt-mask-cluster".
-  const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
-  gchar *name = (target != GDK_NONE) ? gdk_atom_name(target) : NULL;
-  const gboolean is_reorder =
-    name && (!strcmp(name, "dt-mask-group") || !strcmp(name, "dt-mask-empty"));
-  const gboolean is_element =
-    name && (!strcmp(name, "dt-mask-row") || !strcmp(name, "dt-mask-cluster"));
-  g_free(name);
-
-  if(is_reorder)
-  {
-    // rows display bottom-up: the top half of a header means "land above this group"
-    const int h = gtk_widget_get_allocated_height(w);
-    const gboolean above = (h > 0 && y < h / 2);
-    dt_gui_add_class(f, above ? "mask-list-row-drop-above" : "mask-list-row-drop-below");
-  }
-  else if(is_element)
-  {
-    // Auto-expand group if hovering a collapsed group
-    GtkWidget *exp_toggle = g_object_get_data(G_OBJECT(w), "group-expand-toggle");
-    if(exp_toggle && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(exp_toggle)))
-    {
-      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(exp_toggle), TRUE);
-    }
-    dt_gui_add_class(f, "mask-list-row-drop");
-  }
-  else
-    dt_gui_add_class(f, "mask-list-row-drop");
-  return FALSE;  // let GTK_DEST_DEFAULT_MOTION still answer the drag status
+  return _group_drop_motion_kind(w, y, GTK_WIDGET(frame), _dnd_hover_kind(w, dc));
 }
 
 static void _group_drop_leave(GtkWidget *w, GdkDragContext *dc,
                               guint time, gpointer frame)
 {
-  if(frame) _clear_drop_classes(GTK_WIDGET(frame));
+  // siblings too, for the same reason as the motion handler: the line may be
+  // wearing on a neighbouring group's block rather than this frame
+  if(frame) _clear_group_drop_classes(GTK_WIDGET(frame));
 }
 
 static gboolean _element_drop_motion(GtkWidget *w, GdkDragContext *dc,
@@ -9837,17 +10094,16 @@ static gboolean _element_drop_motion(GtkWidget *w, GdkDragContext *dc,
   GtkWidget *row_vbox = g_object_get_data(G_OBJECT(w), "row-vbox");
   if(!row_vbox) return FALSE;
 
-  const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
-  gchar *name = (target != GDK_NONE) ? gdk_atom_name(target) : NULL;
-  const gboolean is_reorder =
-    name && (!strcmp(name, "dt-mask-group") || !strcmp(name, "dt-mask-empty"));
-  g_free(name);
-
-  if(is_reorder)
+  const dt_masks_dnd_hover_t kind = _dnd_hover_kind(w, dc);
+  if(kind == DND_HOVER_REORDER)
   {
+    // a whole group hovering an element row still means "reorder next to this
+    // row's group", so hand it straight to the group-level feedback -- passing
+    // the kind we already have, since re-deriving it would negotiate the drag
+    // pasteboard a second time for this one motion event
     GtkWidget *group_frame = g_object_get_data(G_OBJECT(w), "group-frame");
     if(group_frame)
-      return _group_drop_motion(w, dc, x, y, time, group_frame);
+      return _group_drop_motion_kind(w, y, group_frame, kind);
     return FALSE;
   }
 
@@ -10019,7 +10275,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   gtk_widget_set_tooltip_text(name,
       _("this shape has not been added yet -- finish drawing it on canvas to add it"));
 
-  // opacity: universal across every shape kind, mirroring src/libs/masks.c's
+  // opacity: universal across every shape kind, mirroring the removed mask manager's
   // own "prop == DT_MASKS_PROPERTY_OPACITY && gui->creation" case, which
   // adjusts the *sticky default* opacity conf (the value the shape actually
   // gets baked in with on commit, see masks.c's _new_shape_default_opacity)
@@ -10280,6 +10536,67 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   return row_vbox;
 }
 
+// The event box wrapping a group header -- real or staged (empty) -- carrying
+// the click and drag-and-drop wiring both kinds share. The drop-target list,
+// the drag action, the drag-begin handler, and the tags a ctrl+click rename and
+// the solo dimming look the header up by are identical for both; only which
+// handlers receive the events, and what payload the header drags, differ.
+//
+// Built in one place so the two cannot drift apart. This skeleton is precisely
+// the kind of code where a fix made to one header kind and not the other goes
+// unnoticed: nothing about a drop-target list being one entry short is visible
+// until someone drags the right thing onto the wrong header.
+//
+// `source_targets`/`drag_get` NULL means "not a drag source" -- a lone group has
+// nowhere to reorder to. The caller still connects drag-motion/drag-leave
+// itself: the two kinds deliberately highlight different widgets (a real group
+// highlights its whole block so the group-reorder insertion line spans its full
+// body; a staged one has only its header row), and for a real group that widget
+// does not exist yet at this point.
+static GtkWidget *_make_group_header_evbox(dt_iop_module_t *module,
+                                           GtkWidget *hdr,
+                                           GtkWidget *lbl_box,
+                                           GCallback press,
+                                           GCallback release,
+                                           GCallback drag_received,
+                                           const GtkTargetEntry *source_targets,
+                                           GCallback drag_get)
+{
+  GtkWidget *evbox = gtk_event_box_new();
+  gtk_event_box_set_visible_window(GTK_EVENT_BOX(evbox), TRUE);
+  gtk_container_add(GTK_CONTAINER(evbox), hdr);
+
+  // ctrl+click rename finds the title by this tag (see _group_header_press /
+  // _empty_header_press)
+  g_object_set_data(G_OBJECT(evbox), "title-label-box", lbl_box);
+  // solo dimming must reach the header row itself, never an enclosing block --
+  // the member rows already dim individually, so dimming a block would
+  // double-dim them (see _apply_group_header_dimming)
+  g_object_set_data(G_OBJECT(evbox), "group-header-widget", hdr);
+
+  // g_signal_connect_data, not g_signal_connect: the checked macro only accepts
+  // a literal G_CALLBACK(func), not a GCallback variable (same reason as
+  // _make_op_combo's own note)
+  g_signal_connect_data(G_OBJECT(evbox), "button-press-event", press, module, NULL, 0);
+  g_signal_connect_data(G_OBJECT(evbox), "button-release-event", release, module, NULL, 0);
+
+  // a header accepts a whole group (reorder), a single shape (move it into this
+  // group) and an empty group (reorder) -- one target list covers all three
+  gtk_drag_dest_set(evbox, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP,
+                    _mask_hdr_dnd, G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
+  g_signal_connect_data(G_OBJECT(evbox), "drag-data-received", drag_received, module, NULL, 0);
+
+  if(source_targets && drag_get)
+  {
+    // also a drag source for its own reorder, in addition to the grip handle in
+    // column 0 -- grabbing anywhere on the row moves the group
+    gtk_drag_source_set(evbox, GDK_BUTTON1_MASK, source_targets, 1, GDK_ACTION_MOVE);
+    g_signal_connect_data(G_OBJECT(evbox), "drag-data-get", drag_get, NULL, NULL, 0);
+    g_signal_connect(G_OBJECT(evbox), "drag-begin", G_CALLBACK(_group_drag_begin), module);
+  }
+  return evbox;
+}
+
 // render one empty group as a header, column-aligned with the shape rows and the
 // real group headers: [mode chip] | label | [within-group chooser (disabled)].
 // An empty group has no members, so there is nothing to solo/mute yet -- that
@@ -10343,7 +10660,7 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // the last remaining group cannot be removed (see _empty_header_press), so
   // don't offer it when this is the only one left
   gchar *egtip =
-    g_strdup_printf(_("empty group — select it, then draw a shape (or drop one here) to fill it\n"
+    g_strdup_printf(_("empty group - select it, then draw a shape (or drop one here) to fill it\n"
                       "%s"
                       "drag the row to rearrange\n"
                       "ctrl+click to rename\n"
@@ -10445,48 +10762,49 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // real group, or another empty group can be dropped onto it; right-click
   // (press) removes it. It is also a drag source for its own reorder (like a
   // real group's hdr_evbox), so grabbing anywhere on the row moves it.
-  GtkWidget *hdr_evbox = gtk_event_box_new();
-  gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evbox), TRUE);
-  gtk_container_add(GTK_CONTAINER(hdr_evbox), hdr);
+  // a lone group has nowhere to reorder to, so it is not a drag source
+  const gboolean movable = _group_count(module) >= 2;
+  GtkWidget *hdr_evbox =
+    _make_group_header_evbox(module, hdr, lbl_box,
+                             G_CALLBACK(_empty_header_press),
+                             G_CALLBACK(_empty_header_release),
+                             G_CALLBACK(_masks_empty_header_drag_received),
+                             movable ? _mask_empty_dnd : NULL,
+                             movable ? G_CALLBACK(_masks_empty_drag_get) : NULL);
   g_object_set_data(G_OBJECT(hdr_evbox), "eg", eg);
   if(is_base) g_object_set_data(G_OBJECT(hdr_evbox), "is-base-group", GINT_TO_POINTER(1));
-  // so ctrl+click (_empty_header_press) can find the title box to rename,
-  // same tag a real group's hdr_evbox/ghandle carry (see _group_header_press)
-  g_object_set_data(G_OBJECT(hdr_evbox), "title-label-box", lbl_box);
   // tagged so _apply_empty_selection (a lightweight, no-rebuild selection update)
   // can find this row and toggle its highlight in place
   g_object_set_data(G_OBJECT(hdr_evbox), "eg-header", GINT_TO_POINTER(1));
-  // "group-header-widget" (-> hdr) is for solo dimming (_apply_empty_group_dimming);
-  // "header-widget" (-> block, set below once it exists) is for selection
-  // shading, matching the same two-tag split a real group's own header uses
-  // (see its own "group-header-widget"/"header-widget" comments) -- keeps a
-  // selected empty group's highlight wrapping its whole body (header + any
-  // pending-shape placeholder row) instead of hdr's own edges alone.
-  g_object_set_data(G_OBJECT(hdr_evbox), "group-header-widget", hdr);
-  g_signal_connect(G_OBJECT(hdr_evbox), "button-press-event",
-                   G_CALLBACK(_empty_header_press), module);
-  g_signal_connect(G_OBJECT(hdr_evbox), "button-release-event",
-                   G_CALLBACK(_empty_header_release), module);
-  gtk_drag_dest_set(hdr_evbox, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP,
-                    _mask_hdr_dnd, G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-  g_signal_connect(G_OBJECT(hdr_evbox), "drag-data-received",
-                   G_CALLBACK(_masks_empty_header_drag_received), module);
-  if(_group_count(module) >= 2)
-  {
-    gtk_drag_source_set(hdr_evbox, GDK_BUTTON1_MASK, _mask_empty_dnd, 1, GDK_ACTION_MOVE);
-    g_signal_connect(G_OBJECT(hdr_evbox), "drag-data-get",
-                     G_CALLBACK(_masks_empty_drag_get), NULL);
-    g_signal_connect(G_OBJECT(hdr_evbox), "drag-begin",
-                     G_CALLBACK(_group_drag_begin), module);
-  }
-  // highlight this group's frame while a drag hovers it
-  g_signal_connect(G_OBJECT(hdr_evbox), "drag-motion",
-                   G_CALLBACK(_group_drop_motion), hdr);
-  g_signal_connect(G_OBJECT(hdr_evbox), "drag-leave",
-                   G_CALLBACK(_group_drop_leave), hdr);
-
+  // "group-header-widget" (-> hdr, set by the helper) is for solo dimming
+  // (_apply_empty_group_dimming); "header-widget" (-> block, set below once it
+  // exists) is for selection shading, matching the same two-tag split a real
+  // group's own header uses -- keeps a selected empty group's highlight
+  // wrapping its whole body (header + any pending-shape placeholder row)
+  // instead of hdr's own edges alone.
   GtkWidget *block = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  // a staged group is a group: its block carries the same id/class as a real
+  // one, which is what gives it the shared spacing and -- the reason this is
+  // unconditional rather than only when a pending row exists, as it used to be
+  // -- the drop-indicator styling. Without the class the insertion line is
+  // applied to a widget no rule matches, so dragging near a staged group showed
+  // no indicator at all.
+  gtk_widget_set_name(block, "mask-group-block");
+  dt_gui_add_class(block, "mask-group-block");
   gtk_box_pack_start(GTK_BOX(block), hdr_evbox, FALSE, FALSE, 0);
+
+  // highlight this group's frame while a drag hovers it. The frame is the whole
+  // block, not just the header row: a staged group's block can also hold the
+  // pending-shape placeholder row, and the insertion line has to span the
+  // group's full body to read as landing above/below the group rather than
+  // above/below its header. This also has to be the same widget
+  // _group_drop_above measures against (it resolves "header-widget", set just
+  // below) -- drawing the line on one rectangle while deciding above/below from
+  // another is what made the indicator flip mid-group.
+  g_signal_connect(G_OBJECT(hdr_evbox), "drag-motion",
+                   G_CALLBACK(_group_drop_motion), block);
+  g_signal_connect(G_OBJECT(hdr_evbox), "drag-leave",
+                   G_CALLBACK(_group_drop_leave), block);
   // see the "header-widget"/"group-header-widget" split comment above: this
   // tag is what _apply_empty_selection shades, and it must be the whole
   // block (matching a real group's own group_block target) so a selected
@@ -10521,14 +10839,8 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
       dt_gui_add_class(pending_box, "mask-group-elements");
       gtk_box_pack_start(GTK_BOX(pending_box), _make_pending_shape_row(module, pending), FALSE, FALSE, 0);
       gtk_box_pack_start(GTK_BOX(block), pending_box, FALSE, FALSE, 0);
-      // and give `block` itself the same "one visual card" framing a real,
-      // populated group's own block carries (see .mask-group-block in
-      // darktable.css) -- an empty group's block never needed this before
-      // (it was always just the bare header), but now that it has a body the
-      // header+body pair needs the shared border/spacing to read as one
-      // group instead of two separate, unrelated rows.
-      gtk_widget_set_name(block, "mask-group-block");
-      dt_gui_add_class(block, "mask-group-block");
+      // the "one visual card" framing this body needs (.mask-group-block) is
+      // now applied unconditionally where the block is created above
     }
   }
 
@@ -10562,7 +10874,7 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
 // GtkCheckMenuItem does not auto-close its parent popup on toggle the way a
 // plain GtkMenuItem's "activate" does (by design -- it lets a settings-style
 // menu stay open across several checkbox flips) -- but every check item in
-// *this* menu (invert/solo/solo-edit/toggle-expanded-controls) is a one-shot
+// *this* menu (disable/solo/solo-edit/invert) is a one-shot
 // action, not a settings panel, and is meant to close the menu like every
 // other entry here (see _row_click_press's right-click branch and
 // _shape_menu_closed, which the menu's own "hide" signal drives). Without
@@ -12866,7 +13178,6 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
     dt_gui_add_class(row_vbox, "mask-list-row-selected");
   if(bd->solo_formid == fid || bd->soloedit_formid == fid)
     dt_gui_add_class(row_vbox, "mask-list-row-solo");
-  gtk_box_pack_start(GTK_BOX(row_vbox), row_evbox, FALSE, FALSE, 0);
 
   // every parametric mask row gets its own permanently visible slider editor
   // (see _build_param_row_editor) -- no expand/collapse or docking needed
@@ -13409,10 +13720,11 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     const gboolean group_inverted = (opstate & DT_MASKS_STATE_OP_INVERT) != 0;
 
     // first-class groups: two same-operator groups may sit adjacent (kept apart by
-    // GROUP_BREAK), so the chooser no longer disables neighbouring operators.
+    // GROUP_BREAK), so the chooser no longer disables neighbouring operators --
+    // which is why prev_op/next_op are computed but unused, and why the handle no
+    // longer carries a "disabled-ops" mask (it was always 0, and nothing read it).
     (void)prev_op;
     (void)next_op;
-    const guint disabled_ops = 0;
 
     // within-group combine chooser (union / screen / intersect) -- packed on the
     // RIGHT of the header (see below) so it is not confused with the group's own
@@ -13560,7 +13872,6 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     g_object_set_data_full(G_OBJECT(ghandle_btn), "formids", g_list_copy(formids),
                            (GDestroyNotify)g_list_free);
     if(is_base_group) g_object_set_data(G_OBJECT(ghandle_btn), "is-base-group", GINT_TO_POINTER(1));
-    g_object_set_data(G_OBJECT(ghandle_btn), "disabled-ops", GUINT_TO_POINTER(disabled_ops));
     g_object_set_data(G_OBJECT(ghandle_btn), "title-label-box", lbl_box);
     g_object_set_data(G_OBJECT(ghandle_btn), "group-key", GUINT_TO_POINTER(cid));
     gtk_widget_set_tooltip_text(ghandle_btn, ghandle_tip);
@@ -13690,9 +14001,13 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     // an event box wraps the header so the canvas<->list hover sync can locate
     // this group by any member id (it carries "group-formids") and so clicking
     // it selects the group / right-clicking deletes it.
-    GtkWidget *hdr_evbox = gtk_event_box_new();
-    gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evbox), TRUE);
-    gtk_container_add(GTK_CONTAINER(hdr_evbox), hdr);
+    GtkWidget *hdr_evbox =
+      _make_group_header_evbox(module, hdr, lbl_box,
+                               G_CALLBACK(_group_header_press),
+                               G_CALLBACK(_group_header_release),
+                               G_CALLBACK(_masks_header_drag_received),
+                               group_movable ? _mask_group_dnd : NULL,
+                               group_movable ? G_CALLBACK(_masks_group_drag_get) : NULL);
     g_object_set_data_full(G_OBJECT(hdr_evbox), "group-formids", g_list_copy(formids),
                            (GDestroyNotify)g_list_free);
     g_object_set_data_full(G_OBJECT(hdr_evbox), "hover-formids", g_list_copy(formids),
@@ -13703,24 +14018,10 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     g_signal_connect(G_OBJECT(hdr_evbox), "leave-notify-event",
                      G_CALLBACK(_row_crossing), module);
 
-    // DnD: a header is a drop target for both a whole group (reorder), a single
-    // shape (drop onto a group to move the shape into it), and an empty group
-    // (reorder). It is also a drag *source* for its own reorder (in addition to
-    // the grip handle in column 0, which still works too) -- grabbing anywhere
-    // on the row rearranges the group, not just the handle.
-    gtk_drag_dest_set(hdr_evbox, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP,
-                      _mask_hdr_dnd, G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-    g_signal_connect(G_OBJECT(hdr_evbox), "drag-data-received",
-                     G_CALLBACK(_masks_header_drag_received), module);
-    if(group_movable)
-    {
-      // "group-formids" is already set on hdr_evbox above
-      gtk_drag_source_set(hdr_evbox, GDK_BUTTON1_MASK, _mask_group_dnd, 1, GDK_ACTION_MOVE);
-      g_signal_connect(G_OBJECT(hdr_evbox), "drag-data-get",
-                       G_CALLBACK(_masks_group_drag_get), NULL);
-      g_signal_connect(G_OBJECT(hdr_evbox), "drag-begin",
-                       G_CALLBACK(_group_drag_begin), module);
-    }
+    // DnD (drop targets, and the drag source when group_movable) is wired by
+    // _make_group_header_evbox above, shared with the staged-group header.
+    // "group-formids", which _masks_group_drag_get reads at drag time, is set
+    // just above.
 
     // selection / delete / reset: a plain primary press returns FALSE (so the group
     // drag source can arm), the group is selected on release, and right-click
@@ -13728,9 +14029,8 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     // deleted; tag it so the delete handlers refuse it.
     g_object_set_data(G_OBJECT(hdr_evbox), "group-key", GUINT_TO_POINTER(cid));
     g_object_set_data(G_OBJECT(hdr_evbox), "group-op", GINT_TO_POINTER(opstate));
-    // tagged so _group_header_press's ctrl+click can locate the title label to
-    // swap it for a rename entry (see lbl_box above)
-    g_object_set_data(G_OBJECT(hdr_evbox), "title-label-box", lbl_box);
+    // "title-label-box" (ctrl+click rename) is tagged by
+    // _make_group_header_evbox, shared with the staged-group header.
     // tagged so _apply_group_selection (a lightweight, no-rebuild selection update)
     // can find this header and toggle its highlight in place
     g_object_set_data(G_OBJECT(hdr_evbox), "mask-header", GINT_TO_POINTER(1));
@@ -13741,10 +14041,7 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     g_object_set_data(G_OBJECT(hdr_evbox), "lowop-badge", group_lowop_badge);
     if(is_base_group)
       g_object_set_data(G_OBJECT(hdr_evbox), "is-base-group", GINT_TO_POINTER(1));
-    g_signal_connect(G_OBJECT(hdr_evbox), "button-press-event",
-                     G_CALLBACK(_group_header_press), module);
-    g_signal_connect(G_OBJECT(hdr_evbox), "button-release-event",
-                     G_CALLBACK(_group_header_release), module);
+    // press/release are connected by _make_group_header_evbox above
 
     // pack the header and this group's elements as one block: the header on top, the
     // element rows nested (indented) right below it. formids is top-first; the rows
@@ -13763,7 +14060,7 @@ static void _masks_panel_pack(dt_iop_module_t *module,
     // must only dim the header row itself -- the member rows already dim
     // themselves individually via _update_shape_row_state, so dimming the
     // whole block here would double-dim them (compositing two 0.45 opacities).
-    g_object_set_data(G_OBJECT(hdr_evbox), "group-header-widget", hdr);
+    // "group-header-widget" (-> hdr) is tagged by _make_group_header_evbox.
     // so _apply_group_output_invert_icon can find and toggle this run's own
     // operator handle in place when "invert output" changes, the same way
     // "group-header-widget"/"header-widget" above let other in-place walkers

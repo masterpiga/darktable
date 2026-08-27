@@ -1597,12 +1597,74 @@ static gboolean _configure(GtkWidget *da,
   return dt_control_configure(da, event, user_data);
 }
 
+// Keep the centre at least min_center_width wide across ALL three side columns.
+//
+// _panel_set_side_panel_width arbitrates only while a resize handle is being
+// dragged. Shrinking the WINDOW afterwards never re-ran it, and a panel's width
+// is a gtk_widget_set_size_request -- a hard minimum GTK honours at the centre's
+// expense -- so widening a panel and then shrinking the window made the canvas
+// disappear entirely (user-reported).
+//
+// Shrinks the widest column first, never below min_panel_width, until the centre
+// fits or every column is at its floor. Like _handle_panel_widths (the same
+// trade made when showing a panel would not fit), the shrink is permanent: the
+// panels do not grow back when the window is enlarged again. Losing panel width
+// is recoverable by dragging; losing the canvas is not.
+static void _enforce_center_width(void)
+{
+  if(!g_atomic_int_get(&darktable.gui_running))
+    // panels are not laid out yet; allocations would all read 0
+    return;
+
+  dt_ui_t *ui = darktable.gui->ui;
+  GtkWidget *main_window = ui ? dt_ui_main_window(ui) : NULL;
+  if(!main_window) return;
+
+  int app_window_w = 0;
+  gtk_window_get_size(GTK_WINDOW(main_window), &app_window_w, NULL);
+
+  int fixed_w = darktable.gui->dpi_factor * dt_conf_get_int("min_center_width");
+  if(gtk_widget_get_visible(darktable.gui->widgets.left_border))
+    fixed_w += gtk_widget_get_allocated_width(darktable.gui->widgets.left_border);
+  if(gtk_widget_get_visible(darktable.gui->widgets.right_border))
+    fixed_w += gtk_widget_get_allocated_width(darktable.gui->widgets.right_border);
+
+  const dt_ui_panel_t cols[] =
+    { DT_UI_PANEL_LEFT, DT_UI_PANEL_RIGHT, DT_UI_PANEL_FLEXI };
+  const int min_w = darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width");
+
+  int w[G_N_ELEMENTS(cols)] = { 0 };
+  int total = 0;
+  for(size_t i = 0; i < G_N_ELEMENTS(cols); i++)
+  {
+    GtkWidget *p = ui->panels[cols[i]];
+    if(p && gtk_widget_get_visible(p)) w[i] = gtk_widget_get_allocated_width(p);
+    total += w[i];
+  }
+
+  int excess = total - (app_window_w - fixed_w);
+  while(excess > 0)
+  {
+    int widest = -1;
+    for(size_t i = 0; i < G_N_ELEMENTS(cols); i++)
+      if(w[i] > min_w && (widest < 0 || w[i] > w[widest])) widest = (int)i;
+    if(widest < 0) break;  // every column already at its floor; nothing to give
+    const int give = MIN(w[widest] - min_w, excess);
+    w[widest] -= give;
+    excess -= give;
+    dt_ui_panel_set_size(ui, cols[widest], w[widest]);
+  }
+}
+
 static gboolean _window_configure(GtkWidget *da,
                                   const GdkEvent *event,
                                   gpointer user_data)
 {
   static int oldx = 0;
   static int oldy = 0;
+
+  // the window may have been resized, not just moved
+  _enforce_center_width();
 
   // FIXME: On Wayland we always configure as the even->configure x, y
   // are always 0.
@@ -3047,6 +3109,13 @@ void dt_ui_panel_set_size(const dt_ui_t *ui,
 {
   gchar *key = NULL;
 
+  // this both applies the size AND writes it to conf, so a bad value does not
+  // just trip gtk_widget_set_size_request's 'width >= -1' assertion, it comes
+  // back on the next launch. Callers here always mean a real pixel size; -1
+  // ("natural size") is not something any of them intends. The size also
+  // arrives unvalidated from Lua (dt_lua_gui_panel_set_size).
+  if(s < 0) return;
+
   if(p == DT_UI_PANEL_LEFT
      || p == DT_UI_PANEL_RIGHT
      || p == DT_UI_PANEL_BOTTOM
@@ -3453,21 +3522,36 @@ static void _panel_set_side_panel_width(GtkWidget *widget, const dt_ui_panel_t p
     used_w += gtk_widget_get_allocated_width(darktable.gui->widgets.left_border);
   if(gtk_widget_get_visible(darktable.gui->widgets.right_border))
     used_w += gtk_widget_get_allocated_width(darktable.gui->widgets.right_border);
-  const dt_ui_panel_t side_panels[] = { DT_UI_PANEL_LEFT, DT_UI_PANEL_RIGHT };
+  // every panel that takes width away from the center, flexi included: it is
+  // packed inside centerrow next to centergrid (see _init_main_table), so a
+  // visible flexi column narrows the canvas exactly as LEFT/RIGHT do. Leaving
+  // it out let a left/right drag claim width the flexi panel was already
+  // using, pushing the center below min_center_width.
+  const dt_ui_panel_t side_panels[] =
+    { DT_UI_PANEL_LEFT, DT_UI_PANEL_RIGHT, DT_UI_PANEL_FLEXI };
   for(size_t i = 0; i < G_N_ELEMENTS(side_panels); i++)
   {
     if(side_panels[i] == panel) continue;
-    if(gtk_widget_get_visible(darktable.gui->ui->panels[side_panels[i]]))
-      used_w += gtk_widget_get_allocated_width(darktable.gui->ui->panels[side_panels[i]]);
+    GtkWidget *p = darktable.gui->ui->panels[side_panels[i]];
+    if(p && gtk_widget_get_visible(p))
+      used_w += gtk_widget_get_allocated_width(p);
   }
 
   if(app_window_w - used_w < max_w)
     max_w = app_window_w - used_w;
 
+  const int min_w = darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width");
+  // The window can be narrower than what its panels already occupy -- shrink it
+  // far enough and app_window_w - used_w goes NEGATIVE. CLAMP() with high < low
+  // then returns a nonsense width, which dt_ui_panel_set_size would both apply
+  // (tripping gtk_widget_set_size_request's 'width >= -1' assertion, once per
+  // motion event) and persist to conf. The ceiling must never fall below the
+  // floor; at that point the panels simply cannot all fit, and refusing to
+  // shrink past min_panel_width is the honest answer.
+  max_w = MAX(max_w, min_w);
+
   int sx = panel_drag_start_size;
-  sx = CLAMP((int)(sx + delta_x),
-             darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width"),
-             max_w);
+  sx = CLAMP((int)(sx + delta_x), min_w, max_w);
   dt_ui_panel_set_size(darktable.gui->ui, panel, sx);
 }
 
@@ -3597,8 +3681,10 @@ static void _ui_init_panel_right(dt_ui_t *ui,
 // _panel_handle_button_callback/_motion_callback's left/right/bottom
 // dispatch), own conf-backed width via
 // dt_ui_panel_get_size/set_size (DT_UI_PANEL_FLEXI), own collapse/corner-
-// icon mechanism. Deliberately not touching _handle_panel_widths/
-// _panel_set_side_panel_width's L/R-only width-arbitration logic.
+// icon mechanism. Width arbitration is NOT self-contained, though: the resize
+// handle goes through _panel_set_side_panel_width like the left/right handles,
+// and DT_UI_PANEL_FLEXI is one of its side_panels[] -- all three columns take
+// width from the same center, so all three have to be arbitrated together.
 
 static void _flexi_corner_icon_clicked(GtkWidget *w, gpointer user_data)
 {
@@ -3650,10 +3736,12 @@ static gboolean _flexi_handle_motion_callback(GtkWidget *w,
     // flexi panel that's its right edge (dragging right grows it), for the
     // right-side panel it's the left edge (dragging left grows it)
     const gdouble signed_delta = darktable.gui->ui->flexi_panel_right ? -delta_x : delta_x;
-    const int sx = CLAMP((int)(panel_drag_start_size + signed_delta),
-                         darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width"),
-                         darktable.gui->dpi_factor * dt_conf_get_int("max_panel_width"));
-    dt_ui_panel_set_size(darktable.gui->ui, DT_UI_PANEL_FLEXI, sx);
+    // share the left/right panels' width arbitration rather than clamping to
+    // min/max_panel_width alone: that ignored the window width, the other
+    // panels and min_center_width, so this handle could squeeze the canvas to
+    // nothing. Same drag-start convention (panel_drag_start_size, set by
+    // _flexi_handle_button_callback on press), so it can be used as-is.
+    _panel_set_side_panel_width(widget, DT_UI_PANEL_FLEXI, signed_delta);
     gtk_widget_queue_resize(widget);
     return TRUE;
   }

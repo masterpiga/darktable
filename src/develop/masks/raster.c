@@ -39,11 +39,17 @@
  *
  * Rendering reuses the pipe's existing raster-mask fetch/distortion machinery
  * (dt_dev_get_raster_mask), which returns the source mask already distorted to
- * the requesting module's output roi. The dependency (so the source module
- * stores its mask and the pipe orders correctly) is wired through the module's
- * blend_params raster_mask_* fields, kept in sync with the (single, first-cut)
- * raster element by the mask-list UI. Because the group is rendered on the CPU
- * even in the OpenCL pipe, a raster element works identically on GPU. */
+ * the requesting module's output roi. Because the group is rendered on the CPU
+ * even in the OpenCL pipe, a raster element works identically on GPU.
+ *
+ * The dependency (so each source module stores its mask and the pipe orders
+ * correctly) is registered by _reconcile_raster_form_users() in imageop.c, at
+ * commit_params time -- so it also takes effect on edit reload, with no GUI
+ * action. It is per-element: a module may hold several raster elements, each
+ * naming a different upstream source. It is deliberately independent of
+ * blend_params.raster_mask_*, which stays reserved for the exclusive whole-mask
+ * RASTER mode; nothing writes those fields on behalf of a raster form, and
+ * module->raster_mask.sink.source is therefore NOT this form's source. */
 
 static void _raster_set_form_name(dt_masks_form_t *const form, const size_t nb)
 {
