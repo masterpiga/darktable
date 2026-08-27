@@ -1512,6 +1512,13 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
   gtk_widget_set_visible(data->showmask, TRUE);
   gtk_widget_set_visible(data->suppress, TRUE);
 
+  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  if(pos == MASKS_PANEL_POS_UTILITY)
+  {
+    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
+    if(host) dt_lib_gui_set_expanded(host, TRUE);
+  }
+
   DT_ENTER_GUI_UPDATE();
   if(module->mask_indicator)
     gtk_toggle_button_set_active(
@@ -1585,6 +1592,12 @@ static void _blendop_mask_enable_toggled(
     dt_iop_add_remove_mask_indicator(module, FALSE);
     gtk_widget_set_visible(data->showmask, FALSE);
     gtk_widget_set_visible(data->suppress, FALSE);
+    const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+    if(pos == MASKS_PANEL_POS_UTILITY)
+    {
+      dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
+      if(host) dt_lib_gui_set_expanded(host, FALSE);
+    }
   }
 
   dt_control_hinter_message("");
@@ -16516,7 +16529,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // "#blending-tabs" rule -- gbox is a sibling of the module's own
     // .dt_plugin_ui_main content box, not a descendant of it, so nothing
     // upstream already insets it.
-    GtkWidget *left_cluster =
+    GtkWidget *left_cluster = bd->masks_left_cluster =
       dt_gui_hbox(bd->flexi_inline_collapse_btn, bd->mask_enable_toggle);
 
     GtkWidget *gbox = dt_gui_hbox(left_cluster, caption_label);
