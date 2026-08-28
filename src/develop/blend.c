@@ -457,6 +457,37 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
   return FALSE;
 }
 
+
+/* May the blend render `mask_id`'s group as this module's blend mask?
+
+   IOP_FLAGS_NO_MASKS (retouch, spots) means the module consumes drawn forms
+   itself, inside process() -- see the matching note in pixelpipe_hb.c. So the
+   blend must not also render the forms behind mask_id: it would paint the
+   module's own retouch shapes as a blend mask.
+
+   That reasoning is about *drawn* masks, and testing the flag alone made it
+   apply to flexi groups too, which is wrong and silently destructive. Such a
+   module can still carry a parametric blend mask -- classic evaluates it in
+   make_mask() at the end, with no group involved -- but once that mask is
+   migrated, the parametric config lives in a form inside a flexi group, and
+   the group is exactly what this gate refuses to render. The mask collapsed to
+   a flat opacity: 24 of the 2466 real edits replayed by --verify-masks, every
+   single one of them retouch in parametric-only mode, and nothing structural
+   about the migration was wrong.
+
+   A flexi group is never the module's own shapes. It is created by the flexi
+   panel or by migration, under its own new formid, and for a NO_MASKS module
+   it can only hold non-drawn elements anyway: the panel refuses drawn shapes
+   there (bd->masks_support, blend_gui.c) and migration only ever synthesizes
+   parametric/raster forms for a module that was never allowed a drawn mask in
+   the first place. So flexi groups render; classic drawn masks stay blocked. */
+gboolean dt_blend_may_render_group(dt_iop_module_t *self,
+                                   const dt_develop_mask_mode_t mask_mode)
+{
+  if(!(self->flags() & IOP_FLAGS_NO_MASKS)) return TRUE;
+  return (mask_mode & DEVELOP_MASK_FLEXI) != 0;
+}
+
 static size_t _get_post_operations(const dt_develop_blend_params_t *const bp,
                                    const dt_dev_pixelpipe_iop_t *const piece,
                                    _develop_mask_post_processing operations[3])
@@ -979,7 +1010,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     // gates the cache and the log line, so falling through here would blend
     // against an uninitialized buffer. An empty group contributes nothing, which
     // is exactly the "no form" case handled below.
-    if(form && form->points && mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS))
+    if(form && form->points && mode_drawn && dt_blend_may_render_group(self, mask_mode))
     {
       // expose the in/out images as feathering guides for optional per-shape
       // refinement inside the group renderer (only consumed when a shape has
@@ -1003,7 +1034,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
         dt_iop_image_invert(mask, 1.0f, owidth, oheight, 1); // mask[k] = 1.0f - mask[k];
       }
     }
-    else if(mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS))
+    else if(mode_drawn && dt_blend_may_render_group(self, mask_mode))
     {
       // no form defined but drawn mask active
       // we fill the buffer with 1.0f or 0.0f depending on mask_combine
@@ -1028,7 +1059,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     // which point the result is genuinely informative and must not be
     // suppressed as if it were still the flat "everything/nothing" fallback.
     mask_is_uniform_fallback =
-      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted
+      mode_drawn && dt_blend_may_render_group(self, mask_mode) && !form_ok && !inverted
       && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
 
     dt_print_pipe(DT_DEBUG_PIPE,
@@ -1559,7 +1590,7 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     // gates the cache and the log line, so falling through here would blend
     // against an uninitialized buffer. An empty group contributes nothing, which
     // is exactly the "no form" case handled below.
-    if(form && form->points && mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS))
+    if(form && form->points && mode_drawn && dt_blend_may_render_group(self, mask_mode))
     {
       // The mask group is rendered on the CPU even in the OpenCL pipe, so
       // per-shape detail/blur/contrast/brightness refinement still applies here.
@@ -1621,7 +1652,21 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
         dt_iop_image_invert(mask, 1.0f, owidth, oheight, 1); //mask[k] = 1.0f - mask[k]
       }
     }
-    else if(mode_parametric && !(self->flags() & IOP_FLAGS_NO_MASKS))
+    // mode_drawn, matching the CPU path (dt_develop_blend_process) and this
+    // branch's own comment. It read mode_parametric, which was already
+    // inconsistent with the CPU and is actively wrong after the flexi
+    // migration: migration always clears DEVELOP_MASK_CONDITIONAL, so
+    // mode_parametric is FALSE for *every* migrated edit and this branch
+    // became unreachable -- a flexi group that renders nothing (an empty
+    // group, or one whose only member is a still-full-range parametric
+    // channel) then fell through to the INCL fill below. Where the CPU fills
+    // `inverted ? 0 : 1`, the GPU filled 1.0, so a migrated edit carrying
+    // DEVELOP_COMBINE_MASKS_POS applied to nothing on the CPU and to the
+    // whole image on the GPU.
+    //
+    // NOT covered by the --verify-masks corpus, which replays the CPU path
+    // only: reasoned from the two branches and the comment, not measured.
+    else if(mode_drawn && dt_blend_may_render_group(self, mask_mode))
     {
       // no form defined but drawn mask active
       // we fill the buffer with 1.0f or 0.0f depending on mask_combine
@@ -1639,7 +1684,7 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     // dt_develop_blend_process -- kept in sync by hand since this is a
     // separate OpenCL implementation of the same branch structure.
     mask_is_uniform_fallback =
-      mode_drawn && !(self->flags() & IOP_FLAGS_NO_MASKS) && !form_ok && !inverted
+      mode_drawn && dt_blend_may_render_group(self, mask_mode) && !form_ok && !inverted
       && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
 
     dt_print_pipe(DT_DEBUG_PIPE,

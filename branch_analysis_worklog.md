@@ -2115,3 +2115,760 @@ its local workaround.
 other test target builds and passes.
 
 **Status: 189 tests across eight suites**, all passing.
+
+---
+
+## §34 — The probe image, and three tests that measured the wrong thing
+
+Groundwork for the migration verifier: the harvested masks have to be replayed
+against *some* image, and it cannot be the user's own photo (we deliberately
+never collect those). Hence `develop/masks/probe_image.c` — a deterministic,
+programmatically generated image, plus `test_probe_image.c` (7 tests) that
+measures whether it is actually fit for the job.
+
+**Why the probe is the weak point.** A parametric mask selecting a range the
+probe never produces renders all-zero, and all-zero compares equal to all-zero
+however badly the migration mangled it. Every such case is a verification that
+runs, reports success, and proves nothing.
+
+**Where the bar comes from.** Not from any library of real edits. Profiling a
+sample of real masks and covering exactly what it uses bakes one person's
+habits into everyone's verification — ranges nobody in the sample happened to
+touch look like ranges nobody needs. The test instead sweeps the linear-RGB
+cube through darktable's own colour conversions to discover what each blendif
+channel can physically take, and holds the probe to that. (Two intermediate
+bounds *were* briefly taken from a real library and then removed; the whole
+framing was wrong, not just the numbers.)
+
+Two alternatives were considered and rejected on the way: a flat [0,1] per
+channel is false for Jz/Cz, which the slider reaches only through a boost
+factor (default offset log2(1/100), so slider 1.0 means Jz = 0.01); and bounds
+from the boost slider's own 0..18 EV range put the largest addressable Jz near
+2600, which nothing can cover and no image can reach.
+
+**Global vs local coverage are not the same property** and must not share a
+standard. Globally the probe should span everything the colour space expresses,
+highlights included. Locally it should not: requiring a patch a sixty-fourth of
+the image across to span four stops uniformly is not something a photograph
+does either, and the probe could only satisfy it by becoming unphysical. The
+local test is therefore taken over the diffuse cube ([0,1] linear).
+
+**Three tests measured the wrong thing, and mutation testing is the only
+reason that is known.** All three passed on probes that were plainly
+inadequate:
+
+- *Hard edges, by count.* Defeated by the tile lattice, which puts a sharp
+  step every 16px regardless of whether anything else in the probe has
+  structure. Replaced by a test on the *distribution of edge orientations* — a
+  pure grid occupies 2 of 16 bins, real structure occupies all of them.
+- *Texture, as total per-octave energy.* Same cause: a periodic square lattice
+  has harmonics in every band.
+- *Texture, restricted to edge-free quads.* Defeated by circularity — the
+  noise is what makes a quad non-flat, so selecting flat quads selected
+  against the signal. This version agreed with a noise-free probe to five
+  decimal places.
+
+The version that works takes the diagonal (HH) wavelet coefficient over every
+quad with no selection at all, and reads its **median**. HH is identically zero
+for any function linear in x and y, so the tile's own ramp contributes nothing
+however steep; hard steps are sparse and cannot move a median. With the noise
+switched off the median is exactly 0.0.
+
+**Two real generator bugs surfaced the same way.** The "irregular" second edge
+family used `cell = tile * (2 << level)`, so every cell boundary landed exactly
+on a tile boundary and the whole family added no edge the lattice did not
+already have. And the orientation bar was first expressed as a share of the
+edge population — a denominator dominated by the axis-aligned lattice, so every
+off-axis edge added also raised the bar it was judged against, penalising the
+probe for having more structure. It is now an absolute fraction of pixels.
+
+**Also found and fixed by the coverage tests, before any of the above:**
+the probe had no genuinely dark pixels (LAB L bottom bin unreachable — red and
+green sweep independently, so a dark pixel needs all three channels near zero
+at once and the noise lifted even those), and never reached the gamut boundary
+(top Cz bins unreachable — a rectangular walk of the cube hits its corners only
+at exact tile corners). Fixed by extending the exposure ladder down to -6 EV
+and adding a saturation ladder.
+
+**Process note, second occurrence.** A mutation reported as not firing was
+re-checked rather than believed — and this time the mutation *was* correctly
+applied and rebuilt (verified by grepping the source and watching the object
+file recompile). The test was simply blind. Same rule, opposite conclusion: it
+resolved to a test defect, not a harness defect.
+
+**Status: 196 tests across nine suites**, all passing.
+
+---
+
+## §35 — `--harvest-masks`: collecting real edits without collecting anything else
+
+`develop/masks/harvest.c` + a CLI flag. `darktable --harvest-masks out.json`,
+honouring `--library` / `--configdir`, writes every mask configuration in a
+library to readable JSON and exits.
+
+**Read-only is a structural property here, not a promise.** An ordinary
+darktable startup opens the library read-write, locks it, and will upgrade its
+schema in place if an older version wrote it — so merely pointing a normal run
+at a helper's real library modifies it. The harvest therefore does not use
+darktable's database handle at all: it is dispatched from `dt_init` *before*
+the flexi-test-mode block and long before `dt_database_init()`, opens its own
+connection with both `mode=ro` in the URI and `SQLITE_OPEN_READONLY` in the
+flags, and exits without reaching the rest of startup.
+
+Position also matters for correctness, not just safety: flexi test mode
+rewrites `--library` to a scratch copy that is seeded once and then diverges,
+so harvesting after it would have read a stale snapshot of the user's edits.
+
+Verified empirically on the real 161MB library: identical SHA-256 before and
+after, and no `.lock` / `-wal` / `-shm` files created.
+
+**Privacy is why the format decodes blobs instead of shipping them.** We are
+asking strangers for this file, so it is plain JSON with every value in named
+fields — anyone can open it and check. Free text hides in four places and all
+four are stripped: `images.filename`/film-roll paths (never queried),
+`masks_history.name` (user-renameable), `history.multi_name` (there is even a
+`multi_name_hand_edited` column), and — the one that forced the design —
+`dt_masks_point_group_t.name[128]`, a user-typed group name that lives *inside
+the points blob*. A base64 dump of a group's points would have carried it, and
+nobody auditing the file would have seen it.
+
+Audited on the real output: 2468 edits contain **42 distinct strings in total**,
+every one a module operation name, form type, colourspace or mask-mode label.
+Image identity is reduced to width/height plus a sequential index.
+
+Group point blobs are decoded with the same per-version stride rules as
+`dt_masks_read_masks_history()` (v7 refinement, v8 name, v9 group_opacity, v10
+group_start), and the tail is zero-filled the same way, so an old edit is
+reported with the defaults the loader would actually give it. A blob whose size
+disagrees with stride × count is reported as an error rather than guessed at.
+
+**Real library:** 144,242 history entries scanned, **2,468 edits with masks
+across 544 images, 11,969 forms**. 42MB of JSON, 3.8MB gzipped. The 2,468
+matches the earlier survey exactly (2,431 migratable + 37 already carrying the
+FLEXI bit).
+
+**Still to build: the verifier.** It replays each harvested edit against the
+generated probe, before and after migration, and compares mask buffers. The
+pieces are in place — parametric forms read their input from
+`piece->blend_refine_guide_in/out`, so the probe can be handed straight to
+them, and `dt_masks_group_render_roi()` needs only module/piece/form/roi.
+json-glib is already a dependency, so shared harvest files can be read back.
+
+---
+
+## §36 — Generating the rare cases instead of waiting for them
+
+Correction to §35's closing claim that `INV`/`INCL` "stay synthetic-fixture
+territory permanently, and no corpus size fixes this". True as far as it went,
+and then wrong about what follows from it: the right response to a branch no
+real edit reaches is to *generate* the input, not to wait for a contributor who
+happens to have one. `mask_combine` is three bits — eight values — so the space
+is enumerable outright, and enumerating beats sampling.
+
+Four new tests in `test_flexi_migrate.c` (suite now **200 tests across nine
+suites**), crossing all 8 combine values with the mask modes:
+
+- INV/INCL never survive migration where they mean something.
+- Parametric-only, reaching `DT_COND_REAL`: `MASKS_POS_out == (incl != inv)`.
+- Drawn+parametric: `MASKS_POS_out == (INV ^ INCL)`.
+- Every combine value lands in a valid end state (crossing the existing
+  exhaustive `mask_mode` enumeration with the combine bits it held fixed).
+
+Both XOR tests are mutation-verified (flipping `incl != inv` to `incl == inv`
+fires one; dropping the `^ incl` from `invert_composite` fires the other).
+
+**Three test defects found on the way, all of them mine, none a product bug:**
+
+1. *Asserting against inputs the real path cannot produce.*
+   `_fix_masks_combine()` runs in **every** version branch of
+   `dt_develop_blend_legacy_params_ext()` (lines 2314–2627) and the flexi
+   migration runs after it (2698), so a **drawn** mask can never reach
+   migration with `INV` set — it has already been rewritten to `MASKS_POS`.
+   Calling the migration directly bypasses that. The tests now reproduce the
+   precondition explicitly (`_apply_legacy_combine_fix`) and compute their
+   expectations from the post-fix value.
+
+2. *Degenerate test data.* All-zero `blendif_parameters` is not a partial
+   range but an empty one, and darktable's default `[0,0,1,1]` is the full
+   range; both classify as degenerate and collapse, so the test would never
+   reach the branch it named. Ranges are now genuinely partial.
+
+3. *Wrong expectation, right code* — the same doc-vs-code pattern as §33's
+   deleted test. With `INCL` set, `_classify_conditional()` flips the polarity
+   of *every* channel in the colourspace mask, so any channel left inactive
+   becomes a canceling channel and the config collapses to
+   `DT_COND_CONSTANT`. Reaching `DT_COND_REAL` with `INCL` therefore needs
+   **all** channels active, not merely some. "Set INCL and two channels" — the
+   obvious way to build this test, and what a user would do by hand in the GUI
+   — never reaches the INCL algebra at all. That case is now pinned by its own
+   test (`..._collapses_to_a_constant`) rather than being a silent hole.
+
+Point 3 is also the reason to prefer generated cases here on the merits, not
+just on convenience: a hand-made GUI example of "inclusive with a couple of
+channels" would have looked like coverage of the INCL branch while testing the
+constant-collapse path instead.
+
+**Where real data is still irreplaceable** (i.e. the harvest is not made
+redundant by this): old `blendop_version` / masks-version blobs. Synthesizing
+those would encode *our belief* about what old darktable wrote — the same
+belief the migration code encodes — so a wrong belief would cancel out and the
+test would pass vacuously. Only blobs actually written by old versions break
+that circularity. Likewise real path/brush geometry at scale, and combinations
+nobody would think to enumerate.
+
+**Also this round:** the harvest now tallies its own rare cases into a
+`coverage` section (combine bits, the five mask-mode cases, refinement usage,
+form types, blendop/masks version histograms) and calls out INV/INCL on stdout,
+so a submitted file announces its own value instead of needing to be mined for
+it.
+
+---
+
+## §37 — The verifier: rendering equivalence on 2466 real edits
+
+`develop/masks/verify.c` + `--verify-masks FILE`. Replays every edit in a
+harvest file, renders its mask before and after migration, compares.
+
+**It does not compute what the mask "should" be.** That would encode this
+file's beliefs about classic blending — the same beliefs migrate_legacy.c
+encodes — so a wrong belief would cancel and the comparison would pass. Both
+renders go through the real `dt_develop_blend_process()`, unmodified; the mask
+is recovered by setting `pipe->store_all_raster_masks`, which makes the blend
+publish its finished mask into `piece->raster_masks`.
+
+**Mutation-verified before trusting any result**: flipping `invert_composite`
+in the migration turns 4 of 9 live subset edits DIFFERENT with max diff 1.0.
+
+### Five bugs in the harness, found by making it work
+
+1. `self->flags()` — a hand-built `dt_iop_module_t` crashes. blend_process
+   calls through the module's function pointers and its blend colourspace is
+   per-module, so a stub would crash or (worse) replay everything in the wrong
+   colour space. Now loads the real module the edit names.
+2. `dt_iop_load_module_by_so()` returns **TRUE on failure**. My check was
+   inverted, rejecting every successful load.
+3. `dev->history_mutex` uninitialised → abort. It must also be **RECURSIVE**,
+   as `dt_dev_init()` makes it: a default mutex does not abort here, it
+   deadlocks, which reads as the verifier hanging rather than as a bug.
+4. `piece->iscale` left at 0. Radii are converted as
+   `roi_out->scale / piece->iscale`, so zero divides by zero and asks the
+   guided filter for an effectively infinite window. Does not crash — runs
+   forever. Also needs full-image dimensions on the pipe (masks are normalised
+   against those) with `roi.scale` carrying the downscale.
+5. **The big one: forms were harvested per history entry.** masks_history
+   writes a row only when a form is *created or changed*; an entry that merely
+   references an existing mask writes none. Selecting `num = ?` therefore
+   returned nothing for such entries, and they replayed with a dangling
+   mask_id and no geometry. Fixed to match `dt_masks_read_masks_history()`:
+   every row with `num <= ?`, latest per formid. **Forms went from 11,955 to
+   27,803** — more than half the geometry had been missing, and it was being
+   attributed to the migration.
+
+### Result on the real library
+
+2466 replayed: **2274 identical, 2 equivalent, 30 different, 160 skipped, 0
+errors.** Live (non-uniform classic mask) 1913 → 1897 identical, 2 equivalent,
+14 different. Inert 393. The form fix moved 495 edits from inert to live, i.e.
+that many comparisons went from proving nothing to actually testing something.
+
+### The 30, NOT yet established as migration bugs
+
+Two clusters:
+
+- **15 × retouch**, mask_mode 5 (parametric only), on a module flagged
+  `IOP_FLAGS_NO_MASKS`. Classic renders a uniform 1.0, flexi a uniform
+  `opacity`. Systematic and identical across every instance. Note the
+  guide-image assignment in blend.c sits behind
+  `form && form->points && mode_drawn && !(flags & IOP_FLAGS_NO_MASKS)`, and
+  parametric forms read their input from `piece->blend_refine_guide_in/out` —
+  a plausible mechanism, unconfirmed.
+- **14 × drawn+parametric**, mostly with feathering. Small systematic mean
+  shift (e.g. 0.4948 → 0.4913) with min and max unchanged, but per-pixel max
+  differences up to 0.37.
+- 1 × overlay with a genuinely dangling mask_id.
+
+**Caveat that must not be dropped: at least one edit (idx 1169) reported
+DIFFERENT in the full run and identical when replayed in a small subset.** So
+state still leaks between replays, and until that is found the 30 cannot be
+called migration bugs. Triage order: fix the cross-edit state leak, re-run,
+then investigate whatever survives.
+
+---
+
+## §38 — Every difference accounted for: 2466 real edits, 0 differences
+
+Iterating on §37's 30 unexplained results until each had a cause. Final state
+of `--verify-masks` on the real library:
+
+**2301 identical, 5 equivalent (max 3.8e-5), 0 DIFFERENT, 160 skipped, 0 errors.**
+Live (mask genuinely varies) 2006 → 2001 identical, 5 equivalent, 0 different.
+
+### The five causes
+
+1. **Forms harvested per history entry** (§37). Fixed; forms 11,955 → 27,803.
+
+2. **OpenMP float reassociation.** Two identical full runs disagreed on 4 of
+   2466 edits — three by <0.004 but one by **0.1**, which looked exactly like a
+   real bug. Parallel reductions over pixels make the last bits depend on
+   thread scheduling. Forced single-threaded in the verifier: all four become
+   identical and stable. A verifier whose answer moves between runs cannot be
+   used to investigate anything, so the slower pass buys the only property
+   that makes the output actionable. It also removed the "equivalent" bucket
+   entirely at that stage, proving the noise was all threading.
+
+3. **No colour profile on the replay pipe** — the subtlest, and it made the
+   *pass* count dishonest too. The per-channel branch of every
+   `blendif_*_make_mask()` calls `dt_develop_blendif_init_masking_profile()`
+   and **returns leaving the mask untouched** if there is none. So parametric
+   masks were never evaluated at all — and the two sides failed
+   *asymmetrically*: classic still carries `DEVELOP_MASK_CONDITIONAL`, enters
+   that branch and bails; a migrated edit has had CONDITIONAL folded away,
+   takes the early "not conditional" path, and applies global opacity. Result:
+   a clean spurious "the migration changed this mask" on parametric edits.
+   Fixed by giving the dev an iop-order list and the pipe a linear Rec2020
+   work profile. Live edits rose 1913 → 2006.
+
+4. **A real product bug** — see below.
+
+5. **5 × float reassociation, accounted not fixed.** All exposure, all with
+   both feathering and a detail threshold, max 3.8e-5 over ~200 of 175,000
+   pixels. Classic computes `(drawn × parametric)` then refines; flexi
+   composites the parametric as a group element, so the multiplications land
+   in a different order. Two orders of magnitude below 1/255.
+
+### The product bug: NO_MASKS modules lost their parametric mask
+
+24 edits, every one `retouch` in parametric-only mode. `IOP_FLAGS_NO_MASKS`
+(retouch, spots) means the module consumes drawn forms itself in `process()`,
+so the blend must not also render the forms behind `mask_id`. That reasoning is
+about **drawn** masks — such a module can still carry a parametric blend mask,
+which classic evaluates in `make_mask()` with no group involved.
+
+Migration moves that parametric config into a form inside a flexi group — and
+the group is exactly what the gate refused to render. The mask collapsed to a
+flat opacity.
+
+Nothing structural was wrong: the migration produced a correct group with a
+correct parametric form, and **all 200 structural tests passed**. It took
+replaying real edits to see it. This is precisely the silent-divergence class
+§35 argued the structural suite could not reach, and the first hard evidence
+that the verifier earns its cost.
+
+Fixed in `blend.c` via `dt_blend_may_render_group()`: the flag blocks a classic
+drawn group, never a flexi one. A flexi group is never the module's own shapes
+— it is created by the panel or by migration under a new formid, and for a
+NO_MASKS module can only hold non-drawn elements anyway (`bd->masks_support`
+refuses drawn shapes there, and migration only synthesizes parametric/raster
+forms for a module that was never allowed a drawn mask).
+
+Pinned by 4 new tests (suite now **204 across nine suites**), mutation-verified:
+reverting the gate fires two of them.
+
+### The 160 skips, accounted
+
+Exactly `already_flexi (37) + raster (123)`. Already-flexi is a no-op by design
+(case 8's guard). Raster reads its mask from another module's pipe piece, so a
+standalone replay would render empty on both sides and report a meaningless
+pass — skipped explicitly rather than counted. **123 edits remain unverified**;
+closing that needs a two-module pipe and is the obvious next gap.
+
+### Process note
+
+Two darktable runs must never overlap — the library lock makes the second fail
+(one background probe job died exit 1 that way). Verification runs are
+serialized now.
+## §39 — Closing the raster gap: 123 real edits + 288 generated, and a second product bug
+
+§38 closed with the one coverage hole it could not close: 123 harvested raster
+edits skipped, because "a raster mask reads its mask from another module's pipe
+piece, so a standalone replay would render empty on both sides and report a
+meaningless pass". That is now closed, and closing it found a second real bug.
+
+**The scope was smaller than "a two-module pipe" made it sound.** Classic raster
+mode is *exclusive* — it cannot be combined with a drawn or parametric mask — so
+a classic raster edit is fully described by its source, an invert flag, the
+module opacity, and the global refinements applied downstream of the mask. There
+is no compositing algebra to verify, only inversion and refinement.
+
+### The harness: a real upstream piece, wired by production code
+
+`_attach_raster_source()` in `verify.c` stands up the source the edit names: a
+real module instance pinned one step earlier in the iop order, an enabled pipe
+piece holding a synthetic mask, and both `pipe->nodes` and `dev->iop` populated
+so `dt_dev_get_raster_mask()` resolves exactly as it does live.
+
+Two details worth recording, because getting either wrong makes the run lie:
+
+- **The sink pointer is not `blend_params->raster_mask_source`.** The classic
+  raster branch follows `module->raster_mask.sink.source`, a *resolved module
+  pointer* that only `dt_iop_commit_blend_params()` ever sets. Setting it by
+  hand would have been the harness deciding what the pipe should have resolved.
+  The replay now calls the real function, for every edit rather than only raster
+  ones, so there is one wiring path instead of a special case — and the flexi
+  side gets its raster *form* elements registered by the same call
+  (`_reconcile_raster_form_users`).
+- **The synthetic mask is deliberately not derived from the probe.** A raster
+  mask is an *input* to everything under test, so it needs shape of its own:
+  a smooth radial falloff reaching exactly 0 and exactly 1, with a diagonal term
+  so a transpose-style error cannot pass, and disagreeing with the probe's own
+  edges so the guided filter has something real to work on.
+
+Result: **123 replayed, 123 identical, 118 of them live.** The skip category is
+gone; the full corpus now skips only the 37 already-flexi edits, and live
+comparisons rose from 2006 to 2133.
+
+### The bug: an unresolvable raster flipped from "off" to "fully on"
+
+5 of the 123 carry mask mode RASTER with an **empty source** — a source module
+removed at some point. Classic: `dt_dev_get_raster_mask()` returns NULL and the
+raster branch fills the mask with **0.0**, so the module contributes nothing.
+Flexi: the raster form failed to resolve and returned 0 meaning "did not
+render", `_group_get_mask_roi_flexi()` did not count it, `nb_members == 0` tripped
+the deliberate *"no active mask element → fully opaque"* fallback, and the mask
+filled with **1.0**. The module went from doing nothing to applying at full
+strength over the whole image. Max possible difference, on real edits.
+
+That fallback is right for what it was written for — a group the user is still
+building, where a yellow wall would hide the image they are placing shapes on.
+It is wrong for a reference that cannot be resolved. Fixed in `raster.c`:
+`_raster_unresolved()` fills zero and reports success, so the member is counted
+and the group renders "nothing", matching classic.
+
+The fix is deliberately at render time rather than in migration, because the
+failure is not static. Migration can see an *empty* source; it cannot see a
+source module the user deletes next week. Both cases now behave the same.
+
+### Generating the corners the corpus does not have
+
+The harvest proves the migration works on edits someone actually made. It does
+not cover the corners: the global blur refinement appears in **1** of the 123
+edits, and inversion never co-occurs with a details threshold at all.
+
+Since the space is small and closed, it is enumerated —
+`gen_raster_matrix.py` emits an ordinary harvest file (same schema, no new
+machinery, no user data, regenerable by anyone) crossing invert × opacity ×
+feathering × blur × tone curve × signed details × colour space = **288 edits,
+all live, all identical**.
+
+**Mutation-verified, and the comparison is the point:**
+
+| mutation | generated matrix | real corpus |
+|---|---|---|
+| drop `DT_MASKS_STATE_INVERSE` in `_migrate_raster` | 144 different (exactly the inverted half) | — |
+| skip post-processing for raster (`!uniform` → `!uniform && !raster`) | **264 of 288** caught | **22 of 118** caught |
+
+The refinement mutation is the honest argument for generating: the real corpus
+catches it 12× less often, because the combinations that would expose it are the
+ones the corpus barely contains. Neither source replaces the other — real blobs
+remain irreplaceable for old on-disk formats (§36), and generated cases remain
+irreplaceable for the corners.
+
+### A caveat on the "identical" count that I should have caught earlier
+
+13 edits moved from `identical` (several at *exactly* 0) to `equivalent` at
+~4e-6 between this run and §38's, and the previous worst case *shrank* from
+3.8e-5 to 1.1e-5. I env-gated every change I had made and rebuilt: the new
+numbers reproduce with all of them reverted, so **this is not caused by these
+changes** — the binary's floating-point codegen differs between builds. I did
+not isolate the mechanism further (a comment-only perturbation is not a codegen
+perturbation, so that probe proved nothing).
+
+What follows matters more than the cause: **the identical/equivalent boundary at
+`VERIFY_EPS_IDENTICAL = 1e-6` is not a stable property of the migration**, it
+sits inside build-level float noise. The claim the verifier actually supports is
+the one at the other threshold — **0 differences above 1/255**, with the worst
+observed deviation anywhere in 2466 edits at 1.1e-5, roughly 350× below
+visibility. Quoting the "identical" count as if it were exact would be
+overclaiming; it is quoted here as a diagnostic, not a guarantee.
+
+### Standing
+
+- Full corpus: **2466 replayed, 2411 identical, 18 equivalent, 0 DIFFERENT,
+  37 skipped (already-flexi only), 0 errors.** Live: 2133.
+- Generated raster matrix: **288/288 identical, all live.**
+- Unit suite: **205 tests across 9 mask suites, all passing** (`test_filmicrgb`
+  does not link on macOS — `--wrap` is a GNU ld option — pre-existing and
+  unrelated).
+- Two real product bugs found by replaying real edits, neither reachable by any
+  structural test: the `IOP_FLAGS_NO_MASKS` group gate (§38) and this one.
+
+## §40 — The GPU path, which none of the above tested
+
+Reviewing readiness for testers surfaced the gap the whole verification effort
+structurally cannot see: **`--verify-masks` replays `dt_develop_blend_process`,
+the CPU blend. `dt_develop_blend_process_cl` is a separate hand-maintained
+implementation of the same branch structure, and every number in §34-§39 says
+nothing about it.** Most testers run OpenCL.
+
+Auditing it against the CPU found one live divergence, in the branch
+immediately next to the `IOP_FLAGS_NO_MASKS` fix of §38:
+
+```c
+else if(mode_parametric && dt_blend_may_render_group(self, mask_mode))
+{
+  // no form defined but drawn mask active          <- comment says drawn
+  const float fill = inverted ? 0.0f : 1.0f;
+```
+
+The CPU tests `mode_drawn`; the comment says drawn; the code tested
+`mode_parametric`. Pre-existing, and harmless while classic edits kept
+`DEVELOP_MASK_CONDITIONAL` set — but **migration always clears CONDITIONAL**, so
+`mode_parametric` is FALSE for every migrated edit and the branch became
+unreachable. A flexi group that renders nothing (an empty group, or one whose
+only member is a still-full-range parametric channel — the `is_uniform_noop`
+rule in `_group_get_mask_roi_flexi`) then fell through to the final `else` and
+its `INCL ? 0 : 1` fill.
+
+Net effect: a migrated edit carrying `DEVELOP_COMBINE_MASKS_POS` with a group
+that renders nothing applies to **nothing on the CPU and to the whole image on
+the GPU**. Migration is what makes it reachable, so it counts as introduced by
+this branch even though the typo is older.
+
+Fixed to `mode_drawn`. **Reasoned, not measured** — the corpus cannot exercise
+it, and the fix is recorded as such in the code comment rather than being
+folded into the "0 differences" claim.
+
+**Also checked and found *not* reachable:** the same final `else` reads
+`DEVELOP_COMBINE_INCL`, which `_clear_toplevel_blendif()` does not clear on the
+drawn-only or raster migration paths. It would need INCL set on a drawn-only
+edit; across all 2466 harvested edits, drawn-only carries `(INV, INCL,
+MASKS_POS)` = `(0,0,0)` 627 times and `(0,0,1)` twice, and never INCL. Left
+alone rather than "fixed" speculatively.
+
+**Standing gap for testers:** the OpenCL blend path has no equivalent of the
+CPU corpus replay. Building one means running both pipes over the same edits and
+diffing — the natural next step, and the honest caveat until then.
+## §41 — The GPU replay, and the correction it forced
+
+§40 flagged that `--verify-masks` only ever exercised `dt_develop_blend_process`
+and said building a GPU equivalent was "the natural next step". Built. It did
+not confirm the previous results — it invalidated a substantial part of them.
+
+### The harness: four renders, and a baseline
+
+`_render_mask_cl()` uploads the probe to the device, calls
+`dt_develop_blend_process_cl`, and recovers the mask the same way as the CPU
+side (the CL tail already copies it back and publishes it through
+`dt_iop_piece_set_raster`). Each edit is now rendered four times: classic and
+migrated, on CPU and on GPU.
+
+Four rather than two because a raw CPU-vs-GPU number would be unreadable. The
+two implementations are separately maintained and never agree to the last bit,
+so the run records the CPU/GPU gap on the **classic** edit as a baseline and
+judges the migrated gap against it. The question is whether migration *widens*
+the gap, not whether a gap exists.
+
+### The correction: "0 differences" was partly measuring nothing
+
+`dt_masks_group_get_mask_roi()` dispatches on `bp->mask_mode & DEVELOP_MASK_FLEXI`
+— flexi groups take `_group_get_mask_roi_flexi()`, classic groups the sequential
+fold. **Two different algorithms for the same form.**
+
+`piece->drawn_mask_cache` was keyed on the form hash, the refine-bypass hash and
+the roi. **Not on `mask_mode`.** So in the replay: the classic render populated
+the cache; migration flipped `mask_mode` to FLEXI without touching the form; the
+"after" render computed the same key, hit the cache, and returned *the classic
+renderer's output*. For drawn-only edits `cpu_before == cpu_after` was
+guaranteed by the cache, not by the migration being right.
+
+This is the vacuous-comparison failure this file's own header warns about ("two
+all-zero masks compare equal however wrong the migration was") in a disguise the
+probe-coverage tests and the inert/live split cannot see: the masks are live and
+varied, they are just the same buffer twice.
+
+**The GPU found it because the CL path has no such cache.** For one exposure
+edit:
+
+```
+cpu_classic max=0.6202   cpu_flexi max=0.6202   <- cache hit
+gpu_classic max=0.6202   gpu_flexi max=0.1723   <- rendered for real
+```
+
+Cache key fixed to include `mask_mode` (a genuine latent bug in its own right —
+a key must cover everything the result depends on, and it was omitting *which
+algorithm runs*). The CPU then agreed with the GPU: `cpu_flexi max=0.1723`.
+
+Corrected headline, same corpus: **2187 identical, 124 equivalent, 118
+DIFFERENT, 37 skipped.** Worst CPU difference **1.0**, previously reported as
+1.1e-5.
+
+### The real bug: the operator is applied per *run*, not per element
+
+**Corrected from the first write-up of this section, which claimed flexi "has no
+DIFFERENCE, SUM or EXCLUSION at all" and that migration dropped the operators.
+Both were wrong.** `DT_MASKS_STATE_OP_COMBINE` is precisely `UNION |
+INTERSECTION | DIFFERENCE | SUM | EXCLUSION | MULTIPLY | OP_SCREEN` -- the
+classic bits *are* the flexi **between-group** operators. The model expresses
+all of them. (Thanks to DP for catching this; the wrong diagnosis would have
+sent the fix into extending the model, which is not what is needed.)
+
+What actually differs is *where* the operator is applied:
+
+- **Classic** folds sequentially, applying each element's own operator onto the
+  accumulator, once per element.
+- **Flexi** partitions `grp->points` into maximal same-operator runs, folds each
+  run's members together by the run's *within-group* mode
+  (`SCREEN`/`ISECT`/`WITHIN_MULTIPLY`, none set = union/max), then composites the
+  finished sub-mask onto the accumulator with the run's between-group operator
+  **once per run**.
+
+Migration reuses the classic point list verbatim, so a run of N same-operator
+elements collapses from N applications to one. The 48-brush exposure edit splits
+into element 0 (`op=0`) and elements 1-47 (all `op=SUM`); classic sums 47 times
+and reaches 0.6202, flexi max's them to ~0.1 and sums once, reaching 0.1723.
+
+This only bites operators that are not idempotent-under-union. `max` is
+associative *and* idempotent, so a union run folded then union'd once equals
+each element union'd individually -- which is why classic union and flexi union
+agree and no union-only edit differs. `SUM` (a+b), `DIFFERENCE`, `EXCLUSION`,
+and `INTERSECTION` (min(acc, max(e1,e2)) != min(acc,e1,e2)) all differ.
+
+**Fix shape, verified**: force every non-union element to start its own run
+(`dt_masks_point_group_t.group_start = 1`), which restores per-element
+application exactly. Probed in the verifier over the 27 failing edits:
+
+| | result |
+|---|---|
+| current migration | 27 DIFFERENT, worst 1.0 |
+| non-union elements split into own runs | **27 identical, worst 2.98e-08** |
+
+Consecutive union elements can stay merged (max is idempotent), so the panel
+does not degenerate into one group per stroke for the common case.
+
+**Open, and the reason this was not landed here**: persistence.
+`dt_masks_write_masks_history_item()` is a plain `INSERT`, not an upsert, so the
+modified group cannot be written in place at migration time. The drawn-only path
+currently takes the immediate route (`needs_new_form` is false for it precisely
+because it changes no forms); making it modify the group means routing it
+through the deferred writer (`dt_masks_finish_flexi_migrations`), which knows the
+final `history_end` and runs before `dt_masks_read_masks_history()`. That is a
+behavioural change to every drawn-only edit and needs a load/save round-trip
+test the current harness does not have -- the verifier replays with
+`history_num = -1` and never persists, so it can only confirm the render half.
+
+The migrate_legacy.c comment on the drawn-only path ("flexi renders a drawn group
+through the exact same code path as classic ... already correct with no form
+changes at all") is wrong and should go with the fix.
+
+**Corpus incidence** (2292 edits with a classic drawn group):
+
+| operator | element occurrences | edits containing one |
+|---|---|---|
+| UNION | 3708 | 1235 |
+| SUM | 2037 | 153 |
+| DIFFERENCE | 341 | 158 |
+| INTERSECTION | 289 | 125 |
+| EXCLUSION | 3 | 2 |
+
+355 compared edits carry a non-union operator. **27 mis-render today**; the other
+328 escape only because their shapes do not overlap -- latent, not safe.
+
+### Two pre-existing GPU issues, separated out
+
+- **89 edits where migration *fixed* the GPU.** All mask_mode 9 (raster) or 5,
+  all with refinements: the CL raster branch publishes the host-side `mask`,
+  which never received the device-side post-processing, so the published raster
+  mask is missing its refinements. Migration clears the RASTER bit, the tail
+  copies back from the device, and the result becomes correct. Pre-existing,
+  classic-only, and not caused by this branch — recorded, not fixed here.
+- **2 colorequal raster edits** where the migrated GPU mask diverges by 1.0 with
+  the CPU clean. Not yet diagnosed.
+- **206 edits with a large CPU/GPU gap on the classic edit too** (colorequal
+  dominating). The verdict logic correctly ignores these — the gap does not
+  widen — but the GPU comparison is effectively vacuous for them, so they should
+  not be counted as GPU coverage.
+
+### Standing
+
+**Not ready for testers.** The blocking item is the per-element operator gap:
+355 edits carry it, 27 mis-render outright, and the failure is silent — the edit
+loads, the mask looks plausible, and the module applies in the wrong places.
+
+Process note, and the point of the whole exercise: this was found only by
+rendering the same edits through a *second independent implementation*. A single
+implementation plus a cache validated itself for 2466 edits and reported zero
+differences.
+## §42 — The round trip: does a migrated mask survive being saved?
+
+§41 closed with the gap `--verify-masks` cannot reach by construction: it
+replays in memory with `history_num = -1` and never touches the database, so
+state that is right in memory and then lost on the way to disk is invisible to
+it. `--roundtrip-masks` closes that.
+
+Per edit: seed a scratch image with the harvested **classic** history and forms,
+read it through the real `dt_dev_read_history_ext()`, simulate a mask edit,
+write through the real `dt_dev_write_history_ext()`, read again, compare.
+
+It compares *state*, not pixels, and that is not a weaker test: --verify-masks
+already establishes that a given (blend_params, form tree) renders the same mask
+as its classic original across the corpus. The only open question is whether
+that tuple survives a save -- so a state diff, which names the field that moved,
+is the right instrument.
+
+**Result: 2429 round-tripped, 2429 unchanged, 0 different, 0 errors, 37 skipped
+(already-flexi).**
+
+### Three defects in the test, each of which made it pass while testing nothing
+
+1. **`dev->iop` carries no blend_params after a read.** They are only written
+   onto modules when the history stack is *popped*. Every snapshot came out with
+   zero module lines, so the comparison was between two empty lists. Now
+   snapshots `dev->history` -- which is also the object
+   `dt_dev_write_history_ext()` actually persists, so it was the right thing to
+   compare regardless.
+2. **`multi_priority > 0` rows were silently dropped.**
+   `dt_ioppr_get_iop_order()` returns `INT_MAX` for a second instance absent
+   from the default order, and `dt_dev_read_history_ext()` `continue`s past the
+   row. This is the "cannot get iop-order for ... instance N" line that had been
+   filtered out of every log this session as noise; it was load-bearing.
+   Instance is irrelevant to what this measures, so it is normalized to 0.
+3. **`dt_dev_write_history_ext()` writes the history item's OWN forms snapshot**
+   (`dt_dev_history_item_t.forms`), not `dev->forms` -- and a freshly-read stack
+   has none. Calling it straight after a load wipes `masks_history` and writes
+   nothing, so the test reported the normalization as lost when it had never
+   been offered for saving.
+
+Point 3 also corrects the standing description of Option B. The markers reach
+the database only through a **mask-touching** edit: `_dev_add_history_item_ext()`
+snapshots `dev->forms` only when `include_masks` is set, and of the public
+wrappers only `dt_dev_add_masks_history_item_ext()` passes it. An ordinary
+parameter edit appends an item with `forms == NULL` and persists no masks. This
+is still correct -- an unsaved edit re-derives the markers from the classic
+blend_params on every load -- but it is narrower than "the user edits
+something".
+
+### The invariant check, and why comparing the two loads was not enough
+
+Load #1 against load #2 catches state that *changes* across a save and nothing
+else: a migration producing the same wrong tree twice passes it. That is a real
+blind spot, because the two loads take different paths -- the first migrates
+from classic blend_params, the second finds them already flexi and no-ops -- and
+the interesting failure is one of them silently doing nothing.
+
+So both loads are also checked against the invariant the §41 fix establishes:
+every non-union member heads its own run. Scoped to groups reachable from each
+module's own `mask_id`, after a first version checking all of `dev->forms`
+reported a violation on a group no module references -- `dev->forms` is
+per-image and every masks_history row is a cumulative snapshot, so it routinely
+holds other modules' groups and ones orphaned by earlier edits.
+
+**Mutation-verified**, both halves:
+
+| mutation | result |
+|---|---|
+| `dt_masks_normalize_flexi_groups()` made a no-op | fires, "violated after load" |
+| the call moved to *before* `dt_masks_read_masks_history()` | fires, "violated after load" |
+
+The second pins the ordering that Option B rests on -- the mistake it is
+designed to avoid, caught.
+
+### Standing
+
+- CPU + GPU replay: 2466 edits, **0 CPU differences**, 91 GPU-only (89 = migration
+  fixing a pre-existing CL raster bug, 2 undiagnosed colorequal raster).
+- Round trip: **2429/2429 unchanged**.
+- Generated raster matrix: 288/288.
+- Unit suite: 205 tests, 9 mask suites, all passing.
+
+Remaining before testers: the 2 undiagnosed colorequal raster edits, and GUI
+testing (selection/solo/DnD).
