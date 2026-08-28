@@ -978,6 +978,17 @@ void dt_develop_blendif_rgb_jzczhz_blend(dt_dev_pixelpipe_iop_t *piece,
                                          const dt_dev_pixelpipe_display_mask_t request_mask_display);
 
 
+/** May the blend render mask_id's group as this module's blend mask?
+
+    FALSE only for an IOP_FLAGS_NO_MASKS module (retouch, spots) carrying a
+    *classic* drawn mask -- those consume their own forms in process(), so
+    rendering mask_id's group would paint the module's own shapes. A flexi
+    group is never those shapes and always renders. Exported so the masks test
+    suite can pin that distinction: getting it wrong is silent, and cost 24
+    real edits their parametric mask (see the definition in blend.c). */
+gboolean dt_blend_may_render_group(struct dt_iop_module_t *self,
+                                   const dt_develop_mask_mode_t mask_mode);
+
 /** gui related stuff */
 void dt_iop_gui_init_blending(GtkWidget *iopw, dt_iop_module_t *module);
 void dt_iop_gui_update_blending(dt_iop_module_t *module);
