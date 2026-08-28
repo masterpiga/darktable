@@ -77,7 +77,12 @@ Outlier rate broken down by classic mask mode, over 5954 edits:
 | `uniform\|parametric` | 53 | 686 | 7.7% |
 | `uniform\|raster` | 47 | 377 | 12.5% |
 
-**Drawn-only masks never diverge.** That is exactly what the code predicts: in
+**Drawn-only masks never diverge** -- on this bug. (Do not read that as "drawn
+masks are fine": three later corpora turned up nine drawn-only edits where
+*migration itself* renders the wrong mask, on both devices equally. Those are a
+separate defect, see `masks_revamp_migration_failures.md`, and they are excluded
+from the counts here by the `max_diff <= 1/255` condition in the discriminator
+above.) The clean split here is exactly what the code predicts: in
 `dt_develop_blend_process_cl()` (src/develop/blend.c:1303) the drawn mask is
 rasterised **on the host** by `dt_masks_group_render_roi()` and uploaded, so its
 geometry cannot differ from the CPU run. The parametric mask is the part
@@ -169,9 +174,12 @@ Relevant machinery, all on the `masks_revamp` branch:
 | leonidas | 1722 | 126 | 0 | 0 |
 | gwbarn | 1803 | 98 | 0 | 0 |
 
-A fourth corpus (`thad`, 27,693 edits) was still being checked when this note
-was written; it is 4.6x the size of the other three combined and should be
-folded in.
+Three further corpora have since been checked -- `thad` (27,693 edits, 774
+outliers), `christian_pfister` (7,765 edits, 305) and `zisoft` (281 edits, 5) --
+bringing the totals to 41,730 edits and 1,358 classic-GPU outliers, still with
+zero `dev_gap_widened` anywhere. The mask-mode pattern in section 4 was
+recomputed over the first three corpora only; it has not been re-derived over
+all six, though nothing in the later runs contradicts it.
 
 Contributed mask data is specifications only -- no image content, filenames or
 user text. See `masks_revamp_migration_confidence.md` for the campaign's own
