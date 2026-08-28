@@ -31,6 +31,8 @@
 #include <omp.h>
 #endif
 
+#include <gio/gio.h>
+#include <glib/gstdio.h>
 #include <json-glib/json-glib.h>
 #include <math.h>
 #include <stdio.h>
@@ -199,6 +201,54 @@ static void _read_point(JsonObject *p, const int type, void *out)
       }
     }
   }
+}
+
+/** Load a harvest file, transparently decompressing a gzipped one.
+
+    --harvest-masks writes both FILE and FILE.gz and asks contributors to read
+    the first and send the second (it is ~12x smaller), so the file that
+    actually arrives is nearly always compressed. Requiring it to be unpacked
+    first put a manual step between receiving a contribution and checking it,
+    for no reason: the magic number says which it is.
+
+    Detected by content rather than by extension, so a .gz that was renamed on
+    the way through a file-sharing service, or a plain file that kept the
+    suffix, both still work. */
+JsonParser *dt_masks_harvest_load(const char *path, GError **error)
+{
+  JsonParser *parser = json_parser_new();
+
+  guchar magic[2] = { 0, 0 };
+  FILE *probe = g_fopen(path, "rb");
+  const gboolean gzipped =
+    probe && fread(magic, 1, 2, probe) == 2 && magic[0] == 0x1f && magic[1] == 0x8b;
+  if(probe) fclose(probe);
+
+  if(!gzipped)
+  {
+    if(json_parser_load_from_file(parser, path, error)) return parser;
+    g_object_unref(parser);
+    return NULL;
+  }
+
+  GFile *file = g_file_new_for_path(path);
+  GFileInputStream *raw = g_file_read(file, NULL, error);
+  gboolean ok = FALSE;
+  if(raw)
+  {
+    GZlibDecompressor *decomp = g_zlib_decompressor_new(G_ZLIB_COMPRESSOR_FORMAT_GZIP);
+    GInputStream *plain =
+      g_converter_input_stream_new(G_INPUT_STREAM(raw), G_CONVERTER(decomp));
+    ok = json_parser_load_from_stream(parser, plain, NULL, error);
+    g_object_unref(plain);
+    g_object_unref(decomp);
+    g_object_unref(raw);
+  }
+  g_object_unref(file);
+
+  if(ok) return parser;
+  g_object_unref(parser);
+  return NULL;
 }
 
 /** Rebuild the form list for one edit. Returns NULL if anything is
@@ -1043,13 +1093,13 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
 #endif
 
   GError *err = NULL;
-  JsonParser *parser = json_parser_new();
-  if(!json_parser_load_from_file(parser, json_path, &err))
+  // accepts the .gz the contributor actually sent, as well as a plain file
+  JsonParser *parser = dt_masks_harvest_load(json_path, &err);
+  if(!parser)
   {
     fprintf(stderr, "[verify] cannot read %s: %s\n",
             json_path, err ? err->message : "unknown error");
     g_clear_error(&err);
-    g_object_unref(parser);
     return FALSE;
   }
 
