@@ -6,19 +6,19 @@
      which merges a newly checked corpus into
      masks_revamp_migration_ledger.json and rewrites this file. -->
 
-_Last updated 2026-08-28, over 2 contributed libraries._
+_Last updated 2026-08-28, over 6 contributed libraries._
 
 ## Where we stand
 
-**0 migration failures in 1322 distinct configuration shapes &rarr; the failure rate is below 0.226% (1 in 441) at 95% confidence.**
+**8 migration failures in 4905 distinct configuration shapes &rarr; the failure rate is below 0.294% (1 in 340) at 95% confidence.**
 
 | | |
 |---|---:|
-| contributed libraries | 2 |
-| harvested edits | 4188 |
-| distinct configuration shapes | 1322 |
-| migration failures | 0 |
-| classic-GPU outliers | 70 |
+| contributed libraries | 6 |
+| harvested edits | 41730 |
+| distinct configuration shapes | 4905 |
+| migration failures | 8 |
+| classic-GPU outliers | 246 |
 | shapes proving nothing (inert/skipped) | 2 |
 
 Classic-GPU outliers are counted separately on purpose: there the CPU
@@ -44,55 +44,61 @@ that is the rule of three: the bound is about 3/n.
 
 | corpus | recorded | edits | shapes | darktable |
 |---|---|---:|---:|---|
+| `christian_pfister` | 2026-08-28 | 7765 | 1601 | 5.7.0+675~g2a031d9525-dirty |
 | `dudo` | 2026-08-28 | 2466 | 824 | - |
+| `gwbarn` | 2026-08-28 | 1803 | 926 | 5.7.0+675~g2a031d9525-dirty |
 | `leonidas` | 2026-08-28 | 1722 | 546 | 5.7.0+672~gdedea60e1d-dirty |
+| `thad` | 2026-08-28 | 27693 | 1417 | 5.7.0+675~g2a031d9525-dirty |
+| `zisoft` | 2026-08-28 | 281 | 86 | 5.7.0+675~g2a031d9525-dirty |
 
 ## By mask mode
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `uniform\|drawn\|parametric` | 1019 | 3199 | 0 | 2 | 0.294% (1 in 340) |
-| `uniform\|drawn` | 140 | 624 | 0 | 2 | 2.117% (1 in 47) |
-| `uniform\|raster` | 136 | 271 | 0 | 2 | 2.179% (1 in 45) |
-| `uniform\|parametric` | 27 | 57 | 0 | 2 | _too few_ |
-| `uniform\|flexi` | 0 | 5 | 0 | 1 | _too few_ |
+| `uniform\|drawn\|parametric` | 2487 | 30410 | 0 | 6 | 0.120% (1 in 830) |
+| `uniform\|drawn` | 1908 | 9919 | 7 | 6 | 0.688% (1 in 145) |
+| `uniform\|raster` | 266 | 582 | 1 | 6 | 1.771% (1 in 56) |
+| `uniform\|parametric` | 243 | 781 | 0 | 6 | 1.225% (1 in 81) |
+| `uniform\|flexi` | 1 | 6 | 0 | 2 | _too few_ |
 | `uniform\|drawn\|flexi` | 0 | 32 | 0 | 1 | _too few_ |
 
 ## By form type
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `group` | 1225 | 3635 | 0 | 2 | 0.244% (1 in 409) |
-| `path` | 993 | 2511 | 0 | 2 | 0.301% (1 in 331) |
-| `gradient` | 690 | 1978 | 0 | 2 | 0.433% (1 in 230) |
-| `group\|clone` | 472 | 870 | 0 | 2 | 0.633% (1 in 158) |
-| `ellipse` | 336 | 840 | 0 | 2 | 0.888% (1 in 112) |
-| `path\|non-clone` | 264 | 482 | 0 | 2 | 1.128% (1 in 88) |
-| `path\|clone` | 228 | 442 | 0 | 2 | 1.305% (1 in 76) |
-| `circle\|clone` | 194 | 348 | 0 | 2 | 1.532% (1 in 65) |
-| `brush` | 144 | 285 | 0 | 2 | 2.059% (1 in 48) |
-| `clone\|brush` | 69 | 112 | 0 | 2 | 4.249% (1 in 23) |
-| `brush\|non-clone` | 32 | 49 | 0 | 1 | 8.937% (1 in 11) |
-| `circle` | 30 | 48 | 0 | 2 | 9.503% (1 in 10) |
-| `clone\|ellipse` | 13 | 22 | 0 | 1 | _too few_ |
-| `circle\|non-clone` | 12 | 25 | 0 | 2 | _too few_ |
+| `group` | 4581 | 18632 | 8 | 6 | 0.315% (1 in 317) |
+| `path` | 2966 | 11093 | 8 | 6 | 0.486% (1 in 205) |
+| `brush` | 1416 | 4385 | 0 | 5 | 0.211% (1 in 473) |
+| `gradient` | 1388 | 3724 | 1 | 6 | 0.341% (1 in 292) |
+| `ellipse` | 1288 | 4477 | 4 | 6 | 0.709% (1 in 140) |
+| `group\|clone` | 1183 | 2508 | 0 | 6 | 0.253% (1 in 395) |
+| `circle\|clone` | 515 | 896 | 0 | 5 | 0.580% (1 in 172) |
+| `path\|clone` | 442 | 1230 | 0 | 6 | 0.675% (1 in 148) |
+| `circle` | 424 | 714 | 0 | 6 | 0.704% (1 in 142) |
+| `clone\|brush` | 360 | 556 | 0 | 6 | 0.829% (1 in 120) |
+| `path\|non-clone` | 269 | 502 | 0 | 4 | 1.107% (1 in 90) |
+| `clone\|ellipse` | 163 | 294 | 0 | 4 | 1.821% (1 in 54) |
+| `brush\|non-clone` | 42 | 75 | 0 | 4 | 6.884% (1 in 14) |
+| `circle\|non-clone` | 15 | 41 | 0 | 3 | _too few_ |
 
 ## By mask combine
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `norm\|excl` | 1117 | 3596 | 0 | 2 | 0.268% (1 in 373) |
-| `norm\|excl\|masks_pos` | 196 | 576 | 0 | 2 | 1.517% (1 in 65) |
-| `norm\|incl` | 6 | 12 | 0 | 1 | _too few_ |
-| `norm\|incl\|masks_pos` | 2 | 3 | 0 | 1 | _too few_ |
+| `norm\|excl` | 4077 | 38710 | 6 | 6 | 0.290% (1 in 344) |
+| `norm\|excl\|masks_pos` | 786 | 2928 | 2 | 6 | 0.799% (1 in 125) |
+| `norm\|incl` | 23 | 49 | 0 | 4 | _too few_ |
+| `norm\|incl\|masks_pos` | 15 | 39 | 0 | 4 | _too few_ |
+| `inv\|incl` | 2 | 2 | 0 | 2 | _too few_ |
 | `inv\|excl\|masks_pos` | 1 | 1 | 0 | 1 | _too few_ |
+| `inv\|excl` | 1 | 1 | 0 | 1 | _too few_ |
 
 ## By instance
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `second instance` | 791 | 2809 | 0 | 2 | 0.378% (1 in 264) |
-| `first instance` | 531 | 1379 | 0 | 2 | 0.563% (1 in 177) |
+| `second instance` | 2854 | 29887 | 4 | 6 | 0.320% (1 in 312) |
+| `first instance` | 2051 | 11843 | 4 | 6 | 0.446% (1 in 224) |
 
 ## Coverage gaps
 
@@ -103,18 +109,18 @@ contributors for.**
 
 | stratum | shapes | contributors |
 |---|---:|---:|
-| `uniform\|flexi` | 0 | 1 |
 | `uniform\|drawn\|flexi` | 0 | 1 |
+| `uniform\|flexi` | 1 | 2 |
 | `inv\|excl\|masks_pos` | 1 | 1 |
-| `norm\|incl\|masks_pos` | 2 | 1 |
-| `norm\|incl` | 6 | 1 |
-| `circle\|non-clone` | 12 | 2 |
-| `clone\|ellipse` | 13 | 1 |
-| `uniform\|parametric` | 27 | 2 |
+| `inv\|excl` | 1 | 1 |
+| `inv\|incl` | 2 | 2 |
+| `circle\|non-clone` | 15 | 3 |
+| `norm\|incl\|masks_pos` | 15 | 4 |
+| `norm\|incl` | 23 | 4 |
 
 ## What this still cannot tell you
 
-Contributors are the real sampling unit and there are 2 of them.
+Contributors are the real sampling unit and there are 6 of them.
 Shapes within one library stay correlated even after collapsing, so
 the headline bound is optimistic as a statement about darktable users
 at large. More *libraries* widen coverage far faster than more edits
