@@ -166,7 +166,7 @@ Hardware: Apple M4 Pro, OpenCL available.
 | worst CPU difference | **1.09603998e-05** (~350× below visibility) |
 | GPU: CPU/GPU gap, migrated | **0.0058** |
 | GPU: edits where migration *widened* the gap | **0** |
-| `--roundtrip-masks`, 2429 edits | **2429 unchanged, 0 different, 0 errors** |
+| `--roundtrip-masks`, 2429 edits | **2429 unchanged, 0 different, 0 errors**; 1500 multi-instance, **0 loaded vacuously** |
 | `--styleapply-masks`, 2429 edits | **1860 ok, 0 style masks lost, 0 hosts disturbed, 0 errors**; 569 drawn-only (see below) |
 | generated raster matrix, 288 edits | 24 identical, 12 equivalent, **252 different — 0 of them CPU-driven** (worst CPU diff **exactly 0**); all 252 are classic-GPU outliers, see below |
 | unit suite | **205 tests, 9 mask suites, all pass** |
@@ -195,7 +195,34 @@ Note this figure only became measurable after the pipe **input**-profile fix
 vacuous. An earlier draft of this table reported "288 identical, all live" from
 a pre-fix run; that number was measuring nothing and is superseded by the above.
 
-### 4.1 Styles (`--styleapply-masks`)
+### 4.1 Multi-instance round-tripping
+
+Also raised by the external review, and it was worse than the review supposed.
+`--roundtrip-masks` used to force `multi_priority` to 0, because a second
+instance of a module has no entry in the *default* iop order a scratch image
+gets: `dt_ioppr_get_iop_order()` returns `INT_MAX` for it and
+`dt_dev_read_history_ext()` drops the row silently. **1500 of the 2429
+round-tripped edits — 62% — are multi-instance**, so that normalization was not
+a detail; it was most of the corpus.
+
+Fixed by giving the scratch image a custom iop-order list containing the
+instance (`dt_masks_scratch_seed_iop_order()`), placed by the same rule
+`dt_ioppr_insert_module_instance()` uses. Result: 2429 unchanged, 0 different,
+with the real harvested `multi_priority` throughout.
+
+The reason this mattered so much is that the old failure mode was *silent and
+passing*: a dev with no modules in it snapshots to no module lines, and two such
+snapshots compare equal whatever migration did. So the tool now also counts
+edits that loaded with no module at all and fails the run if any did.
+
+That guard was checked against a negative control rather than assumed: with the
+iop-order seeding disabled, the run reports **1500 loaded with no module** while
+still printing "2429 unchanged, 0 different, 0 errors" — which is exactly what
+the old numbers were.
+
+---
+
+### 4.2 Styles (`--styleapply-masks`)
 
 Added after an external review flagged styles and presets as unharvested. They
 are not just unharvested: they migrate through a *different door*.
@@ -304,7 +331,10 @@ different disguises.
    two empty lists compare equal.
 6. **`multi_priority > 0` history rows silently dropped**:
    `dt_ioppr_get_iop_order()` returns `INT_MAX` for a second instance absent
-   from the default order and the reader `continue`s.
+   from the default order and the reader `continue`s. Worked around at first by
+   forcing `multi_priority` to 0 — which quietly cost 62% of the round-trip
+   corpus. Now fixed properly (§4.1), with a guard and a negative control so it
+   cannot recur unnoticed.
 7. **Missing pipe *input* profile** → the OpenCL kernel's first line is
    `if(... || use_work_profile == 0) return;` — it returns **without writing the
    mask**, leaving zeros. Every scene-referred edit rendered zeros on the GPU on
@@ -352,10 +382,13 @@ load-bearing three times.
    else that function does concerns module params and version fixups, not masks.
    Its host is also a single fixed drawn-mask edit, so it varies the style, not
    what the style lands on.
-9. **`--roundtrip-masks` simulates the user's edit** via
+9. **`--roundtrip-masks` still normalizes multi-instance in `--styleapply-masks`.**
+   The style test applies every edit at `multi_priority` 0; only the round trip
+   now carries the harvested instance.
+10. **`--roundtrip-masks` simulates the user's edit** via
    `dt_dev_add_masks_history_item_ext()`. If a real GUI edit path differs from
    that call, the round trip is not exactly what a user does.
-10. **Single corpus, single machine.** One person's library, one GPU
+11. **Single corpus, single machine.** One person's library, one GPU
    (Apple M4 Pro), one OpenCL implementation.
 
 ---

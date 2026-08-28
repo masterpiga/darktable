@@ -297,6 +297,7 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
   gboolean first_report = TRUE;
 
   int total = 0, same = 0, differ = 0, skipped = 0, errors = 0;
+  int no_module = 0, multi_instance = 0;
 
   for(guint i = 0; i < n; i++)
   {
@@ -334,10 +335,11 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
 
     dt_masks_scratch_wipe_history(ROUNDTRIP_IMGID);
     dt_masks_scratch_seed_image(ROUNDTRIP_IMGID, w, h);
-    // multi_priority (mp) is deliberately not passed: see scratch_image.h
-    (void)mp;
+    // the iop-order entry must exist before the history row referencing it,
+    // or dt_dev_read_history_ext() drops the row (see scratch_image.h)
+    if(op) dt_masks_scratch_seed_iop_order(ROUNDTRIP_IMGID, op, mp);
     const gboolean seeded =
-      op && dt_masks_scratch_seed_history(ROUNDTRIP_IMGID, 0, op, bv, &bp, forms);
+      op && dt_masks_scratch_seed_history(ROUNDTRIP_IMGID, 0, op, mp, bv, &bp, forms);
     g_list_free_full(forms, (GDestroyNotify)dt_masks_free_form);
 
     if(!seeded) { skipped++; continue; }
@@ -351,6 +353,18 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
     // load #2: blendop_params are flexi now, so migration no-ops and the
     // stored forms have to carry what load #1 derived in memory
     gchar *snap2 = _load_and_snapshot(FALSE, &v2);
+
+    if(mp > 0) multi_instance++;
+
+    /* A guard against passing vacuously, not a statistic.
+       dt_dev_read_history_ext() drops a history row whose (operation,
+       multi_priority) has no iop-order entry, without saying so -- and two
+       snapshots of a dev with no modules in it compare equal no matter what
+       migration did. That is precisely how multi-instance edits used to be
+       "tested" here. If this count is ever non-zero the run proves nothing
+       about those edits, so it is reported next to the pass count rather than
+       left for someone to notice. */
+    if(snap1 && !strstr(snap1, "module ")) no_module++;
 
     gchar *diff = NULL;
     if(!snap1 || !snap2)
@@ -410,9 +424,13 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
   printf("[roundtrip]   errors        : %d\n", errors);
   printf("[roundtrip]   skipped       : %d  (already flexi, or unreconstructable)\n",
          skipped);
+  printf("[roundtrip]   of those, multi-instance (multi_priority > 0) : %d\n",
+         multi_instance);
+  printf("[roundtrip]   loaded with NO module at all (would pass vacuously) : %d\n",
+         no_module);
   if(report_path) printf("[roundtrip] per-edit report written to %s\n", report_path);
 
-  return differ == 0 && errors == 0;
+  return differ == 0 && errors == 0 && no_module == 0;
 }
 
 // modelines: These editor modelines have been set for all relevant files

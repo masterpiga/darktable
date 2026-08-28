@@ -56,22 +56,38 @@ void dt_masks_scratch_seed_image(const dt_imgid_t imgid,
     `blendop_version` is the harvested one, so the row genuinely arrives as
     classic and the real migration runs on read.
 
-    multi_priority is always written as 0, never the harvested value. A second
-    instance of a module has no entry in the *default* iop order a scratch
-    image gets, dt_ioppr_get_iop_order() returns INT_MAX for it, and
-    dt_dev_read_history_ext() then skips the row entirely -- which silently
-    produces a dev with no modules at all, and comparisons between empty module
-    lists that pass no matter what migration did. Instance identity is
-    irrelevant to what these tools measure, so it is normalized away rather
-    than worked around.
+    `multi_priority` is written as given. A second instance only survives the
+    read if the image also has an iop-order entry for it -- see
+    dt_masks_scratch_seed_iop_order(), which callers must invoke first for any
+    non-zero multi_priority.
 
     Returns FALSE if the module is unknown or the insert failed. */
 gboolean dt_masks_scratch_seed_history(const dt_imgid_t imgid,
                                        const int num,
                                        const char *operation,
+                                       const int multi_priority,
                                        const int blendop_version,
                                        const dt_develop_blend_params_t *bp,
                                        GList *forms);
+
+/** Give `imgid` an iop-order list that contains (operation, multi_priority).
+
+    Only needed for a second or later instance. A scratch image otherwise gets
+    the *default* iop order, which has one entry per module at instance 0 only;
+    dt_ioppr_get_iop_order() returns INT_MAX for any other instance ("cannot get
+    iop-order for X instance N"), and dt_dev_read_history_ext() then drops the
+    row without a word. That silently produced a dev with no modules at all,
+    and comparisons between two empty module lists pass no matter what
+    migration did -- so this is not cosmetic: without it a multi-instance edit
+    is not being tested, it is being skipped.
+
+    Mirrors dt_ioppr_insert_module_instance(): the new entry goes immediately
+    before the highest-instance entry already present for that operation, which
+    is where darktable itself puts a duplicated module. A no-op for
+    multi_priority 0. */
+void dt_masks_scratch_seed_iop_order(const dt_imgid_t imgid,
+                                     const char *operation,
+                                     const int multi_priority);
 
 // modelines: These editor modelines have been set for all relevant files
 // by tools/update_modelines.py
