@@ -90,8 +90,8 @@ that is the rule of three: the bound is about 3/n.
 | `norm\|incl` | 23 | 49 | 0 | 4 | _too few_ |
 | `norm\|incl\|masks_pos` | 15 | 39 | 0 | 4 | _too few_ |
 | `inv\|incl` | 2 | 2 | 0 | 2 | _too few_ |
-| `inv\|excl\|masks_pos` | 1 | 1 | 0 | 1 | _too few_ |
 | `inv\|excl` | 1 | 1 | 0 | 1 | _too few_ |
+| `inv\|excl\|masks_pos` | 1 | 1 | 0 | 1 | _too few_ |
 
 ## By instance
 
@@ -110,9 +110,9 @@ contributors for.**
 | stratum | shapes | contributors |
 |---|---:|---:|
 | `uniform\|drawn\|flexi` | 0 | 1 |
-| `uniform\|flexi` | 1 | 2 |
-| `inv\|excl\|masks_pos` | 1 | 1 |
 | `inv\|excl` | 1 | 1 |
+| `inv\|excl\|masks_pos` | 1 | 1 |
+| `uniform\|flexi` | 1 | 2 |
 | `inv\|incl` | 2 | 2 |
 | `circle\|non-clone` | 15 | 3 |
 | `norm\|incl\|masks_pos` | 15 | 4 |
