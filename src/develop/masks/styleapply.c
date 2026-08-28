@@ -361,10 +361,14 @@ static gboolean _apply_as_style(const char *operation,
 // driver
 // ---------------------------------------------------------------------------
 
-// a harvested edit this tool cannot apply as a style. Recorded rather than
-// silently dropped, so the report accounts for every index in the harvest.
+/* A harvested edit this tool cannot apply as a style. Recorded rather than
+   silently dropped, so the report accounts for every index in the harvest.
+
+   A plain block, NOT the usual do{...}while(0) -- see the note on
+   ROUNDTRIP_SKIP: `continue` binds to the nearest enclosing loop, and
+   do/while(0) is one, so the idiom turns the skip into a fall-through. */
 #define STYLEAPPLY_SKIP(why)                                                    \
-  do {                                                                          \
+  {                                                                             \
     skipped++;                                                                  \
     if(rf)                                                                      \
     {                                                                           \
@@ -373,7 +377,7 @@ static gboolean _apply_as_style(const char *operation,
       first_report = FALSE;                                                     \
     }                                                                           \
     continue;                                                                   \
-  } while(0)
+  }
 
 gboolean dt_masks_styleapply_harvest_section(const char *json_path,
                                              FILE *rf,
