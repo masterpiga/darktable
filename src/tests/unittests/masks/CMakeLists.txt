@@ -42,8 +42,15 @@ add_cmocka_test(test_flexi_compose
                 SOURCES test_flexi_compose.c flexi_fixture.c
                 LINK_LIBRARIES lib_darktable cmocka)
 
+# Is the synthetic probe image actually adequate to replay harvested masks
+# against? Measured per channel, not assumed -- see the file header.
+add_cmocka_test(test_probe_image
+                SOURCES test_probe_image.c
+                LINK_LIBRARIES lib_darktable cmocka)
+
 foreach(_t test_flexi_model test_flexi_cache test_flexi_persistence test_flexi_dnd
-           test_flexi_groups test_flexi_panel test_flexi_migrate test_flexi_compose)
+           test_flexi_groups test_flexi_panel test_flexi_migrate test_flexi_compose
+           test_probe_image)
   target_include_directories(${_t} PRIVATE
                              ${CMAKE_CURRENT_SOURCE_DIR}
                              ${CMAKE_SOURCE_DIR}/src)

@@ -2553,6 +2553,11 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   // comment in develop.h.
   g_list_free_full(dev->pending_flexi_migrations, free);
   dev->pending_flexi_migrations = NULL;
+  // same defensiveness for the post-read normalization queue (see
+  // dt_masks_normalize_flexi_groups); a stale entry here would re-normalize a
+  // group belonging to the previously loaded image
+  g_list_free(dev->pending_flexi_group_splits);
+  dev->pending_flexi_group_splits = NULL;
 
   // Specific handling for None workflow (interdependency)
 
@@ -2845,6 +2850,11 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   dt_masks_finish_flexi_migrations(dev);
 
   dt_masks_read_masks_history(dev, imgid);
+
+  // after the read, not before: this adjusts groups that already exist in the
+  // database, and the read above replaces dev->forms wholesale (see the
+  // function's own comment, and dev->pending_flexi_group_splits in develop.h)
+  dt_masks_normalize_flexi_groups(dev);
 
   // FIXME : this probably needs to capture dev thread lock
   if(dev->gui_attached && !no_image)

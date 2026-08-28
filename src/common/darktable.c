@@ -28,6 +28,9 @@
 #include "common/collection.h"
 #include "common/colorspaces.h"
 #include "common/darktable.h"
+#include "develop/masks/harvest.h"
+#include "develop/masks/roundtrip.h"
+#include "develop/masks/verify.h"
 #include "common/datetime.h"
 #include "common/exif.h"
 #include "common/pwstorage/pwstorage.h"
@@ -199,6 +202,27 @@ static int usage(const char *argv0)
          "    (/tmp/flexi_mask_test/xmp) instead of next to the original image.\n"
          "    Pass --no-flexi-test-mode to use --configdir/--library the normal\n"
          "    way (as the actual write target) instead.\n"
+         "\n"
+         "--verify-masks FILE\n"
+         "    Replay the mask configurations in a --harvest-masks FILE, rendering\n"
+         "    each one before and after migration to the new mask model and\n"
+         "    comparing the results, then exit. Writes FILE.report.json.\n"
+         "\n"
+         "--harvest-masks FILE\n"
+         "    Export every mask configuration in the library to FILE as JSON, then\n"
+         "    exit. Used to check that migrating masks to the new model leaves real\n"
+         "    edits rendering identically; sharing the file with the developers helps\n"
+         "    test that against a wider range of edits than we can invent.\n"
+         "\n"
+         "    The library is opened strictly read-only and is never locked, written\n"
+         "    to, or schema-upgraded. Use --library / --configdir to choose which\n"
+         "    library to read.\n"
+         "\n"
+         "    The output is plain, readable JSON holding only numbers and darktable\n"
+         "    module names: no file or folder names, no shape, group or module\n"
+         "    instance names, no image content or thumbnails, no EXIF, no timestamps.\n"
+         "    Images appear only as pixel dimensions and a sequential index. Please\n"
+         "    read the file before sharing it.\n"
          "\n"
          "--library FILE\n"
          "    Specifies an alternate location for darktable's image information database,\n"
@@ -1102,6 +1126,9 @@ int dt_init(int argc,
 
   // database
   char *dbfilename_from_command = NULL;
+  char *harvest_masks_output = NULL;
+  char *verify_masks_input = NULL;
+  char *roundtrip_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
   char *moduledir_from_command = NULL;
@@ -1200,6 +1227,24 @@ int dt_init(int argc,
       else if(!strcmp(argv[k], "--library") && argc > k + 1)
       {
         dbfilename_from_command = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--harvest-masks") && argc > k + 1)
+      {
+        harvest_masks_output = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--verify-masks") && argc > k + 1)
+      {
+        verify_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--roundtrip-masks") && argc > k + 1)
+      {
+        roundtrip_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -1615,6 +1660,44 @@ int dt_init(int argc,
     dt_print(DT_DEBUG_ALWAYS,
              "[init] darktable dump directory is '%s'",
              darktable.tmp_directory ? darktable.tmp_directory : "NOT AVAILABLE");
+  }
+
+  if(harvest_masks_output)
+  {
+    // Harvest and exit, here rather than anywhere later.
+    //
+    // The position is the point: everything below this line moves towards
+    // opening the library read-write -- dt_database_init() takes a lock on it
+    // and will upgrade its schema in place if it was written by an older
+    // darktable. Someone running this against their real library to help us
+    // test must not have that library touched, so the harvest happens before
+    // any of that exists, opens its own read-only connection, and returns
+    // without ever reaching startup.
+    //
+    // It also runs before the flexi test-mode block just below, which
+    // rewrites --library to point at a scratch copy. That copy is seeded once
+    // and then diverges, so harvesting after it would silently read a stale
+    // snapshot of the user's edits rather than their current ones.
+    gchar *library = NULL;
+    if(dbfilename_from_command)
+      library = g_strdup(dbfilename_from_command);
+    else
+    {
+      gchar *cfg = configdir_from_command
+        ? g_strdup(configdir_from_command)
+        : g_build_filename(g_get_user_config_dir(), "darktable", NULL);
+      library = g_build_filename(cfg, "library.db", NULL);
+      g_free(cfg);
+    }
+
+    const gboolean ok = dt_masks_harvest_library(library, harvest_masks_output);
+    if(!ok)
+      fprintf(stderr,
+              "[harvest] no output written.\n"
+              "[harvest] Use --library FILE to name the library explicitly, or\n"
+              "[harvest] --configdir DIR to name the directory holding library.db.\n");
+    g_free(library);
+    exit(ok ? 0 : 1);
   }
 
   if(darktable.flexi_test_mode)
@@ -2251,6 +2334,42 @@ int dt_init(int argc,
     dt_print(DT_DEBUG_ALWAYS, "[dt_init] ERROR: iop order looks bad, aborting.");
     dt_splash_screen_destroy();
     return 1;
+  }
+
+  if(verify_masks_input)
+  {
+    // Positioned here on purpose, and unlike --harvest-masks this one cannot
+    // run early: replaying a mask means running the real blend, which needs
+    // the colour profiles (dt_colorspaces_init, above) and a genuine module
+    // instance from the iop registry (dt_iop_load_modules_so, just above) --
+    // a hand-built module struct crashes in dt_develop_blend_process, which
+    // calls through its function pointers.
+    //
+    // It is equally deliberate that this sits *before* the GUI is brought up:
+    // nothing about comparing two mask buffers needs a window, and requiring
+    // one would make the verifier unusable exactly where it is most useful,
+    // on a headless machine or in CI.
+    dt_splash_screen_destroy();
+    gchar *report = g_strconcat(verify_masks_input, ".report.json", NULL);
+    const gboolean ok = dt_masks_verify_harvest(verify_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(roundtrip_masks_input)
+  {
+    // Same placement rationale as --verify-masks above (needs the iop registry,
+    // does not need a GUI), with one extra requirement: this one drives the
+    // real history reader and writer, so it needs a working library database
+    // as well. That is the whole point -- it exists to test the trip through
+    // the database that the in-memory verifier cannot see -- so run it against
+    // a throwaway one, `--library :memory:`, and never a real catalogue: it
+    // creates and repeatedly wipes a scratch image id.
+    dt_splash_screen_destroy();
+    gchar *report = g_strconcat(roundtrip_masks_input, ".roundtrip.json", NULL);
+    const gboolean ok = dt_masks_roundtrip_harvest(roundtrip_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
   }
 
   if(darktable.dump_pfm_module)

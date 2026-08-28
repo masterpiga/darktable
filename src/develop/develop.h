@@ -249,6 +249,24 @@ typedef struct dt_develop_t
   // (NULL) between dt_dev_read_history_ext() calls.
   GList *pending_flexi_migrations;
 
+  // mask_ids of *pre-existing* classic drawn groups a migration reused as-is
+  // (cases MASK and MASK|CONDITIONAL), queued for the run-boundary
+  // normalization dt_masks_normalize_flexi_groups() applies.
+  //
+  // Separate from pending_flexi_migrations above, and drained at the opposite
+  // moment: that list synthesizes *new* forms and must run BEFORE
+  // dt_masks_read_masks_history() so its writes are picked up, while this one
+  // adjusts forms that already exist in the DB and must therefore run AFTER
+  // that read -- which replaces dev->forms wholesale and would otherwise
+  // discard the adjustment. Nothing here is written back to the database: the
+  // stored group keeps its original classic shape list, and only picks up the
+  // markers if the user edits the image and dt_dev_write_history_ext()
+  // rewrites masks_history from dev->forms.
+  //
+  // Holds mask_ids (GINT_TO_POINTER), always empty (NULL) between
+  // dt_dev_read_history_ext() calls.
+  GList *pending_flexi_group_splits;
+
   //full preview stuff
   gboolean full_preview;
   dt_dev_zoom_t full_preview_last_zoom;
