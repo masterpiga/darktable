@@ -6581,6 +6581,12 @@ static void _masks_group_drag_received(GtkWidget *w,
       // dragged. Re-derived from the run head after the reorder, never reused
       // from before it.
       if(ok) _select_moved_group(module, _group_cid_of_form(grp, src));
+      // reordering groups reorders grp->points, i.e. the fold order the pipe
+      // actually evaluates -- so it has to be committed exactly like an element
+      // reorder does (see _masks_row_drag_received). Without this the model
+      // moved but nothing invalidated the pipe, so the canvas kept the pre-drag
+      // render until an unrelated event (a zoom) forced a recompute.
+      if(ok) dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
     }
     dt_print(DT_DEBUG_MASKS, "[masks dnd] group received src=%d dst=%d ok=%d", src, dst,
              ok);
@@ -10346,6 +10352,12 @@ static void _masks_group_to_empty_drop(GtkWidget *w,
       // the moved group stays selected, re-derived after the reorder -- see
       // _select_moved_group
       if(ok) _select_moved_group(module, _group_cid_of_form(grp, src));
+      // a real group lands at the staged group's position, which can carry it
+      // past other real groups (an empty group can sit between two of them), so
+      // this reorders the evaluated fold order too and must be committed -- see
+      // _masks_group_drag_received. (The mirror case, dragging an *empty* group,
+      // moves nothing the pipe can see and is deliberately not committed.)
+      if(ok) dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
     }
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
@@ -16013,9 +16025,24 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
 
   // make sure this module's flexi content isn't left owning a shared host's
-  // content box once its widgets (relocatable_box included) are destroyed
+  // content box once its widgets (relocatable_box included) are destroyed.
+  //
+  // Unlike every other caller, this one can run *after* the widgets are gone:
+  // when the panel is hosted elsewhere (the masks_flexi_host utility lib, or
+  // the separate grid panel), relocatable_box is a child of that owner, not of
+  // this module's iopw -- and at app quit that owner is torn down on its own
+  // schedule, which may be first. _masks_flexi_release would then walk dangling
+  // GtkWidget pointers (bd->* is never nulled when a widget dies), which is
+  // what the burst of GTK_IS_WIDGET criticals on exit is. Reparenting a
+  // destroyed box back into a destroyed iopw achieves nothing anyway; only the
+  // host bookkeeping still matters, so do just that.
   if(darktable.develop->proxy.masks_flexi_host.hosted_module == module)
-    _masks_flexi_release(module);
+  {
+    if(bd->relocatable_box && GTK_IS_WIDGET(bd->relocatable_box))
+      _masks_flexi_release(module);
+    else
+      darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
+  }
 
   dt_pthread_mutex_lock(&bd->lock);
   if(bd->timeout_handle)
