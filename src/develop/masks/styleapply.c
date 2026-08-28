@@ -21,6 +21,8 @@
 #include "common/darktable.h"
 #include "common/debug.h"
 #include "common/history.h"
+#include "common/iop_order.h"
+#include "common/styles.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
 #include "develop/masks.h"
@@ -33,6 +35,10 @@
 // Same reasoning as --roundtrip-masks: one scratch image, wiped between edits,
 // only ever safe against `--library :memory:`.
 #define STYLEAPPLY_IMGID 1
+
+// how many items of one module a single style under test may carry: one for an
+// ordinary edit, two for one the user kept as a second instance
+#define STYLEAPPLY_MAX_ITEMS 2
 
 // ---------------------------------------------------------------------------
 // the host edit: what is already on the image when the style lands
@@ -161,15 +167,19 @@ static gchar *_describe_mask(dt_develop_t *dev,
   return g_string_free(s, FALSE);
 }
 
-/** Find the last history item for `operation`, or NULL. */
+/** Find the last history item for `operation` at `multi_priority`, or NULL.
+    A negative `multi_priority` matches any instance. */
 static const dt_dev_history_item_t *_history_item_for(dt_develop_t *dev,
-                                                      const char *operation)
+                                                      const char *operation,
+                                                      const int multi_priority)
 {
   const dt_dev_history_item_t *found = NULL;
   for(GList *l = dev->history; l; l = g_list_next(l))
   {
     const dt_dev_history_item_t *h = l->data;
-    if(h && !strcmp(h->op_name, operation)) found = h;
+    if(!h || strcmp(h->op_name, operation)) continue;
+    if(multi_priority >= 0 && h->multi_priority != multi_priority) continue;
+    found = h;
   }
   return found;
 }
@@ -191,34 +201,34 @@ static void _open(dt_develop_t *dev)
   dt_dev_read_history_ext(dev, STYLEAPPLY_IMGID, TRUE);
 }
 
-/** Phase 1: read the seeded classic host and write it back as flexi, exactly
+/** Phase 1: read the seeded classic rows and write them back as flexi, exactly
     as --roundtrip-masks does, so the image on disk is a normal migrated image
-    before any style touches it. Returns the host's mask description. */
-static gchar *_settle_host(const _host_t *host)
+    before any style touches it. Reports the host's mask state, which is what
+    the style must not damage. */
+static void _settle(const _host_t *host, gchar **host_desc)
 {
   dt_develop_t dev;
   _open(&dev);
 
   // pop the stack onto the modules, then snapshot dev->forms into a history
   // item -- dt_dev_write_history_ext() persists the *item's* forms, and a
-  // freshly-read stack has none (see roundtrip.c for the long version)
+  // freshly-read stack has none (see roundtrip.c for the long version).
+  // Every migrated module needs its own snapshot, not just the first: the
+  // driver may have seeded a second module here.
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
   for(GList *m = dev.iop; m; m = g_list_next(m))
   {
     dt_iop_module_t *mod = m->data;
-    if(mod->blend_params && (mod->blend_params->mask_mode & DEVELOP_MASK_FLEXI))
-    {
+    if(mod->enabled && mod->blend_params
+       && (mod->blend_params->mask_mode & DEVELOP_MASK_FLEXI))
       dt_dev_add_masks_history_item_ext(&dev, mod, FALSE, TRUE);
-      break;
-    }
   }
   dt_dev_write_history_ext(&dev, STYLEAPPLY_IMGID);
 
-  const dt_dev_history_item_t *h = _history_item_for(&dev, host->operation);
-  gchar *desc = _describe_mask(&dev, h ? h->blend_params : NULL, NULL);
+  const dt_dev_history_item_t *h = _history_item_for(&dev, host->operation, 0);
+  *host_desc = _describe_mask(&dev, h ? h->blend_params : NULL, NULL);
 
   dt_dev_cleanup(&dev);
-  return desc;
 }
 
 /** Phase 2: apply one classic edit to the settled image as a style.
@@ -237,13 +247,37 @@ static gchar *_settle_host(const _host_t *host)
         the argument styles pass and which decides whether the resulting
         history item gets a forms snapshot.
 
+      - dt_ioppr_update_for_style_items(), which is what allocates the instances
+        the style's items land on. This is deliberately not second-guessed: a
+        style item's stored multi_priority is *not* the instance it ends up at,
+        because the target image has its own instances to fit around, so
+        darktable renumbers and derives the matching iop_order. Calling the real
+        function is the only way to land where darktable would, and it is what
+        creates the iop-order entry for a second instance -- without one the
+        history row is written and then silently dropped on the next read.
+
     Everything else dt_styles_apply_style_item() does concerns module params,
     versions and the flip/spots special cases, none of which touches masks.
 
-    Returns FALSE if the style could not be applied at all. */
+    `n_items` is how many items of this same module the style carries, which is
+    the only way a style ever reaches a second instance. Note it is not the
+    user-facing "append" mode: _styles_apply_to_image_ext() passes append=FALSE
+    to both of the calls above unconditionally, so a style always *replaces*
+    what is on the image; the instance count comes from the style itself, i.e.
+    from an image that had the module twice when the style was captured. (This
+    matters, and cost a wrong first attempt: forcing append=TRUE instead makes
+    dt_ioppr_update_for_style_items() allocate instance 1 while
+    dt_history_merge_module_into_history() still replaces instance 0, so the
+    result lands somewhere the caller is not looking.)
+
+    Returns FALSE if the style could not be applied at all; on success reports
+    through `landed` which instances the items ended up at, since that is where
+    the caller has to go looking for the results. */
 static gboolean _apply_as_style(const char *operation,
                                 const int blendop_version,
-                                const dt_develop_blend_params_t *classic)
+                                const dt_develop_blend_params_t *classic,
+                                const int n_items,
+                                int *landed)
 {
   dt_develop_t dev;
   _open(&dev);
@@ -256,45 +290,71 @@ static gboolean _apply_as_style(const char *operation,
     return FALSE;
   }
 
-  dt_iop_module_t *module = calloc(1, sizeof(dt_iop_module_t));
-  if(!module)
+  /* Resolve instances and iop-orders the way the real style path does. The
+     multi_name is empty because the harvest records no user-authored text --
+     that only matters in that it leaves _ioppr_update_for_entries()'s
+     force-append branch alone. params_size must be non-zero or the entry is
+     treated as an auto-init module and gets no iop-order at all. */
+  dt_style_item_t si[STYLEAPPLY_MAX_ITEMS] = { { 0 } };
+  GList *si_list = NULL;
+  for(int k = 0; k < n_items; k++)
   {
-    dt_dev_cleanup(&dev);
-    return FALSE;
+    si[k].operation = (gchar *)operation;
+    si[k].multi_name = (gchar *)"";
+    si[k].multi_priority = k;
+    si[k].params_size = mod_src->params_size;
+    si_list = g_list_append(si_list, &si[k]);
   }
-  module->dev = &dev;
-  if(dt_iop_load_module(module, mod_src->so, &dev))
-  {
-    free(module);
-    dt_dev_cleanup(&dev);
-    return FALSE;
-  }
-  module->instance = mod_src->instance;
-  module->multi_priority = 0; // see scratch_image.h
-  module->iop_order = mod_src->iop_order;
-  module->enabled = TRUE;
-  memcpy(module->params, module->default_params, module->params_size);
+  dt_ioppr_update_for_style_items(&dev, si_list, FALSE);
+  g_list_free(si_list);
 
-  // the migration call. Note this is the same shape styles.c uses: the stored
-  // version is classic, so the equality test there fails and this branch runs.
-  if(blendop_version == dt_develop_blend_version())
-    memcpy(module->blend_params, classic, sizeof(dt_develop_blend_params_t));
-  else
-    dt_develop_blend_legacy_params(module, classic, blendop_version,
-                                   module->blend_params, dt_develop_blend_version(),
-                                   sizeof(dt_develop_blend_params_t));
-
+  // modules_used is shared across the items, exactly as the loop in
+  // _styles_apply_to_image_ext() shares it -- it is what stops the second item
+  // from replacing the module the first one just claimed
   GList *modules_used = NULL;
-  dt_history_merge_module_into_history(&dev, NULL, module, &modules_used, FALSE, FALSE);
+  gboolean ok = TRUE;
+
+  for(int k = 0; k < n_items; k++)
+  {
+    dt_iop_module_t *module = calloc(1, sizeof(dt_iop_module_t));
+    if(!module) { ok = FALSE; break; }
+
+    module->dev = &dev;
+    if(dt_iop_load_module(module, mod_src->so, &dev))
+    {
+      free(module);
+      ok = FALSE;
+      break;
+    }
+    module->instance = mod_src->instance;
+    module->multi_priority = si[k].multi_priority;
+    module->iop_order = si[k].iop_order;
+    module->enabled = TRUE;
+    memcpy(module->params, module->default_params, module->params_size);
+    if(landed) landed[k] = si[k].multi_priority;
+
+    // the migration call. Note this is the same shape styles.c uses: the stored
+    // version is classic, so the equality test there fails and this branch runs.
+    if(blendop_version == dt_develop_blend_version())
+      memcpy(module->blend_params, classic, sizeof(dt_develop_blend_params_t));
+    else
+      dt_develop_blend_legacy_params(module, classic, blendop_version,
+                                     module->blend_params, dt_develop_blend_version(),
+                                     sizeof(dt_develop_blend_params_t));
+
+    dt_history_merge_module_into_history(&dev, NULL, module, &modules_used,
+                                         FALSE, FALSE);
+
+    dt_iop_cleanup_module(module);
+    free(module);
+  }
   g_list_free(modules_used);
 
   // and this is what styles.c does next: write history and forms to db
-  dt_dev_write_history_ext(&dev, STYLEAPPLY_IMGID);
+  if(ok) dt_dev_write_history_ext(&dev, STYLEAPPLY_IMGID);
 
-  dt_iop_cleanup_module(module);
-  free(module);
   dt_dev_cleanup(&dev);
-  return TRUE;
+  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -347,6 +407,7 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
 
   int total = 0, ok_count = 0, dangling = 0, host_lost = 0, skipped = 0, errors = 0;
   int same_op = 0, drawn_in_style = 0, not_carried = 0;
+  int multi_item = 0, landed_second = 0, no_module = 0;
 
   for(guint i = 0; i < n; i++)
   {
@@ -375,12 +436,19 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     const int bv = json_object_has_member(edit, "blendop_version")
       ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
 
-    // A style for the same module as the host legitimately *replaces* the
-    // host's mask, so "the host mask survived" is not a property to check
-    // there. The style's own mask still has to resolve, so the edit is kept
-    // and only that assertion is dropped.
     const gboolean collides = !strcmp(op, host.operation);
     if(collides) same_op++;
+
+    /* An edit the user kept as a second instance is applied inside a style that
+       carries the module twice, which is the only way a style ever reaches a
+       second instance: style application always replaces rather than appends,
+       so the instance count comes from the style itself -- from an image that
+       had the module twice when the style was captured. Both items then have to
+       migrate, both have to persist, and neither may end up standing on the
+       other's form. */
+    const int mp = json_object_has_member(edit, "multi_priority")
+      ? (int)json_object_get_int_member(edit, "multi_priority") : 0;
+    const int n_items = mp > 0 ? 2 : 1;
 
     // A style never carries drawn geometry: masks_history is per image, and
     // data.db's style_items has no forms column -- dt_styles_create_from_image()
@@ -405,26 +473,60 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
 
     // phase 1: settle it -- migrate and write back, so the style lands on a
     // normal already-migrated image
-    gchar *host_before = _settle_host(&host);
+    gchar *host_before = NULL;
+    _settle(&host, &host_before);
 
     total++;
+    if(n_items > 1) multi_item++;
 
     // phase 2: apply the edit under test as a style
-    if(!_apply_as_style(op, bv, &bp))
+    int landed[STYLEAPPLY_MAX_ITEMS] = { 0 };
+    if(!_apply_as_style(op, bv, &bp, n_items, landed))
     {
       errors++;
       g_free(host_before);
       continue;
     }
+    int max_landed = 0;
+    for(int k = 0; k < n_items; k++) max_landed = MAX(max_landed, landed[k]);
+    if(max_landed > 0) landed_second++;
 
     // phase 3: reload from the database and see what actually persisted
     dt_develop_t dev;
     _open(&dev);
 
-    gboolean style_resolved = FALSE;
-    const dt_dev_history_item_t *sh = _history_item_for(&dev, op);
-    gchar *style_desc = _describe_mask(&dev, sh ? sh->blend_params : NULL,
-                                       &style_resolved);
+    /* Every item the style carried has to have arrived. The verdict is taken
+       from the *worst* of them, so a style whose second instance was lost
+       cannot be reported as ok on the strength of its first. */
+    gboolean style_resolved = TRUE;
+    gboolean vanished = FALSE;
+    gboolean id_preserved = TRUE;
+    gchar *style_desc = NULL;
+    int worst_mp = landed[0];
+
+    for(int k = 0; k < n_items; k++)
+    {
+      gboolean k_resolved = FALSE;
+      const dt_dev_history_item_t *ih = _history_item_for(&dev, op, landed[k]);
+      gchar *d = _describe_mask(&dev, ih ? ih->blend_params : NULL, &k_resolved);
+
+      const gboolean k_same_id =
+        ih && ih->blend_params && ih->blend_params->mask_id == bp.mask_id;
+
+      // keep the first failing item's description, else the first item's
+      if(!style_desc || (style_resolved && !k_resolved))
+      {
+        g_free(style_desc);
+        style_desc = d;
+        if(!k_resolved) worst_mp = landed[k];
+      }
+      else
+        g_free(d);
+
+      if(!ih) vanished = TRUE;
+      if(!k_resolved) style_resolved = FALSE;
+      if(!k_same_id) id_preserved = FALSE;
+    }
 
     /* A drawn-ONLY style is the one case where a dangling mask is the correct,
        pre-existing outcome rather than a regression, and it is recognised
@@ -438,32 +540,33 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     const gboolean drawn_only =
       (bp.mask_mode & DEVELOP_MASK_MASK)
       && !(bp.mask_mode & (DEVELOP_MASK_CONDITIONAL | DEVELOP_MASK_RASTER));
-    const gboolean same_id =
-      sh && sh->blend_params && sh->blend_params->mask_id == bp.mask_id;
-    const gboolean expected_dangling = !style_resolved && drawn_only && same_id;
+    const gboolean expected_dangling =
+      !style_resolved && drawn_only && id_preserved;
 
+    // whatever the style did not land on must be exactly as it was
     gchar *host_after = NULL;
     gboolean host_ok = TRUE;
     if(!collides)
     {
-      const dt_dev_history_item_t *hh = _history_item_for(&dev, host.operation);
+      const dt_dev_history_item_t *hh = _history_item_for(&dev, host.operation, 0);
       host_after = _describe_mask(&dev, hh ? hh->blend_params : NULL, NULL);
       host_ok = host_before && host_after && !strcmp(host_before, host_after);
     }
 
     dt_dev_cleanup(&dev);
 
+    /* A style item that landed on no module at all is the failure a
+       single-instance harness could not see: the history row is written, then
+       dropped on the next read for want of an iop-order entry, and two absent
+       masks compare equal no matter what migration did. Named separately so it
+       cannot be read as an ordinary dangling mask. */
     const char *verdict;
-    if(expected_dangling)
+    if(vanished)
     {
-      not_carried++;
-      verdict = "drawn-only style, form never carried (same on master)";
-    }
-    else if(!style_resolved)
-    {
-      dangling++;
-      verdict = "style mask lost";
-      printf("[styleapply] DANGLING at edit %u (%s): %s\n", i, op, style_desc);
+      no_module++;
+      verdict = "style item landed on no module at all";
+      printf("[styleapply] NO MODULE at edit %u (%s, instance %d):"
+             " history row did not survive the reload\n", i, op, worst_mp);
     }
     else if(!host_ok)
     {
@@ -473,6 +576,18 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
              "             before: %s\n"
              "             after : %s\n",
              i, op, host_before, host_after);
+    }
+    else if(expected_dangling)
+    {
+      not_carried++;
+      verdict = "drawn-only style, form never carried (same on master)";
+    }
+    else if(!style_resolved)
+    {
+      dangling++;
+      verdict = "style mask lost";
+      printf("[styleapply] DANGLING at edit %u (%s, instance %d): %s\n",
+             i, op, worst_mp, style_desc);
     }
     else
     {
@@ -484,9 +599,11 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     {
       gchar *esc = g_strescape(style_desc, NULL);
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\", \"mask_mode\": %u,"
-                  " \"same_op_as_host\": %s, \"result\": \"%s\", \"style_mask\": \"%s\"}",
+                  " \"same_op_as_host\": %s, \"style_items\": %d,"
+                  " \"harvested_multi_priority\": %d, \"max_landed_instance\": %d,"
+                  " \"result\": \"%s\", \"style_mask\": \"%s\"}",
               first_report ? "" : ",", i, op, bp.mask_mode,
-              collides ? "true" : "false", verdict, esc);
+              collides ? "true" : "false", n_items, mp, max_landed, verdict, esc);
       g_free(esc);
       first_report = FALSE;
     }
@@ -511,6 +628,8 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
   printf("[styleapply]   ok             : %d\n", ok_count);
   printf("[styleapply]   STYLE MASK LOST: %d  (migrated form never persisted)\n", dangling);
   printf("[styleapply]   HOST DISTURBED : %d\n", host_lost);
+  printf("[styleapply]   NO MODULE AT ALL: %d  (row dropped on reload;"
+         " would otherwise pass vacuously)\n", no_module);
   printf("[styleapply]   drawn-only, form never carried by any style"
          " (same on master, not a failure) : %d\n", not_carried);
   printf("[styleapply]   errors         : %d\n", errors);
@@ -520,9 +639,13 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
          " where replacing the host mask is correct)\n", same_op);
   printf("[styleapply]   (and %d carry a drawn mask, which no style can ever"
          " carry forms for -- true on master too)\n", drawn_in_style);
+  printf("[styleapply]   multi-instance edits, applied in a style carrying the"
+         " module twice : %d\n", multi_item);
+  printf("[styleapply]     of those, a second instance was actually allocated  "
+         "         : %d\n", landed_second);
   if(report_path) printf("[styleapply] per-edit report written to %s\n", report_path);
 
-  return dangling == 0 && host_lost == 0 && errors == 0;
+  return dangling == 0 && host_lost == 0 && no_module == 0 && errors == 0;
 }
 
 // modelines: These editor modelines have been set for all relevant files
