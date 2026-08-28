@@ -134,6 +134,25 @@
 
 darktable_t darktable;
 
+/* Report path for a harvest FILE: FILE + `suffix`, with a trailing ".gz"
+   dropped first. The file that arrives from a contributor is the compressed
+   one (see --harvest-masks), and naming its report "x.json.gz.check.json"
+   would then differ from the report for the same corpus unpacked -- which
+   matters because tools/masks_migration_confidence.py finds reports by that
+   exact name. */
+static gchar *_masks_report_path(const char *input, const char *suffix)
+{
+  const size_t len = strlen(input);
+  if(len > 3 && !strcmp(input + len - 3, ".gz"))
+  {
+    gchar *stem = g_strndup(input, len - 3);
+    gchar *out = g_strconcat(stem, suffix, NULL);
+    g_free(stem);
+    return out;
+  }
+  return g_strconcat(input, suffix, NULL);
+}
+
 static int usage(const char *argv0)
 {
 #ifdef _WIN32
@@ -215,6 +234,10 @@ static int usage(const char *argv0)
          "\n"
          "    Use --library :memory: with this: it writes to a scratch image id\n"
          "    and must never be pointed at a real catalogue.\n"
+         "\n"
+         "    FILE may be gzipped; the .gz a contributor sends is read directly,\n"
+         "    with no need to unpack it first. The same is true of\n"
+         "    --verify-masks, --roundtrip-masks and --styleapply-masks.\n"
          "\n"
          "    The three checks can also be run one at a time -- --roundtrip-masks,\n"
          "    --verify-masks and --styleapply-masks below -- which is useful when\n"
@@ -2385,7 +2408,7 @@ int dt_init(int argc,
     // one would make the verifier unusable exactly where it is most useful,
     // on a headless machine or in CI.
     dt_splash_screen_destroy();
-    gchar *report = g_strconcat(verify_masks_input, ".report.json", NULL);
+    gchar *report = _masks_report_path(verify_masks_input, ".report.json");
     const gboolean ok = dt_masks_verify_harvest(verify_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
@@ -2401,7 +2424,7 @@ int dt_init(int argc,
     // a throwaway one, `--library :memory:`, and never a real catalogue: it
     // creates and repeatedly wipes a scratch image id.
     dt_splash_screen_destroy();
-    gchar *report = g_strconcat(roundtrip_masks_input, ".roundtrip.json", NULL);
+    gchar *report = _masks_report_path(roundtrip_masks_input, ".roundtrip.json");
     const gboolean ok = dt_masks_roundtrip_harvest(roundtrip_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
@@ -2413,7 +2436,7 @@ int dt_init(int argc,
     // it drives the real history reader and writer against a scratch image, so
     // it needs `--library :memory:` and never a real catalogue.
     dt_splash_screen_destroy();
-    gchar *report = g_strconcat(styleapply_masks_input, ".styleapply.json", NULL);
+    gchar *report = _masks_report_path(styleapply_masks_input, ".styleapply.json");
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
@@ -2427,7 +2450,7 @@ int dt_init(int argc,
     // against a scratch image, so it needs `--library :memory:` and never a
     // real catalogue.
     dt_splash_screen_destroy();
-    gchar *report = g_strconcat(check_masks_input, ".check.json", NULL);
+    gchar *report = _masks_report_path(check_masks_input, ".check.json");
     const gboolean ok = dt_masks_check_harvest(check_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
