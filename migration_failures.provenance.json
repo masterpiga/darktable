@@ -1,0 +1,262 @@
+[
+ {
+  "new_index": 0,
+  "corpus": "thad",
+  "original_index": 8223,
+  "operation": "diffuse",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 1,
+  "corpus": "thad",
+  "original_index": 8225,
+  "operation": "diffuse",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 2,
+  "corpus": "thad",
+  "original_index": 8617,
+  "operation": "sharpen",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 3,
+  "corpus": "thad",
+  "original_index": 8620,
+  "operation": "sharpen",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 4,
+  "corpus": "thad",
+  "original_index": 21710,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 5,
+  "corpus": "thad",
+  "original_index": 21711,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 6,
+  "corpus": "thad",
+  "original_index": 21727,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 7,
+  "corpus": "thad",
+  "original_index": 21728,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 8,
+  "corpus": "thad",
+  "original_index": 26998,
+  "operation": "contrastntexture",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "FAIL",
+  "note": "bug A: nested groups"
+ },
+ {
+  "new_index": 9,
+  "corpus": "christian_pfister",
+  "original_index": 7253,
+  "operation": "colorbalancergb",
+  "mask_mode": 9,
+  "mask_combine": 4,
+  "expected": "FAIL",
+  "note": "bug B: raster + MASKS_POS"
+ },
+ {
+  "new_index": 10,
+  "corpus": "christian_pfister",
+  "original_index": 7254,
+  "operation": "colorbalancergb",
+  "mask_mode": 9,
+  "mask_combine": 4,
+  "expected": "FAIL",
+  "note": "bug B: raster + MASKS_POS"
+ },
+ {
+  "new_index": 11,
+  "corpus": "thad",
+  "original_index": 1830,
+  "operation": "toneequal",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 12,
+  "corpus": "thad",
+  "original_index": 2562,
+  "operation": "toneequal",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 13,
+  "corpus": "thad",
+  "original_index": 4003,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 14,
+  "corpus": "thad",
+  "original_index": 4372,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 15,
+  "corpus": "thad",
+  "original_index": 4373,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 16,
+  "corpus": "thad",
+  "original_index": 4375,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 17,
+  "corpus": "thad",
+  "original_index": 4489,
+  "operation": "exposure",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 18,
+  "corpus": "thad",
+  "original_index": 4490,
+  "operation": "exposure",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 19,
+  "corpus": "thad",
+  "original_index": 4593,
+  "operation": "colorbalancergb",
+  "mask_mode": 7,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 20,
+  "corpus": "thad",
+  "original_index": 4594,
+  "operation": "colorbalancergb",
+  "mask_mode": 7,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 21,
+  "corpus": "thad",
+  "original_index": 4872,
+  "operation": "exposure",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 22,
+  "corpus": "thad",
+  "original_index": 5893,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 23,
+  "corpus": "thad",
+  "original_index": 5894,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 0,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 24,
+  "corpus": "thad",
+  "original_index": 8743,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ },
+ {
+  "new_index": 25,
+  "corpus": "thad",
+  "original_index": 8747,
+  "operation": "colorbalancergb",
+  "mask_mode": 3,
+  "mask_combine": 4,
+  "expected": "pass",
+  "note": "control: nested groups, >=2 root members, passes"
+ }
+]
