@@ -45,6 +45,10 @@ JSON. Design constraints, all deliberate:
   *and* `SQLITE_OPEN_READONLY` in the flags. Runs before `dt_database_init()`.
 - Emits **no** file paths, filenames, or user-authored text (group names are
   skipped) — so a contributor can read the file before sending it.
+- Writes a `FILE.gz` copy alongside the JSON (150.2 MB → 12.4 MB on this
+  corpus). Both are kept on purpose: contributors are asked to *read* the JSON
+  and *send* the gz, and needing a separate compression step is exactly the kind
+  of friction that stops people helping — particularly on Windows.
 - Hand-rolled JSON emitter rather than a serializer, so a field can only appear
   if it was typed out explicitly.
 - `_group_point_stride()` mirrors `dt_masks_read_masks_history()`'s per-version
