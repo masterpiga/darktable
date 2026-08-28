@@ -1,0 +1,352 @@
+[
+ {
+  "new_index": 0,
+  "corpus": "dudo",
+  "original_index": 371,
+  "operation": "retouch",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 1,
+  "corpus": "leonidas",
+  "original_index": 163,
+  "operation": "rgbcurve",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 2,
+  "corpus": "leonidas",
+  "original_index": 1256,
+  "operation": "channelmixerrgb",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 3,
+  "corpus": "leonidas",
+  "original_index": 1258,
+  "operation": "channelmixerrgb",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 4,
+  "corpus": "gwbarn",
+  "original_index": 10,
+  "operation": "colorbalancergb",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 5,
+  "corpus": "gwbarn",
+  "original_index": 949,
+  "operation": "diffuse",
+  "gpu_max_diff": 1,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 1,
+  "dev_gap_migrated": 5.29395592e-23
+ },
+ {
+  "new_index": 6,
+  "corpus": "gwbarn",
+  "original_index": 1542,
+  "operation": "diffuse",
+  "gpu_max_diff": 0.940842688,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.940842688,
+  "dev_gap_migrated": 1.22189522e-06
+ },
+ {
+  "new_index": 7,
+  "corpus": "gwbarn",
+  "original_index": 1681,
+  "operation": "diffuse",
+  "gpu_max_diff": 0.915641651,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.915641651,
+  "dev_gap_migrated": 4.6223402e-05
+ },
+ {
+  "new_index": 8,
+  "corpus": "gwbarn",
+  "original_index": 1642,
+  "operation": "atrous",
+  "gpu_max_diff": 0.90712899,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.90712899,
+  "dev_gap_migrated": 2.83122063e-06
+ },
+ {
+  "new_index": 9,
+  "corpus": "gwbarn",
+  "original_index": 1122,
+  "operation": "colorbalancergb",
+  "gpu_max_diff": 0.663676143,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.663676143,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 10,
+  "corpus": "gwbarn",
+  "original_index": 1622,
+  "operation": "colorbalancergb",
+  "gpu_max_diff": 0.514754891,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.514754891,
+  "dev_gap_migrated": 6.55651093e-06
+ },
+ {
+  "new_index": 11,
+  "corpus": "leonidas",
+  "original_index": 1249,
+  "operation": "channelmixerrgb",
+  "gpu_max_diff": 0.314583629,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.314583629,
+  "dev_gap_migrated": 0.000166967511
+ },
+ {
+  "new_index": 12,
+  "corpus": "leonidas",
+  "original_index": 727,
+  "operation": "exposure",
+  "gpu_max_diff": 0.130705237,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.130704045,
+  "dev_gap_migrated": 1.55866146e-05
+ },
+ {
+  "new_index": 13,
+  "corpus": "gwbarn",
+  "original_index": 386,
+  "operation": "highpass",
+  "gpu_max_diff": 0.113367319,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.113367379,
+  "dev_gap_migrated": 4.08291817e-06
+ },
+ {
+  "new_index": 14,
+  "corpus": "dudo",
+  "original_index": 290,
+  "operation": "colorequal",
+  "gpu_max_diff": 0.0809727907,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0809727907,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 15,
+  "corpus": "dudo",
+  "original_index": 300,
+  "operation": "colorequal",
+  "gpu_max_diff": 0.0809727907,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0809727907,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 16,
+  "corpus": "dudo",
+  "original_index": 154,
+  "operation": "exposure",
+  "gpu_max_diff": 0.0681062341,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0681059957,
+  "dev_gap_migrated": 7.03334808e-06
+ },
+ {
+  "new_index": 17,
+  "corpus": "gwbarn",
+  "original_index": 35,
+  "operation": "censorize",
+  "gpu_max_diff": 0.0609045029,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0609043837,
+  "dev_gap_migrated": 8.04662704e-06
+ },
+ {
+  "new_index": 18,
+  "corpus": "dudo",
+  "original_index": 160,
+  "operation": "colorequal",
+  "gpu_max_diff": 0.0504688621,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0504688621,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 19,
+  "corpus": "gwbarn",
+  "original_index": 1366,
+  "operation": "highpass",
+  "gpu_max_diff": 0.0418181419,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0418248773,
+  "dev_gap_migrated": 0.000156253576
+ },
+ {
+  "new_index": 20,
+  "corpus": "dudo",
+  "original_index": 560,
+  "operation": "exposure",
+  "gpu_max_diff": 0.0405803323,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0405803323,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 21,
+  "corpus": "dudo",
+  "original_index": 2037,
+  "operation": "retouch",
+  "gpu_max_diff": 0.032237947,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0322348997,
+  "dev_gap_migrated": 0.000127464533
+ },
+ {
+  "new_index": 22,
+  "corpus": "dudo",
+  "original_index": 2041,
+  "operation": "retouch",
+  "gpu_max_diff": 0.032237947,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0322348997,
+  "dev_gap_migrated": 0.000127464533
+ },
+ {
+  "new_index": 23,
+  "corpus": "dudo",
+  "original_index": 1480,
+  "operation": "sharpen",
+  "gpu_max_diff": 0.0306856036,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0306856632,
+  "dev_gap_migrated": 1.40629709e-06
+ },
+ {
+  "new_index": 24,
+  "corpus": "gwbarn",
+  "original_index": 1126,
+  "operation": "denoiseprofile",
+  "gpu_max_diff": 0.0240469575,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0240487456,
+  "dev_gap_migrated": 0.00254735351
+ },
+ {
+  "new_index": 25,
+  "corpus": "gwbarn",
+  "original_index": 1135,
+  "operation": "denoiseprofile",
+  "gpu_max_diff": 0.0240469575,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0240487456,
+  "dev_gap_migrated": 0.00254735351
+ },
+ {
+  "new_index": 26,
+  "corpus": "gwbarn",
+  "original_index": 1318,
+  "operation": "highpass",
+  "gpu_max_diff": 0.0188612938,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0188612938,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 27,
+  "corpus": "leonidas",
+  "original_index": 1693,
+  "operation": "primaries",
+  "gpu_max_diff": 0.0155737847,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0155744702,
+  "dev_gap_migrated": 0.000142835081
+ },
+ {
+  "new_index": 28,
+  "corpus": "leonidas",
+  "original_index": 1698,
+  "operation": "primaries",
+  "gpu_max_diff": 0.0155737847,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0155744702,
+  "dev_gap_migrated": 0.000142835081
+ },
+ {
+  "new_index": 29,
+  "corpus": "leonidas",
+  "original_index": 1700,
+  "operation": "primaries",
+  "gpu_max_diff": 0.0155737847,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.0155744702,
+  "dev_gap_migrated": 0.000142835081
+ },
+ {
+  "new_index": 30,
+  "corpus": "dudo",
+  "original_index": 307,
+  "operation": "blurs",
+  "gpu_max_diff": 0.00920748711,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.00920748711,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 31,
+  "corpus": "dudo",
+  "original_index": 2003,
+  "operation": "colorharmonizer",
+  "gpu_max_diff": 0.00784027576,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.00784027576,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 32,
+  "corpus": "dudo",
+  "original_index": 2008,
+  "operation": "colorharmonizer",
+  "gpu_max_diff": 0.00784027576,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.00784027576,
+  "dev_gap_migrated": 0
+ },
+ {
+  "new_index": 33,
+  "corpus": "dudo",
+  "original_index": 2148,
+  "operation": "atrous",
+  "gpu_max_diff": 0.00749945641,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.00749945641,
+  "dev_gap_migrated": 1.1920929e-07
+ },
+ {
+  "new_index": 34,
+  "corpus": "dudo",
+  "original_index": 2153,
+  "operation": "atrous",
+  "gpu_max_diff": 0.00749945641,
+  "cpu_max_diff": 0,
+  "dev_gap_classic": 0.00749945641,
+  "dev_gap_migrated": 1.1920929e-07
+ }
+]
