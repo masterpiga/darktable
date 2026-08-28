@@ -282,13 +282,13 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
   setvbuf(stdout, NULL, _IOLBF, 0);
 
   GError *err = NULL;
-  JsonParser *parser = json_parser_new();
-  if(!json_parser_load_from_file(parser, json_path, &err))
+  // accepts the .gz the contributor actually sent, as well as a plain file
+  JsonParser *parser = dt_masks_harvest_load(json_path, &err);
+  if(!parser)
   {
     fprintf(stderr, "[roundtrip] cannot read %s: %s\n",
             json_path, err ? err->message : "unknown error");
     g_clear_error(&err);
-    g_object_unref(parser);
     return FALSE;
   }
 
