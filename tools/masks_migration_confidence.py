@@ -585,6 +585,25 @@ def shapes_from_ledger(ledger):
     return shapes
 
 
+def failing_shapes(shapes):
+    """The shapes that failed a check, for the document's own account of them.
+
+    A document that reports "8 migration failures" and says nothing about what
+    they are is not a summary, it is a number: whoever reads it still has to go
+    and find out whether they are understood or merely counted."""
+    out = []
+    for shape in shapes.values():
+        if not any(shape.verdict(c) == "fail" for c, _ in CHECKS):
+            continue
+        out.append({"operation": shape.features.get("operation"),
+                    "mask_mode": shape.features.get("mask_mode"),
+                    "mask_combine": shape.features.get("mask_combine"),
+                    "contributors": len(shape.contributors)})
+    out.sort(key=lambda f: (str(f["operation"]), f["mask_mode"] or 0,
+                            f["mask_combine"] or 0))
+    return out
+
+
 def _strata(shape):
     """Every stratum this shape belongs to. A shape counts in several."""
     out = [("overall", "all configurations")]
@@ -683,7 +702,7 @@ def _table(rows, confidence):
     return out
 
 
-def render_doc(ledger, summary, confidence):
+def render_doc(ledger, summary, confidence, failing=()):
     overall = summary[("overall", "all configurations")]
     corpora = ledger["corpora"]
     n_c = len(corpora)
@@ -742,8 +761,31 @@ def render_doc(ledger, summary, confidence):
     L.append("correlated case uncollapsed.")
     L.append("")
     L.append("Intervals are one-sided Clopper-Pearson. With zero observed failures")
-    L.append("that is the rule of three: the bound is about 3/n.")
+    L.append("that degenerates to the rule of three, a bound of about 3/n; with")
+    L.append("failures observed it widens accordingly, which is the interval doing")
+    L.append("its job rather than the measurement regressing.")
     L.append("")
+
+    if overall["failures"]:
+        L.append("## Known failures")
+        L.append("")
+        L.append("The failing shapes are characterised, reproducible and **open**. See")
+        L.append("`masks_revamp_migration_failures.md` for the analysis and")
+        L.append("`migration_failures.json.gz` for a reproducer carrying passing")
+        L.append("controls alongside them.")
+        L.append("")
+        L.append("| operation | mask mode | combine | contributors |")
+        L.append("|---|---|---|---:|")
+        for f in failing:
+            L.append("| `%s` | %s | %s | %d |"
+                     % (f["operation"],
+                        _cell(_bits(f["mask_mode"] or 0, MASK_MODE_NAMES)),
+                        _cell(_combine_name(f["mask_combine"] or 0)),
+                        f["contributors"]))
+        L.append("")
+        L.append("A failing *shape* can stand for several failing edits: repeats of the")
+        L.append("same configuration collapse onto it, exactly as passing repeats do.")
+        L.append("")
 
     L.append("## Contributed corpora")
     L.append("")
@@ -886,7 +928,8 @@ def main():
 
     if args.record:
         with open(args.doc, "w") as fp:
-            fp.write(render_doc(ledger, summary, args.confidence))
+            fp.write(render_doc(ledger, summary, args.confidence,
+                                failing_shapes(shapes)))
         print("\nledger   : %s" % os.path.relpath(args.ledger, REPO))
         print("document : %s" % os.path.relpath(args.doc, REPO))
     elif args.harvests:

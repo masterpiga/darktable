@@ -33,20 +33,63 @@ contributed libraries diverge, across 15 modules. Zero CPU failures and zero
 cases where migration widened an edit's own CPU/GPU gap, in all three corpora --
 so this is not the migration moving anything.
 
-**NOT established: that this reproduces on other hardware.** A harvest file
-contains only mask *specifications*; the rendering all happens locally. Every
-one of these runs was on a single device:
+**Also established: it reproduces on a second, unrelated OpenCL stack.** The
+corpus counts above were all gathered on one device:
 
 ```
 DEVICE: 'Apple M4 Pro'   PLATFORM: Apple   OpenCL 1.2   DRIVER VERSION 1.2 1.0
 ```
 
-What varies between the corpora is the mask configurations, not the GPU. An
-earlier note in the working log claimed cross-hardware reproduction on the
-strength of one contributor's higher rate; that was wrong and is retracted here.
-**Confirming this on a non-Apple OpenCL stack is open question #1** -- it decides
-whether this is a darktable kernel bug or an Apple OpenCL compiler bug, and those
-have very different fixes.
+A harvest file contains only mask *specifications* -- the rendering happens
+locally -- so what varied between the corpora was the mask configurations, not
+the GPU. That left open whether this was a darktable bug or an Apple OpenCL
+compiler bug. (An earlier note in the working log claimed cross-hardware
+reproduction on the strength of one contributor's higher rate; that reasoning was
+wrong, and is superseded by the actual second-device run below rather than
+merely retracted.)
+
+The 35-edit corpus of section 5 has since been replayed on:
+
+```
+DEVICE: 'gfx1150'   PLATFORM: AMD Accelerated Parallel Processing
+DEVICE VERSION: OpenCL 2.0 AMD-APP (3679.0)   DRIVER VERSION: 3679.0 (PAL,LC)
+OPENCL FAST MODE: NO
+```
+
+Windows, AMD RDNA, LLVM/PAL compiler -- nothing shared with the Apple stack. 33
+of the 35 still diverge, with the same signature: `max_diff == 0` on every edit,
+worst classic CPU/GPU gap 1.0, worst migrated gap 0.00093, `dev_gap_widened` 0.
+**This is a darktable bug, not an Apple compiler bug.** `OPENCL FAST MODE: NO`
+also rules out `-cl-fast-relaxed-math` as the cause.
+
+**Two mechanisms, not one.** Comparing the two runs edit by edit splits the
+corpus cleanly:
+
+| group | behaviour | edits |
+|---|---|---|
+| **A** | Apple and AMD diverge by the *same amount to 5 significant figures* | 1, 4, 6, 7, 8, 10, 12, 13, 16, 17, 21, 22, 23, 33, 34 |
+| **B** | magnitude is vendor-dependent, ratio 0.000 to 5.603 | the rest |
+
+Group A is the important one. Two different compilers on two different ISAs do
+not agree to five digits by accident, so for those edits the divergence is a
+deterministic, source-level difference between the kernel and its host
+counterpart -- reproducible anywhere, and the right place to start debugging.
+
+Group B varies with the device in both directions. Two Apple outliers fall below
+1/255 on AMD (edit 5, `diffuse`, 1.0 -> 0.0000212; edit 9, `colorbalancergb`,
+0.664 -> 0.000309), while others get materially worse (`colorequal` 14/15,
+0.081 -> 0.454; `blurs` 30, 5.0x; `highpass` 26, 2.0x). That is consistent with a
+second, precision-sensitive effect: a small numeric difference landing on either
+side of a threshold and amplifying. It explains why the outlier rate varies
+between corpora and why some cases reach full range.
+
+Caveat on the AMD run: it was built from `dc7361be49`, 7 commits behind the
+`masks_revamp` HEAD that produced the Apple numbers (hence the missing `source`
+and `summary` keys in its report, added later by `e7e06fb8f2`). The `verify.c`
+diff across that range touches only report serialisation and gzip input --
+`_verify_edit()`, `_max_abs_diff()`, the tolerance and the single-threading are
+unchanged -- so the two runs are directly comparable. Re-running both on the same
+commit is cheap and worth doing before this goes upstream.
 
 
 ## 3. The discriminator
@@ -123,7 +166,21 @@ darktable --library :memory: --verify-masks classic_opencl_outliers.json.gz
 ```
 
 Runs in seconds and writes `classic_opencl_outliers.json.report.json`. Compare
-`dev_diff_before` against `dev_diff_after` per edit.
+`dev_diff_before` against `dev_diff_after` per edit. Check the run actually used
+the GPU: it prints either `[verify] OpenCL device N acquired` or `[verify] no
+OpenCL device: CPU blend only`, and in the CPU-only case every `gpu_max_diff` is
+0, which looks like "no divergence" but is really "no test".
+
+On Windows, `darktable.exe` redirects stdout to
+`%USERPROFILE%\Documents\Darktable\darktable-log.txt` and calls `FreeConsole()`,
+so the terminal stays silent; redirect to a file (`> verify.log 2>&1`) to keep
+the output, and use `start /wait` since cmd does not wait for a GUI-subsystem
+binary. `darktable-cli` is not an alternative -- it requires input and output
+filenames and exits before `--verify-masks` is parsed. Note also that if the
+report file cannot be opened (Windows Controlled Folder Access protects
+`Downloads`/`Documents` from unsigned local builds), the run still completes
+successfully and writes nothing, with no error: confirm the
+`[verify] per-edit report written to ...` line.
 
 Single worst cases, all with `gpu_max_diff == 1.0`, `max_diff == 0`:
 
@@ -154,16 +211,23 @@ Relevant machinery, all on the `masks_revamp` branch:
 
 ## 6. Suggested next steps
 
-1. **Reproduce on a non-Apple OpenCL device.** Decides kernel bug vs Apple
-   compiler bug. Nothing else is worth much until this is answered.
-2. **Confirm the blendif-kernel hypothesis** by taking one full-range case
-   (leonidas #163, rgbcurve) and dumping the mask from both paths --
-   `-d masks -d opencl`, or `--dump-diff-pipe`, which exists for exactly this.
-3. **Check whether raster is downstream of the same cause** by testing a raster
+1. ~~Reproduce on a non-Apple OpenCL device.~~ **Done** -- see section 2. It
+   reproduces on AMD; this is a darktable bug.
+2. **Confirm the blendif-kernel hypothesis** by dumping the mask from both paths
+   -- `-d masks -d opencl`, or `--dump-diff-pipe`, which exists for exactly this.
+   Use a **group A** case: deterministic across vendors, so anything found is
+   real rather than device noise. Edit 1 (`rgbcurve`, = leonidas #163) is both
+   full-range and group A, which makes it the single best target.
+3. **Treat group B as a separate question**, and only after A is understood. If
+   fixing the group A divergence also removes the group B spread, there was one
+   cause all along; if it does not, there is a genuinely precision-sensitive
+   comparison in the kernel to find.
+4. **Check whether raster is downstream of the same cause** by testing a raster
    consumer whose producer has a drawn-only mask; the hypothesis predicts no
    divergence there.
-4. Once localised, this is an upstream `master` bug report, not a masks_revamp
-   one. The verifier can produce a clean before/after per edit for the issue.
+5. Once localised, this is an upstream `master` bug report, not a masks_revamp
+   one. The verifier can produce a clean before/after per edit for the issue,
+   now on two vendors.
 
 
 ## 7. Provenance of the numbers
