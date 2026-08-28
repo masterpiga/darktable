@@ -6,19 +6,19 @@
      which merges a newly checked corpus into
      masks_revamp_migration_ledger.json and rewrites this file. -->
 
-_Last updated 2026-08-28, over 6 contributed libraries._
+_Last updated 2026-08-28, over 7 contributed libraries._
 
 ## Where we stand
 
-**8 migration failures in 4905 distinct configuration shapes &rarr; the failure rate is below 0.294% (1 in 340) at 95% confidence.**
+**8 migration failures in 4976 distinct configuration shapes &rarr; the failure rate is below 0.290% (1 in 344) at 95% confidence.**
 
 | | |
 |---|---:|
-| contributed libraries | 6 |
-| harvested edits | 41730 |
-| distinct configuration shapes | 4905 |
+| contributed libraries | 7 |
+| harvested edits | 42275 |
+| distinct configuration shapes | 4976 |
 | migration failures | 8 |
-| classic-GPU outliers | 246 |
+| classic-GPU outliers | 253 |
 | shapes proving nothing (inert/skipped) | 2 |
 
 Classic-GPU outliers are counted separately on purpose: there the CPU
@@ -38,7 +38,30 @@ selecting a different code path, and including it would leave the
 correlated case uncollapsed.
 
 Intervals are one-sided Clopper-Pearson. With zero observed failures
-that is the rule of three: the bound is about 3/n.
+that degenerates to the rule of three, a bound of about 3/n; with
+failures observed it widens accordingly, which is the interval doing
+its job rather than the measurement regressing.
+
+## Known failures
+
+The failing shapes are characterised, reproducible and **open**. See
+`masks_revamp_migration_failures.md` for the analysis and
+`migration_failures.json.gz` for a reproducer carrying passing
+controls alongside them.
+
+| operation | mask mode | combine | contributors |
+|---|---|---|---:|
+| `colorbalancergb` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `colorbalancergb` | `uniform\|drawn` | `norm\|excl\|masks_pos` | 1 |
+| `colorbalancergb` | `uniform\|raster` | `norm\|excl\|masks_pos` | 1 |
+| `contrastntexture` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `diffuse` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `diffuse` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `sharpen` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `sharpen` | `uniform\|drawn` | `norm\|excl` | 1 |
+
+A failing *shape* can stand for several failing edits: repeats of the
+same configuration collapse onto it, exactly as passing repeats do.
 
 ## Contributed corpora
 
@@ -48,6 +71,7 @@ that is the rule of three: the bound is about 3/n.
 | `dudo` | 2026-08-28 | 2466 | 824 | - |
 | `gwbarn` | 2026-08-28 | 1803 | 926 | 5.7.0+675~g2a031d9525-dirty |
 | `leonidas` | 2026-08-28 | 1722 | 546 | 5.7.0+672~gdedea60e1d-dirty |
+| `macchiato17` | 2026-08-28 | 545 | 121 | 5.7.0+675~g2a031d9525-dirty |
 | `thad` | 2026-08-28 | 27693 | 1417 | 5.7.0+675~g2a031d9525-dirty |
 | `zisoft` | 2026-08-28 | 281 | 86 | 5.7.0+675~g2a031d9525-dirty |
 
@@ -55,10 +79,10 @@ that is the rule of three: the bound is about 3/n.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `uniform\|drawn\|parametric` | 2487 | 30410 | 0 | 6 | 0.120% (1 in 830) |
-| `uniform\|drawn` | 1908 | 9919 | 7 | 6 | 0.688% (1 in 145) |
-| `uniform\|raster` | 266 | 582 | 1 | 6 | 1.771% (1 in 56) |
-| `uniform\|parametric` | 243 | 781 | 0 | 6 | 1.225% (1 in 81) |
+| `uniform\|drawn\|parametric` | 2529 | 30779 | 0 | 7 | 0.118% (1 in 844) |
+| `uniform\|drawn` | 1916 | 9988 | 7 | 7 | 0.685% (1 in 145) |
+| `uniform\|raster` | 285 | 675 | 1 | 7 | 1.654% (1 in 60) |
+| `uniform\|parametric` | 245 | 795 | 0 | 7 | 1.215% (1 in 82) |
 | `uniform\|flexi` | 1 | 6 | 0 | 2 | _too few_ |
 | `uniform\|drawn\|flexi` | 0 | 32 | 0 | 1 | _too few_ |
 
@@ -66,18 +90,18 @@ that is the rule of three: the bound is about 3/n.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `group` | 4581 | 18632 | 8 | 6 | 0.315% (1 in 317) |
-| `path` | 2966 | 11093 | 8 | 6 | 0.486% (1 in 205) |
-| `brush` | 1416 | 4385 | 0 | 5 | 0.211% (1 in 473) |
+| `group` | 4644 | 18942 | 8 | 7 | 0.311% (1 in 321) |
+| `path` | 3023 | 11380 | 8 | 7 | 0.477% (1 in 209) |
+| `brush` | 1421 | 4397 | 0 | 6 | 0.211% (1 in 474) |
 | `gradient` | 1388 | 3724 | 1 | 6 | 0.341% (1 in 292) |
-| `ellipse` | 1288 | 4477 | 4 | 6 | 0.709% (1 in 140) |
-| `group\|clone` | 1183 | 2508 | 0 | 6 | 0.253% (1 in 395) |
-| `circle\|clone` | 515 | 896 | 0 | 5 | 0.580% (1 in 172) |
-| `path\|clone` | 442 | 1230 | 0 | 6 | 0.675% (1 in 148) |
-| `circle` | 424 | 714 | 0 | 6 | 0.704% (1 in 142) |
-| `clone\|brush` | 360 | 556 | 0 | 6 | 0.829% (1 in 120) |
+| `ellipse` | 1302 | 4504 | 4 | 7 | 0.702% (1 in 142) |
+| `group\|clone` | 1196 | 2536 | 0 | 7 | 0.250% (1 in 399) |
+| `circle\|clone` | 523 | 912 | 0 | 6 | 0.571% (1 in 175) |
+| `path\|clone` | 443 | 1234 | 0 | 7 | 0.674% (1 in 148) |
+| `circle` | 435 | 734 | 0 | 7 | 0.686% (1 in 145) |
+| `clone\|brush` | 362 | 559 | 0 | 7 | 0.824% (1 in 121) |
 | `path\|non-clone` | 269 | 502 | 0 | 4 | 1.107% (1 in 90) |
-| `clone\|ellipse` | 163 | 294 | 0 | 4 | 1.821% (1 in 54) |
+| `clone\|ellipse` | 165 | 299 | 0 | 5 | 1.799% (1 in 55) |
 | `brush\|non-clone` | 42 | 75 | 0 | 4 | 6.884% (1 in 14) |
 | `circle\|non-clone` | 15 | 41 | 0 | 3 | _too few_ |
 
@@ -85,10 +109,10 @@ that is the rule of three: the bound is about 3/n.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `norm\|excl` | 4077 | 38710 | 6 | 6 | 0.290% (1 in 344) |
-| `norm\|excl\|masks_pos` | 786 | 2928 | 2 | 6 | 0.799% (1 in 125) |
+| `norm\|excl` | 4127 | 39145 | 6 | 7 | 0.287% (1 in 348) |
+| `norm\|excl\|masks_pos` | 806 | 3031 | 2 | 7 | 0.779% (1 in 128) |
 | `norm\|incl` | 23 | 49 | 0 | 4 | _too few_ |
-| `norm\|incl\|masks_pos` | 15 | 39 | 0 | 4 | _too few_ |
+| `norm\|incl\|masks_pos` | 16 | 46 | 0 | 5 | _too few_ |
 | `inv\|incl` | 2 | 2 | 0 | 2 | _too few_ |
 | `inv\|excl` | 1 | 1 | 0 | 1 | _too few_ |
 | `inv\|excl\|masks_pos` | 1 | 1 | 0 | 1 | _too few_ |
@@ -97,8 +121,8 @@ that is the rule of three: the bound is about 3/n.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `second instance` | 2854 | 29887 | 4 | 6 | 0.320% (1 in 312) |
-| `first instance` | 2051 | 11843 | 4 | 6 | 0.446% (1 in 224) |
+| `second instance` | 2875 | 30123 | 4 | 7 | 0.318% (1 in 314) |
+| `first instance` | 2101 | 12152 | 4 | 7 | 0.435% (1 in 229) |
 
 ## Coverage gaps
 
@@ -115,12 +139,12 @@ contributors for.**
 | `uniform\|flexi` | 1 | 2 |
 | `inv\|incl` | 2 | 2 |
 | `circle\|non-clone` | 15 | 3 |
-| `norm\|incl\|masks_pos` | 15 | 4 |
+| `norm\|incl\|masks_pos` | 16 | 5 |
 | `norm\|incl` | 23 | 4 |
 
 ## What this still cannot tell you
 
-Contributors are the real sampling unit and there are 6 of them.
+Contributors are the real sampling unit and there are 7 of them.
 Shapes within one library stay correlated even after collapsing, so
 the headline bound is optimistic as a statement about darktable users
 at large. More *libraries* widen coverage far faster than more edits
