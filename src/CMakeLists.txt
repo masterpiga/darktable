@@ -141,6 +141,8 @@ FILE(GLOB SOURCE_FILES
   "develop/masks/probe_image.c"
   "develop/masks/raster.c"
   "develop/masks/roundtrip.c"
+  "develop/masks/scratch_image.c"
+  "develop/masks/styleapply.c"
   "develop/masks/verify.c"
   "develop/pixelpipe.c"
   "develop/preview_data.c"
