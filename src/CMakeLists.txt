@@ -129,6 +129,7 @@ FILE(GLOB SOURCE_FILES
   "develop/imageop_math.c"
   "develop/lightroom.c"
   "develop/masks/brush.c"
+  "develop/masks/check.c"
   "develop/masks/circle.c"
   "develop/masks/ellipse.c"
   "develop/masks/gradient.c"
