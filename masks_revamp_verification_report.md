@@ -167,7 +167,7 @@ Hardware: Apple M4 Pro, OpenCL available.
 | GPU: CPU/GPU gap, migrated | **0.0058** |
 | GPU: edits where migration *widened* the gap | **0** |
 | `--roundtrip-masks`, 2429 edits | **2429 unchanged, 0 different, 0 errors**; 1500 multi-instance, **0 loaded vacuously** |
-| `--styleapply-masks`, 2429 edits | **1860 ok, 0 style masks lost, 0 hosts disturbed, 0 errors**; 569 drawn-only (see below) |
+| `--styleapply-masks`, 2429 edits | **1860 ok, 0 style masks lost, 0 hosts disturbed, 0 items landing on no module, 0 errors**; 569 drawn-only (see below); 1500 applied as two-item multi-instance styles, all 1500 allocating a second instance |
 | generated raster matrix, 288 edits | 24 identical, 12 equivalent, **252 different — 0 of them CPU-driven** (worst CPU diff **exactly 0**); all 252 are classic-GPU outliers, see below |
 | unit suite | **205 tests, 9 mask suites, all pass** |
 
@@ -241,6 +241,27 @@ from, which no style has ever carried (`style_items` has no forms column;
 `dt_styles_create_from_image()` copies history rows only). Master behaves
 identically. Had the id *changed*, migration would have synthesized something
 and lost it, and the test fails.
+
+**Multi-instance styles.** Every multi-instance edit in the corpus (1500 of
+2429) is applied inside a style that carries the module *twice*, and both items
+must migrate, persist and resolve independently. That construction is not a
+choice of the harness: `_styles_apply_to_image_ext()` passes `append = FALSE`
+unconditionally, so a style always *replaces* what is on the image and can only
+reach a second instance by containing two items for that module — i.e. by having
+been captured from an image that used it twice. The instances themselves are
+allocated by the real `dt_ioppr_update_for_style_items()`, not chosen here: a
+style item's stored `multi_priority` is not where it lands, since the target
+image has its own instances to fit around. All 1500 allocated a second instance
+and all 1500 came back with both items intact.
+
+This too got one wrong attempt first, and the tool caught it rather than the
+author. Applying those edits as *appending* styles made
+`dt_ioppr_update_for_style_items()` allocate instance 1 while
+`dt_history_merge_module_into_history()` still replaced instance 0 — so the
+result landed where the harness was not looking, and all 1500 were reported as
+"landed on no module at all". That is the intended behaviour of the guard: a
+missing module is a named failure, never a silent pass, because two absent masks
+compare equal whatever migration did.
 
 One caution recorded honestly: the first version of this test reported 2401 of
 2429 as lost. Most of that was the harness, not the product — it required the
@@ -381,14 +402,12 @@ load-bearing three times.
    `dt_history_merge_module_into_history()` with `dev_src == NULL`); everything
    else that function does concerns module params and version fixups, not masks.
    Its host is also a single fixed drawn-mask edit, so it varies the style, not
-   what the style lands on.
-9. **`--roundtrip-masks` still normalizes multi-instance in `--styleapply-masks`.**
-   The style test applies every edit at `multi_priority` 0; only the round trip
-   now carries the harvested instance.
-10. **`--roundtrip-masks` simulates the user's edit** via
+   what the style lands on. Instance allocation is *not* reproduced —
+   `dt_ioppr_update_for_style_items()` is called for real.
+9. **`--roundtrip-masks` simulates the user's edit** via
    `dt_dev_add_masks_history_item_ext()`. If a real GUI edit path differs from
    that call, the round trip is not exactly what a user does.
-11. **Single corpus, single machine.** One person's library, one GPU
+10. **Single corpus, single machine.** One person's library, one GPU
    (Apple M4 Pro), one OpenCL implementation.
 
 ---
