@@ -139,6 +139,34 @@ static dt_iop_module_t *_raster_resolve_source(const dt_iop_module_t *const modu
   return NULL;
 }
 
+/* An unresolvable raster element renders as all-zero, and reports success.
+ *
+ * The distinction matters more than it looks. Returning 0 means "this member
+ * did not render", and _group_get_mask_roi_flexi() then does not count it --
+ * so a group whose only member is an unresolvable raster comes out with
+ * nb_members == 0, which trips the deliberate "no active mask element"
+ * fallback in dt_develop_blend_process() and fills the mask with 1.0. The
+ * module would apply at full strength across the whole image.
+ *
+ * That fallback is right for what it was written for (a group the user is
+ * still building, where a yellow wall would hide the image they are placing
+ * shapes on). It is wrong here: the classic renderer's raster branch fills
+ * 0.0f when dt_dev_get_raster_mask() hands back NULL, so a raster mask whose
+ * source is gone means the module contributes *nothing*. Rendering zero and
+ * counting the member keeps that, and keeps it for the case migration cannot
+ * see either -- a source module deleted after the fact, which resolves fine
+ * today and not tomorrow.
+ *
+ * Found by replaying real edits: 5 in the harvested corpus carry mask mode
+ * RASTER with an empty source (a source module removed at some point), and
+ * every one of them flipped from "module does nothing" to "module applies
+ * everywhere". */
+static int _raster_unresolved(float *const buffer, const dt_iop_roi_t *const roi)
+{
+  memset(buffer, 0, (size_t)roi->width * roi->height * sizeof(float));
+  return 1;
+}
+
 static int _raster_get_mask_roi(const dt_iop_module_t *const module,
                                 const dt_dev_pixelpipe_iop_t *const piece,
                                 dt_masks_form_t *const form,
@@ -153,7 +181,7 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
   {
     dt_print(DT_DEBUG_MASKS, "[masks] raster form %d: source '%s' not found in pipe",
              form->formid, p->source);
-    return 0;
+    return _raster_unresolved(buffer, roi);
   }
 
   // dt_dev_get_raster_mask returns the source mask already distorted to the
@@ -167,7 +195,7 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
   {
     dt_print(DT_DEBUG_MASKS, "[masks] raster form %d: no raster mask from '%s' id=%d",
              form->formid, p->source, p->id);
-    return 0;
+    return _raster_unresolved(buffer, roi);
   }
 
   const size_t npix = (size_t)roi->width * roi->height;

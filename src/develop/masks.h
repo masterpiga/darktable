@@ -836,6 +836,14 @@ gboolean dt_masks_migrate_classic_to_flexi(struct dt_iop_module_t *module,
     dt_masks_read_masks_history() runs; a no-op if nothing is pending. */
 void dt_masks_finish_flexi_migrations(dt_develop_t *dev);
 
+/** Apply the flexi run-boundary normalization to every classic drawn group a
+    migration reused (dev->pending_flexi_group_splits), and drain the list.
+
+    Must be called AFTER dt_masks_read_masks_history(), which replaces
+    dev->forms wholesale -- unlike dt_masks_finish_flexi_migrations(), which
+    must run before it. Writes nothing to the database. */
+void dt_masks_normalize_flexi_groups(dt_develop_t *dev);
+
 /** we create a completely new form. */
 dt_masks_form_t *dt_masks_create(dt_masks_type_t type);
 /** we create a completely new form and add it to darktable.develop->allforms. */
