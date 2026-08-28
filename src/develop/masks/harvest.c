@@ -22,6 +22,7 @@
 #include "develop/blend.h"
 #include "develop/masks.h"
 
+#include <gio/gio.h>
 #include <inttypes.h>
 #include <sqlite3.h>
 #include <stdio.h>
@@ -495,6 +496,67 @@ static void _emit_blend_params(json_t *j, const dt_develop_blend_params_t *b)
 // the harvest
 // ---------------------------------------------------------------------------
 
+/** Write a gzip copy of `src_path` at `dst_path`.
+
+    The point is that both files exist afterwards. The person who ran this is
+    being asked to send us the result, and being asked to read it first -- so
+    the readable JSON stays, and the compressed copy is the one to upload. It
+    is a large ratio for this data (a 143 MB harvest goes to about 12 MB), which
+    is the difference between "attach it to a forum post" and "find a file
+    host".
+
+    Streamed rather than read into memory: these files run to hundreds of MB.
+    Failure is not fatal to the harvest -- the JSON is already safely written,
+    so the caller reports it and carries on. */
+static gboolean _gzip_file(const char *src_path,
+                           const char *dst_path,
+                           GError **err)
+{
+  GFile *src = g_file_new_for_path(src_path);
+  GFile *dst = g_file_new_for_path(dst_path);
+  gboolean ok = FALSE;
+
+  GFileInputStream *in = g_file_read(src, NULL, err);
+  if(in)
+  {
+    GFileOutputStream *out =
+      g_file_replace(dst, NULL, FALSE, G_FILE_CREATE_NONE, NULL, err);
+    if(out)
+    {
+      GZlibCompressor *comp =
+        g_zlib_compressor_new(G_ZLIB_COMPRESSOR_FORMAT_GZIP, -1);
+      GOutputStream *zout =
+        g_converter_output_stream_new(G_OUTPUT_STREAM(out), G_CONVERTER(comp));
+
+      ok = g_output_stream_splice(zout, G_INPUT_STREAM(in),
+                                  G_OUTPUT_STREAM_SPLICE_CLOSE_SOURCE
+                                  | G_OUTPUT_STREAM_SPLICE_CLOSE_TARGET,
+                                  NULL, err) >= 0;
+
+      g_object_unref(zout);
+      g_object_unref(comp);
+      g_object_unref(out);
+    }
+    g_object_unref(in);
+  }
+
+  g_object_unref(src);
+  g_object_unref(dst);
+  return ok;
+}
+
+/** Size of a file in bytes, or -1. */
+static goffset _file_size(const char *path)
+{
+  GFile *f = g_file_new_for_path(path);
+  GFileInfo *info = g_file_query_info(f, G_FILE_ATTRIBUTE_STANDARD_SIZE,
+                                      G_FILE_QUERY_INFO_NONE, NULL, NULL);
+  const goffset size = info ? g_file_info_get_size(info) : -1;
+  if(info) g_object_unref(info);
+  g_object_unref(f);
+  return size;
+}
+
 gboolean dt_masks_harvest_library(const char *library_path,
                                   const char *output_path)
 {
@@ -724,6 +786,35 @@ gboolean dt_masks_harvest_library(const char *library_path,
   if(skipped_size)
     printf("[harvest]   skipped (old blendop)   : %d\n", skipped_size);
   printf("[harvest] wrote %s\n", output_path);
+
+  // and a compressed copy alongside it, so sharing the result does not need a
+  // second tool the person may not have (notably on Windows)
+  gchar *gz_path = g_strconcat(output_path, ".gz", NULL);
+  GError *gz_err = NULL;
+  const gboolean gz_ok = _gzip_file(output_path, gz_path, &gz_err);
+  if(gz_ok)
+  {
+    const goffset raw = _file_size(output_path);
+    const goffset gz = _file_size(gz_path);
+    if(raw > 0 && gz > 0)
+    {
+      gchar *raw_s = g_format_size(raw);
+      gchar *gz_s = g_format_size(gz);
+      printf("[harvest] wrote %s  (%s, from %s)\n", gz_path, gz_s, raw_s);
+      g_free(raw_s);
+      g_free(gz_s);
+    }
+    else
+      printf("[harvest] wrote %s\n", gz_path);
+  }
+  else
+  {
+    printf("[harvest] could not write %s: %s\n"
+           "[harvest] (not a problem -- the JSON above is complete;"
+           " compress it yourself if you like)\n",
+           gz_path, gz_err ? gz_err->message : "unknown error");
+  }
+  g_clear_error(&gz_err);
   // Say plainly when a library holds one of the configurations we have no real
   // test data for, so the person who ran it knows their file is worth sending
   // even if the totals look unremarkable.
@@ -743,6 +834,10 @@ gboolean dt_masks_harvest_library(const char *library_path,
          "[harvest] It has no file names, folder names, shape or group names, "
          "or image content.\n"
          "[harvest] Please open it and check before sharing it.\n");
+  if(gz_ok)
+    printf("[harvest] Read %s, then send %s -- they hold the same thing.\n",
+           output_path, gz_path);
+  g_free(gz_path);
 
   return TRUE;
 }
