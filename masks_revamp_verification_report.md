@@ -167,7 +167,7 @@ Hardware: Apple M4 Pro, OpenCL available.
 | GPU: CPU/GPU gap, migrated | **0.0058** |
 | GPU: edits where migration *widened* the gap | **0** |
 | `--roundtrip-masks`, 2429 edits | **2429 unchanged, 0 different, 0 errors** |
-| generated raster matrix, 288 edits | **288 identical, all live** |
+| generated raster matrix, 288 edits | 24 identical, 12 equivalent, **252 different — 0 of them CPU-driven** (worst CPU diff **exactly 0**); all 252 are classic-GPU outliers, see below |
 | unit suite | **205 tests, 9 mask suites, all pass** |
 
 The 37 skips are exactly the already-flexi edits (migration is a documented
@@ -177,6 +177,22 @@ no-op for them).
 1/255 and `dev_diff_after` ≤ 1/255, i.e. migration makes the GPU *agree* with
 the CPU. `mask_mode` 9 (raster, 22), 7 (drawn+parametric, 18), 5 (10). These are
 pre-existing OpenCL bugs in *classic* rendering, not regressions.
+
+The same holds for the raster matrix, and more sharply: **all 252 "different"
+satisfy that same predicate** (`dev_diff_before` > 1/255, `dev_diff_after` ≤
+1/255; worst `dev_diff_after` across all 252 is `1.55e-05`), and the CPU
+`max_diff` is **exactly 0 on every one of the 288**. The matrix is dense in
+raster edits by construction, so it concentrates the known pre-existing OpenCL
+raster defect — the CL raster branch publishes the host mask without
+device-side post-processing — which is why the ratio is so much higher here
+than in the real corpus. Aggregate: classic CPU-vs-GPU gap **0.385**, migrated
+**1.55e-05**; edits where migration *widened* the gap: **0**.
+
+Note this figure only became measurable after the pipe **input**-profile fix
+(§6); before it, the OpenCL kernel `blendop_mask_rgb_jzczhz` returned early on
+`use_work_profile == 0` without writing the mask, and the GPU comparison was
+vacuous. An earlier draft of this table reported "288 identical, all live" from
+a pre-fix run; that number was measuring nothing and is superseded by the above.
 
 ---
 
