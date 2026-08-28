@@ -656,6 +656,16 @@ def _cell(name):
     return "`%s`" % str(name).replace("|", "\\|")
 
 
+def _rank(kv):
+    """Sort key for a stratum row: most shapes first, then by name.
+
+    The name tiebreak is not cosmetic. Without it, rows with equal shape counts
+    come out in dict insertion order, which differs between a run that just
+    recorded a corpus and one that reloaded the ledger from JSON -- so
+    regenerating the document produced a spurious git diff every time."""
+    return (-kv[1]["shapes"], str(kv[0]))
+
+
 def _pct(bound):
     if bound is None:
         return "_too few_"
@@ -666,7 +676,7 @@ def _table(rows, confidence):
     out = ["| | shapes | edits | failures | contributors | %d%% upper bound |"
            % round(confidence * 100),
            "|---|---:|---:|---:|---:|---|"]
-    for name, r in sorted(rows, key=lambda kv: -kv[1]["shapes"]):
+    for name, r in sorted(rows, key=_rank):
         out.append("| %s | %d | %d | %d | %d | %s |"
                    % (_cell(name), r["shapes"], r["edits"], r["failures"],
                       r["contributors"], _pct(r["failure_rate_upper_bound"])))
@@ -757,7 +767,7 @@ def render_doc(ledger, summary, confidence):
 
     thin = sorted(((name, r) for (g, name), r in summary.items()
                    if g != "overall" and r["failure_rate_upper_bound"] is None),
-                  key=lambda kv: kv[1]["shapes"])
+                  key=lambda kv: (kv[1]["shapes"], str(kv[0])))
     L.append("## Coverage gaps")
     L.append("")
     if not thin:
@@ -798,7 +808,7 @@ def _print_group(title, rows, confidence):
     print("  %-26s %7s %7s %6s %8s  %s"
           % ("", "shapes", "edits", "fails", "contrib",
              "%d%% upper bound" % round(confidence * 100)))
-    for name, r in sorted(rows, key=lambda kv: -kv[1]["shapes"]):
+    for name, r in sorted(rows, key=_rank):
         print("  %-26s %7d %7d %6d %8d  %s"
               % (name[:26], r["shapes"], r["edits"], r["failures"],
                  r["contributors"], _pct(r["failure_rate_upper_bound"])))
