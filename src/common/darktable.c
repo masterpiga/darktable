@@ -28,6 +28,7 @@
 #include "common/collection.h"
 #include "common/colorspaces.h"
 #include "common/darktable.h"
+#include "develop/masks/check.h"
 #include "develop/masks/harvest.h"
 #include "develop/masks/roundtrip.h"
 #include "develop/masks/styleapply.h"
@@ -203,6 +204,22 @@ static int usage(const char *argv0)
          "    (/tmp/flexi_mask_test/xmp) instead of next to the original image.\n"
          "    Pass --no-flexi-test-mode to use --configdir/--library the normal\n"
          "    way (as the actual write target) instead.\n"
+         "\n"
+         "--check-masks FILE\n"
+         "    Run every migration check over a --harvest-masks FILE and exit: the\n"
+         "    save/load round trip, the before/after render comparison, and the\n"
+         "    classic-style application. Writes one self-contained\n"
+         "    FILE.check.json holding a row for every harvested edit plus a\n"
+         "    summary of each check, so nothing has to be read off the terminal.\n"
+         "    Exits 0 only if all three passed.\n"
+         "\n"
+         "    Use --library :memory: with this: it writes to a scratch image id\n"
+         "    and must never be pointed at a real catalogue.\n"
+         "\n"
+         "    The three checks can also be run one at a time -- --roundtrip-masks,\n"
+         "    --verify-masks and --styleapply-masks below -- which is useful when\n"
+         "    investigating one of them, but --check-masks is what a contributed\n"
+         "    harvest should be run through.\n"
          "\n"
          "--verify-masks FILE\n"
          "    Replay the mask configurations in a --harvest-masks FILE, rendering\n"
@@ -1134,6 +1151,7 @@ int dt_init(int argc,
   char *verify_masks_input = NULL;
   char *roundtrip_masks_input = NULL;
   char *styleapply_masks_input = NULL;
+  char *check_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
   char *moduledir_from_command = NULL;
@@ -1256,6 +1274,12 @@ int dt_init(int argc,
       else if(!strcmp(argv[k], "--styleapply-masks") && argc > k + 1)
       {
         styleapply_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--check-masks") && argc > k + 1)
+      {
+        check_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -2391,6 +2415,20 @@ int dt_init(int argc,
     dt_splash_screen_destroy();
     gchar *report = g_strconcat(styleapply_masks_input, ".styleapply.json", NULL);
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(check_masks_input)
+  {
+    // All three checks in one run, so a contributor's harvest takes one command
+    // and yields one file. Same placement and same database requirement as the
+    // individual flags above: it drives the real history reader and writer
+    // against a scratch image, so it needs `--library :memory:` and never a
+    // real catalogue.
+    dt_splash_screen_destroy();
+    gchar *report = g_strconcat(check_masks_input, ".check.json", NULL);
+    const gboolean ok = dt_masks_check_harvest(check_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
   }
