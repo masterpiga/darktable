@@ -167,6 +167,7 @@ Hardware: Apple M4 Pro, OpenCL available.
 | GPU: CPU/GPU gap, migrated | **0.0058** |
 | GPU: edits where migration *widened* the gap | **0** |
 | `--roundtrip-masks`, 2429 edits | **2429 unchanged, 0 different, 0 errors** |
+| `--styleapply-masks`, 2429 edits | **1860 ok, 0 style masks lost, 0 hosts disturbed, 0 errors**; 569 drawn-only (see below) |
 | generated raster matrix, 288 edits | 24 identical, 12 equivalent, **252 different — 0 of them CPU-driven** (worst CPU diff **exactly 0**); all 252 are classic-GPU outliers, see below |
 | unit suite | **205 tests, 9 mask suites, all pass** |
 
@@ -194,6 +195,34 @@ Note this figure only became measurable after the pipe **input**-profile fix
 vacuous. An earlier draft of this table reported "288 identical, all live" from
 a pre-fix run; that number was measuring nothing and is superseded by the above.
 
+### 4.1 Styles (`--styleapply-masks`)
+
+Added after an external review flagged styles and presets as unharvested. They
+are not just unharvested: they migrate through a *different door*.
+`dt_styles_apply_style_item()` calls `dt_develop_blend_legacy_params()`, which
+delegates to the `_ext` variant with `history_num = -1` — the **immediate**,
+non-deferred branch of `dt_masks_migrate_classic_to_flexi()`, where
+`_persist_form()` writes the synthesized form to `dev->forms` **only** and never
+to `main.masks_history`.
+
+That found product bug #6 (§5). Of the 569 remaining drawn-only edits, a
+dangling mask is the correct pre-existing outcome and the test asserts it
+precisely rather than waving at it: migration reuses the classic `mask_id`
+verbatim for drawn-only, so the id that comes back must be *the same id the
+style was saved with* — an id naming a form on the image the style was created
+from, which no style has ever carried (`style_items` has no forms column;
+`dt_styles_create_from_image()` copies history rows only). Master behaves
+identically. Had the id *changed*, migration would have synthesized something
+and lost it, and the test fails.
+
+One caution recorded honestly: the first version of this test reported 2401 of
+2429 as lost. Most of that was the harness, not the product — it required the
+`FLEXI` bit on a form-less mask, which misread the deliberate
+`DT_COND_CONSTANT` / `DT_COND_PASSTHROUGH` normalization (a parametric mask with
+no active channel is a constant, correctly migrated to a uniform blend with no
+form) as a lost mask. The real defect underneath was 147 edits, and only
+tracing the in-memory state before and after each step separated the two.
+
 ---
 
 ## 5. Product bugs found and fixed
@@ -204,6 +233,7 @@ a pre-fix run; that number was measuring nothing and is superseded by the above.
 | 2 | An **unresolvable raster** rendered 1.0 instead of 0.0 — module applied to the whole image instead of nothing (5 edits) | `raster.c` — `_raster_unresolved()` | raster replay |
 | 3 | OpenCL branch tested `mode_parametric` where the CPU tests `mode_drawn`; migration always clears `CONDITIONAL`, so the branch was **dead after migration** | `blend.c` | code audit; **reasoned, not measured** |
 | 4 | `piece->drawn_mask_cache` key omitted `mask_mode` — which selects *which renderer runs* — so a migrated edit was served the classic renderer's output | `blend.c` | GPU replay |
+| 6 | **A style's migrated mask was never persisted**: flexi migration synthesizes a form for a parametric or raster style, but `dt_history_merge_module_into_history()` only snapshots `dev->forms` into the history item when forms were copied from a source *image* — and styles pass `dev_src == NULL`. `dt_dev_write_history_ext()` then wrote a `mask_id` with no form behind it, so the mask was gone on the next load (147 edits: all 123 raster, 24 parametric) | `history.c` | `--styleapply-masks` |
 | 5 | **Classic combine operators applied per-run instead of per-element**: `SUM`/`DIFFERENCE`/`INTERSECTION`/`EXCLUSION` under-composited (355 edits carry it, 27 mis-rendered) | `migrate_legacy.c`, `develop.c/.h`, `masks.h` | GPU replay, after #4 |
 
 ### Bug 5 in detail (the significant one)
@@ -314,10 +344,18 @@ load-bearing three times.
    that never received device-side post-processing; plus the profile asymmetry
    in §6.7). Migration incidentally improves them. **A reviewer may reasonably
    question whether they should be fixed rather than recorded.**
-8. **`--roundtrip-masks` simulates the user's edit** via
+8. **`--styleapply-masks` reproduces `dt_styles_apply_style_item()` rather than
+   calling it**, because calling it means standing up the styles tables. The
+   two calls that matter are reproduced exactly and in order
+   (`dt_develop_blend_legacy_params()`, then
+   `dt_history_merge_module_into_history()` with `dev_src == NULL`); everything
+   else that function does concerns module params and version fixups, not masks.
+   Its host is also a single fixed drawn-mask edit, so it varies the style, not
+   what the style lands on.
+9. **`--roundtrip-masks` simulates the user's edit** via
    `dt_dev_add_masks_history_item_ext()`. If a real GUI edit path differs from
    that call, the round trip is not exactly what a user does.
-9. **Single corpus, single machine.** One person's library, one GPU
+10. **Single corpus, single machine.** One person's library, one GPU
    (Apple M4 Pro), one OpenCL implementation.
 
 ---
@@ -332,6 +370,8 @@ load-bearing three times.
 | `src/develop/masks/probe_image.{c,h}` | generated probe image |
 | `src/develop/masks/harvest_read.h` | shared JSON→structs reconstruction |
 | `src/tests/unittests/masks/test_probe_image.c` | 7 tests measuring probe adequacy |
+| `src/develop/masks/styleapply.c` / `.h` | `--styleapply-masks`: a classic style applied to an already-migrated image |
+| `src/develop/masks/scratch_image.c` / `.h` | scratch-image seeding shared by `--roundtrip-masks` and `--styleapply-masks` |
 | `src/tests/unittests/masks/gen_raster_matrix.py` | 288-edit raster coverage matrix |
 | `branch_analysis_worklog.md` §34–§42 | full chronological record incl. wrong turns |
 

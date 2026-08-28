@@ -1,0 +1,126 @@
+/*
+    This file is part of darktable,
+    Copyright (C) 2026 darktable developers.
+
+    darktable is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    darktable is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with darktable.  If not, see <http://www.gnu.org/licenses/>.
+*/
+
+#include "develop/masks/scratch_image.h"
+
+#include "common/darktable.h"
+#include "common/debug.h"
+#include "develop/imageop.h"
+#include "develop/masks.h"
+
+#include <sqlite3.h>
+#include <string.h>
+
+void dt_masks_scratch_seed_image(const dt_imgid_t imgid,
+                                 const int width,
+                                 const int height)
+{
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db),
+                        "INSERT OR IGNORE INTO main.film_rolls (id, folder)"
+                        " VALUES (1, 'scratch')", NULL, NULL, NULL);
+
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "INSERT OR REPLACE INTO main.images"
+                              " (id, group_id, film_id, width, height, filename,"
+                              "  version, max_version, history_end, flags)"
+                              " VALUES (?1, ?1, 1, ?2, ?3, 'scratch.raw', 0, 0, 1, 0)",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, width);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, height);
+  sqlite3_step(stmt);
+  sqlite3_finalize(stmt);
+}
+
+void dt_masks_scratch_wipe_history(const dt_imgid_t imgid)
+{
+  const char *const stmts[] = {
+    "DELETE FROM main.history WHERE imgid = ?1",
+    "DELETE FROM main.masks_history WHERE imgid = ?1",
+    "DELETE FROM main.module_order WHERE imgid = ?1",
+  };
+  for(size_t i = 0; i < sizeof(stmts) / sizeof(stmts[0]); i++)
+  {
+    sqlite3_stmt *stmt;
+    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), stmts[i], -1, &stmt, NULL);
+    DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+    sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+  }
+}
+
+gboolean dt_masks_scratch_seed_history(const dt_imgid_t imgid,
+                                       const int num,
+                                       const char *operation,
+                                       const int blendop_version,
+                                       const dt_develop_blend_params_t *bp,
+                                       GList *forms)
+{
+  dt_iop_module_so_t *so = NULL;
+  for(GList *l = darktable.iop; l; l = g_list_next(l))
+  {
+    dt_iop_module_so_t *cand = l->data;
+    if(cand && !strcmp(cand->op, operation)) { so = cand; break; }
+  }
+  if(!so) return FALSE;
+
+  // a throwaway instance, only to borrow default_params/params_size/version()
+  dt_iop_module_t module;
+  dt_develop_t scratch;
+  memset(&scratch, 0, sizeof(scratch));
+  // note the sense: returns TRUE on failure
+  if(dt_iop_load_module_by_so(&module, so, &scratch)) return FALSE;
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "INSERT INTO main.history"
+                              " (imgid, num, module, operation, op_params, enabled,"
+                              "  blendop_params, blendop_version, multi_priority,"
+                              "  multi_name, multi_name_hand_edited)"
+                              " VALUES (?1, ?8, ?2, ?3, ?4, 1, ?5, ?6, ?7, '', 0)",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, module.version());
+  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 3, operation, -1, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 4, module.default_params, module.params_size,
+                             SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 5, bp, sizeof(dt_develop_blend_params_t),
+                             SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 6, blendop_version);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, 0); // see the header on multi_priority
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 8, num);
+  const gboolean ok = sqlite3_step(stmt) == SQLITE_DONE;
+  sqlite3_finalize(stmt);
+
+  dt_iop_cleanup_module(&module);
+  if(!ok) return FALSE;
+
+  // the forms, under the same num -- the row dt_masks_read_masks_history()
+  // treats as current for this module
+  for(GList *l = forms; l; l = g_list_next(l))
+    dt_masks_write_masks_history_item(imgid, num, l->data);
+
+  return TRUE;
+}
+
+// modelines: These editor modelines have been set for all relevant files
+// by tools/update_modelines.py
+// vim: shiftwidth=2 expandtab tabstop=2 cindent
+// kate: tab-indents: off; indent-width 2; replace-tabs on;
+// indent-mode cstyle; remove-trailing-spaces modified;
