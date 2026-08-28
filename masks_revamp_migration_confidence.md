@@ -10,16 +10,16 @@ _Last updated 2026-08-28, over 7 contributed libraries._
 
 ## Where we stand
 
-**8 migration failures in 4976 distinct configuration shapes &rarr; the failure rate is below 0.290% (1 in 344) at 95% confidence.**
+**9 migration failures in 4978 distinct configuration shapes &rarr; the failure rate is below 0.315% (1 in 317) at 95% confidence.**
 
 | | |
 |---|---:|
 | contributed libraries | 7 |
 | harvested edits | 42275 |
-| distinct configuration shapes | 4976 |
-| migration failures | 8 |
+| distinct configuration shapes | 4978 |
+| migration failures | 9 |
 | classic-GPU outliers | 253 |
-| shapes proving nothing (inert/skipped) | 2 |
+| shapes proving nothing (inert/skipped) | 0 |
 
 Classic-GPU outliers are counted separately on purpose: there the CPU
 renders classic and migrated identically and only the *classic* GPU
@@ -57,6 +57,7 @@ controls alongside them.
 | `contrastntexture` | `uniform\|drawn` | `norm\|excl` | 1 |
 | `diffuse` | `uniform\|drawn` | `norm\|excl` | 1 |
 | `diffuse` | `uniform\|drawn` | `norm\|excl` | 1 |
+| `exposure` | `uniform\|flexi` | `norm\|excl` | 1 |
 | `sharpen` | `uniform\|drawn` | `norm\|excl` | 1 |
 | `sharpen` | `uniform\|drawn` | `norm\|excl` | 1 |
 
@@ -68,7 +69,7 @@ same configuration collapse onto it, exactly as passing repeats do.
 | corpus | recorded | edits | shapes | darktable |
 |---|---|---:|---:|---|
 | `christian_pfister` | 2026-08-28 | 7765 | 1601 | 5.7.0+675~g2a031d9525-dirty |
-| `dudo` | 2026-08-28 | 2466 | 824 | - |
+| `dudo` | 2026-08-28 | 2466 | 824 | 5.7.0+675~g2a031d9525-dirty |
 | `gwbarn` | 2026-08-28 | 1803 | 926 | 5.7.0+675~g2a031d9525-dirty |
 | `leonidas` | 2026-08-28 | 1722 | 546 | 5.7.0+672~gdedea60e1d-dirty |
 | `macchiato17` | 2026-08-28 | 545 | 121 | 5.7.0+675~g2a031d9525-dirty |
@@ -83,8 +84,8 @@ same configuration collapse onto it, exactly as passing repeats do.
 | `uniform\|drawn` | 1916 | 9988 | 7 | 7 | 0.685% (1 in 145) |
 | `uniform\|raster` | 285 | 675 | 1 | 7 | 1.654% (1 in 60) |
 | `uniform\|parametric` | 245 | 795 | 0 | 7 | 1.215% (1 in 82) |
-| `uniform\|flexi` | 1 | 6 | 0 | 2 | _too few_ |
-| `uniform\|drawn\|flexi` | 0 | 32 | 0 | 1 | _too few_ |
+| `uniform\|flexi` | 2 | 6 | 1 | 2 | _too few_ |
+| `uniform\|drawn\|flexi` | 1 | 32 | 0 | 1 | _too few_ |
 
 ## By form type
 
@@ -109,7 +110,7 @@ same configuration collapse onto it, exactly as passing repeats do.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `norm\|excl` | 4127 | 39145 | 6 | 7 | 0.287% (1 in 348) |
+| `norm\|excl` | 4129 | 39145 | 7 | 7 | 0.318% (1 in 314) |
 | `norm\|excl\|masks_pos` | 806 | 3031 | 2 | 7 | 0.779% (1 in 128) |
 | `norm\|incl` | 23 | 49 | 0 | 4 | _too few_ |
 | `norm\|incl\|masks_pos` | 16 | 46 | 0 | 5 | _too few_ |
@@ -122,7 +123,7 @@ same configuration collapse onto it, exactly as passing repeats do.
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
 | `second instance` | 2875 | 30123 | 4 | 7 | 0.318% (1 in 314) |
-| `first instance` | 2101 | 12152 | 4 | 7 | 0.435% (1 in 229) |
+| `first instance` | 2103 | 12152 | 5 | 7 | 0.499% (1 in 200) |
 
 ## Coverage gaps
 
@@ -133,11 +134,11 @@ contributors for.**
 
 | stratum | shapes | contributors |
 |---|---:|---:|
-| `uniform\|drawn\|flexi` | 0 | 1 |
 | `inv\|excl` | 1 | 1 |
 | `inv\|excl\|masks_pos` | 1 | 1 |
-| `uniform\|flexi` | 1 | 2 |
+| `uniform\|drawn\|flexi` | 1 | 1 |
 | `inv\|incl` | 2 | 2 |
+| `uniform\|flexi` | 2 | 2 |
 | `circle\|non-clone` | 15 | 3 |
 | `norm\|incl\|masks_pos` | 16 | 5 |
 | `norm\|incl` | 23 | 4 |
