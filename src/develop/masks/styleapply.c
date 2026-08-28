@@ -396,7 +396,7 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     // phase 0: a fresh image carrying the classic host edit
     dt_masks_scratch_wipe_history(STYLEAPPLY_IMGID);
     dt_masks_scratch_seed_image(STYLEAPPLY_IMGID, w, h);
-    if(!dt_masks_scratch_seed_history(STYLEAPPLY_IMGID, 0, host.operation,
+    if(!dt_masks_scratch_seed_history(STYLEAPPLY_IMGID, 0, host.operation, 0,
                                       host.blendop_version, &host.bp, host.forms))
     {
       skipped++;

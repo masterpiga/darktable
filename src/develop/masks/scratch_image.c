@@ -20,6 +20,7 @@
 
 #include "common/darktable.h"
 #include "common/debug.h"
+#include "common/iop_order.h"
 #include "develop/imageop.h"
 #include "develop/masks.h"
 
@@ -65,9 +66,68 @@ void dt_masks_scratch_wipe_history(const dt_imgid_t imgid)
   }
 }
 
+void dt_masks_scratch_seed_iop_order(const dt_imgid_t imgid,
+                                     const char *operation,
+                                     const int multi_priority)
+{
+  // the default list already carries instance 0 for every module
+  if(multi_priority <= 0) return;
+
+  GList *list = dt_ioppr_get_iop_order_list(imgid, FALSE);
+  if(!list) return;
+
+  dt_iop_order_entry_t *entry = malloc(sizeof(dt_iop_order_entry_t));
+  if(!entry)
+  {
+    dt_ioppr_iop_order_list_free(list);
+    return;
+  }
+  g_strlcpy(entry->operation, operation, sizeof(entry->operation));
+  entry->instance = multi_priority;
+  entry->name[0] = '\0';
+  entry->o.iop_order = 0;
+
+  // same placement rule as dt_ioppr_insert_module_instance()
+  GList *place = NULL;
+  int max_instance = -1;
+  for(GList *l = list; l; l = g_list_next(l))
+  {
+    const dt_iop_order_entry_t *const e = l->data;
+    if(!strcmp(e->operation, operation) && e->instance > max_instance)
+    {
+      place = l;
+      max_instance = e->instance;
+    }
+  }
+  if(!place)
+  {
+    // the module is not in the default order at all -- nothing to hang the
+    // instance off, and writing it anywhere would be inventing an order
+    free(entry);
+    dt_ioppr_iop_order_list_free(list);
+    return;
+  }
+  list = g_list_insert_before(list, place, entry);
+
+  // renumber. The only contract on these values is "starts above 0 and
+  // increases" (see _ioppr_reset_iop_order in iop_order.c); the gaps leave
+  // room for anything inserted later.
+  int order = 100;
+  for(GList *l = list; l; l = g_list_next(l))
+  {
+    dt_iop_order_entry_t *e = l->data;
+    e->o.iop_order = order;
+    order += 100;
+  }
+
+  dt_ioppr_write_iop_order_list(list, imgid);
+  dt_ioppr_iop_order_list_free(list);
+}
+
 gboolean dt_masks_scratch_seed_history(const dt_imgid_t imgid,
                                        const int num,
                                        const char *operation,
+                                       const int multi_priority,
                                        const int blendop_version,
                                        const dt_develop_blend_params_t *bp,
                                        GList *forms)
@@ -103,7 +163,7 @@ gboolean dt_masks_scratch_seed_history(const dt_imgid_t imgid,
   DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 5, bp, sizeof(dt_develop_blend_params_t),
                              SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 6, blendop_version);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, 0); // see the header on multi_priority
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, multi_priority);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 8, num);
   const gboolean ok = sqlite3_step(stmt) == SQLITE_DONE;
   sqlite3_finalize(stmt);
