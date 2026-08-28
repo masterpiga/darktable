@@ -30,6 +30,7 @@
 #include "common/darktable.h"
 #include "develop/masks/harvest.h"
 #include "develop/masks/roundtrip.h"
+#include "develop/masks/styleapply.h"
 #include "develop/masks/verify.h"
 #include "common/datetime.h"
 #include "common/exif.h"
@@ -1129,6 +1130,7 @@ int dt_init(int argc,
   char *harvest_masks_output = NULL;
   char *verify_masks_input = NULL;
   char *roundtrip_masks_input = NULL;
+  char *styleapply_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
   char *moduledir_from_command = NULL;
@@ -1245,6 +1247,12 @@ int dt_init(int argc,
       else if(!strcmp(argv[k], "--roundtrip-masks") && argc > k + 1)
       {
         roundtrip_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--styleapply-masks") && argc > k + 1)
+      {
+        styleapply_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -2368,6 +2376,18 @@ int dt_init(int argc,
     dt_splash_screen_destroy();
     gchar *report = g_strconcat(roundtrip_masks_input, ".roundtrip.json", NULL);
     const gboolean ok = dt_masks_roundtrip_harvest(roundtrip_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(styleapply_masks_input)
+  {
+    // Same placement and same database requirement as --roundtrip-masks above:
+    // it drives the real history reader and writer against a scratch image, so
+    // it needs `--library :memory:` and never a real catalogue.
+    dt_splash_screen_destroy();
+    gchar *report = g_strconcat(styleapply_masks_input, ".styleapply.json", NULL);
+    const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
   }

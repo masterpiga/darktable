@@ -24,6 +24,7 @@
 #include "develop/imageop.h"
 #include "develop/masks.h"
 #include "develop/masks/harvest_read.h"
+#include "develop/masks/scratch_image.h"
 
 #include <json-glib/json-glib.h>
 #include <sqlite3.h>
@@ -34,123 +35,6 @@
 // caller is expected to pass --library :memory:), so there is nothing to
 // collide with.
 #define ROUNDTRIP_IMGID 1
-
-// ---------------------------------------------------------------------------
-// seeding: put a harvested edit into the database as *classic* history
-// ---------------------------------------------------------------------------
-
-/** The scratch image row. No NOT NULL constraints on main.images, so only the
-    few columns the history reader actually consults need filling. */
-static void _seed_image(const int width, const int height)
-{
-  sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_EXEC(dt_database_get(darktable.db),
-                        "INSERT OR IGNORE INTO main.film_rolls (id, folder)"
-                        " VALUES (1, 'roundtrip')", NULL, NULL, NULL);
-
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "INSERT OR REPLACE INTO main.images"
-                              " (id, group_id, film_id, width, height, filename,"
-                              "  version, max_version, history_end, flags)"
-                              " VALUES (?1, ?1, 1, ?2, ?3, 'roundtrip.raw', 0, 0, 1, 0)",
-                              -1, &stmt, NULL);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, ROUNDTRIP_IMGID);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, width);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, height);
-  sqlite3_step(stmt);
-  sqlite3_finalize(stmt);
-}
-
-static void _wipe_history(void)
-{
-  const char *const stmts[] = {
-    "DELETE FROM main.history WHERE imgid = ?1",
-    "DELETE FROM main.masks_history WHERE imgid = ?1",
-    "DELETE FROM main.module_order WHERE imgid = ?1",
-  };
-  for(size_t i = 0; i < sizeof(stmts) / sizeof(stmts[0]); i++)
-  {
-    sqlite3_stmt *stmt;
-    DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db), stmts[i], -1, &stmt, NULL);
-    DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, ROUNDTRIP_IMGID);
-    sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-  }
-}
-
-/** Write the one history row this edit consists of.
-
-    `op_params` are the module's *defaults*, not the user's: the harvest
-    deliberately records no module parameters (they are user data and say
-    nothing about masks). That substitution is sound here because nothing under
-    test reads them -- migration and the mask code work on blend_params and the
-    form tree -- but they cannot simply be omitted, since the history reader
-    runs each module's own legacy_params on them and drops the row outright if
-    the blob is the wrong size.
-
-    `blendop_version` is the harvested one, so the row genuinely arrives as
-    classic and the real migration runs on read. */
-static gboolean _seed_history(const char *operation,
-                              const int multi_priority,
-                              const int blendop_version,
-                              const dt_develop_blend_params_t *bp,
-                              GList *forms)
-{
-  dt_iop_module_so_t *so = NULL;
-  for(GList *l = darktable.iop; l; l = g_list_next(l))
-  {
-    dt_iop_module_so_t *cand = l->data;
-    if(cand && !strcmp(cand->op, operation)) { so = cand; break; }
-  }
-  if(!so) return FALSE;
-
-  // a throwaway instance, only to borrow default_params/params_size/version()
-  dt_iop_module_t module;
-  dt_develop_t scratch;
-  memset(&scratch, 0, sizeof(scratch));
-  // note the sense: returns TRUE on failure
-  if(dt_iop_load_module_by_so(&module, so, &scratch)) return FALSE;
-
-  sqlite3_stmt *stmt;
-  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "INSERT INTO main.history"
-                              " (imgid, num, module, operation, op_params, enabled,"
-                              "  blendop_params, blendop_version, multi_priority,"
-                              "  multi_name, multi_name_hand_edited)"
-                              " VALUES (?1, 0, ?2, ?3, ?4, 1, ?5, ?6, ?7, '', 0)",
-                              -1, &stmt, NULL);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, ROUNDTRIP_IMGID);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, module.version());
-  DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 3, operation, -1, SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 4, module.default_params, module.params_size,
-                             SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 5, bp, sizeof(dt_develop_blend_params_t),
-                             SQLITE_TRANSIENT);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 6, blendop_version);
-  // multi_priority is forced to 0, NOT the harvested value. A second instance
-  // of a module has no entry in the *default* iop order this scratch image
-  // gets, dt_ioppr_get_iop_order() returns INT_MAX for it, and
-  // dt_dev_read_history_ext() then skips the row entirely -- which silently
-  // produced a dev with no modules at all, and a snapshot comparison of two
-  // empty module lists that passed no matter what migration did. Instance
-  // identity is irrelevant to what is being measured here (whether a mask's
-  // state survives a save/load), so it is normalized away rather than worked
-  // around.
-  (void)multi_priority;
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 7, 0);
-  const gboolean ok = sqlite3_step(stmt) == SQLITE_DONE;
-  sqlite3_finalize(stmt);
-
-  dt_iop_cleanup_module(&module);
-  if(!ok) return FALSE;
-
-  // the forms, under the same num -- which is history_end - 1, the row
-  // dt_masks_read_masks_history() treats as current
-  for(GList *l = forms; l; l = g_list_next(l))
-    dt_masks_write_masks_history_item(ROUNDTRIP_IMGID, 0, l->data);
-
-  return TRUE;
-}
 
 // ---------------------------------------------------------------------------
 // snapshotting: everything the mask depends on, as comparable text
@@ -448,9 +332,12 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
     const int bv = json_object_has_member(edit, "blendop_version")
       ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
 
-    _wipe_history();
-    _seed_image(w, h);
-    const gboolean seeded = op && _seed_history(op, mp, bv, &bp, forms);
+    dt_masks_scratch_wipe_history(ROUNDTRIP_IMGID);
+    dt_masks_scratch_seed_image(ROUNDTRIP_IMGID, w, h);
+    // multi_priority (mp) is deliberately not passed: see scratch_image.h
+    (void)mp;
+    const gboolean seeded =
+      op && dt_masks_scratch_seed_history(ROUNDTRIP_IMGID, 0, op, bv, &bp, forms);
     g_list_free_full(forms, (GDestroyNotify)dt_masks_free_form);
 
     if(!seeded) { skipped++; continue; }
