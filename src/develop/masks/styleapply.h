@@ -19,6 +19,7 @@
 #pragma once
 
 #include <glib.h>
+#include <stdio.h>
 
 /* --styleapply-masks: does a *classic* style survive being applied to an image
  * that already has flexi masks of its own?
@@ -53,8 +54,25 @@
  * image) is one fixed drawn-mask edit picked from the same corpus, so that
  * what varies between iterations is only the thing under test.
  *
+ * The report carries a row for every harvested edit (skips included, with their
+ * reason) and a "summary" object holding every figure the run prints, so it can
+ * be read without the terminal output that went with it.
+ *
  * Returns TRUE if every edit passed. */
 gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_path);
+
+/* Same run, writing its report as the body of an already-open JSON object (no
+ * enclosing braces) so it can be composed into a combined document -- see
+ * dt_masks_check_harvest(). `rf` may be NULL.
+ *
+ * `ran` (may be NULL) reports whether the check was applicable at all: it needs
+ * a drawn-mask edit from the corpus to act as the host, and a library holding
+ * none leaves nothing to apply a style onto. That is not a failure, so the
+ * return value is still TRUE -- callers that distinguish "passed" from "did not
+ * apply" should read this. */
+gboolean dt_masks_styleapply_harvest_section(const char *json_path,
+                                             FILE *rf,
+                                             gboolean *ran);
 
 // modelines: These editor modelines have been set for all relevant files
 // by tools/update_modelines.py

@@ -361,9 +361,26 @@ static gboolean _apply_as_style(const char *operation,
 // driver
 // ---------------------------------------------------------------------------
 
-gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_path)
+// a harvested edit this tool cannot apply as a style. Recorded rather than
+// silently dropped, so the report accounts for every index in the harvest.
+#define STYLEAPPLY_SKIP(why)                                                    \
+  do {                                                                          \
+    skipped++;                                                                  \
+    if(rf)                                                                      \
+    {                                                                           \
+      fprintf(rf, "%s\n    {\"index\": %u, \"result\": \"skipped\","             \
+                  " \"reason\": \"%s\"}", first_report ? "" : ",", i, (why));   \
+      first_report = FALSE;                                                     \
+    }                                                                           \
+    continue;                                                                   \
+  } while(0)
+
+gboolean dt_masks_styleapply_harvest_section(const char *json_path,
+                                             FILE *rf,
+                                             gboolean *ran)
 {
   setvbuf(stdout, NULL, _IOLBF, 0);
+  if(ran) *ran = TRUE;
 
   GError *err = NULL;
   JsonParser *parser = json_parser_new();
@@ -390,18 +407,29 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
   _host_t host = { .valid = FALSE };
   if(!_pick_host(edits, &host))
   {
-    fprintf(stderr, "[styleapply] %s has no drawn-mask edit to use as the host\n",
-            json_path);
+    /* Not a failure: this check needs a drawn-mask edit from the corpus to
+       stand in for "a mask already on the image", and a library that happens to
+       contain none simply has nothing to apply a style onto. Reporting it as a
+       failed check would tell a contributor their masks are broken when what
+       actually happened is that this question does not arise for them. */
+    printf("[styleapply] %s has no drawn-mask edit to use as the host"
+           " -- nothing to check\n", json_path);
+    if(ran) *ran = FALSE;
+    if(rf)
+      fprintf(rf, "\n  \"source\": \"%s\",\n  \"edits\": [],\n"
+                  "  \"summary\": {\n"
+                  "    \"ran\": false,\n"
+                  "    \"reason\": \"no drawn-mask edit in the corpus"
+                  " to use as a host\"\n  }", json_path);
     g_object_unref(parser);
-    return FALSE;
+    return TRUE;
   }
 
   const guint n = json_array_get_length(edits);
   printf("[styleapply] applying %u harvested edits as styles onto a '%s' host\n",
          n, host.operation);
 
-  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
-  if(rf) fprintf(rf, "{\n  \"source\": \"%s\",\n  \"host\": \"%s\",\n  \"edits\": [",
+  if(rf) fprintf(rf, "\n  \"source\": \"%s\",\n  \"host\": \"%s\",\n  \"edits\": [",
                  json_path, host.operation);
   gboolean first_report = TRUE;
 
@@ -415,23 +443,23 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     if(!edit) continue;
 
     JsonObject *bo = json_object_get_object_member(edit, "blend");
-    if(!bo) { skipped++; continue; }
+    if(!bo) STYLEAPPLY_SKIP("no blend object");
 
     dt_develop_blend_params_t bp;
     dt_masks_harvest_read_blend_params(bo, &bp);
     // an already-flexi edit has no migration to survive
-    if(bp.mask_mode & DEVELOP_MASK_FLEXI) { skipped++; continue; }
+    if(bp.mask_mode & DEVELOP_MASK_FLEXI) STYLEAPPLY_SKIP("already flexi");
 
     const char *op = json_object_has_member(edit, "operation")
       ? json_object_get_string_member(edit, "operation") : NULL;
-    if(!op) { skipped++; continue; }
+    if(!op) STYLEAPPLY_SKIP("no operation");
 
     JsonObject *img = json_object_get_object_member(edit, "image");
     const int w = img && json_object_has_member(img, "width")
       ? (int)json_object_get_int_member(img, "width") : 0;
     const int h = img && json_object_has_member(img, "height")
       ? (int)json_object_get_int_member(img, "height") : 0;
-    if(w <= 0 || h <= 0) { skipped++; continue; }
+    if(w <= 0 || h <= 0) STYLEAPPLY_SKIP("no image dimensions");
 
     const int bv = json_object_has_member(edit, "blendop_version")
       ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
@@ -466,10 +494,7 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     dt_masks_scratch_seed_image(STYLEAPPLY_IMGID, w, h);
     if(!dt_masks_scratch_seed_history(STYLEAPPLY_IMGID, 0, host.operation, 0,
                                       host.blendop_version, &host.bp, host.forms))
-    {
-      skipped++;
-      continue;
-    }
+      STYLEAPPLY_SKIP("host history row could not be seeded");
 
     // phase 1: settle it -- migrate and write back, so the style lands on a
     // normal already-migrated image
@@ -615,13 +640,34 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
     if((i + 1) % 250 == 0) printf("[styleapply]   %u/%u ...\n", i + 1, n);
   }
 
-  if(rf)
-  {
-    fputs("\n  ]\n}\n", rf);
-    fclose(rf);
-  }
   g_list_free_full(host.forms, (GDestroyNotify)dt_masks_free_form);
   g_object_unref(parser);
+
+  const gboolean passed =
+    dangling == 0 && host_lost == 0 && no_module == 0 && errors == 0;
+
+  // the report carries every figure the summary below prints, so it can be read
+  // on its own without the terminal output of the run that produced it
+  if(rf)
+  {
+    fputs("\n  ],\n  \"summary\": {\n", rf);
+    fprintf(rf, "    \"ran\": true,\n");
+    fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
+    fprintf(rf, "    \"harvested\": %u,\n", n);
+    fprintf(rf, "    \"applied_as_style\": %d,\n", total);
+    fprintf(rf, "    \"ok\": %d,\n", ok_count);
+    fprintf(rf, "    \"style_mask_lost\": %d,\n", dangling);
+    fprintf(rf, "    \"host_disturbed\": %d,\n", host_lost);
+    fprintf(rf, "    \"no_module_at_all\": %d,\n", no_module);
+    fprintf(rf, "    \"drawn_only_not_carried\": %d,\n", not_carried);
+    fprintf(rf, "    \"errors\": %d,\n", errors);
+    fprintf(rf, "    \"skipped\": %d,\n", skipped);
+    fprintf(rf, "    \"same_op_as_host\": %d,\n", same_op);
+    fprintf(rf, "    \"drawn_mask_in_style\": %d,\n", drawn_in_style);
+    fprintf(rf, "    \"multi_instance_styles\": %d,\n", multi_item);
+    fprintf(rf, "    \"second_instance_allocated\": %d\n", landed_second);
+    fputs("  }", rf);
+  }
 
   printf("[styleapply]\n");
   printf("[styleapply] applied as style : %d\n", total);
@@ -643,9 +689,24 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
          " module twice : %d\n", multi_item);
   printf("[styleapply]     of those, a second instance was actually allocated  "
          "         : %d\n", landed_second);
-  if(report_path) printf("[styleapply] per-edit report written to %s\n", report_path);
 
-  return dangling == 0 && host_lost == 0 && no_module == 0 && errors == 0;
+  return passed;
+}
+
+#undef STYLEAPPLY_SKIP
+
+gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_path)
+{
+  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
+  if(rf) fputs("{", rf);
+  const gboolean ok = dt_masks_styleapply_harvest_section(json_path, rf, NULL);
+  if(rf)
+  {
+    fputs("\n}\n", rf);
+    fclose(rf);
+    printf("[styleapply] per-edit report written to %s\n", report_path);
+  }
+  return ok;
 }
 
 // modelines: These editor modelines have been set for all relevant files

@@ -263,7 +263,21 @@ static gchar *_first_difference(const char *a, const char *b)
   return out ? out : g_strdup("(no line-level difference found)");
 }
 
-gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_path)
+// a harvested edit this tool cannot round-trip. Recorded rather than silently
+// dropped, so the report accounts for every index in the harvest.
+#define ROUNDTRIP_SKIP(why)                                                     \
+  do {                                                                          \
+    skipped++;                                                                  \
+    if(rf)                                                                      \
+    {                                                                           \
+      fprintf(rf, "%s\n    {\"index\": %u, \"result\": \"skipped\","             \
+                  " \"reason\": \"%s\"}", first_report ? "" : ",", i, (why));   \
+      first_report = FALSE;                                                     \
+    }                                                                           \
+    continue;                                                                   \
+  } while(0)
+
+gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
 {
   setvbuf(stdout, NULL, _IOLBF, 0);
 
@@ -292,8 +306,7 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
   const guint n = json_array_get_length(edits);
   printf("[roundtrip] round-tripping %u harvested edits from %s\n", n, json_path);
 
-  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
-  if(rf) fprintf(rf, "{\n  \"source\": \"%s\",\n  \"edits\": [", json_path);
+  if(rf) fprintf(rf, "\n  \"source\": \"%s\",\n  \"edits\": [", json_path);
   gboolean first_report = TRUE;
 
   int total = 0, same = 0, differ = 0, skipped = 0, errors = 0;
@@ -305,26 +318,27 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
     if(!edit) continue;
 
     JsonObject *bo = json_object_get_object_member(edit, "blend");
-    if(!bo) { skipped++; continue; }
+    if(!bo) ROUNDTRIP_SKIP("no blend object");
 
     dt_develop_blend_params_t bp;
     dt_masks_harvest_read_blend_params(bo, &bp);
 
     // an already-flexi edit has no migration to survive; the round trip would
     // be testing the plain history reader, which is not what this is for
-    if(bp.mask_mode & DEVELOP_MASK_FLEXI) { skipped++; continue; }
+    if(bp.mask_mode & DEVELOP_MASK_FLEXI) ROUNDTRIP_SKIP("already flexi");
 
     JsonObject *img = json_object_get_object_member(edit, "image");
     const int w = img && json_object_has_member(img, "width")
       ? (int)json_object_get_int_member(img, "width") : 0;
     const int h = img && json_object_has_member(img, "height")
       ? (int)json_object_get_int_member(img, "height") : 0;
-    if(w <= 0 || h <= 0) { skipped++; continue; }
+    if(w <= 0 || h <= 0) ROUNDTRIP_SKIP("no image dimensions");
 
     JsonArray *fa = json_object_has_member(edit, "forms")
       ? json_object_get_array_member(edit, "forms") : NULL;
     GList *forms = fa ? dt_masks_harvest_read_forms(fa) : NULL;
-    if(fa && json_array_get_length(fa) > 0 && !forms) { skipped++; continue; }
+    if(fa && json_array_get_length(fa) > 0 && !forms)
+      ROUNDTRIP_SKIP("forms could not be reconstructed");
 
     const char *op = json_object_has_member(edit, "operation")
       ? json_object_get_string_member(edit, "operation") : NULL;
@@ -342,7 +356,7 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
       op && dt_masks_scratch_seed_history(ROUNDTRIP_IMGID, 0, op, mp, bv, &bp, forms);
     g_list_free_full(forms, (GDestroyNotify)dt_masks_free_form);
 
-    if(!seeded) { skipped++; continue; }
+    if(!seeded) ROUNDTRIP_SKIP("history row could not be seeded");
 
     total++;
 
@@ -410,12 +424,26 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
     if((i + 1) % 250 == 0) printf("[roundtrip]   %u/%u ...\n", i + 1, n);
   }
 
+  g_object_unref(parser);
+
+  const gboolean passed = differ == 0 && errors == 0 && no_module == 0;
+
+  // the report carries every figure the summary below prints, so it can be read
+  // on its own without the terminal output of the run that produced it
   if(rf)
   {
-    fputs("\n  ]\n}\n", rf);
-    fclose(rf);
+    fputs("\n  ],\n  \"summary\": {\n", rf);
+    fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
+    fprintf(rf, "    \"harvested\": %u,\n", n);
+    fprintf(rf, "    \"round_tripped\": %d,\n", total);
+    fprintf(rf, "    \"unchanged\": %d,\n", same);
+    fprintf(rf, "    \"different\": %d,\n", differ);
+    fprintf(rf, "    \"errors\": %d,\n", errors);
+    fprintf(rf, "    \"skipped\": %d,\n", skipped);
+    fprintf(rf, "    \"multi_instance\": %d,\n", multi_instance);
+    fprintf(rf, "    \"loaded_with_no_module\": %d\n", no_module);
+    fputs("  }", rf);
   }
-  g_object_unref(parser);
 
   printf("[roundtrip]\n");
   printf("[roundtrip] round-tripped   : %d\n", total);
@@ -428,9 +456,24 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
          multi_instance);
   printf("[roundtrip]   loaded with NO module at all (would pass vacuously) : %d\n",
          no_module);
-  if(report_path) printf("[roundtrip] per-edit report written to %s\n", report_path);
 
-  return differ == 0 && errors == 0 && no_module == 0;
+  return passed;
+}
+
+#undef ROUNDTRIP_SKIP
+
+gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_path)
+{
+  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
+  if(rf) fputs("{", rf);
+  const gboolean ok = dt_masks_roundtrip_harvest_section(json_path, rf);
+  if(rf)
+  {
+    fputs("\n}\n", rf);
+    fclose(rf);
+    printf("[roundtrip] per-edit report written to %s\n", report_path);
+  }
+  return ok;
 }
 
 // modelines: These editor modelines have been set for all relevant files

@@ -64,16 +64,24 @@
 // diff would only say "something did".
 
 #include <glib.h>
+#include <stdio.h>
 
 G_BEGIN_DECLS
 
 /** Round-trip every edit in the harvest file at `json_path` through a real
     database write and read. If `report_path` is non-NULL a per-edit JSON
-    report is written there.
+    report is written there, carrying a row for every harvested edit (skips
+    included, with their reason) and a "summary" object holding every figure
+    the run prints.
 
     Returns TRUE if every edit came back identical. */
 gboolean dt_masks_roundtrip_harvest(const char *json_path,
                                     const char *report_path);
+
+/** Same run, writing its report as the body of an already-open JSON object
+    (no enclosing braces) so it can be composed into a combined document --
+    see dt_masks_check_harvest(). `rf` may be NULL. */
+gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf);
 
 G_END_DECLS
 

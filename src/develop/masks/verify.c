@@ -1002,7 +1002,7 @@ static const char *_result_name(const verify_result_t r)
   }
 }
 
-gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
+gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
 {
   // line-buffered: a crash mid-replay must not swallow the progress output
   // that says which edit it was on
@@ -1069,8 +1069,7 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
   st.worst_index = -1;
   st.worst_gpu_index = -1;
 
-  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
-  if(rf) fputs("{\n  \"edits\": [", rf);
+  if(rf) fprintf(rf, "\n  \"source\": \"%s\",\n  \"edits\": [", json_path);
   gboolean first_report = TRUE;
 
   const guint n = json_array_get_length(edits);
@@ -1133,7 +1132,10 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
       }
     }
 
-    if(rf && rep.result != VERIFY_SKIPPED)
+    // skipped edits are written too: the report has to account for every edit
+    // in the harvest, or reading it means reconciling it against the terminal
+    // output to find out what happened to the missing indices
+    if(rf)
     {
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\", \"result\": \"%s\","
                   " \"inert\": %s, \"max_diff\": %.9g, \"mean_diff\": %.9g,"
@@ -1157,12 +1159,39 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
       printf("[verify]   %u/%u ...\n", i + 1, n);
   }
 
+  g_object_unref(parser);
+
+  const gboolean passed = st.different == 0 && st.error == 0;
+
+  // Every number the summary below prints also goes into the report, so the
+  // file is self-contained: reading a run must not require having kept the
+  // terminal output that went with it.
   if(rf)
   {
-    fputs("\n  ]\n}\n", rf);
-    fclose(rf);
+    fputs("\n  ],\n  \"summary\": {\n", rf);
+    fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
+    fprintf(rf, "    \"harvested\": %u,\n", n);
+    fprintf(rf, "    \"replayed\": %d,\n", st.total);
+    fprintf(rf, "    \"identical\": %d,\n", st.identical);
+    fprintf(rf, "    \"equivalent\": %d,\n", st.equivalent);
+    fprintf(rf, "    \"different\": %d,\n", st.different);
+    fprintf(rf, "    \"skipped\": %d,\n", st.skipped);
+    fprintf(rf, "    \"errors\": %d,\n", st.error);
+    fprintf(rf, "    \"live\": %d,\n", st.live);
+    fprintf(rf, "    \"live_identical\": %d,\n", st.live_identical);
+    fprintf(rf, "    \"live_equivalent\": %d,\n", st.live_equivalent);
+    fprintf(rf, "    \"live_different\": %d,\n", st.live_different);
+    fprintf(rf, "    \"inert\": %d,\n", st.inert_before);
+    fprintf(rf, "    \"worst_cpu_diff\": %.9g,\n", st.worst_max_diff);
+    fprintf(rf, "    \"worst_cpu_diff_index\": %d,\n", st.worst_index);
+    fprintf(rf, "    \"gpu_compared\": %d,\n", st.gpu_compared);
+    fprintf(rf, "    \"worst_gpu_diff\": %.9g,\n", st.worst_gpu_diff);
+    fprintf(rf, "    \"worst_gpu_diff_index\": %d,\n", st.worst_gpu_index);
+    fprintf(rf, "    \"worst_dev_gap_classic\": %.9g,\n", st.worst_dev_before);
+    fprintf(rf, "    \"worst_dev_gap_migrated\": %.9g,\n", st.worst_dev_after);
+    fprintf(rf, "    \"dev_gap_widened\": %d\n", st.dev_gap_widened);
+    fputs("  }", rf);
   }
-  g_object_unref(parser);
 
   printf("[verify]\n");
   printf("[verify] replayed          : %d\n", st.total);
@@ -1202,8 +1231,6 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
   }
   else
     printf("[verify] GPU: not replayed (no OpenCL device)\n");
-  if(report_path)
-    printf("[verify] per-edit report written to %s\n", report_path);
 
 #ifdef HAVE_OPENCL
   if(_verify_devid >= 0)
@@ -1213,7 +1240,21 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
   }
 #endif
 
-  return st.different == 0 && st.error == 0;
+  return passed;
+}
+
+gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
+{
+  FILE *rf = report_path ? g_fopen(report_path, "wb") : NULL;
+  if(rf) fputs("{", rf);
+  const gboolean ok = dt_masks_verify_harvest_section(json_path, rf);
+  if(rf)
+  {
+    fputs("\n}\n", rf);
+    fclose(rf);
+    printf("[verify] per-edit report written to %s\n", report_path);
+  }
+  return ok;
 }
 
 // modelines: These editor modelines have been set for all relevant files
