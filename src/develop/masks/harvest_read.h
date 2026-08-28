@@ -33,6 +33,13 @@
 
 G_BEGIN_DECLS
 
+/** Load a harvest file into a JsonParser, transparently decompressing it if it
+    is gzipped. --harvest-masks writes FILE and FILE.gz and asks contributors to
+    send the second, so the compressed one is what usually arrives; whether it
+    is compressed is decided by the magic number, not the extension. Returns
+    NULL on failure with `error` set; caller owns the parser. */
+JsonParser *dt_masks_harvest_load(const char *path, GError **error);
+
 /** Rebuild the form list for one harvested edit from its "forms" array.
     Returns NULL if anything is unreconstructable, so a malformed record is
     skipped rather than replayed as something subtly different. Caller owns the
