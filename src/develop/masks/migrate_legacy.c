@@ -90,6 +90,88 @@
 // construction helpers
 // ---------------------------------------------------------------------------
 
+/* Classic applies a shape's combine operator once per SHAPE; the flexi fold
+ * applies it once per RUN.
+ *
+ * The flexi fold (_group_get_mask_roi_flexi in group.c) partitions grp->points
+ * into maximal same-operator runs, folds each run's members together with the
+ * run's *within-group* mode (SCREEN/ISECT/WITHIN_MULTIPLY; none set = union,
+ * i.e. max) and composites the finished sub-mask onto the accumulator with the
+ * run's between-group operator -- once. The classic sequential fold instead
+ * walks the list applying each member's own operator to the accumulator
+ * directly. Same operators (DT_MASKS_STATE_OP_COMBINE is exactly the classic
+ * set), applied a different number of times.
+ *
+ * That is invisible for union, because max is idempotent as well as
+ * associative: max'ing a run together and then max'ing it in once equals
+ * max'ing each member in individually. It is very visible for the others --
+ * SUM (a+b) compounds per application, and INTERSECTION is min(acc, max(e1,e2))
+ * one way and min(acc, e1, e2) the other. A real 48-brush mask at 0.1 opacity
+ * reached 0.6202 under classic and 0.1723 after migration.
+ *
+ * Giving every non-union member its own run restores per-member application
+ * exactly (verified: the 27 edits in the harvested corpus that diverged all
+ * became identical, worst residual 2.98e-08). Consecutive union members are
+ * deliberately left merged -- they are already equivalent, and splitting them
+ * would turn a 48-stroke mask into 48 one-shape groups in the panel for no
+ * behavioural gain.
+ *
+ * Idempotent: re-marking a member that already starts a run changes nothing,
+ * which is what lets this run on every load and also on a group that has since
+ * been written back to the database in split form. */
+static void _split_nonunion_runs(dt_develop_t *dev,
+                                 dt_masks_form_t *grp,
+                                 const int depth)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  // a malformed/cyclic tree must not spin here; classic nesting is shallow
+  if(depth > 8) return;
+
+  // MULTIPLY is deliberately absent: no classic drawn shape carries it (it is
+  // the operator migration itself attaches to a synthesized parametric run),
+  // and that run is built already-correct by _migrate_drawn_and_parametric.
+  const int non_union = DT_MASKS_STATE_INTERSECTION
+                      | DT_MASKS_STATE_DIFFERENCE
+                      | DT_MASKS_STATE_SUM
+                      | DT_MASKS_STATE_EXCLUSION;
+
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    if(pt->state & non_union) pt->group_start = 1;
+
+    // A member can itself be a group, and rendering one recurses back into
+    // dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
+    // now flexi, so the nested group is folded by the run algebra too and needs
+    // the same treatment. Missing this left 4 of the 27 corpus divergences
+    // unfixed when the split was applied only to the top-level group.
+    dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
+    if(child && (child->type & DT_MASKS_GROUP))
+      _split_nonunion_runs(dev, child, depth + 1);
+  }
+}
+
+/* Queue a reused classic drawn group for the normalization above, and do it
+ * once now.
+ *
+ * Both halves are needed, for different callers. Doing it now covers the paths
+ * that never re-read from the database and instead snapshot dev->forms as it
+ * stands (style application, live preset application). Queueing covers the
+ * darkroom-load path, where dt_masks_read_masks_history() replaces dev->forms
+ * wholesale straight after migration and would discard the in-memory work --
+ * see dev->pending_flexi_group_splits. */
+static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_id)
+{
+  if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
+
+  _split_nonunion_runs(module->dev, dt_masks_get_from_id(module->dev, mask_id), 0);
+
+  const gpointer key = GINT_TO_POINTER(mask_id);
+  if(!g_list_find(module->dev->pending_flexi_group_splits, key))
+    module->dev->pending_flexi_group_splits =
+      g_list_append(module->dev->pending_flexi_group_splits, key);
+}
+
 static dt_masks_point_group_t *_new_group_point(const dt_mask_id_t formid,
                                                 const int state)
 {
@@ -680,7 +762,12 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
       const gboolean masks_pos = (o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
       _clear_toplevel_blendif(n);
       n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-      // n->mask_id is already o->mask_id -- reused verbatim.
+      // n->mask_id is already o->mask_id -- reused verbatim, so this is a
+      // drawn-only migration in every respect and needs the same run-boundary
+      // normalization that _dispatch()'s DEVELOP_MASK_MASK-alone case applies.
+      // (DT_COND_CONSTANT just above does not: it sets mask_id to NO_MASKID,
+      // so no group is rendered at all.)
+      _queue_group_split(module, o->mask_id);
       if(masks_pos != inv)
         n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
       else
@@ -780,6 +867,13 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   drawn_pt->parentid = top_grp->formid;
   top_grp->points = g_list_append(top_grp->points, drawn_pt);
 
+  // drawn_pt references the *original* classic drawn group, which is rendered
+  // by recursing back into dt_masks_group_get_mask_roi() -- and that recursion
+  // reads the module's (now flexi) blend_params, so the inner group is folded
+  // by the flexi run algebra too. It therefore needs the same run-boundary
+  // normalization as the drawn-only case above.
+  _queue_group_split(module, o->mask_id);
+
   // the channel elements form their own run, separate from drawn_pt's (a
   // different operator always starts a new run, see the run-boundary test
   // in _group_get_mask_roi_flexi) -- DT_MASKS_STATE_MULTIPLY is that run's
@@ -842,12 +936,16 @@ static gboolean _dispatch(dt_iop_module_t *module,
   }
   else if(o->mask_mode & DEVELOP_MASK_MASK)
   {
-    // drawn only: flexi renders a drawn group through the exact same code
-    // path as classic (mode_drawn covers both DEVELOP_MASK_MASK and
-    // DEVELOP_MASK_FLEXI, see blend.c) -- reusing mask_id verbatim, whether
-    // or not it currently resolves to anything, is already correct with no
-    // form changes at all.
+    // Drawn only: the form tree is reused verbatim, mask_id and all -- but
+    // NOT untouched. `mode_drawn` covers both DEVELOP_MASK_MASK and
+    // DEVELOP_MASK_FLEXI in blend.c, so the two modes reach the same *call*;
+    // they do not reach the same renderer. dt_masks_group_get_mask_roi()
+    // dispatches on the FLEXI bit to a different fold, which applies each
+    // member's combine operator once per run rather than once per member.
+    // _queue_group_split() marks the run boundaries that make the two agree;
+    // see its comment for why that is all it takes.
     n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
+    _queue_group_split(module, o->mask_id);
     ok = TRUE;
   }
   else // DEVELOP_MASK_CONDITIONAL alone
@@ -1008,4 +1106,32 @@ void dt_masks_finish_flexi_migrations(dt_develop_t *dev)
 
   g_list_free(dev->pending_flexi_migrations);
   dev->pending_flexi_migrations = NULL;
+}
+
+/* Run-boundary normalization for classic drawn groups reused by a migration.
+
+   Must run AFTER dt_masks_read_masks_history(), which is the whole reason this
+   is separate from dt_masks_finish_flexi_migrations() (that one runs before it,
+   because it writes new forms the read then picks up). This one adjusts groups
+   that already exist in the database, so anything it does before the read is
+   discarded by it.
+
+   Deliberately writes nothing back. The stored group keeps the classic shape
+   list exactly as authored -- which keeps the conversion reversible, matters
+   for the classic-restore path, and means a migration never rewrites a user's
+   form data. The markers only reach the database if the user edits the image,
+   at which point dt_dev_write_history_ext() rewrites masks_history from
+   dev->forms wholesale and picks them up. Re-deriving them on every load until
+   then costs one pass over the point list, and _split_nonunion_runs() is
+   idempotent, so a group that HAS been written back is simply re-marked to the
+   same value. */
+void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
+{
+  if(!dev->pending_flexi_group_splits) return;
+
+  for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))
+    _split_nonunion_runs(dev, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)), 0);
+
+  g_list_free(dev->pending_flexi_group_splits);
+  dev->pending_flexi_group_splits = NULL;
 }
