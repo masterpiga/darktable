@@ -585,11 +585,19 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
        dropped on the next read for want of an iop-order entry, and two absent
        masks compare equal no matter what migration did. Named separately so it
        cannot be read as an ordinary dangling mask. */
+    /* `verdict` is prose for a human reading the report; `outcome` is the
+       stable slug tools aggregate on. Both, because the two audiences want
+       different things and collapsing them means one of them loses: an
+       aggregator matching on the prose breaks silently the moment the wording
+       is improved (which is exactly how 584 known-good rows were once counted
+       as failures). */
     const char *verdict;
+    const char *outcome;
     if(vanished)
     {
       no_module++;
       verdict = "style item landed on no module at all";
+      outcome = "no_module";
       printf("[styleapply] NO MODULE at edit %u (%s, instance %d):"
              " history row did not survive the reload\n", i, op, worst_mp);
     }
@@ -597,6 +605,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     {
       host_lost++;
       verdict = "host mask disturbed";
+      outcome = "host_disturbed";
       printf("[styleapply] HOST DISTURBED at edit %u (%s):\n"
              "             before: %s\n"
              "             after : %s\n",
@@ -606,11 +615,13 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     {
       not_carried++;
       verdict = "drawn-only style, form never carried (same on master)";
+      outcome = "not_carried";
     }
     else if(!style_resolved)
     {
       dangling++;
       verdict = "style mask lost";
+      outcome = "style_mask_lost";
       printf("[styleapply] DANGLING at edit %u (%s, instance %d): %s\n",
              i, op, worst_mp, style_desc);
     }
@@ -618,6 +629,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     {
       ok_count++;
       verdict = "ok";
+      outcome = "ok";
     }
 
     if(rf)
@@ -626,9 +638,11 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\", \"mask_mode\": %u,"
                   " \"same_op_as_host\": %s, \"style_items\": %d,"
                   " \"harvested_multi_priority\": %d, \"max_landed_instance\": %d,"
-                  " \"result\": \"%s\", \"style_mask\": \"%s\"}",
+                  " \"outcome\": \"%s\", \"result\": \"%s\","
+                  " \"style_mask\": \"%s\"}",
               first_report ? "" : ",", i, op, bp.mask_mode,
-              collides ? "true" : "false", n_items, mp, max_landed, verdict, esc);
+              collides ? "true" : "false", n_items, mp, max_landed, outcome,
+              verdict, esc);
       g_free(esc);
       first_report = FALSE;
     }
