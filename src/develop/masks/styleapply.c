@@ -189,7 +189,7 @@ static const dt_dev_history_item_t *_history_item_for(dt_develop_t *dev,
 // ---------------------------------------------------------------------------
 
 /** Read the scratch image through the real history reader. Caller cleans up. */
-static void _open(dt_develop_t *dev)
+static void _open_scratch_dev(dt_develop_t *dev)
 {
   dt_dev_init(dev, FALSE);
   // dt_dev_init leaves dev->iop NULL and dt_dev_read_history_ext refuses to do
@@ -208,7 +208,7 @@ static void _open(dt_develop_t *dev)
 static void _settle(const _host_t *host, gchar **host_desc)
 {
   dt_develop_t dev;
-  _open(&dev);
+  _open_scratch_dev(&dev);
 
   // pop the stack onto the modules, then snapshot dev->forms into a history
   // item -- dt_dev_write_history_ext() persists the *item's* forms, and a
@@ -280,7 +280,7 @@ static gboolean _apply_as_style(const char *operation,
                                 int *landed)
 {
   dt_develop_t dev;
-  _open(&dev);
+  _open_scratch_dev(&dev);
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
   dt_iop_module_t *mod_src = dt_iop_get_module_by_op_priority(dev.iop, operation, -1);
@@ -493,7 +493,7 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
 
     // phase 3: reload from the database and see what actually persisted
     dt_develop_t dev;
-    _open(&dev);
+    _open_scratch_dev(&dev);
 
     /* Every item the style carried has to have arrived. The verdict is taken
        from the *worst* of them, so a style whose second instance was lost

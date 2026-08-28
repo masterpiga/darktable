@@ -181,6 +181,8 @@ jobs:
           # right thing even if this environment variable is not present.
           echo "DARKTABLE_APPIMAGE_UPDATE=release" >> $GITHUB_ENV
       - name: Build AppImage
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           cd src
           bash tools/appimage-build-script.sh
