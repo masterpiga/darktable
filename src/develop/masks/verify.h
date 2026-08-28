@@ -67,16 +67,25 @@
 // is counted separately rather than being allowed to pad the pass rate.
 
 #include <glib.h>
+#include <stdio.h>
 
 G_BEGIN_DECLS
 
 /** Replay every edit in the harvest file at `json_path`, rendering its mask
     before and after migration, and report. If `report_path` is non-NULL a
-    detailed per-edit JSON report is written there.
+    detailed per-edit JSON report is written there, carrying both the per-edit
+    rows and a "summary" object holding every figure the run prints, so the
+    file stands on its own without the terminal output.
 
     Returns TRUE if every non-skipped edit rendered identically. */
 gboolean dt_masks_verify_harvest(const char *json_path,
                                  const char *report_path);
+
+/** Same run, writing its report as the *body* of an already-open JSON object
+    (`"source"`, `"edits"`, `"summary"` members, no enclosing braces) so several
+    tools can be composed into one document -- see dt_masks_check_harvest().
+    `rf` may be NULL to run without a report. */
+gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf);
 
 G_END_DECLS
 
