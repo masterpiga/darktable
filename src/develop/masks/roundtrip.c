@@ -263,10 +263,22 @@ static gchar *_first_difference(const char *a, const char *b)
   return out ? out : g_strdup("(no line-level difference found)");
 }
 
-// a harvested edit this tool cannot round-trip. Recorded rather than silently
-// dropped, so the report accounts for every index in the harvest.
+/* A harvested edit this tool cannot round-trip. Recorded rather than silently
+   dropped, so the report accounts for every index in the harvest.
+
+   A plain block, NOT the usual do{...}while(0): `continue` binds to the
+   nearest enclosing loop, and do/while(0) IS one, so wrapped in the idiom it
+   would leave the do-while and fall through into the very code the skip
+   exists to avoid. That is not theoretical -- it shipped, and every skipped
+   edit was then also judged, so reports carried two rows per skipped index
+   and three of dudo's stale mask ids were charged to migration as lost masks.
+
+   The cost of the plain block is that the macro must never be followed by an
+   `else` (the trailing `;` at each call site would orphan it). No call site
+   has one, and a skip is by nature the end of an iteration, so there is
+   nothing for an `else` to do here. */
 #define ROUNDTRIP_SKIP(why)                                                     \
-  do {                                                                          \
+  {                                                                             \
     skipped++;                                                                  \
     if(rf)                                                                      \
     {                                                                           \
@@ -275,7 +287,7 @@ static gchar *_first_difference(const char *a, const char *b)
       first_report = FALSE;                                                     \
     }                                                                           \
     continue;                                                                   \
-  } while(0)
+  }
 
 gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
 {

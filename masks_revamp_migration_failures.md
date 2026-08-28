@@ -90,23 +90,30 @@ mishandling the raster path, the stale drawn group, or their interaction is
 open.
 
 
-## Not a bug -- dangling mask ids in `dudo`
+## A ninth failure that was never real
 
-The confidence document lists a ninth failing shape, `exposure` /
-`uniform|flexi`, from three style-apply rows in `dudo` (#1276, #1277, #1279).
-It is **not** a migration defect and should not be chased.
+For one round the document reported nine failing shapes, the extra one being
+`exposure` / `uniform|flexi` from three style-apply rows in `dudo`. It was an
+artefact of the harness, and the note is kept because the way it hid is worth
+remembering.
 
-Those edits carry a `mask_id` (1782388005, 1782404617) with `forms: []` -- the
-referenced form does not exist anywhere in the library. Style-apply correctly
-reports that no migrated form was persisted, because there was never a form to
-migrate. This is detritus from developing the branch on this very library, and
-it is the reason the headline widened from 0.290% to 0.315%.
+`ROUNDTRIP_SKIP` and `STYLEAPPLY_SKIP` ended in `continue`, wrapped in the
+usual `do { ... } while(0)`. `continue` binds to the nearest enclosing loop and
+`do/while(0)` is one, so it left the macro instead of the edit loop and
+execution fell through into the code the skip existed to avoid. Every skipped
+edit was therefore *also* judged, and each affected report carried two rows for
+that index. `--verify-masks` was unaffected: it skips by returning from
+`_verify_edit()`, so it has no loop to mis-bind to.
 
-The aggregator counts it because `style_mask_lost` is a failure outcome and it
-has no way to distinguish "the form was dropped" from "the form was never
-there". Teaching it that difference means giving style-apply a distinct outcome
-for a dangling source reference; until then, read the headline as 8 real
-failures plus this one.
+The aggregator then indexed report rows by harvest index with a dict
+comprehension, so the second row silently won -- and the second row is the
+judgement the skip was there to prevent. Three already-flexi `dudo` edits with
+stale mask ids were charged to migration as lost masks.
+
+Both macros are now plain blocks, and `_index_rows()` in the aggregator refuses
+a report that carries two rows for one index rather than resolving it. All
+seven corpora were re-checked and re-recorded on the fixed build; the bound
+returned to 0.290%.
 
 
 ## Why these were not caught earlier

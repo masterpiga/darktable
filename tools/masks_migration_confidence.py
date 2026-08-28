@@ -465,6 +465,35 @@ def _shape_id(key):
     return hashlib.sha1(canon.encode("utf-8")).hexdigest()[:16]
 
 
+def _index_rows(corpus_name, check, rows):
+    """Index one check's report rows by harvest index, refusing duplicates.
+
+    Each index must appear at most once: a check either skips an edit or
+    judges it. Two rows for one index means the check emitted a skip and then
+    ran the edit anyway, which a dict comprehension would resolve silently by
+    keeping whichever row came last -- and the row that comes last is the one
+    the skip was there to prevent. That is not hypothetical: a build made from
+    a dirty tree emitted both for every "already flexi" edit, and three of
+    dudo's stale mask ids were charged to migration as lost masks because the
+    skip that should have excluded them was the row that got dropped.
+
+    Raising is the point. A report is cheap to regenerate and the bound is
+    quoted to contributors, so a malformed one has to stop the run rather than
+    shift a number nobody would think to re-derive."""
+    out = {}
+    for row in rows:
+        index = row.get("index")
+        if index in out:
+            raise SystemExit(
+                "%s: %s reports two rows for edit %s (%r and %r). The report is "
+                "malformed -- re-run `darktable --library :memory: --check-masks` "
+                "with a build of the current tree, and record that."
+                % (corpus_name, check, index,
+                   out[index].get("result"), row.get("result")))
+        out[index] = row
+    return out
+
+
 def digest(corpus):
     """Everything the ledger needs to keep about one corpus.
 
@@ -474,7 +503,7 @@ def digest(corpus):
     typical) and are not what gets kept."""
     shapes = {}
     features = {}
-    by_index = {check: {row.get("index"): row for row in corpus.reports.get(check, [])}
+    by_index = {check: _index_rows(corpus.name, check, corpus.reports.get(check, []))
                 for check, _ in CHECKS}
 
     for index, edit in enumerate(corpus.edits):
