@@ -90,6 +90,25 @@ mishandling the raster path, the stale drawn group, or their interaction is
 open.
 
 
+## Not a bug -- dangling mask ids in `dudo`
+
+The confidence document lists a ninth failing shape, `exposure` /
+`uniform|flexi`, from three style-apply rows in `dudo` (#1276, #1277, #1279).
+It is **not** a migration defect and should not be chased.
+
+Those edits carry a `mask_id` (1782388005, 1782404617) with `forms: []` -- the
+referenced form does not exist anywhere in the library. Style-apply correctly
+reports that no migrated form was persisted, because there was never a form to
+migrate. This is detritus from developing the branch on this very library, and
+it is the reason the headline widened from 0.290% to 0.315%.
+
+The aggregator counts it because `style_mask_lost` is a failure outcome and it
+has no way to distinguish "the form was dropped" from "the form was never
+there". Teaching it that difference means giving style-apply a distinct outcome
+for a dangling source reference; until then, read the headline as 8 real
+failures plus this one.
+
+
 ## Why these were not caught earlier
 
 - 205 existing unit tests pass on all 11. None of them looks at a pixel.

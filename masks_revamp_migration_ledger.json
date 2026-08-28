@@ -1612,7 +1612,7 @@
   "dudo": {
    "recorded": "2026-08-28",
    "edits": 2466,
-   "darktable_version": null,
+   "darktable_version": "5.7.0+675~g2a031d9525-dirty",
    "shapes": {
     "001abaa48b4e1af2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "00317acade519055": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
@@ -1699,7 +1699,7 @@
     "172164fefbf776ca": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "178f733a8071c7ff": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"inert":2,"ok":1}}},
     "1825629b868b3844": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
-    "1827ba6edb686a34": {"edits":5,"outcomes":{}},
+    "1827ba6edb686a34": {"edits":5,"outcomes":{"roundtrip":{"ok":5},"styleapply":{"fail":3,"ok":2},"verify":{"skipped":5}}},
     "187d370e868a901d": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "19f5bc08eed0d85c": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
     "1a67f44066992956": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -1818,7 +1818,7 @@
     "3a37ad4d1ffc6bcc": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"classic_gpu":1}}},
     "3b8340c1300e25eb": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "3ba36d95866bcad8": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
-    "3bcc08fcac33f433": {"edits":32,"outcomes":{}},
+    "3bcc08fcac33f433": {"edits":32,"outcomes":{"roundtrip":{"ok":32},"styleapply":{"ok":32},"verify":{"skipped":32}}},
     "3bd5acd454c3f627": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
     "3bede08e58f3168f": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "3c254a5aba2e49f5": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
