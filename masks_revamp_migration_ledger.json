@@ -2,9 +2,9 @@
  "version": 1,
  "corpora": {
   "christian_pfister": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 7765,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "0001d73d389c8ec4": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "001a5fb39982b806": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
@@ -150,7 +150,7 @@
     "1857645d5a33c99b": {"edits":43,"outcomes":{"roundtrip":{"ok":43},"styleapply":{"ok":43},"verify":{"ok":43}}},
     "18ad6cd595fab832": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "18cd425659d25734": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"ok":3}}},
-    "18e9b005482908d6": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"cpu_fail":2}}},
+    "18e9b005482908d6": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "190c7f4eded97603": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "193a4d6badbb3ad0": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "193c4d6cac190890": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -1610,9 +1610,9 @@
    }
   },
   "dudo": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 2466,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "001abaa48b4e1af2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "00317acade519055": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
@@ -2441,9 +2441,9 @@
    }
   },
   "gwbarn": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 1803,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "00092b67b60397be": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "00702f347ce04b73": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -3374,9 +3374,9 @@
    }
   },
   "leonidas": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 1722,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "01355a62b3c7bf80": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"classic_gpu":1}}},
     "01724bdb9b3067f7": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -3927,9 +3927,9 @@
    }
   },
   "macchiato17": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 545,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "029a0129933660f9": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"ok":3}}},
     "03c9f9087677b2a9": {"edits":7,"outcomes":{"roundtrip":{"ok":7},"styleapply":{"ok":7},"verify":{"ok":7}}},
@@ -4055,9 +4055,9 @@
    }
   },
   "thad": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 27693,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "00041e290fc87d03": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "001e7bd7e0995375": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
@@ -4373,7 +4373,7 @@
     "3ae6ab0efc46a5fe": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "3ae8efa08bcae24e": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
     "3b0e93b0afd7ad4d": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
-    "3b1d98e5f3c57d46": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"cpu_fail":2}}},
+    "3b1d98e5f3c57d46": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "3b1f0fdf55745594": {"edits":1,"outcomes":{"roundtrip":{"skipped":1},"styleapply":{"ok":1},"verify":{"skipped":1}}},
     "3bc1c6724d763581": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "3c13bcdca4b42cd9": {"edits":17,"outcomes":{"roundtrip":{"ok":17},"styleapply":{"ok":17},"verify":{"ok":17}}},
@@ -4626,7 +4626,7 @@
     "67953329f7d708b1": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "67c3a0b5ee2830d8": {"edits":9,"outcomes":{"roundtrip":{"ok":9},"styleapply":{"ok":9},"verify":{"inert":2,"ok":7}}},
     "67c4458cfc49304e": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
-    "683136ff3f50c5da": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"cpu_fail":1}}},
+    "683136ff3f50c5da": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "68389f17301fa9b4": {"edits":7,"outcomes":{"roundtrip":{"ok":7},"styleapply":{"ok":7},"verify":{"ok":7}}},
     "687f2795308fd0ba": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "689174f5c66ed60b": {"edits":55,"outcomes":{"roundtrip":{"ok":55},"styleapply":{"ok":55},"verify":{"classic_gpu":19,"inert":1,"ok":35}}},
@@ -4650,7 +4650,7 @@
     "6c61a037b36d0729": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"ok":3}}},
     "6c88563c25703e07": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
     "6cb6f07468042926": {"edits":18,"outcomes":{"roundtrip":{"ok":18},"styleapply":{"ok":18},"verify":{"ok":18}}},
-    "6cd0a0f308bddb1d": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"cpu_fail":1}}},
+    "6cd0a0f308bddb1d": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "6cf95691c2a6060c": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "6d039b9b443f2301": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"inert":2}}},
     "6d11c52132f48b45": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
@@ -4701,7 +4701,7 @@
     "756ec303dd06dd7d": {"edits":9,"outcomes":{"roundtrip":{"ok":9},"styleapply":{"ok":9},"verify":{"inert":7,"ok":2}}},
     "758c22a3de098add": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "75c5d6ac7b27ad10": {"edits":9,"outcomes":{"roundtrip":{"ok":9},"styleapply":{"ok":9},"verify":{"inert":9}}},
-    "75ddca6db8c8bb57": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"cpu_fail":2}}},
+    "75ddca6db8c8bb57": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "75dfc744592060ad": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "75f26587adf1ca41": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
     "77710af91ac6bf47": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -4965,7 +4965,7 @@
     "a64b89eb2e9f4381": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "a653144f07c60651": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "a655f12835162968": {"edits":104,"outcomes":{"roundtrip":{"ok":104},"styleapply":{"ok":104},"verify":{"classic_gpu":2,"ok":102}}},
-    "a67e0741df3ff9cb": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"cpu_fail":1}}},
+    "a67e0741df3ff9cb": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "a6df073ca39b7e19": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "a6ea5cb43fae2a86": {"edits":26,"outcomes":{"roundtrip":{"ok":26},"styleapply":{"ok":26},"verify":{"classic_gpu":6,"inert":3,"ok":17}}},
     "a6f858e4cc854766": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -5258,7 +5258,7 @@
     "db9947d8647c7c07": {"edits":5,"outcomes":{"roundtrip":{"ok":5},"styleapply":{"ok":5},"verify":{"ok":5}}},
     "dbb95ec4f29cc8a1": {"edits":1,"outcomes":{"roundtrip":{"skipped":1},"styleapply":{"ok":1},"verify":{"skipped":1}}},
     "dbcaa5570d327ece": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
-    "dbccde2106422ee5": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"cpu_fail":1}}},
+    "dbccde2106422ee5": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "dbed126cca1d9b46": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "dc32c7430eb1d4f9": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "dcb173931131b767": {"edits":19,"outcomes":{"roundtrip":{"ok":19},"styleapply":{"ok":19},"verify":{"ok":19}}},
@@ -5351,7 +5351,7 @@
     "e81b626ad3b5b927": {"edits":5,"outcomes":{"roundtrip":{"ok":5},"styleapply":{"ok":5},"verify":{"ok":5}}},
     "e83dfba74f637e72": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"ok":3}}},
     "e8a74b6938395c9d": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
-    "e8fbb048f41057c2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"cpu_fail":1}}},
+    "e8fbb048f41057c2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "e90445350124e6c2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "e92608e1a3bc4863": {"edits":10671,"outcomes":{"roundtrip":{"ok":10671},"styleapply":{"ok":10671},"verify":{"classic_gpu":272,"inert":1,"ok":10398}}},
     "e96d486b2908162f": {"edits":6,"outcomes":{"roundtrip":{"ok":6},"styleapply":{"ok":6},"verify":{"ok":6}}},
@@ -5479,9 +5479,9 @@
    }
   },
   "zisoft": {
-   "recorded": "2026-08-28",
+   "recorded": "2026-08-29",
    "edits": 281,
-   "darktable_version": "5.7.0+681~g7c284ec25b-dirty",
+   "darktable_version": "5.7.0+682~g0912461e64-dirty",
    "shapes": {
     "029a0129933660f9": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "03491190cb045456": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
