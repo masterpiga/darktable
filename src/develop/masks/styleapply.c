@@ -437,6 +437,14 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
                  json_path, host.operation);
   gboolean first_report = TRUE;
 
+  /* Exact repeats reuse the first occurrence's verdict instead of seeding,
+     styling and reloading the scratch image again -- see
+     dt_masks_harvest_edit_key(). Every occurrence is still counted. */
+  typedef struct { const char *verdict, *outcome; gchar *desc;
+                   int n_items, mp, max_landed; gboolean collides, drawn; } _sa_cached_t;
+  GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  int distinct = 0;
+
   int total = 0, ok_count = 0, dangling = 0, host_lost = 0, skipped = 0, errors = 0;
   int same_op = 0, drawn_in_style = 0, not_carried = 0;
   int multi_item = 0, landed_second = 0, no_module = 0;
@@ -492,6 +500,39 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     // migration decides to do with an unresolvable drawn mask, the result must
     // not claim a form that is not there.
     if(bp.mask_mode & DEVELOP_MASK_MASK) drawn_in_style++;
+
+    gchar *key = dt_masks_harvest_edit_key(edit);
+    const _sa_cached_t *cached = key ? g_hash_table_lookup(seen, key) : NULL;
+    if(cached)
+    {
+      g_free(key);
+      total++;
+      if(cached->n_items > 1) multi_item++;
+      if(cached->max_landed > 0) landed_second++;
+      if(!strcmp(cached->outcome, "ok")) ok_count++;
+      else if(!strcmp(cached->outcome, "not_carried")) not_carried++;
+      else if(!strcmp(cached->outcome, "style_mask_lost")) dangling++;
+      else if(!strcmp(cached->outcome, "host_disturbed")) host_lost++;
+      else if(!strcmp(cached->outcome, "no_module")) no_module++;
+      if(rf)
+      {
+        gchar *esc = g_strescape(cached->desc ? cached->desc : "", NULL);
+        fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\","
+                    " \"mask_mode\": %u, \"same_op_as_host\": %s,"
+                    " \"style_items\": %d, \"harvested_multi_priority\": %d,"
+                    " \"max_landed_instance\": %d, \"outcome\": \"%s\","
+                    " \"result\": \"%s\", \"repeat\": true,"
+                    " \"style_mask\": \"%s\"}",
+                first_report ? "" : ",", i, op, bp.mask_mode,
+                cached->collides ? "true" : "false", cached->n_items, cached->mp,
+                cached->max_landed, cached->outcome, cached->verdict, esc);
+        g_free(esc);
+        first_report = FALSE;
+      }
+      if((i + 1) % 250 == 0) printf("[styleapply]   %u/%u ...\n", i + 1, n);
+      continue;
+    }
+    distinct++;
 
     // phase 0: a fresh image carrying the classic host edit
     dt_masks_scratch_wipe_history(STYLEAPPLY_IMGID);
@@ -643,12 +684,26 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
                   " \"same_op_as_host\": %s, \"style_items\": %d,"
                   " \"harvested_multi_priority\": %d, \"max_landed_instance\": %d,"
                   " \"outcome\": \"%s\", \"result\": \"%s\","
-                  " \"style_mask\": \"%s\"}",
+                  " \"repeat\": false, \"style_mask\": \"%s\"}",
               first_report ? "" : ",", i, op, bp.mask_mode,
               collides ? "true" : "false", n_items, mp, max_landed, outcome,
               verdict, esc);
       g_free(esc);
       first_report = FALSE;
+    }
+
+    if(key)
+    {
+      _sa_cached_t *store = malloc(sizeof(_sa_cached_t));
+      if(store)
+      {
+        store->verdict = verdict; store->outcome = outcome;
+        store->desc = style_desc ? g_strdup(style_desc) : NULL;
+        store->n_items = n_items; store->mp = mp; store->max_landed = max_landed;
+        store->collides = collides; store->drawn = drawn_only;
+        g_hash_table_insert(seen, key, store);
+      }
+      else g_free(key);
     }
 
     g_free(style_desc);
@@ -673,6 +728,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
     fprintf(rf, "    \"harvested\": %u,\n", n);
     fprintf(rf, "    \"applied_as_style\": %d,\n", total);
+    fprintf(rf, "    \"distinct_edits\": %d,\n", distinct);
     fprintf(rf, "    \"ok\": %d,\n", ok_count);
     fprintf(rf, "    \"style_mask_lost\": %d,\n", dangling);
     fprintf(rf, "    \"host_disturbed\": %d,\n", host_lost);
@@ -688,7 +744,9 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
   }
 
   printf("[styleapply]\n");
-  printf("[styleapply] applied as style : %d\n", total);
+  g_hash_table_destroy(seen);
+  printf("[styleapply] applied as style : %d  (%d distinct, %d exact repeats reused)\n",
+         total, distinct, total - distinct);
   printf("[styleapply]   ok             : %d\n", ok_count);
   printf("[styleapply]   STYLE MASK LOST: %d  (migrated form never persisted)\n", dangling);
   printf("[styleapply]   HOST DISTURBED : %d\n", host_lost);

@@ -19,6 +19,7 @@
 #include "develop/masks/harvest.h"
 
 #include "common/darktable.h"
+#include "common/exif.h"
 #include "develop/blend.h"
 #include "develop/masks.h"
 
@@ -29,6 +30,13 @@
 #include <string.h>
 
 #define HARVEST_FORMAT_VERSION 1
+
+// An XMP sidecar records no image dimensions. Mask geometry is normalised, so
+// what a replay needs from them is an aspect ratio; 3:2 is the commonest
+// photographic one, and whichever is chosen applies equally to the classic and
+// migrated renders a verification compares.
+#define HARVEST_XMP_NOMINAL_WIDTH 6000
+#define HARVEST_XMP_NOMINAL_HEIGHT 4000
 
 // ---------------------------------------------------------------------------
 // JSON emission
@@ -341,48 +349,21 @@ static void _emit_version_histogram(json_t *j, const char *key, const int *bucke
 }
 
 /** Read the forms attached to one history entry and emit them. */
-static int _emit_forms(json_t *j,
-                       sqlite3 *db,
-                       const int imgid,
-                       const int num,
-                       harvest_stats_t *st)
+/** Emit one form. Shared by both harvest drivers -- the library one reads its
+    columns from masks_history, the XMP one from a parsed sidecar, and the JSON
+    they produce has to be identical field for field or a corpus's provenance
+    would change what it means. */
+static void _emit_one_form(json_t *j,
+                           const int formid,
+                           const int type,
+                           const int version,
+                           const void *pts,
+                           const int pts_bytes,
+                           const int pts_count,
+                           const void *src,
+                           const int src_bytes,
+                           harvest_stats_t *st)
 {
-  sqlite3_stmt *stmt;
-  // Every form *visible* at this history position, not just the ones written
-  // at it.
-  //
-  // masks_history stores a row when a form is created or changed, under the
-  // history entry that changed it. A later entry that merely references an
-  // existing mask writes no row of its own, so selecting `num = ?2` returns
-  // nothing for it -- and the edit then replays with a dangling mask_id and no
-  // geometry, which renders as the "no form" fallback instead of as the user's
-  // actual mask.
-  //
-  // That is what dt_masks_read_masks_history() does too (it reads every row
-  // with num < history_end and lets later rows for the same formid win), and
-  // getting it wrong here produced 22 spurious "the migration changed this
-  // mask" results whose real cause was that half the geometry was missing.
-  //
-  // SQLite's documented bare-column behaviour applies: with MAX(num) in the
-  // select list, the other columns come from the row that supplied the
-  // maximum, which is exactly the latest version of each form.
-  const char *q = "SELECT formid, form, version, points, points_count, source,"
-                  "       MAX(num)"
-                  " FROM masks_history WHERE imgid = ?1 AND num <= ?2"
-                  " GROUP BY formid"
-                  " ORDER BY formid";
-  if(sqlite3_prepare_v2(db, q, -1, &stmt, NULL) != SQLITE_OK) return 0;
-  sqlite3_bind_int(stmt, 1, imgid);
-  sqlite3_bind_int(stmt, 2, num);
-
-  int n = 0;
-  _j_open(j, "forms", '[');
-  while(sqlite3_step(stmt) == SQLITE_ROW)
-  {
-    const int formid = sqlite3_column_int(stmt, 0);
-    const int type = sqlite3_column_int(stmt, 1);
-    const int version = sqlite3_column_int(stmt, 2);
-
     _tally_version(st->masks_version, version);
     if(type & DT_MASKS_CIRCLE)   st->form_type_circle++;
     if(type & DT_MASKS_ELLIPSE)  st->form_type_ellipse++;
@@ -390,11 +371,6 @@ static int _emit_forms(json_t *j,
     if(type & DT_MASKS_BRUSH)    st->form_type_brush++;
     if(type & DT_MASKS_GRADIENT) st->form_type_gradient++;
     if(type & DT_MASKS_GROUP)    st->form_type_group++;
-    const void *pts = sqlite3_column_blob(stmt, 3);
-    const int pts_bytes = sqlite3_column_bytes(stmt, 3);
-    const int pts_count = sqlite3_column_int(stmt, 4);
-    const void *src = sqlite3_column_blob(stmt, 5);
-    const int src_bytes = sqlite3_column_bytes(stmt, 5);
 
     _j_open(j, NULL, '{');
     _j_int(j, "formid", formid);
@@ -449,6 +425,56 @@ static int _emit_forms(json_t *j,
     }
 
     _j_close(j, '}');
+}
+
+static int _emit_forms(json_t *j,
+                       sqlite3 *db,
+                       const int imgid,
+                       const int num,
+                       harvest_stats_t *st)
+{
+  sqlite3_stmt *stmt;
+  // Every form *visible* at this history position, not just the ones written
+  // at it.
+  //
+  // masks_history stores a row when a form is created or changed, under the
+  // history entry that changed it. A later entry that merely references an
+  // existing mask writes no row of its own, so selecting `num = ?2` returns
+  // nothing for it -- and the edit then replays with a dangling mask_id and no
+  // geometry, which renders as the "no form" fallback instead of as the user's
+  // actual mask.
+  //
+  // That is what dt_masks_read_masks_history() does too (it reads every row
+  // with num < history_end and lets later rows for the same formid win), and
+  // getting it wrong here produced 22 spurious "the migration changed this
+  // mask" results whose real cause was that half the geometry was missing.
+  //
+  // SQLite's documented bare-column behaviour applies: with MAX(num) in the
+  // select list, the other columns come from the row that supplied the
+  // maximum, which is exactly the latest version of each form.
+  const char *q = "SELECT formid, form, version, points, points_count, source,"
+                  "       MAX(num)"
+                  " FROM masks_history WHERE imgid = ?1 AND num <= ?2"
+                  " GROUP BY formid"
+                  " ORDER BY formid";
+  if(sqlite3_prepare_v2(db, q, -1, &stmt, NULL) != SQLITE_OK) return 0;
+  sqlite3_bind_int(stmt, 1, imgid);
+  sqlite3_bind_int(stmt, 2, num);
+
+  int n = 0;
+  _j_open(j, "forms", '[');
+  while(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    const int formid = sqlite3_column_int(stmt, 0);
+    const int type = sqlite3_column_int(stmt, 1);
+    const int version = sqlite3_column_int(stmt, 2);
+    const void *pts = sqlite3_column_blob(stmt, 3);
+    const int pts_bytes = sqlite3_column_bytes(stmt, 3);
+    const int pts_count = sqlite3_column_int(stmt, 4);
+    const void *src = sqlite3_column_blob(stmt, 5);
+    const int src_bytes = sqlite3_column_bytes(stmt, 5);
+    _emit_one_form(j, formid, type, version, pts, pts_bytes, pts_count,
+                   src, src_bytes, st);
     n++;
   }
   _j_close(j, ']');
@@ -555,6 +581,598 @@ static goffset _file_size(const char *path)
   if(info) g_object_unref(info);
   g_object_unref(f);
   return size;
+}
+
+/** The "coverage" section: what is in this corpus that we may not have seen
+    before. Its own function because both harvest drivers emit it identically,
+    and an incoming file is triaged on these counts without reading the rest. */
+static void _emit_coverage(json_t *j, const harvest_stats_t *st)
+{
+  // What is in here that we may not have seen before. Kept as its own section
+  // so an incoming file can be triaged on these counts without reading the
+  // whole of it.
+  _j_open(j, "coverage", '{');
+  _j_open(j, "mask_combine", '{');
+  _j_int(j, "inverted", st->combine_inv);
+  _j_int(j, "inclusive", st->combine_incl);
+  _j_int(j, "drawn_mask_polarity", st->combine_masks_pos);
+  _j_close(j, '}');
+  _j_open(j, "cases", '{');
+  _j_int(j, "drawn_only", st->case_drawn_only);
+  _j_int(j, "parametric_only", st->case_parametric_only);
+  _j_int(j, "drawn_and_parametric", st->case_drawn_and_parametric);
+  _j_int(j, "raster", st->case_raster);
+  _j_int(j, "already_flexi", st->case_already_flexi);
+  _j_close(j, '}');
+  _j_open(j, "refinements", '{');
+  _j_int(j, "feathering", st->uses_feathering);
+  _j_int(j, "details", st->uses_details);
+  _j_int(j, "blur", st->uses_blur);
+  _j_int(j, "contrast_or_brightness", st->uses_contrast_or_brightness);
+  _j_int(j, "per_shape_refinement", st->per_shape_refinement);
+  _j_int(j, "custom_group_opacity", st->custom_group_opacity);
+  _j_int(j, "explicit_group_start", st->explicit_group_start);
+  _j_close(j, '}');
+  _j_open(j, "form_types", '{');
+  _j_int(j, "circle", st->form_type_circle);
+  _j_int(j, "ellipse", st->form_type_ellipse);
+  _j_int(j, "path", st->form_type_path);
+  _j_int(j, "brush", st->form_type_brush);
+  _j_int(j, "gradient", st->form_type_gradient);
+  _j_int(j, "group", st->form_type_group);
+  _j_close(j, '}');
+  _emit_version_histogram(j, "blendop_versions", st->blendop_version);
+  _emit_version_histogram(j, "masks_versions", st->masks_version);
+  _j_close(j, '}');
+
+}
+
+/** Write a gzipped copy beside the harvest and say so. Shared by both drivers:
+    the person sending the file should not need a second tool to compress it,
+    notably on Windows. */
+static void _report_and_gzip(const char *output_path)
+{
+  // and a compressed copy alongside it, so sharing the result does not need a
+  // second tool the person may not have (notably on Windows)
+  gchar *gz_path = g_strconcat(output_path, ".gz", NULL);
+  GError *gz_err = NULL;
+  const gboolean gz_ok = _gzip_file(output_path, gz_path, &gz_err);
+  if(gz_ok)
+  {
+    const goffset raw = _file_size(output_path);
+    const goffset gz = _file_size(gz_path);
+    if(raw > 0 && gz > 0)
+    {
+      gchar *raw_s = g_format_size(raw);
+      gchar *gz_s = g_format_size(gz);
+      printf("[harvest] wrote %s  (%s, from %s)\n", gz_path, gz_s, raw_s);
+      g_free(raw_s);
+      g_free(gz_s);
+    }
+    else
+      printf("[harvest] wrote %s\n", gz_path);
+  }
+  else
+  {
+    printf("[harvest] could not write %s: %s\n"
+           "[harvest] (not a problem -- the JSON above is complete;"
+           " compress it yourself if you like)\n",
+           gz_path, gz_err ? gz_err->message : "unknown error");
+  }
+  if(gz_ok)
+    printf("[harvest] Read %s, then send %s -- they hold the same thing.\n",
+           output_path, gz_path);
+  g_free(gz_path);
+  g_clear_error(&gz_err);
+}
+
+// ---------------------------------------------------------------------------
+// harvesting from XMP sidecars
+// ---------------------------------------------------------------------------
+
+/* Not everyone uses darktable's library. A photographer who imports, edits and
+   moves on keeps their whole development history in the .xmp next to each
+   file, and library.db is a scratch index they would happily delete -- so a
+   harvest that can only read library.db cannot see their masks at all, and the
+   corpus quietly over-represents people who use the DAM.
+
+   The sidecar is parsed here rather than handed to dt_exif_xmp_read(), which
+   would be the obvious reuse. That function writes into darktable's own
+   database and therefore needs the whole of startup behind it, which is exactly
+   what --harvest-masks refuses to do (see this file's header: the harvest runs
+   before dt_database_init() so that pointing it at someone's real setup cannot
+   modify anything). A sidecar is XML with darktable's own hex/gz blobs in it,
+   both of which can be read with no database, no exiv2 and no lock: GMarkupParser
+   for the XML, dt_exif_xmp_decode() for the blobs.
+
+   Only the attributes named below are read. A sidecar also carries the original
+   filename, GPS coordinates, timestamps and ratings; none of them are looked
+   at, and the output is the same fields the library harvest produces. */
+
+static gint _int_cmp(gconstpointer a, gconstpointer b)
+{
+  return GPOINTER_TO_INT(a) - GPOINTER_TO_INT(b);
+}
+
+typedef struct _xmp_form_t
+{
+  int num, formid, type, version, points_count;
+  unsigned char *points; int points_bytes;
+  unsigned char *source; int source_bytes;
+} _xmp_form_t;
+
+typedef struct _xmp_hist_t
+{
+  int num, multi_priority, enabled, blendop_version;
+  gchar *operation;
+  unsigned char *blendop; int blendop_bytes;
+} _xmp_hist_t;
+
+typedef struct _xmp_ctx_t
+{
+  GList *hist;   // _xmp_hist_t*, in file order
+  GList *forms;  // _xmp_form_t*, in file order
+  gboolean in_history, in_masks;
+} _xmp_ctx_t;
+
+static const char *_attr(const gchar **names, const gchar **values, const char *want)
+{
+  for(int i = 0; names[i]; i++)
+    if(!strcmp(names[i], want)) return values[i];
+  return NULL;
+}
+
+static int _attr_int(const gchar **names, const gchar **values,
+                     const char *want, const int dflt)
+{
+  const char *v = _attr(names, values, want);
+  return v ? atoi(v) : dflt;
+}
+
+static unsigned char *_attr_blob(const gchar **names, const gchar **values,
+                                 const char *want, int *out_len)
+{
+  *out_len = 0;
+  const char *v = _attr(names, values, want);
+  if(!v) return NULL;
+  return dt_exif_xmp_decode(v, (int)strlen(v), out_len);
+}
+
+static void _xmp_start(GMarkupParseContext *ctx,
+                       const gchar *element,
+                       const gchar **names,
+                       const gchar **values,
+                       gpointer user,
+                       GError **error)
+{
+  (void)ctx; (void)error;
+  _xmp_ctx_t *x = user;
+
+  if(!strcmp(element, "darktable:history")) { x->in_history = TRUE; return; }
+  if(!strcmp(element, "darktable:masks_history")) { x->in_masks = TRUE; return; }
+  if(strcmp(element, "rdf:li")) return;
+
+  if(x->in_masks)
+  {
+    _xmp_form_t *f = calloc(1, sizeof(_xmp_form_t));
+    if(!f) return;
+    f->num = _attr_int(names, values, "darktable:mask_num", 0);
+    f->formid = _attr_int(names, values, "darktable:mask_id", 0);
+    f->type = _attr_int(names, values, "darktable:mask_type", 0);
+    f->version = _attr_int(names, values, "darktable:mask_version", 0);
+    f->points_count = _attr_int(names, values, "darktable:mask_nb", 0);
+    // `darktable:mask_name` is deliberately not read: user-typed free text.
+    f->points = _attr_blob(names, values, "darktable:mask_points", &f->points_bytes);
+    f->source = _attr_blob(names, values, "darktable:mask_src", &f->source_bytes);
+    x->forms = g_list_prepend(x->forms, f);
+  }
+  else if(x->in_history)
+  {
+    _xmp_hist_t *h = calloc(1, sizeof(_xmp_hist_t));
+    if(!h) return;
+    h->num = _attr_int(names, values, "darktable:num", 0);
+    h->multi_priority = _attr_int(names, values, "darktable:multi_priority", 0);
+    h->enabled = _attr_int(names, values, "darktable:enabled", 1);
+    h->blendop_version = _attr_int(names, values, "darktable:blendop_version", 14);
+    const char *op = _attr(names, values, "darktable:operation");
+    h->operation = g_strdup(op ? op : "");
+    // `darktable:params` (the module's own settings) and `darktable:multi_name`
+    // are not read: the first is not needed to replay a mask, the second is
+    // user-typed.
+    h->blendop = _attr_blob(names, values, "darktable:blendop_params",
+                            &h->blendop_bytes);
+    x->hist = g_list_prepend(x->hist, h);
+  }
+}
+
+static void _xmp_end(GMarkupParseContext *ctx,
+                     const gchar *element,
+                     gpointer user,
+                     GError **error)
+{
+  (void)ctx; (void)error;
+  _xmp_ctx_t *x = user;
+  if(!strcmp(element, "darktable:history")) x->in_history = FALSE;
+  else if(!strcmp(element, "darktable:masks_history")) x->in_masks = FALSE;
+}
+
+static void _xmp_free(_xmp_ctx_t *x)
+{
+  for(GList *l = x->hist; l; l = g_list_next(l))
+  {
+    _xmp_hist_t *h = l->data;
+    g_free(h->operation);
+    g_free(h->blendop);
+    free(h);
+  }
+  for(GList *l = x->forms; l; l = g_list_next(l))
+  {
+    _xmp_form_t *f = l->data;
+    g_free(f->points);
+    g_free(f->source);
+    free(f);
+  }
+  g_list_free(x->hist);
+  g_list_free(x->forms);
+}
+
+/** Every form visible at history position `num`, emitted in formid order.
+
+    The same rule the library harvest applies, for the same reason: a sidecar
+    records a form under the history entry that changed it, so an entry that
+    merely references an existing mask lists none of its own, and the latest
+    row at or below `num` is the one that is live. */
+static int _emit_xmp_forms(json_t *j,
+                           GList *forms,
+                           const int num,
+                           harvest_stats_t *st)
+{
+  // gather the winning row per formid: highest mask_num <= num
+  GHashTable *live = g_hash_table_new(g_direct_hash, g_direct_equal);
+  for(GList *l = forms; l; l = g_list_next(l))
+  {
+    _xmp_form_t *f = l->data;
+    if(f->num > num) continue;
+    _xmp_form_t *cur = g_hash_table_lookup(live, GINT_TO_POINTER(f->formid));
+    if(!cur || f->num >= cur->num)
+      g_hash_table_insert(live, GINT_TO_POINTER(f->formid), f);
+  }
+
+  GList *ids = g_hash_table_get_keys(live);
+  ids = g_list_sort(ids, (GCompareFunc)_int_cmp);
+
+  int n = 0;
+  _j_open(j, "forms", '[');
+  for(GList *l = ids; l; l = g_list_next(l))
+  {
+    const _xmp_form_t *f = g_hash_table_lookup(live, l->data);
+    _emit_one_form(j, f->formid, f->type, f->version,
+                   f->points, f->points_bytes, f->points_count,
+                   f->source, f->source_bytes, st);
+    n++;
+  }
+  _j_close(j, ']');
+
+  g_list_free(ids);
+  g_hash_table_destroy(live);
+  return n;
+}
+
+/** The image a sidecar belongs to, or NULL if it is not beside it.
+
+    darktable's own convention is `<image file>.xmp` -- `IMG_1234.CR3.xmp` next
+    to `IMG_1234.CR3` -- so stripping the suffix is the answer nearly always.
+    The "short" variant some setups produce (`IMG_1234.xmp`) names no
+    extension, so fall back to looking for a sibling with the same stem that is
+    not itself a sidecar. */
+static gchar *_image_for_sidecar(const char *xmp_path)
+{
+  const size_t len = strlen(xmp_path);
+  if(len < 5) return NULL;
+
+  gchar *stripped = g_strndup(xmp_path, len - 4);   // drop ".xmp"
+  if(g_file_test(stripped, G_FILE_TEST_IS_REGULAR)) return stripped;
+
+  /* A duplicate's sidecar carries darktable's index before the extension --
+     `TLK_0591_04.CR3.xmp` is the fourth duplicate of `TLK_0591.CR3`, and every
+     duplicate points at that same image. 40 of the 1,579 sidecars in the
+     library this was developed against are of this form, so without it their
+     masks would all fall back to a nominal canvas. */
+  gchar *dot = strrchr(stripped, '.');
+  if(dot && dot != stripped)
+  {
+    const gchar *underscore = NULL;
+    for(const gchar *c = dot - 1; c > stripped; c--)
+    {
+      if(g_ascii_isdigit(*c)) continue;
+      if(*c == '_' && c != dot - 1) underscore = c;
+      break;
+    }
+    if(underscore)
+    {
+      gchar *base = g_strndup(stripped, (gsize)(underscore - stripped));
+      gchar *cand = g_strconcat(base, dot, NULL);
+      g_free(base);
+      if(g_file_test(cand, G_FILE_TEST_IS_REGULAR))
+      {
+        g_free(stripped);
+        return cand;
+      }
+      g_free(cand);
+    }
+  }
+
+  gchar *dir = g_path_get_dirname(stripped);
+  gchar *stem = g_path_get_basename(stripped);
+  g_free(stripped);
+
+  // the short sidecar form (`IMG_1234_01.xmp`) names no extension, so the
+  // duplicate index has to come off the stem before the sibling scan too
+  gchar *us = strrchr(stem, '_');
+  if(us && us != stem)
+  {
+    gboolean all_digits = us[1] != '\0';
+    for(const gchar *c = us + 1; *c && all_digits; c++)
+      if(!g_ascii_isdigit(*c)) all_digits = FALSE;
+    if(all_digits) *us = '\0';
+  }
+
+  gchar *found = NULL;
+  GDir *d = g_dir_open(dir, 0, NULL);
+  if(d)
+  {
+    gchar *prefix = g_strconcat(stem, ".", NULL);
+    const gchar *name;
+    while(!found && (name = g_dir_read_name(d)))
+    {
+      if(!g_str_has_prefix(name, prefix)) continue;
+      if(g_str_has_suffix(name, ".xmp") || g_str_has_suffix(name, ".XMP")) continue;
+      gchar *cand = g_build_filename(dir, name, NULL);
+      if(g_file_test(cand, G_FILE_TEST_IS_REGULAR)) found = cand;
+      else g_free(cand);
+    }
+    g_free(prefix);
+    g_dir_close(d);
+  }
+  g_free(dir);
+  g_free(stem);
+  return found;
+}
+
+/** Collect every .xmp under `dir`, recursively, in a stable order. */
+static void _collect_xmps(const char *dir, GList **out, int depth)
+{
+  // sidecars sit beside the images; a deep tree is normal, a cyclic one is not
+  if(depth > 32) return;
+  GDir *d = g_dir_open(dir, 0, NULL);
+  if(!d) return;
+
+  GList *entries = NULL;
+  const gchar *name;
+  while((name = g_dir_read_name(d))) entries = g_list_prepend(entries, g_strdup(name));
+  g_dir_close(d);
+  entries = g_list_sort(entries, (GCompareFunc)g_strcmp0);
+
+  for(GList *e = entries; e; e = g_list_next(e))
+  {
+    gchar *path = g_build_filename(dir, (const char *)e->data, NULL);
+    if(g_file_test(path, G_FILE_TEST_IS_DIR))
+    {
+      _collect_xmps(path, out, depth + 1);
+      g_free(path);
+    }
+    else if(g_str_has_suffix((const char *)e->data, ".xmp")
+            || g_str_has_suffix((const char *)e->data, ".XMP"))
+      *out = g_list_prepend(*out, path);
+    else
+      g_free(path);
+  }
+  g_list_free_full(entries, g_free);
+}
+
+gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path)
+{
+  if(!g_file_test(dir, G_FILE_TEST_IS_DIR))
+  {
+    fprintf(stderr, "[harvest] not a directory: %s\n", dir);
+    return FALSE;
+  }
+
+  GList *files = NULL;
+  _collect_xmps(dir, &files, 0);
+  files = g_list_reverse(files);
+  const guint nfiles = g_list_length(files);
+  printf("[harvest] %u XMP sidecars under %s\n", nfiles, dir);
+  if(nfiles == 0)
+  {
+    g_list_free_full(files, g_free);
+    fprintf(stderr, "[harvest] nothing to harvest.\n");
+    return FALSE;
+  }
+
+  FILE *f = g_fopen(output_path, "wb");
+  if(!f)
+  {
+    fprintf(stderr, "[harvest] cannot write output file: %s\n", output_path);
+    g_list_free_full(files, g_free);
+    return FALSE;
+  }
+
+  json_t j = { .f = f, .indent = 0, .need_comma = FALSE };
+  fputs("{", f);
+  j.indent = 1;
+  j.need_comma = FALSE;
+
+  _j_str(&j, "format", "darktable-mask-harvest");
+  _j_int(&j, "format_version", HARVEST_FORMAT_VERSION);
+  _j_str(&j, "source_kind", "xmp");
+  _j_str(&j, "darktable_version", darktable_package_version);
+  _j_int(&j, "current_blend_version", DEVELOP_BLEND_VERSION);
+  _j_int(&j, "current_masks_version", dt_masks_version());
+  _j_str(&j, "contents",
+         "Mask configurations only, read from XMP sidecars. No file names, no "
+         "folder names, no shape or group names, no module instance names, no "
+         "image content, no thumbnails, no timestamps, no EXIF, no GPS. Image "
+         "identity is reduced to a sequential index.");
+  _j_str(&j, "image_dimensions",
+         "read from each sidecar's own image file, metadata only, nothing else "
+         "about it opened. Where that file is missing a nominal 3:2 canvas is "
+         "used instead and the edit is marked dimensions_known: 0; mask geometry "
+         "is stored normalised, so that only sets the aspect a replay draws on, "
+         "identically for the classic and migrated renders it compares.");
+
+  _j_open(&j, "edits", '[');
+
+  harvest_stats_t st;
+  memset(&st, 0, sizeof(st));
+
+  int harvested = 0, scanned = 0, skipped_no_mask = 0, skipped_size = 0;
+  int total_forms = 0, image_index = -1, images_with_masks = 0, files_read = 0;
+  int dims_from_image = 0, dims_nominal = 0;
+
+  for(GList *fl = files; fl; fl = g_list_next(fl))
+  {
+    const char *path = fl->data;
+    gchar *contents = NULL;
+    gsize len = 0;
+    if(!g_file_get_contents(path, &contents, &len, NULL)) continue;
+
+    _xmp_ctx_t x;
+    memset(&x, 0, sizeof(x));
+    static const GMarkupParser parser =
+      { _xmp_start, _xmp_end, NULL, NULL, NULL };
+    GMarkupParseContext *mctx =
+      g_markup_parse_context_new(&parser, 0, &x, NULL);
+    const gboolean parsed =
+      g_markup_parse_context_parse(mctx, contents, (gssize)len, NULL)
+      && g_markup_parse_context_end_parse(mctx, NULL);
+    g_markup_parse_context_free(mctx);
+    g_free(contents);
+
+    if(!parsed) { _xmp_free(&x); continue; }
+    files_read++;
+
+    /* The sidecar records no dimensions, but it sits beside the image that
+       does. Only the pixel size is read from it (see dt_exif_get_dimensions);
+       nothing else about the file is opened, and nothing but width and height
+       reaches the output. */
+    int img_w = HARVEST_XMP_NOMINAL_WIDTH, img_h = HARVEST_XMP_NOMINAL_HEIGHT;
+    gboolean dims_known = FALSE;
+    gchar *image_path = _image_for_sidecar(path);
+    if(image_path)
+    {
+      dims_known = dt_exif_get_dimensions(image_path, &img_w, &img_h);
+      g_free(image_path);
+    }
+    if(dims_known) dims_from_image++;
+    else dims_nominal++;
+
+    // both lists were built by prepending, so put them back in file order
+    x.hist = g_list_reverse(x.hist);
+    x.forms = g_list_reverse(x.forms);
+
+    image_index++;
+    gboolean counted_this_image = FALSE;
+
+    for(GList *hl = x.hist; hl; hl = g_list_next(hl))
+    {
+      const _xmp_hist_t *h = hl->data;
+      scanned++;
+
+      // same rule as the library harvest: only blobs this build's struct can
+      // decode field by field, counted rather than silently dropped
+      if(!h->blendop || h->blendop_bytes != (int)sizeof(dt_develop_blend_params_t))
+      {
+        if(h->blendop) skipped_size++;
+        continue;
+      }
+
+      dt_develop_blend_params_t blend;
+      memcpy(&blend, h->blendop, sizeof(blend));
+
+      const uint32_t interesting = DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL
+                                 | DEVELOP_MASK_RASTER | DEVELOP_MASK_FLEXI;
+      if(!(blend.mask_mode & interesting)) { skipped_no_mask++; continue; }
+
+      if(!counted_this_image) { images_with_masks++; counted_this_image = TRUE; }
+
+      _j_open(&j, NULL, '{');
+      _j_int(&j, "index", harvested);
+      _j_int(&j, "image_index", image_index);
+      _j_open(&j, "image", '{');
+      // See "image_dimensions" above: a sidecar does not carry them.
+      _j_int(&j, "width", img_w);
+      _j_int(&j, "height", img_h);
+      _j_int(&j, "dimensions_known", dims_known ? 1 : 0);
+      _j_close(&j, '}');
+
+      _j_str(&j, "operation", h->operation);
+      _j_int(&j, "multi_priority", h->multi_priority);
+      _j_int(&j, "enabled", h->enabled);
+      _j_int(&j, "blendop_version", h->blendop_version);
+
+      if(blend.mask_combine & DEVELOP_COMBINE_INV) st.combine_inv++;
+      if(blend.mask_combine & DEVELOP_COMBINE_INCL) st.combine_incl++;
+      if(blend.mask_combine & DEVELOP_COMBINE_MASKS_POS) st.combine_masks_pos++;
+
+      const gboolean has_drawn = (blend.mask_mode & DEVELOP_MASK_MASK) != 0;
+      const gboolean has_param = (blend.mask_mode & DEVELOP_MASK_CONDITIONAL) != 0;
+      if(blend.mask_mode & DEVELOP_MASK_FLEXI) st.case_already_flexi++;
+      else if(blend.mask_mode & DEVELOP_MASK_RASTER) st.case_raster++;
+      else if(has_drawn && has_param) st.case_drawn_and_parametric++;
+      else if(has_drawn) st.case_drawn_only++;
+      else if(has_param) st.case_parametric_only++;
+
+      if(blend.feathering_radius != 0.0f) st.uses_feathering++;
+      if(blend.details != 0.0f) st.uses_details++;
+      if(blend.blur_radius != 0.0f) st.uses_blur++;
+      if(blend.contrast != 0.0f || blend.brightness != 0.0f)
+        st.uses_contrast_or_brightness++;
+
+      _tally_version(st.blendop_version, h->blendop_version);
+
+      _emit_blend_params(&j, &blend);
+      total_forms += _emit_xmp_forms(&j, x.forms, h->num, &st);
+
+      _j_close(&j, '}');
+      harvested++;
+    }
+
+    _xmp_free(&x);
+
+    if(files_read % 250 == 0)
+      printf("[harvest]   %d/%u sidecars ...\n", files_read, nfiles);
+  }
+  g_list_free_full(files, g_free);
+
+  _j_close(&j, ']');
+
+  _j_open(&j, "summary", '{');
+  _j_int(&j, "sidecars_found", nfiles);
+  _j_int(&j, "sidecars_parsed", files_read);
+  _j_int(&j, "history_entries_scanned", scanned);
+  _j_int(&j, "edits_harvested", harvested);
+  _j_int(&j, "images_with_masks", images_with_masks);
+  _j_int(&j, "forms_harvested", total_forms);
+  _j_int(&j, "skipped_no_mask", skipped_no_mask);
+  _j_int(&j, "skipped_unsupported_blendop_size", skipped_size);
+  _j_int(&j, "dimensions_from_image", dims_from_image);
+  _j_int(&j, "dimensions_nominal", dims_nominal);
+  _j_close(&j, '}');
+
+  _emit_coverage(&j, &st);
+
+  fputs("\n}\n", f);
+  fclose(f);
+
+  printf("[harvest] %d edits from %d sidecars (%d with masks), %d forms\n",
+         harvested, files_read, images_with_masks, total_forms);
+  printf("[harvest]   image size read from the file : %d\n", dims_from_image);
+  if(dims_nominal)
+    printf("[harvest]   image missing, nominal 3:2 used: %d\n", dims_nominal);
+  printf("[harvest] written to %s\n", output_path);
+  _report_and_gzip(output_path);
+  return harvested > 0;
 }
 
 gboolean dt_masks_harvest_library(const char *library_path,
@@ -736,42 +1354,7 @@ gboolean dt_masks_harvest_library(const char *library_path,
   _j_int(&j, "skipped_unsupported_blendop_size", skipped_size);
   _j_close(&j, '}');
 
-  // What is in here that we may not have seen before. Kept as its own section
-  // so an incoming file can be triaged on these counts without reading the
-  // whole of it.
-  _j_open(&j, "coverage", '{');
-  _j_open(&j, "mask_combine", '{');
-  _j_int(&j, "inverted", st.combine_inv);
-  _j_int(&j, "inclusive", st.combine_incl);
-  _j_int(&j, "drawn_mask_polarity", st.combine_masks_pos);
-  _j_close(&j, '}');
-  _j_open(&j, "cases", '{');
-  _j_int(&j, "drawn_only", st.case_drawn_only);
-  _j_int(&j, "parametric_only", st.case_parametric_only);
-  _j_int(&j, "drawn_and_parametric", st.case_drawn_and_parametric);
-  _j_int(&j, "raster", st.case_raster);
-  _j_int(&j, "already_flexi", st.case_already_flexi);
-  _j_close(&j, '}');
-  _j_open(&j, "refinements", '{');
-  _j_int(&j, "feathering", st.uses_feathering);
-  _j_int(&j, "details", st.uses_details);
-  _j_int(&j, "blur", st.uses_blur);
-  _j_int(&j, "contrast_or_brightness", st.uses_contrast_or_brightness);
-  _j_int(&j, "per_shape_refinement", st.per_shape_refinement);
-  _j_int(&j, "custom_group_opacity", st.custom_group_opacity);
-  _j_int(&j, "explicit_group_start", st.explicit_group_start);
-  _j_close(&j, '}');
-  _j_open(&j, "form_types", '{');
-  _j_int(&j, "circle", st.form_type_circle);
-  _j_int(&j, "ellipse", st.form_type_ellipse);
-  _j_int(&j, "path", st.form_type_path);
-  _j_int(&j, "brush", st.form_type_brush);
-  _j_int(&j, "gradient", st.form_type_gradient);
-  _j_int(&j, "group", st.form_type_group);
-  _j_close(&j, '}');
-  _emit_version_histogram(&j, "blendop_versions", st.blendop_version);
-  _emit_version_histogram(&j, "masks_versions", st.masks_version);
-  _j_close(&j, '}');
+  _emit_coverage(&j, &st);
 
   j.indent = 0;
   fputs("\n}\n", f);
@@ -787,34 +1370,8 @@ gboolean dt_masks_harvest_library(const char *library_path,
     printf("[harvest]   skipped (old blendop)   : %d\n", skipped_size);
   printf("[harvest] wrote %s\n", output_path);
 
-  // and a compressed copy alongside it, so sharing the result does not need a
-  // second tool the person may not have (notably on Windows)
-  gchar *gz_path = g_strconcat(output_path, ".gz", NULL);
-  GError *gz_err = NULL;
-  const gboolean gz_ok = _gzip_file(output_path, gz_path, &gz_err);
-  if(gz_ok)
-  {
-    const goffset raw = _file_size(output_path);
-    const goffset gz = _file_size(gz_path);
-    if(raw > 0 && gz > 0)
-    {
-      gchar *raw_s = g_format_size(raw);
-      gchar *gz_s = g_format_size(gz);
-      printf("[harvest] wrote %s  (%s, from %s)\n", gz_path, gz_s, raw_s);
-      g_free(raw_s);
-      g_free(gz_s);
-    }
-    else
-      printf("[harvest] wrote %s\n", gz_path);
-  }
-  else
-  {
-    printf("[harvest] could not write %s: %s\n"
-           "[harvest] (not a problem -- the JSON above is complete;"
-           " compress it yourself if you like)\n",
-           gz_path, gz_err ? gz_err->message : "unknown error");
-  }
-  g_clear_error(&gz_err);
+  _report_and_gzip(output_path);
+
   // Say plainly when a library holds one of the configurations we have no real
   // test data for, so the person who ran it knows their file is worth sending
   // even if the totals look unremarkable.
@@ -834,10 +1391,6 @@ gboolean dt_masks_harvest_library(const char *library_path,
          "[harvest] It has no file names, folder names, shape or group names, "
          "or image content.\n"
          "[harvest] Please open it and check before sharing it.\n");
-  if(gz_ok)
-    printf("[harvest] Read %s, then send %s -- they hold the same thing.\n",
-           output_path, gz_path);
-  g_free(gz_path);
 
   return TRUE;
 }
