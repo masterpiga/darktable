@@ -1028,6 +1028,31 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
 struct dt_masks_empty_group_t *_capture_emptied_group(dt_masks_form_t *grp,
                                                              const dt_mask_id_t src);
 
+// with the mask off there is nothing for the panel's controls to act on, so
+// the whole panel body goes insensitive rather than merely inert -- the panel
+// can still be expanded (the mask-off state is reachable and legible either
+// way), it just stops offering controls that would silently do nothing.
+// Deliberately left live: the on/off toggle, the collapse arrow and the
+// options hamburger, all in the header -- those are the ways out of this
+// state, and the options menu is where the panel position is chosen.
+static void _masks_panel_apply_enabled_state(dt_iop_gui_blend_data_t *data,
+                                             const gboolean mask_enabled)
+{
+  if(data->masks_panel_body)
+    gtk_widget_set_sensitive(GTK_WIDGET(data->masks_panel_body), mask_enabled);
+
+  // the rest are header controls. Sensitivity is set on the widgets
+  // themselves, not on the cluster holding them, both because the hamburger
+  // shares that cluster and because flexi re-homes masks_edit/masks_polarity
+  // between the header and the shapes row (see _masks_apply_layout) -- this
+  // way the state follows them wherever the layout puts them.
+  if(data->showmask) gtk_widget_set_sensitive(data->showmask, mask_enabled);
+  if(data->suppress) gtk_widget_set_sensitive(data->suppress, mask_enabled);
+  if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, mask_enabled);
+  if(data->masks_polarity)
+    gtk_widget_set_sensitive(data->masks_polarity, mask_enabled);
+}
+
 static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
                                          dt_iop_gui_blend_data_t *data)
 {
@@ -1036,6 +1061,7 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
     dt_print(DT_DEBUG_MASKS,
              "[masks] _blendop_masks_mode_callback '%s': mask_mode 0x%x->0x%x",
              data->module->op, bp->mask_mode, mask_mode);
+  const gboolean was_enabled = bp->mask_mode & DEVELOP_MASK_ENABLED;
   bp->mask_mode = mask_mode;
 
   const gboolean mask_enabled = mask_mode & DEVELOP_MASK_ENABLED;
@@ -1046,8 +1072,16 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   // flexi reuses the drawn-group toolbar/renderer, so the drawn-mask panel and
   // refinement controls appear for it too.
   const gboolean mode_drawn_or_flexi = mode_drawn || mode_flexi;
+  // with the mask off the panel shows what switching it on would give -- the
+  // same controls, greyed out (see _masks_panel_apply_enabled_state) -- rather
+  // than folding to nothing and leaving an empty panel behind for anyone who
+  // expands it anyway. Switching on always lands in flexi (see
+  // _blendop_mask_enable), so flexi is the layout to preview.
+  const gboolean show_mask_ui = mode_drawn_or_flexi || !mask_enabled;
+  const gboolean show_flexi_ui = mode_flexi || !mask_enabled;
 
-  _box_set_visible(data->blend_box, mask_enabled);
+  _box_set_visible(data->blend_box, TRUE);
+  _masks_panel_apply_enabled_state(data, mask_enabled);
 
   if(data->masks_blend_header)
   {
@@ -1107,29 +1141,45 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   }
   else
   {
-    _box_set_visible(data->refine_box, data->raster_inited && mode_raster);
+    // mask off: still shown, greyed, as the preview described above
+    _box_set_visible(data->refine_box,
+                     !mask_enabled || (data->raster_inited && mode_raster));
   }
 
-  if(data->masks_inited && mode_drawn_or_flexi)
+  if(data->masks_inited && show_mask_ui)
   {
     // section caption reflects the mode: flexi drops the label (the combo value
     // "N shapes used" already says enough); classic keeps "drawn mask"
     dt_bauhaus_widget_set_label(data->masks_combo, N_("blend"),
-                                mode_flexi ? "" : N_("drawn mask"));
+                                show_flexi_ui ? "" : N_("drawn mask"));
     // flexi-only widgets: new-shape operator selector, add-parametric button,
     // and the per-shape composition list. classic drawn mask keeps the vanilla
     // toolbar.
     if(data->masks_reset_mask_btn)
-      gtk_widget_set_visible(data->masks_reset_mask_btn, mode_flexi);
+      gtk_widget_set_visible(data->masks_reset_mask_btn, show_flexi_ui);
     if(data->masks_param_channels_box)
       gtk_widget_set_visible(data->masks_param_channels_box,
-                             mode_flexi && data->blendif_support);
+                             show_flexi_ui && data->blendif_support);
     if(data->masks_groups_header)
-      gtk_widget_set_visible(data->masks_groups_header, mode_flexi);
-    _masks_apply_layout(data, mode_flexi);
-    gtk_widget_set_visible(GTK_WIDGET(data->masks_list_box), mode_flexi);
+      gtk_widget_set_visible(data->masks_groups_header, show_flexi_ui);
+    _masks_apply_layout(data, show_flexi_ui);
+    gtk_widget_set_visible(GTK_WIDGET(data->masks_list_box), show_flexi_ui);
+    // only for a live mask: with the mask off the list keeps whatever it last
+    // held, greyed out, rather than being rebuilt from a group nothing is
+    // using -- and the staging state it would need is cleared just below
     if(mode_flexi) _build_masks_list(data->module);
     _box_set_visible(data->masks_box, TRUE);
+
+    if(!mask_enabled)
+    {
+      // the panel is a preview of what switching the mask on would give, so
+      // nothing of it belongs on canvas (this used to fall to the classic
+      // branch below, which is now reached only by a live classic mask)
+      for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->masks_shapes[n]), FALSE);
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->masks_edit), FALSE);
+      dt_masks_set_edit_mode(data->module, DT_MASKS_EDIT_OFF);
+    }
   }
   else if(data->masks_inited)
   {
@@ -1182,6 +1232,13 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
 
   // rebuild the accelerators
   dt_iop_connect_accels_multi(data->module->so);
+
+  // switching the mask on is an act of reaching for its controls, so unfold
+  // the panel; switching it off puts them away. Recorded as the panel's shared
+  // collapse state (see _masks_panel_collapsed_pref) rather than applied
+  // directly, so the relocate below carries it out in whichever position the
+  // panel currently lives -- one rule, three mechanisms.
+  if(mask_enabled != was_enabled) _masks_panel_set_collapsed_pref(!mask_enabled);
 
   // mode just changed (possibly into/out of flexi) while this module was
   // already focused -- dt_iop_request_focus() above is a no-op in that case,
@@ -1800,28 +1857,43 @@ gboolean blend_color_picker_apply(dt_iop_module_t *module,
 // some unrelated RGB channel.
 //
 // Neither remapping the channels (Lab a/b have no RGB-display counterpart) nor
-// silently dropping the forms is honest, so the switch is refused while any
-// exist. Callers use this both to disable the menu entries and to explain why.
-static int _module_parametric_form_count(dt_iop_module_t *module)
+// silently dropping the forms is honest, so a colorspace change offers the user
+// the one honest option -- delete them -- and does nothing unless they accept
+// (see _blendif_change_blend_colorspace).
+//
+// Referenced by id rather than by pointer: removing a form can also collapse
+// the group that held it (see dt_masks_form_remove's emptied-group branch), so
+// a pointer collected here can be dangling by the time the next one is removed.
+// Both ends are re-resolved at the point of use instead.
+typedef struct _parametric_ref_t
 {
-  const dt_masks_form_t *const grp = _module_mask_group(module);
-  int n = 0;
-  for(const GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  dt_mask_id_t grpid;   // the group holding it, which is where it is removed from
+  dt_mask_id_t formid;
+} _parametric_ref_t;
+
+// every parametric element in the mask, at any nesting depth -- one inside a
+// subgroup is just as unable to survive the switch as a top-level one
+static void _collect_parametric_forms(dt_masks_form_t *grp,
+                                      GList **out,
+                                      const int depth)
+{
+  if(!grp || depth > 16) return;  // malformed/cyclic nesting must not hang the GUI
+  for(const GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *const pt = l->data;
-    const dt_masks_form_t *const f = dt_masks_get_from_id(darktable.develop, pt->formid);
-    if(f && (f->type & DT_MASKS_PARAMETRIC)) n++;
-  }
-  return n;
-}
+    dt_masks_form_t *const f = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(!f) continue;
 
-// shared by every disabled blend-colorspace menu entry
-static const char *_blend_cst_locked_tooltip(void)
-{
-  return _("the blend colorspace cannot be changed while the mask has parametric"
-           " elements: each one stores the channels of the colorspace it was"
-           " created in, and those channels do not exist in another one.\n"
-           "remove the parametric elements first.");
+    if(f->type & DT_MASKS_PARAMETRIC)
+    {
+      _parametric_ref_t *const ref = malloc(sizeof(_parametric_ref_t));
+      ref->grpid = grp->formid;
+      ref->formid = f->formid;
+      *out = g_list_prepend(*out, ref);
+    }
+    else if(f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
+      _collect_parametric_forms(f, out, depth + 1);
+  }
 }
 
 static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
@@ -1840,14 +1912,55 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
   }
   if(cst != module->blend_params->blend_cst)
   {
-    // the menu entries that lead here are already disabled in this case (see
-    // _add_blend_colorspace_menu); this is the authority, so that any other
-    // path -- a shortcut, a future caller -- cannot invalidate the forms
-    // either. See _module_parametric_form_count for why the switch is refused.
-    if(_module_parametric_form_count(module))
+    // Parametric elements cannot come along (see _collect_parametric_forms):
+    // deleting them is the only honest outcome, so ask, and switch nothing at
+    // all unless the user agrees. This is the authority for every path into a
+    // colorspace change -- the menu, a shortcut, a future caller -- rather than
+    // something the menu enforces by disabling its own entries.
+    GList *parametrics = NULL;
+    _collect_parametric_forms(_module_mask_group(module), &parametrics, 0);
+    if(parametrics)
     {
-      dt_control_log("%s", _blend_cst_locked_tooltip());
-      return FALSE;
+      const int n = g_list_length(parametrics);
+      const gboolean confirmed = dt_gui_show_yes_no_dialog(
+        ngettext("remove parametric element?",
+                 "remove parametric elements?", n), "",
+        ngettext("this mask has %d parametric element. it stores the channels of"
+                 " the colorspace it was created in, and those channels do not"
+                 " exist in another colorspace, so it cannot be carried over.\n\n"
+                 "change the blend colorspace and remove it?",
+                 "this mask has %d parametric elements. they store the channels of"
+                 " the colorspace they were created in, and those channels do not"
+                 " exist in another colorspace, so they cannot be carried over.\n\n"
+                 "change the blend colorspace and remove them?", n), n);
+      if(!confirmed)
+      {
+        g_list_free_full(parametrics, free);
+        return FALSE;
+      }
+
+      dt_masks_clear_form_gui(darktable.develop);
+      for(const GList *l = parametrics; l; l = g_list_next(l))
+      {
+        const _parametric_ref_t *const ref = l->data;
+        // re-resolved per iteration: an earlier removal may have taken the
+        // group with it (see the _parametric_ref_t comment)
+        dt_masks_form_t *const owner = dt_masks_get_from_id(darktable.develop, ref->grpid);
+        dt_masks_form_t *const form = dt_masks_get_from_id(darktable.develop, ref->formid);
+        if(owner && form) dt_masks_form_remove(module, owner, form);
+      }
+      g_list_free_full(parametrics, free);
+      dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+
+      // the panel's selection and its cached list signature can still name the
+      // forms just deleted; dt_iop_gui_update() below rebuilds from these
+      dt_iop_gui_blend_data_t *const bdp = module->blend_data;
+      if(bdp)
+      {
+        if(bdp->panel_selected_formid != INVALID_MASKID)
+          bdp->panel_selected_formid = INVALID_MASKID;
+        bdp->masks_list_sig = DT_INVALID_HASH;
+      }
     }
 
     dt_develop_blend_init_blendif_parameters(module->blend_params, cst);
@@ -2021,25 +2134,17 @@ static void _blendif_options_callback(GtkButton *button,
      && (module_cst == DEVELOP_BLEND_CS_LAB || module_cst == DEVELOP_BLEND_CS_RGB_DISPLAY
          || module_cst == DEVELOP_BLEND_CS_RGB_SCENE))
   {
-    // parametric elements pin the colorspace they were created in, so every
-    // entry in this section is dead while any exist (see
-    // _module_parametric_form_count). Disable them and say why on the section
-    // header, which is the one widget here that stays hoverable -- GTK does not
-    // deliver motion (hence tooltips) to insensitive widgets, so a tooltip on
-    // the disabled entries themselves would never be seen.
-    const gboolean cst_locked = _module_parametric_form_count(module) > 0;
-
-    mi = gtk_menu_item_new_with_label(cst_locked ? _("blend colorspace (locked)")
-                                                 : _("blend colorspace"));
-    // the header is the only widget in this section left sensitive when locked,
-    // purely so it can carry the explanation; it has no activate handler, so
-    // clicking it just dismisses the menu.
-    gtk_widget_set_sensitive(mi, cst_locked);
-    if(cst_locked) gtk_widget_set_tooltip_text(mi, _blend_cst_locked_tooltip());
+    // every entry here stays live even when the mask holds parametric elements
+    // that cannot survive the switch: _blendif_change_blend_colorspace asks
+    // about those and deletes them on a yes. Disabling the entries instead used
+    // to leave the user with a dead section and nowhere to put the explanation
+    // (GTK delivers no motion, hence no tooltip, to insensitive widgets), which
+    // took a sensitive-but-inert "(locked)" header to work around.
+    mi = gtk_menu_item_new_with_label(_("blend colorspace"));
+    gtk_widget_set_sensitive(mi, FALSE);  // a plain section label
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
 
     mi = gtk_menu_item_new_with_label(_("reset to default blend colorspace"));
-    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_NONE), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -2058,7 +2163,6 @@ static void _blendif_options_callback(GtkButton *button,
         gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
         dt_gui_add_class(mi, "active_menu_item");
       }
-      gtk_widget_set_sensitive(mi, !cst_locked);
       g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                              GINT_TO_POINTER(DEVELOP_BLEND_CS_LAB), NULL);
       g_signal_connect(G_OBJECT(mi), "activate",
@@ -2073,7 +2177,6 @@ static void _blendif_options_callback(GtkButton *button,
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
       dt_gui_add_class(mi, "active_menu_item");
     }
-    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_DISPLAY), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -2087,7 +2190,6 @@ static void _blendif_options_callback(GtkButton *button,
       gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
       dt_gui_add_class(mi, "active_menu_item");
     }
-    gtk_widget_set_sensitive(mi, !cst_locked);
     g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
                            GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_SCENE), NULL);
     g_signal_connect(G_OBJECT(mi), "activate",
@@ -16141,6 +16243,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_enable_toggle),
                                is_mask_enabled);
   _update_mask_enable_toggle_tooltip(bd->mask_enable_toggle, is_mask_enabled);
+  _masks_panel_apply_enabled_state(bd, is_mask_enabled);
   if(bd->masks_blend_header)
   {
     if(is_mask_enabled)
@@ -16287,8 +16390,12 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   const gboolean mode_parametric = mask_mode & DEVELOP_MASK_CONDITIONAL;
   // flexi reuses the drawn-group toolbar/renderer (see _blendop_masks_mode_callback)
   const gboolean mode_drawn_or_flexi = mode_drawn || mode_flexi;
+  // mask off shows the flexi panel greyed out rather than an empty panel --
+  // see _blendop_masks_mode_callback, which this mirrors
+  const gboolean show_mask_ui = mode_drawn_or_flexi || !mask_enabled;
+  const gboolean show_flexi_ui = mode_flexi || !mask_enabled;
 
-  _box_set_visible(bd->blend_box, mask_enabled);
+  _box_set_visible(bd->blend_box, TRUE);
 
   const dt_image_t img = module->dev->image_storage;
   gtk_widget_set_visible(bd->details_slider, dt_image_is_rawprepare_supported(&img));
@@ -16342,29 +16449,35 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     module->suppress_mask = FALSE;
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->suppress), FALSE);
 
-    _box_set_visible(bd->refine_box, bd->raster_inited && mode_raster);
+    // mask off: still shown, greyed, as the preview described above
+    _box_set_visible(bd->refine_box,
+                     !mask_enabled || (bd->raster_inited && mode_raster));
   }
 
-  if(bd->masks_inited && mode_drawn_or_flexi)
+  if(bd->masks_inited && show_mask_ui)
   {
     // section caption reflects the mode: flexi drops the label (the combo value
     // "N shapes used" already says enough); classic keeps "drawn mask"
     dt_bauhaus_widget_set_label(bd->masks_combo, N_("blend"),
-                                mode_flexi ? "" : N_("drawn mask"));
+                                show_flexi_ui ? "" : N_("drawn mask"));
     // flexi-only widgets: new-shape operator selector, add-parametric button,
     // and the per-shape composition list (classic drawn mask stays vanilla)
     if(bd->masks_reset_mask_btn)
-      gtk_widget_set_visible(bd->masks_reset_mask_btn, mode_flexi);
+      gtk_widget_set_visible(bd->masks_reset_mask_btn, show_flexi_ui);
     if(bd->masks_param_channels_box)
       gtk_widget_set_visible(bd->masks_param_channels_box,
-                             mode_flexi && bd->blendif_support);
+                             show_flexi_ui && bd->blendif_support);
     if(bd->masks_groups_header)
-      gtk_widget_set_visible(bd->masks_groups_header, mode_flexi);
-    _masks_apply_layout(bd, mode_flexi);
-    gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), mode_flexi);
+      gtk_widget_set_visible(bd->masks_groups_header, show_flexi_ui);
+    _masks_apply_layout(bd, show_flexi_ui);
+    gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), show_flexi_ui);
     _box_set_visible(bd->masks_box, TRUE);
-    // (re)build the per-shape composition list for this module's group
+    // (re)build the per-shape composition list for this module's group -- only
+    // for a live mask; with the mask off the list keeps what it last held
     if(mode_flexi) _build_masks_list(module);
+    // and nothing of an off mask belongs on canvas (this used to fall to the
+    // classic branch below, which is now reached only by a live classic mask)
+    if(!mask_enabled) dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
   }
   else if(bd->masks_inited)
   {
@@ -16512,18 +16625,19 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     bd->save_for_leave = 0;
     dt_pthread_mutex_unlock(&bd->lock);
 
-    // collapse control for the separate flexi masks panel (left/right) --
-    // only shown while hosted there (see _masks_flexi_relocate); a plain
-    // flat arrow with its own CSS class, deliberately not styled like the
-    // on/off toggle next to it
+    // collapse control for the masking panel: in the separate flexi panel
+    // (left/right) it folds the whole panel away to its canvas corner icon,
+    // embedded in the module it folds the panel body away below this header
+    // and doubles as the way back (see _flexi_inline_collapse_clicked, which
+    // dispatches on the position, and sets the arrow direction and tooltip
+    // to match). Hidden only in the utility-lib position, which collapses
+    // via the lib's own expander header. A plain flat arrow with its own CSS
+    // class, deliberately not styled like the on/off toggle next to it.
     bd->flexi_inline_collapse_btn =
       dtgtk_button_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_LEFT, NULL);
     gtk_widget_set_name(bd->flexi_inline_collapse_btn, "flexi-inline-collapse");
-    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn,
-                                _("collapse this panel; click the icon it leaves behind\n"
-                                  "on the canvas to bring it back"));
     g_signal_connect(G_OBJECT(bd->flexi_inline_collapse_btn), "clicked",
-                     G_CALLBACK(_flexi_inline_collapse_clicked), NULL);
+                     G_CALLBACK(_flexi_inline_collapse_clicked), module);
     gtk_widget_set_no_show_all(bd->flexi_inline_collapse_btn, TRUE);
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
 
@@ -16544,22 +16658,32 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     GtkWidget *caption_label = dt_ui_label_new(_("blend mask"));
     gtk_widget_set_margin_start(caption_label, DT_PIXEL_APPLY_DPI(4));
 
-    // "blend mask" header: the panel-collapse arrow (hidden unless hosted in
-    // a side panel) and the on/off toggle sit to the left of the caption;
-    // the hamburger menu and the display/suppress eye icons (grouped into
-    // right_cluster below) sit at the far right -- this replaces the old
-    // classic mode-select row entirely, since flexi is the only mask type
-    // left to switch on. left/right_cluster group their contents into a
-    // single pack_end/pack_start unit apiece purely for ordering; the
-    // header's own left/right inset (matching the module's content width)
-    // comes from a real margin on gbox itself, in darktable.css's
-    // "#blending-tabs" rule -- gbox is a sibling of the module's own
-    // .dt_plugin_ui_main content box, not a descendant of it, so nothing
-    // upstream already insets it.
+    // "blend mask" header, in one fixed reading order everywhere:
+    //
+    //   expander | title | toggle | <space> | actions | hamburger
+    //
+    // The expander (the panel-collapse arrow, hidden unless the panel is
+    // hosted in a side panel) leads; the caption and then the on/off toggle
+    // follow; the display/suppress eyes and the hamburger close on the right,
+    // grouped into right_cluster below. The space in the middle is simply what
+    // is left between the start-packed and end-packed halves. The one
+    // exception is a panel docked in the separate *right* panel, where the
+    // expander and the hamburger trade ends so the arrow sits against the edge
+    // it folds toward -- see _masks_header_apply_side, which is also why those
+    // two are the only header widgets that ever move.
+    //
+    // masks_left_cluster is the toggle's home box: the utility position lends
+    // the toggle to that lib's own header (see _masks_flexi_relocate) and
+    // hands it back here. The header's own left/right inset (matching the
+    // module's content width) comes from a real margin on gbox itself, in
+    // darktable.css's "#blending-tabs" rule -- gbox is a sibling of the
+    // module's own .dt_plugin_ui_main content box, not a descendant of it, so
+    // nothing upstream already insets it.
     GtkWidget *left_cluster = bd->masks_left_cluster =
-      dt_gui_hbox(bd->flexi_inline_collapse_btn, bd->mask_enable_toggle);
+      dt_gui_hbox(bd->mask_enable_toggle);
 
-    GtkWidget *gbox = dt_gui_hbox(left_cluster, caption_label);
+    GtkWidget *gbox =
+      dt_gui_hbox(bd->flexi_inline_collapse_btn, caption_label, left_cluster);
     dt_gui_add_class(gbox, "dt_section_label");
     dt_gui_add_help_link(gbox, "masks_blending");
     gtk_widget_set_name(gbox, "blending-tabs");
@@ -16846,7 +16970,15 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     bd->relocatable_box = GTK_BOX(dt_gui_vbox());
     dt_gui_box_add(iopw, GTK_WIDGET(bd->relocatable_box));
     dt_gui_box_add(bd->relocatable_box, gbox);
-    GtkWidget *mask_panel = GTK_WIDGET(bd->relocatable_box);
+    // ...and everything below the header goes into masks_panel_body, one
+    // wrapper the embedded position can fold away as a unit without
+    // disturbing the mode-driven visibility of what is inside it (see its
+    // field comment). Nothing else changes: mask_panel, which the rest of
+    // this function fills, just points at the body instead of at
+    // relocatable_box itself.
+    bd->masks_panel_body = GTK_BOX(dt_gui_vbox());
+    dt_gui_box_add(bd->relocatable_box, GTK_WIDGET(bd->masks_panel_body));
+    GtkWidget *mask_panel = GTK_WIDGET(bd->masks_panel_body);
 
     GtkWidget *box = dt_gui_vbox();
     bd->blend_box = GTK_BOX(dt_gui_vbox(
@@ -16878,6 +17010,16 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // block in _build_masks_list).
 
     gtk_widget_set_name(GTK_WIDGET(iopw), "blending-wrapper");
+
+    // masks_panel_body's own visibility is the embedded collapse state, so it
+    // must not be reset by an ancestor's show_all -- and the module expander
+    // does exactly one right after this function returns (see
+    // dt_iop_gui_set_expander). Same show-then-no_show_all sequencing as the
+    // other collapsible wrappers here: every child is shown once (as that
+    // expander-level show_all would have done anyway) before the wrapper
+    // opts out of later ones.
+    gtk_widget_show_all(GTK_WIDGET(bd->masks_panel_body));
+    gtk_widget_set_no_show_all(GTK_WIDGET(bd->masks_panel_body), TRUE);
 
     bd->blend_inited = TRUE;
 
