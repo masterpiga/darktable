@@ -4,10 +4,16 @@ Both are **pre-existing bugs in `master`**, unrelated to the mask revamp. They
 were found by a tool built to verify something else, and both are worth fixing
 upstream on their own merits.
 
+**Status: finding 1 is fixed and merged** (`f54402ea96`). Finding 2 is
+diagnosed and has a validated fix, but is not implemented; it is the open item
+this document is now mainly about.
+
 The tool (`--verify-masks` on the `masks_revamp` branch) replays a harvested
 mask edit four ways -- classic and migrated, each on the CPU and on OpenCL --
-and compares the resulting masks. Seven contributed libraries, 42,275 masked
-edits. It was built to prove the migration is faithful; the four-way replay also
+and compares the resulting masks. Every measurement below comes from seven
+contributed libraries, 42,275 masked edits. (Two more libraries have since been
+checked, with the finding-1 fix in place: they add 10,275 edits and 12
+divergences, all of them finding 2.) It was built to prove the migration is faithful; the four-way replay also
 makes classic disagreeing *with itself* across CPU and OpenCL visible, which is
 what this document is about.
 
@@ -15,11 +21,14 @@ Throughout, "diverges" means classic's own CPU and OpenCL renders of the same
 edit differ by more than 1/255 at some pixel.
 
 
-## Finding 1 -- the OpenCL path publishes a stale raster mask
+## Finding 1 -- the OpenCL path publishes a stale raster mask (FIXED, merged)
+
+Merged as `f54402ea96`. Kept here for the record, and because the evidence
+below is what separates this cause from finding 2.
 
 ### The problem
 
-`dt_develop_blend_process_cl()` ends with:
+`dt_develop_blend_process_cl()` used to end with:
 
 ```c
 if(dt_iop_piece_is_raster_mask_used(piece, BLEND_RASTER_ID))
@@ -69,7 +78,8 @@ post-processing the shortcut is valid, so those 590 edits are clean.
 
 ### The fix
 
-Read back unconditionally. Delete the `if(!raster)` guard.
+Read back unconditionally. Delete the `if(!raster)` guard. This is what was
+merged.
 
 ### Evidence that it fixes it
 
@@ -295,8 +305,9 @@ writes a per-edit report next to the input. The classic-diverges-with-itself
 condition is `max_diff <= 1/255 && gpu_max_diff > 1/255`, equivalently
 `dev_diff_before > 1/255` with `dev_diff_after ~ 0`.
 
-- Finding 1: `classic_opencl_outliers.json.gz` in the repo root reproduces the
-  general divergence; a raster-specific corpus is trivial to regenerate by
+- Finding 1: needs a build from before `f54402ea96` to reproduce at all.
+  `classic_opencl_outliers.json.gz` in the repo root reproduces the general
+  divergence; a raster-specific corpus is trivial to regenerate by
   filtering any harvest for `mask_mode` containing `raster` and a non-zero
   `feathering_radius`, `blur_radius`, `contrast` or `brightness`.
 - Finding 2: the standalone differential harnesses used for the numbers above
