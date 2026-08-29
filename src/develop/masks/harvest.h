@@ -25,6 +25,15 @@
 // Run as `darktable --harvest-masks out.json`, honouring --library and
 // --configdir to pick which library to read.
 //
+// Or as `darktable --harvest-masks-xmp DIR out.json`, which walks DIR
+// recursively and reads the sidecars instead. Not a convenience: plenty of
+// photographers keep their whole development history in the .xmp next to each
+// file and treat library.db as a rebuildable index, so a library-only harvest
+// sees none of their masks and the corpus silently over-represents people who
+// use darktable as a DAM. Both paths write the same format and hold to both
+// properties below -- the sidecar one parses the XML itself rather than going
+// through dt_exif_xmp_read(), precisely so that property 1 survives.
+//
 // TWO PROPERTIES THIS FILE IS RESPONSIBLE FOR
 //
 // 1. It is strictly read-only on the user's library.
@@ -77,6 +86,16 @@ G_BEGIN_DECLS
     Opens its own read-only connection; never writes to, locks, or upgrades the
     library. Returns TRUE on success. Progress and a summary go to stdout, so
     the user can see what was collected before deciding whether to share it. */
+/** Harvest from XMP sidecars instead of a library: walk `dir` recursively,
+    read every .xmp found and write the same JSON format.
+
+    For people who do not use darktable's database -- their whole development
+    history lives in the sidecars, so a library-only harvest would see none of
+    their masks and the corpus would over-represent DAM users. Parses the XMP
+    itself rather than going through dt_exif_xmp_read(), which would need the
+    whole of startup behind it and so would give up property 1 above. */
+gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path);
+
 gboolean dt_masks_harvest_library(const char *library_path,
                                   const char *output_path);
 

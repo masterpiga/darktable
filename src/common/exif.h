@@ -80,6 +80,16 @@ void dt_exif_sanitize_datetime(char *datetime);
  * struct. returns TRUE if no success. */
 gboolean dt_exif_read(dt_image_t *img, const char *path);
 
+/** Just the pixel dimensions of `path`, and nothing else.
+
+    dt_exif_read() would also answer this, but it decodes IPTC, XMP and the
+    default metadata into a dt_image_t on the way -- creator, rights, tags,
+    GPS. --harvest-masks-xmp needs an image's aspect ratio and promises to read
+    nothing else about it, so it asks exiv2 for exactly that. Metadata only: no
+    pixels are decoded. Returns FALSE if the file cannot be opened or declares
+    no size, leaving *width and *height untouched. */
+gboolean dt_exif_get_dimensions(const char *path, int *width, int *height);
+
 /** read exif data to image struct from given data blob, wherever you got it from.
     returns TRUE in case of an error */
 gboolean dt_exif_read_from_blob(dt_image_t *img, uint8_t *blob, const int size);

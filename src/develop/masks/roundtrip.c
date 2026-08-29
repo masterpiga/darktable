@@ -321,6 +321,13 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
   if(rf) fprintf(rf, "\n  \"source\": \"%s\",\n  \"edits\": [", json_path);
   gboolean first_report = TRUE;
 
+  /* Exact repeats reuse the first occurrence's verdict rather than being
+     seeded, loaded and snapshotted again -- see dt_masks_harvest_edit_key().
+     Every occurrence is still counted and reported. */
+  typedef struct { int kind; gchar *diff; gboolean no_module; } _rt_cached_t;
+  GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  int distinct = 0;
+
   int total = 0, same = 0, differ = 0, skipped = 0, errors = 0;
   int no_module = 0, multi_instance = 0;
 
@@ -371,6 +378,33 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     if(!seeded) ROUNDTRIP_SKIP("history row could not be seeded");
 
     total++;
+    if(mp > 0) multi_instance++;
+
+    gchar *key = dt_masks_harvest_edit_key(edit);
+    const _rt_cached_t *cached = key ? g_hash_table_lookup(seen, key) : NULL;
+    if(cached)
+    {
+      g_free(key);
+      if(cached->no_module) no_module++;
+      if(cached->kind == 0) same++;
+      else if(cached->kind == 1) differ++;
+      else errors++;
+      if(rf)
+      {
+        gchar *esc = cached->diff ? g_strescape(cached->diff, NULL) : NULL;
+        fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\","
+                    " \"mask_mode\": %u, \"result\": \"%s\", \"repeat\": true"
+                    "%s%s%s}",
+                first_report ? "" : ",", i, op, bp.mask_mode,
+                cached->kind == 1 ? "different" : (cached->kind == 0 ? "same" : "error"),
+                esc ? ", \"first_difference\": \"" : "", esc ? esc : "", esc ? "\"" : "");
+        g_free(esc);
+        first_report = FALSE;
+      }
+      if((i + 1) % 250 == 0) printf("[roundtrip]   %u/%u ...\n", i + 1, n);
+      continue;
+    }
+    distinct++;
 
     // load #1: the real migration runs here (the stored blendop_version is
     // classic), then writes everything back
@@ -379,8 +413,6 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     // load #2: blendop_params are flexi now, so migration no-ops and the
     // stored forms have to carry what load #1 derived in memory
     gchar *snap2 = _load_and_snapshot(FALSE, &v2);
-
-    if(mp > 0) multi_instance++;
 
     /* A guard against passing vacuously, not a statistic.
        dt_dev_read_history_ext() drops a history row whose (operation,
@@ -419,12 +451,25 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     {
       gchar *esc = diff ? g_strescape(diff, NULL) : NULL;
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\", \"mask_mode\": %u,"
-                  " \"result\": \"%s\"%s%s%s}",
+                  " \"result\": \"%s\", \"repeat\": false%s%s%s}",
               first_report ? "" : ",", i, op, bp.mask_mode,
               diff ? "different" : (snap1 && snap2 ? "same" : "error"),
               esc ? ", \"first_difference\": \"" : "", esc ? esc : "", esc ? "\"" : "");
       g_free(esc);
       first_report = FALSE;
+    }
+
+    if(key)
+    {
+      _rt_cached_t *store = malloc(sizeof(_rt_cached_t));
+      if(store)
+      {
+        store->kind = diff ? 1 : ((snap1 && snap2) ? 0 : 2);
+        store->diff = diff ? g_strdup(diff) : NULL;
+        store->no_module = snap1 && !strstr(snap1, "module ");
+        g_hash_table_insert(seen, key, store);
+      }
+      else g_free(key);
     }
 
     g_free(v1);
@@ -448,6 +493,7 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
     fprintf(rf, "    \"harvested\": %u,\n", n);
     fprintf(rf, "    \"round_tripped\": %d,\n", total);
+    fprintf(rf, "    \"distinct_edits\": %d,\n", distinct);
     fprintf(rf, "    \"unchanged\": %d,\n", same);
     fprintf(rf, "    \"different\": %d,\n", differ);
     fprintf(rf, "    \"errors\": %d,\n", errors);
@@ -458,7 +504,9 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
   }
 
   printf("[roundtrip]\n");
-  printf("[roundtrip] round-tripped   : %d\n", total);
+  g_hash_table_destroy(seen);
+  printf("[roundtrip] round-tripped   : %d  (%d distinct, %d exact repeats reused)\n",
+         total, distinct, total - distinct);
   printf("[roundtrip]   unchanged     : %d\n", same);
   printf("[roundtrip]   DIFFERENT     : %d\n", differ);
   printf("[roundtrip]   errors        : %d\n", errors);
