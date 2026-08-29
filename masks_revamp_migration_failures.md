@@ -1,13 +1,19 @@
 # Migration failures found by the harvest campaign
 
-**Status: open. These are real masks_revamp bugs and they must be fixed before
-the branch ships.**
+**Status: FIXED (2026-08-29). Kept as the record of what the campaign found,
+what actually caused it, and what the reproducer is now guarding.**
 
-Six contributed libraries, 41,730 edits, have turned up **11 edits (8 distinct
-configuration shapes) where migration renders a different mask than classic
-does on the CPU**. Every one of them is a full-range failure (`max_diff = 1.0`),
-up to 174,592 differing pixels and a mean difference of 0.75 -- not float noise,
-a visibly wrong mask.
+Six contributed libraries, 41,730 edits, turned up **11 edits (8 distinct
+configuration shapes) where migration rendered a different mask than classic
+did on the CPU**. Every one was a full-range failure (`max_diff = 1.0`), up to
+174,592 differing pixels and a mean difference of 0.75 -- not float noise, a
+visibly wrong mask.
+
+Both are fixed in `migrate_legacy.c`. All seven libraries now re-check clean:
+the worst CPU difference anywhere is 1.1e-03, well under the 1/255 visibility
+threshold, and the bound moved from 0.290% to 0.060% (1 in 1,661). The two
+headings below name what the campaign *thought* it had found; each now leads
+with what the cause turned out to be.
 
 Both devices agree with each other on these (`dev_diff_before` ~
 `dev_diff_after` ~ 0), so this is not the classic-OpenCL divergence documented
@@ -26,7 +32,44 @@ every coarse feature and pass anyway, so a proposed fix has to explain both
 sides, not just make the failures go away.
 
 
-## Bug A -- nested groups
+## Bug A -- not nested groups: a member classic renders as a *replace*
+
+**Cause.** A member with no `DT_MASKS_STATE_OP_COMBINE` bit is what
+`dt_masks_group_add_form()` gives a group's *first* shape (`if(grp->points)
+state |= default_operator` -- the first gets none, having nothing to combine
+with). Classic's fold special-cases that position: `nb_ok == 0 || (state &
+UNION)` unions it onto the empty accumulator. But when such a member ends up
+*after* one that already rendered, classic falls through its whole if/else
+chain to the final else -- `buffer[i] = op * mask[i]` -- which **replaces** the
+accumulator and discards every earlier member.
+
+Flexi cannot express that. `_flexi_apply_group_op()` maps an operator-less run
+head to union, and the panel agrees: `blend_gui.c` repairs `(state &
+OP_COMBINE) == NONE` to `DT_MASKS_STATE_UNION` on sight, calling it back-compat
+that is "never valid for new edits". So the same bit pattern means *replace* to
+the classic renderer and *union* to every part of flexi, and the mask classic
+threw away came back after migration at full strength.
+
+Nesting was only a correlate: grouping shapes is what produces a **second**
+operator-less member. That is why every failure had nested groups and none
+lacked them, while 849 of thad's 858 nested-group edits migrated exactly.
+
+**Fix: fail closed** (`_group_has_replace_member()`), per this file's standing
+rule -- the module keeps its classic mask_mode and classic renderer, which is
+what it uses on master today. Across the seven libraries 52 edits (0.12%) carry
+the pattern inside their own mask group; 9 rendered differently and the other 43
+passed only because whatever replaced the discarded members happened to cover
+them. All 52 now stay classic.
+
+The awkward part is *when* it can be decided. On darkroom load the group's
+members do not exist yet at migration time -- drawn-only migrates inline while
+`dev->forms` still holds the previous image, and drawn+parametric is deferred to
+a pass that by construction runs before the masks are read. So the check runs at
+the one point where the members do exist, `dt_masks_normalize_flexi_groups()`,
+and undoes the migration from a snapshot the split queue now carries. Style and
+preset application, where `dev->forms` is loaded, decide up front instead.
+
+### What the campaign originally observed
 
 9 edits, all from `thad`, all `mask_mode = 3` (`uniform|drawn`), no parametric
 and no raster involved. The module's mask is a group **whose members are
@@ -62,6 +105,19 @@ gwbarn between them -- 5,991 edits -- exercise the case zero times. It took a
 
 
 ## Bug B -- raster mask combined with MASKS_POS
+
+**Cause.** Classic's raster branch is an `else if` *ahead* of the
+drawn/parametric branch in `dt_develop_blend_process()`, so it reads none of
+`mask_combine`: the mask is exactly `raster * opacity`. MASKS_POS never inverts
+it, INV never reaches it (the `blendif_*_make_mask()` call that consumes INV
+lives in the branch that does not run), and INCL only feeds a fallback fill that
+branch owns. After migration the group renders *through* that later branch,
+where MASKS_POS inverts it -- hence `max_diff = 1.0`, a fully inverted mask.
+
+**Fix.** `_migrate_raster()` clears `INV | INCL | MASKS_POS`, since classic
+consumed none of them. Both edits now render at 3.9e-05.
+
+### What the campaign originally observed
 
 2 edits, from `christian_pfister` (#7253, #7254, both colorbalancergb),
 `mask_mode = 9` (`uniform|raster`) with `mask_combine = 4`
@@ -131,11 +187,22 @@ the only method that could have found them.
 
 ## Where this leaves the numbers
 
-`masks_revamp_migration_confidence.md` now reports 8 failing shapes out of
-4,905, bounding the migration failure rate below 0.294% at 95% confidence --
-wider than the 0.135% it showed when no failure had been seen, which is the
-interval behaving correctly rather than a regression in the measurement.
+`masks_revamp_migration_confidence.md` reports **0 failing shapes out of 4,975,
+bounding the migration failure rate below 0.060% (1 in 1,661) at 95%
+confidence** -- down from 0.290% while the two bugs stood.
 
-The per-stratum table shows `uniform|drawn` at 7 failures and `uniform|raster`
-at 1. Neither number should be read as a rate for "drawn masks" or "raster
-masks" at large: both concentrate in the two specific structures above.
+Do not read that as "migration is now proven correct". It is the same evidence
+as before with two known defects removed; the standing caveat still holds, and
+seven contributors remains the real limit on what the number can say.
+
+The reproducer stays in the tree as a regression test. Re-run it after any
+change to `migrate_legacy.c` or to the group fold:
+
+```
+darktable --library :memory: --verify-masks migration_failures.json.gz
+```
+
+It should report 26 replayed, 0 different. The 15 controls are the half that
+matters: they look like the failures on every coarse feature and passed even
+while the bugs were live, so a change that "fixes" the failures by breaking the
+controls is caught here.
