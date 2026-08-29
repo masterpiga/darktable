@@ -4,7 +4,7 @@
   "christian_pfister": {
    "recorded": "2026-08-29",
    "edits": 7765,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "0001d73d389c8ec4": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "001a5fb39982b806": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
@@ -1612,7 +1612,7 @@
   "dudo": {
    "recorded": "2026-08-29",
    "edits": 2466,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "001abaa48b4e1af2": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "00317acade519055": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"inert":1}}},
@@ -2443,7 +2443,7 @@
   "gwbarn": {
    "recorded": "2026-08-29",
    "edits": 1803,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "00092b67b60397be": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "00702f347ce04b73": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -3376,7 +3376,7 @@
   "leonidas": {
    "recorded": "2026-08-29",
    "edits": 1722,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "01355a62b3c7bf80": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"classic_gpu":1}}},
     "01724bdb9b3067f7": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
@@ -3929,7 +3929,7 @@
   "macchiato17": {
    "recorded": "2026-08-29",
    "edits": 545,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "029a0129933660f9": {"edits":3,"outcomes":{"roundtrip":{"ok":3},"styleapply":{"ok":3},"verify":{"ok":3}}},
     "03c9f9087677b2a9": {"edits":7,"outcomes":{"roundtrip":{"ok":7},"styleapply":{"ok":7},"verify":{"ok":7}}},
@@ -4057,7 +4057,7 @@
   "thad": {
    "recorded": "2026-08-29",
    "edits": 27693,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "00041e290fc87d03": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},
     "001e7bd7e0995375": {"edits":4,"outcomes":{"roundtrip":{"ok":4},"styleapply":{"ok":4},"verify":{"ok":4}}},
@@ -5481,7 +5481,7 @@
   "zisoft": {
    "recorded": "2026-08-29",
    "edits": 281,
-   "darktable_version": "5.7.0+682~g0912461e64-dirty",
+   "darktable_version": "5.7.0+683~g2f70917066-dirty",
    "shapes": {
     "029a0129933660f9": {"edits":2,"outcomes":{"roundtrip":{"ok":2},"styleapply":{"ok":2},"verify":{"ok":2}}},
     "03491190cb045456": {"edits":1,"outcomes":{"roundtrip":{"ok":1},"styleapply":{"ok":1},"verify":{"ok":1}}},

@@ -249,6 +249,13 @@ static int usage(const char *argv0)
          "    each one before and after migration to the new mask model and\n"
          "    comparing the results, then exit. Writes FILE.report.json.\n"
          "\n"
+         "--harvest-masks-xmp DIR FILE\n"
+         "    The same, for people who do not use darktable's library: walk DIR\n"
+         "    recursively, read the mask configurations out of every .xmp sidecar\n"
+         "    found and write them to FILE (plus FILE.gz). Reads nothing else from\n"
+         "    the sidecars -- no file names, no GPS, no timestamps -- and writes\n"
+         "    nothing anywhere else.\n"
+         "\n"
          "--harvest-masks FILE\n"
          "    Export every mask configuration in the library to FILE as JSON, then\n"
          "    exit. Used to check that migrating masks to the new model leaves real\n"
@@ -1171,6 +1178,7 @@ int dt_init(int argc,
   // database
   char *dbfilename_from_command = NULL;
   char *harvest_masks_output = NULL;
+  char *harvest_masks_xmp_dir = NULL;
   char *verify_masks_input = NULL;
   char *roundtrip_masks_input = NULL;
   char *styleapply_masks_input = NULL;
@@ -1275,6 +1283,16 @@ int dt_init(int argc,
         dbfilename_from_command = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--harvest-masks-xmp") && argc > k + 2)
+      {
+        harvest_masks_xmp_dir = argv[++k];
+        harvest_masks_output = argv[++k];
+        argv[k - 2] = NULL;
+        argv[k - 1] = NULL;
+        argv[k] = NULL;
+        // handled below, before anything opens a database
+        continue;
       }
       else if(!strcmp(argv[k], "--harvest-masks") && argc > k + 1)
       {
@@ -1718,6 +1736,15 @@ int dt_init(int argc,
     dt_print(DT_DEBUG_ALWAYS,
              "[init] darktable dump directory is '%s'",
              darktable.tmp_directory ? darktable.tmp_directory : "NOT AVAILABLE");
+  }
+
+  if(harvest_masks_xmp_dir)
+  {
+    // Same position and the same reason as --harvest-masks below: this runs
+    // before anything opens or locks a database, and it only ever reads.
+    const gboolean ok =
+      dt_masks_harvest_xmp_dir(harvest_masks_xmp_dir, harvest_masks_output);
+    exit(ok ? 0 : 1);
   }
 
   if(harvest_masks_output)

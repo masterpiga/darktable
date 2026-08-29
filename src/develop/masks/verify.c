@@ -43,11 +43,26 @@
 // opacity that used to multiply once at the end now multiplies per element,
 // for instance -- so an exact comparison would report noise as breakage.
 //
-// These two thresholds separate the three answers worth distinguishing:
-// identical (nothing moved), equivalent (moved by less than the mask's own
-// 8-bit representable step, so nothing a user could see), and different.
+// These thresholds separate the three answers worth distinguishing: identical
+// (nothing moved), equivalent (moved by less than the mask's own 8-bit
+// representable step, so nothing a user could see), and different.
+//
+// The shape of the test is darktable's own, taken from the integration suite's
+// `deltae`: a result fails when EITHER the worst pixel exceeds the tolerance OR
+// the mean over the whole frame exceeds a third of it
+// (`max_dE > MAX_DELTA_E or mean_dE > MAX_DELTA_E / 3`), with a much tighter
+// max deciding "identical". Two conditions rather than one, because a worst-
+// pixel figure on its own answers whether anything differs and nothing about
+// how much: one pixel landing on the far side of a threshold on a mask
+// boundary and half the frame being wrong both report 1.0. The mean is what
+// tells them apart -- it is the magnitude weighted by the area it covers -- and
+// `differing_pixels` in the per-edit rows says how much of the frame took part.
+//
+// Same structure, mask units instead of delta-E: a mask is 0..1 module
+// strength, so the tolerance is the 8-bit step it is stored and displayed at.
 #define VERIFY_EPS_IDENTICAL 1e-6f
 #define VERIFY_EPS_EQUIVALENT (1.0f / 255.0f)
+#define VERIFY_EPS_EQUIVALENT_MEAN (VERIFY_EPS_EQUIVALENT / 3.0f)
 
 // Replaying at full sensor resolution would spend most of the run in
 // rasterisation for no extra discrimination -- a difference in mask geometry
@@ -73,10 +88,24 @@ typedef struct
   int live_identical, live_equivalent, live_different;
   double worst_max_diff;
   int worst_index;
+  // the same edit's mean and differing-pixel count, so the headline number can
+  // be read as a magnitude and not just as "something differs somewhere"
+  double worst_mean_diff;
+  int worst_differing_pixels;
 
   int gpu_compared;              // edits where both GPU renders succeeded
   double worst_gpu_diff;         // GPU: worst classic-vs-migrated
   int worst_gpu_index;
+  double worst_gpu_mean_diff;
+  int worst_gpu_differing_pixels;
+
+  // what those mask differences did to the rendered image
+  int image_compared;
+  double worst_image_diff, worst_image_mean_diff;
+  int worst_image_differing_pixels, worst_image_index;
+  int gpu_image_compared;
+  double worst_gpu_image_diff, worst_gpu_image_mean_diff;
+  int worst_gpu_image_differing_pixels, worst_gpu_image_index;
   double worst_dev_before;       // worst CPU/GPU gap on classic edits
   double worst_dev_after;        // ... and on migrated ones
   int dev_gap_widened;           // migrated gap worse than classic by >1/255
@@ -251,6 +280,37 @@ JsonParser *dt_masks_harvest_load(const char *path, GError **error)
   return NULL;
 }
 
+gchar *dt_masks_harvest_edit_key(JsonObject *edit)
+{
+  // "index" and "image_index" are deliberately absent: they say where the edit
+  // sat in the harvest, which changes nothing about what it renders.
+  static const char *const members[] =
+    { "operation", "blendop_version", "multi_priority", "enabled",
+      "image", "blend", "forms", NULL };
+
+  GString *acc = g_string_new(NULL);
+  JsonGenerator *gen = json_generator_new();
+  for(int i = 0; members[i]; i++)
+  {
+    JsonNode *n = json_object_get_member(edit, members[i]);
+    if(n)
+    {
+      json_generator_set_root(gen, n);
+      gsize len = 0;
+      gchar *txt = json_generator_to_data(gen, &len);
+      if(txt) g_string_append_len(acc, txt, (gssize)len);
+      g_free(txt);
+    }
+    // a separator so absent and empty members cannot alias into each other
+    g_string_append_c(acc, 0x1f);
+  }
+  g_object_unref(gen);
+
+  gchar *key = g_compute_checksum_for_string(G_CHECKSUM_SHA256, acc->str, acc->len);
+  g_string_free(acc, TRUE);
+  return key;
+}
+
 /** Rebuild the form list for one edit. Returns NULL if anything is
     unreconstructable, so a malformed record is skipped rather than replayed as
     something subtly different from what it recorded. */
@@ -350,6 +410,12 @@ typedef struct
   gboolean dev_mutex_ready;
   dt_iop_roi_t roi;
   float *probe;
+  // What the module under test "produced": the probe with a synthetic effect
+  // applied (see _make_module_output). The blend mixes this with `probe`
+  // according to the mask, so it is both what makes the rendered image respond
+  // to the mask at all and what gives the blendif `_out` channels something of
+  // their own to select on.
+  float *modout;
   float *out;
 
   // the upstream module a raster edit reads its mask from, present only for
@@ -369,6 +435,40 @@ typedef struct
     run reports CPU-only results and says so rather than silently narrowing. */
 static int _verify_devid = -1;
 
+/** The output of the module the mask is attached to: the probe at +1 EV.
+    Not decoration -- two things depend on the module having actually done
+    something, and until this existed it had not.
+
+    The blend computes `out = in * (1 - mask) + module_out * mask`
+    (blendif_*.c). Seeding `out` with a copy of the input, as this harness did,
+    makes the blend a no-op for every mask: the rendered image is the probe
+    whatever the mask says, so there is no image-level effect to measure at all.
+
+    And the parametric channels come in `_in`/`_out` pairs -- blendif evaluates
+    the second half against the module's output (see the DEVELOP_BLENDIF_*_out
+    reads in blendif_rgb_jzczhz.c). With output equal to input, every `_out`
+    channel was silently exercised as a duplicate of its `_in` counterpart, so
+    half the parametric channel space was never really tested.
+
+    +1 EV, i.e. a doubling, because exposure is the archetypal masked
+    adjustment and because in the scene-linear probe it is exactly `in * 2`:
+    the per-pixel effect size `|module_out - in|` is then the image value
+    itself -- non-zero everywhere except true black, and never larger than 1.
+    That last part matters for reading the numbers: since the image difference
+    is the mask difference scaled by that effect, the mask metric is an upper
+    bound on the image metric, which is why the verdict stays on the mask.
+
+    Deliberately not clipped: the pipeline is float and scene-linear values
+    above 1.0 are ordinary, and clipping would flatten the effect to zero over
+    the probe's whole upper half. */
+static float *_make_module_output(const float *const probe, const size_t npix)
+{
+  float *m = dt_alloc_align_float(npix * 4);
+  if(!m) return NULL;
+  for(size_t i = 0; i < npix * 4; i++) m[i] = probe[i] * 2.0f;
+  return m;
+}
+
 /** the mask dt_develop_blend_process() published for the last render */
 static const float *_published_mask(replay_t *r)
 {
@@ -378,13 +478,15 @@ static const float *_published_mask(replay_t *r)
 
 /** Render the mask for the current blend_params/forms, into a caller-owned
     copy. Returns NULL if the blend published nothing. */
-static float *_render_mask(replay_t *r)
+static float *_render_mask(replay_t *r, float **image)
 {
   const size_t npix = (size_t)r->roi.width * r->roi.height;
+  if(image) *image = NULL;
 
-  // the blend writes into `out`; start it as a copy of the input, which is
-  // what a module that did nothing would have produced
-  memcpy(r->out, r->probe, sizeof(float) * npix * 4);
+  // the blend writes into `out`, mixing it with the input by the mask -- so it
+  // starts as what the module produced, not as a copy of the input (see
+  // _make_module_output)
+  memcpy(r->out, r->modout, sizeof(float) * npix * 4);
 
   // pipe->forms is what the drawn/flexi group lookup walks, and migration has
   // may have added forms to dev->forms since the last render
@@ -412,6 +514,14 @@ static float *_render_mask(replay_t *r)
   float *copy = dt_alloc_align_float(npix);
   if(!copy) return NULL;
   memcpy(copy, m, sizeof(float) * npix);
+
+  // the blended image the mask actually produced, for the severity half of the
+  // comparison
+  if(image)
+  {
+    *image = dt_alloc_align_float(npix * 4);
+    if(*image) memcpy(*image, r->out, sizeof(float) * npix * 4);
+  }
   return copy;
 }
 
@@ -430,8 +540,9 @@ static float *_render_mask(replay_t *r)
     The mask comes back the same way as on the CPU: the tail of the CL function
     copies the finished mask off the device and publishes it through
     dt_iop_piece_set_raster(), so nothing here re-implements the readback. */
-static float *_render_mask_cl(replay_t *r)
+static float *_render_mask_cl(replay_t *r, float **image)
 {
+  if(image) *image = NULL;
 #ifdef HAVE_OPENCL
   if(r->devid < 0) return NULL;
 
@@ -447,7 +558,7 @@ static float *_render_mask_cl(replay_t *r)
   // input, which is what a module that did nothing would have produced
   if(dt_opencl_write_host_to_image(r->devid, r->probe, dev_in, w, h, sizeof(float) * 4)
      != CL_SUCCESS) goto done;
-  if(dt_opencl_write_host_to_image(r->devid, r->probe, dev_out, w, h, sizeof(float) * 4)
+  if(dt_opencl_write_host_to_image(r->devid, r->modout, dev_out, w, h, sizeof(float) * 4)
      != CL_SUCCESS) goto done;
 
   r->pipe.forms = r->dev.forms;
@@ -466,6 +577,19 @@ static float *_render_mask_cl(replay_t *r)
   copy = dt_alloc_align_float(npix);
   if(copy) memcpy(copy, m, sizeof(float) * npix);
 
+  if(image)
+  {
+    float *img = dt_alloc_align_float(npix * 4);
+    // a failed readback leaves *image NULL, which the caller treats as
+    // "no image comparison here" rather than comparing against garbage
+    if(img
+       && dt_opencl_copy_image_to_host(r->devid, img, dev_out, w, h,
+                                       sizeof(float) * 4) == CL_SUCCESS)
+      *image = img;
+    else
+      dt_free_align(img);
+  }
+
 done:
   dt_opencl_release_mem_object(dev_in);
   dt_opencl_release_mem_object(dev_out);
@@ -476,16 +600,75 @@ done:
 #endif
 }
 
-/** worst absolute deviation between two masks */
-static double _max_abs_diff(const float *a, const float *b, const size_t n)
+/** How two masks differ: the worst deviation, the mean over every pixel, and
+    how many pixels differ at all.
+
+    Max alone answers "is there a difference" and nothing about its size -- one
+    stray pixel and a wholly inverted mask both report 1.0. The mean and the
+    differing-pixel count are what separate those, so they are collected for the
+    GPU comparisons on the same footing as the CPU one rather than left to a
+    reader's imagination. */
+typedef struct _diff_stats_t
 {
-  double worst = 0.0;
+  double max;
+  double mean;
+  int differing;
+} _diff_stats_t;
+
+static _diff_stats_t _diff_stats(const float *a, const float *b, const size_t n)
+{
+  _diff_stats_t st = { 0.0, 0.0, 0 };
+  double sum = 0.0;
   for(size_t i = 0; i < n; i++)
   {
     const double d = fabs((double)a[i] - (double)b[i]);
-    if(d > worst) worst = d;
+    if(d > st.max) st.max = d;
+    sum += d;
+    if(d > VERIFY_EPS_IDENTICAL) st.differing++;
   }
-  return worst;
+  st.mean = n ? sum / (double)n : 0.0;
+  return st;
+}
+
+/** The same three statistics over a rendered image rather than a mask.
+
+    RGB only: the fourth float of each pixel is not image content, and letting
+    it into a mean would dilute every number by a quarter.
+
+    This is the other half of what the integration suite measures. A mask
+    difference is the more sensitive signal -- it is the module's strength, so
+    it registers wherever the mask moved at all -- while what a user could
+    actually see is that difference scaled by how much the module changes the
+    pixel underneath. Both are reported, because either alone misleads: the
+    mask number alone cannot say whether anything visible happened, and the
+    image number alone hides a mask error in regions where this particular
+    synthetic effect happens to be small. */
+static _diff_stats_t _diff_stats_rgb(const float *a, const float *b, const size_t npix)
+{
+  _diff_stats_t st = { 0.0, 0.0, 0 };
+  double sum = 0.0;
+  for(size_t i = 0; i < npix; i++)
+  {
+    double worst_ch = 0.0;
+    for(int c = 0; c < 3; c++)
+    {
+      const double d = fabs((double)a[i * 4 + c] - (double)b[i * 4 + c]);
+      if(d > worst_ch) worst_ch = d;
+      sum += d;
+    }
+    if(worst_ch > st.max) st.max = worst_ch;
+    // one pixel, counted once, if any of its channels moved -- the same rule
+    // count-diff-pixels applies in the integration suite
+    if(worst_ch > VERIFY_EPS_IDENTICAL) st.differing++;
+  }
+  st.mean = npix ? sum / (double)(npix * 3) : 0.0;
+  return st;
+}
+
+/** worst absolute deviation between two masks */
+static double _max_abs_diff(const float *a, const float *b, const size_t n)
+{
+  return _diff_stats(a, b, n).max;
 }
 
 /** is this mask the same value everywhere? A uniform mask makes the comparison
@@ -521,6 +704,7 @@ static void _replay_cleanup(replay_t *r)
   g_list_free(r->pipe.nodes);
   g_list_free(r->dev.iop);
   dt_free_align(r->probe);
+  dt_free_align(r->modout);
   dt_free_align(r->out);
   g_list_free_full(r->dev.forms, (GDestroyNotify)dt_masks_free_form);
   memset(r, 0, sizeof(*r));
@@ -795,6 +979,7 @@ static const char *_replay_init(replay_t *r,
   }
 
   r->probe = dt_masks_probe_new(width, height);
+  r->modout = _make_module_output(r->probe, (size_t)width * height);
   r->out = dt_alloc_align_float((size_t)width * height * 4);
   if(!r->probe || !r->out)
   {
@@ -813,6 +998,9 @@ typedef struct
   verify_result_t result;
   const char *skip_reason;
   gboolean inert;
+  // this edit is byte-identical to an earlier one and reused its verdict
+  // rather than being rendered again (see dt_masks_harvest_edit_key)
+  gboolean repeat;
   double max_diff;          // CPU: classic vs migrated -- the original verdict
   double mean_diff;
   int differing_pixels;
@@ -821,6 +1009,16 @@ typedef struct
   // says whether these numbers mean anything.
   gboolean gpu_ran;
   double gpu_max_diff;      // GPU: classic vs migrated
+  double gpu_mean_diff;     // ... and how large that difference actually is
+  int gpu_differing_pixels;
+
+  // the same comparisons on the rendered image, i.e. what the mask difference
+  // actually did to pixels (see _diff_stats_rgb)
+  gboolean image_compared, gpu_image_compared;
+  double image_max_diff, image_mean_diff;
+  int image_differing_pixels;
+  double gpu_image_max_diff, gpu_image_mean_diff;
+  int gpu_image_differing_pixels;
   // CPU-vs-GPU disagreement, measured on *both* sides of the migration.
   //
   // The after-value alone would be unreadable. The two blend implementations
@@ -891,7 +1089,9 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   const size_t npix = (size_t)w * h;
 
   // --- before migration -------------------------------------------------
-  float *before = _render_mask(&r);
+  float *before_img = NULL, *after_img = NULL;
+  float *before_cl_img = NULL, *after_cl_img = NULL;
+  float *before = _render_mask(&r, &before_img);
   if(!before)
   {
     rep->result = VERIFY_ERROR;
@@ -904,7 +1104,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 
   // the same classic edit on the GPU, before anything is migrated: this is the
   // baseline the post-migration CPU/GPU gap gets judged against
-  float *before_cl = _render_mask_cl(&r);
+  float *before_cl = _render_mask_cl(&r, &before_cl_img);
 
   // --- migrate ----------------------------------------------------------
   if(!dt_masks_migrate_classic_to_flexi(&r.module, r.module.blend_params, -1))
@@ -913,23 +1113,27 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
     rep->skip_reason = "migration declined";
     dt_free_align(before);
     dt_free_align(before_cl);
+    dt_free_align(before_img);
+    dt_free_align(before_cl_img);
     _replay_cleanup(&r);
     return;
   }
 
   // --- after migration --------------------------------------------------
-  float *after = _render_mask(&r);
+  float *after = _render_mask(&r, &after_img);
   if(!after)
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "flexi render produced no mask";
     dt_free_align(before);
     dt_free_align(before_cl);
+    dt_free_align(before_img);
+    dt_free_align(before_cl_img);
     _replay_cleanup(&r);
     return;
   }
 
-  float *after_cl = _render_mask_cl(&r);
+  float *after_cl = _render_mask_cl(&r, &after_cl_img);
 
   // Only meaningful when *both* GPU renders succeeded. If one side rendered
   // and the other did not, that asymmetry is itself worth reporting rather
@@ -956,25 +1160,39 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   if(before_cl && after_cl)
   {
     rep->gpu_ran = TRUE;
-    rep->gpu_max_diff = _max_abs_diff(before_cl, after_cl, npix);
+    const _diff_stats_t g = _diff_stats(before_cl, after_cl, npix);
+    rep->gpu_max_diff = g.max;
+    rep->gpu_mean_diff = g.mean;
+    rep->gpu_differing_pixels = g.differing;
+
+    if(before_cl_img && after_cl_img)
+    {
+      const _diff_stats_t gi = _diff_stats_rgb(before_cl_img, after_cl_img, npix);
+      rep->gpu_image_compared = TRUE;
+      rep->gpu_image_max_diff = gi.max;
+      rep->gpu_image_mean_diff = gi.mean;
+      rep->gpu_image_differing_pixels = gi.differing;
+    }
     rep->dev_diff_before = _max_abs_diff(before, before_cl, npix);
     rep->dev_diff_after = _max_abs_diff(after, after_cl, npix);
   }
 
   // --- compare ----------------------------------------------------------
-  double max_d = 0.0, sum_d = 0.0;
-  int differing = 0;
-  for(size_t i = 0; i < npix; i++)
+  const _diff_stats_t c = _diff_stats(before, after, npix);
+  const double max_d = c.max;
+
+  if(before_img && after_img)
   {
-    const double d = fabs((double)before[i] - (double)after[i]);
-    if(d > max_d) max_d = d;
-    sum_d += d;
-    if(d > VERIFY_EPS_IDENTICAL) differing++;
+    const _diff_stats_t ci = _diff_stats_rgb(before_img, after_img, npix);
+    rep->image_compared = TRUE;
+    rep->image_max_diff = ci.max;
+    rep->image_mean_diff = ci.mean;
+    rep->image_differing_pixels = ci.differing;
   }
 
-  rep->max_diff = max_d;
-  rep->mean_diff = npix ? sum_d / (double)npix : 0.0;
-  rep->differing_pixels = differing;
+  rep->max_diff = c.max;
+  rep->mean_diff = c.mean;
+  rep->differing_pixels = c.differing;
 
   if((darktable.unmuted & DT_DEBUG_MASKS) && max_d > VERIFY_EPS_EQUIVALENT)
   {
@@ -1009,15 +1227,27 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   //    (one more 8-bit step) keeps ordinary kernel noise from being reported
   //    as a regression.
   double verdict_d = max_d;
+  double verdict_mean = c.mean;
   if(rep->gpu_ran)
   {
-    verdict_d = MAX(verdict_d, rep->gpu_max_diff);
+    if(rep->gpu_max_diff > verdict_d)
+    {
+      verdict_d = rep->gpu_max_diff;
+      verdict_mean = rep->gpu_mean_diff;
+    }
+    // The widening is a max-vs-max quantity: it compares two worst-pixel gaps,
+    // so there is no mean that belongs with it. It therefore only ever raises
+    // the max side of the test, and is left out of the mean side rather than
+    // paired with a number measuring something else.
     const double widened = rep->dev_diff_after - rep->dev_diff_before;
     if(widened > VERIFY_EPS_EQUIVALENT) verdict_d = MAX(verdict_d, widened);
   }
 
+  // `deltae`'s rule: over tolerance on the worst pixel, or over a third of it
+  // on average, is a real difference; well under it everywhere is identical.
   if(verdict_d <= VERIFY_EPS_IDENTICAL) rep->result = VERIFY_IDENTICAL;
-  else if(verdict_d <= VERIFY_EPS_EQUIVALENT) rep->result = VERIFY_EQUIVALENT;
+  else if(verdict_d <= VERIFY_EPS_EQUIVALENT
+          && verdict_mean <= VERIFY_EPS_EQUIVALENT_MEAN) rep->result = VERIFY_EQUIVALENT;
   else rep->result = VERIFY_DIFFERENT;
 
   // one GPU render succeeding while the other failed is a real asymmetry --
@@ -1033,6 +1263,10 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   dt_free_align(after);
   dt_free_align(before_cl);
   dt_free_align(after_cl);
+  dt_free_align(before_img);
+  dt_free_align(after_img);
+  dt_free_align(before_cl_img);
+  dt_free_align(after_cl_img);
   _replay_cleanup(&r);
 }
 
@@ -1118,6 +1352,8 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
   memset(&st, 0, sizeof(st));
   st.worst_index = -1;
   st.worst_gpu_index = -1;
+  st.worst_image_index = -1;
+  st.worst_gpu_image_index = -1;
 
   if(rf) fprintf(rf, "\n  \"source\": \"%s\",\n  \"edits\": [", json_path);
   gboolean first_report = TRUE;
@@ -1125,21 +1361,48 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
   const guint n = json_array_get_length(edits);
   printf("[verify] replaying %u harvested edits from %s\n", n, json_path);
 
+  /* Exact repeats are rendered once (see dt_masks_harvest_edit_key). The
+     verdict is stored against the edit's content key and reused, so every
+     occurrence is still counted, reported and aggregated exactly as if it had
+     been replayed -- only the four renders are skipped. */
+  GHashTable *seen =
+    g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
+  int replayed_unique = 0;
+
   for(guint i = 0; i < n; i++)
   {
     JsonObject *edit = json_array_get_object_element(edits, i);
     if(!edit) continue;
 
     edit_report_t rep;
-    // -d masks names each edit before replaying it: when one of these wedges
-    // or crashes, the last line printed is the only thing that says which
-    // configuration did it.
-    if(darktable.unmuted & DT_DEBUG_MASKS)
-      printf("[verify] edit %u op=%s mask_mode=%d\n", i,
-             _obj_str(edit, "operation", "?"),
-             (int)_obj_int(json_object_get_object_member(edit, "blend"),
-                           "mask_mode", -1));
-    _verify_edit(edit, &rep);
+    gchar *key = dt_masks_harvest_edit_key(edit);
+    const edit_report_t *cached = key ? g_hash_table_lookup(seen, key) : NULL;
+    if(cached)
+    {
+      rep = *cached;
+      rep.repeat = TRUE;
+      g_free(key);
+    }
+    else
+    {
+      // -d masks names each edit before replaying it: when one of these wedges
+      // or crashes, the last line printed is the only thing that says which
+      // configuration did it.
+      if(darktable.unmuted & DT_DEBUG_MASKS)
+        printf("[verify] edit %u op=%s mask_mode=%d\n", i,
+               _obj_str(edit, "operation", "?"),
+               (int)_obj_int(json_object_get_object_member(edit, "blend"),
+                             "mask_mode", -1));
+      _verify_edit(edit, &rep);
+      rep.repeat = FALSE;
+      replayed_unique++;
+      if(key)
+      {
+        edit_report_t *store = malloc(sizeof(edit_report_t));
+        if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
+        else g_free(key);
+      }
+    }
 
     st.total++;
     switch(rep.result)
@@ -1166,6 +1429,30 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
       {
         st.worst_max_diff = rep.max_diff;
         st.worst_index = (int)i;
+        st.worst_mean_diff = rep.mean_diff;
+        st.worst_differing_pixels = rep.differing_pixels;
+      }
+      if(rep.image_compared)
+      {
+        st.image_compared++;
+        if(rep.image_max_diff > st.worst_image_diff)
+        {
+          st.worst_image_diff = rep.image_max_diff;
+          st.worst_image_mean_diff = rep.image_mean_diff;
+          st.worst_image_differing_pixels = rep.image_differing_pixels;
+          st.worst_image_index = (int)i;
+        }
+      }
+      if(rep.gpu_image_compared)
+      {
+        st.gpu_image_compared++;
+        if(rep.gpu_image_max_diff > st.worst_gpu_image_diff)
+        {
+          st.worst_gpu_image_diff = rep.gpu_image_max_diff;
+          st.worst_gpu_image_mean_diff = rep.gpu_image_mean_diff;
+          st.worst_gpu_image_differing_pixels = rep.gpu_image_differing_pixels;
+          st.worst_gpu_image_index = (int)i;
+        }
       }
       if(rep.gpu_ran)
       {
@@ -1174,6 +1461,8 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
         {
           st.worst_gpu_diff = rep.gpu_max_diff;
           st.worst_gpu_index = (int)i;
+          st.worst_gpu_mean_diff = rep.gpu_mean_diff;
+          st.worst_gpu_differing_pixels = rep.gpu_differing_pixels;
         }
         st.worst_dev_before = MAX(st.worst_dev_before, rep.dev_diff_before);
         st.worst_dev_after = MAX(st.worst_dev_after, rep.dev_diff_after);
@@ -1190,7 +1479,14 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\", \"result\": \"%s\","
                   " \"inert\": %s, \"max_diff\": %.9g, \"mean_diff\": %.9g,"
                   " \"differing_pixels\": %d, \"gpu_ran\": %s,"
-                  " \"gpu_max_diff\": %.9g, \"dev_diff_before\": %.9g,"
+                  " \"gpu_max_diff\": %.9g, \"gpu_mean_diff\": %.9g,"
+                  " \"gpu_differing_pixels\": %d,"
+                              " \"repeat\": %s, \"image_compared\": %s, \"image_max_diff\": %.9g,"
+                  " \"image_mean_diff\": %.9g, \"image_differing_pixels\": %d,"
+                  " \"gpu_image_compared\": %s, \"gpu_image_max_diff\": %.9g,"
+                  " \"gpu_image_mean_diff\": %.9g,"
+                  " \"gpu_image_differing_pixels\": %d,"
+                  " \"dev_diff_before\": %.9g,"
                   " \"dev_diff_after\": %.9g%s%s%s}",
               first_report ? "" : ",", i,
               _obj_str(edit, "operation", "?"),
@@ -1198,7 +1494,14 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
               rep.inert ? "true" : "false",
               rep.max_diff, rep.mean_diff, rep.differing_pixels,
               rep.gpu_ran ? "true" : "false",
-              rep.gpu_max_diff, rep.dev_diff_before, rep.dev_diff_after,
+              rep.gpu_max_diff, rep.gpu_mean_diff, rep.gpu_differing_pixels,
+              rep.repeat ? "true" : "false",
+              rep.image_compared ? "true" : "false",
+              rep.image_max_diff, rep.image_mean_diff, rep.image_differing_pixels,
+              rep.gpu_image_compared ? "true" : "false",
+              rep.gpu_image_max_diff, rep.gpu_image_mean_diff,
+              rep.gpu_image_differing_pixels,
+              rep.dev_diff_before, rep.dev_diff_after,
               rep.skip_reason ? ", \"reason\": \"" : "",
               rep.skip_reason ? rep.skip_reason : "",
               rep.skip_reason ? "\"" : "");
@@ -1222,6 +1525,7 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"passed\": %s,\n", passed ? "true" : "false");
     fprintf(rf, "    \"harvested\": %u,\n", n);
     fprintf(rf, "    \"replayed\": %d,\n", st.total);
+    fprintf(rf, "    \"distinct_edits\": %d,\n", replayed_unique);
     fprintf(rf, "    \"identical\": %d,\n", st.identical);
     fprintf(rf, "    \"equivalent\": %d,\n", st.equivalent);
     fprintf(rf, "    \"different\": %d,\n", st.different);
@@ -1234,19 +1538,41 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"inert\": %d,\n", st.inert_before);
     fprintf(rf, "    \"worst_cpu_diff\": %.9g,\n", st.worst_max_diff);
     fprintf(rf, "    \"worst_cpu_diff_index\": %d,\n", st.worst_index);
+    fprintf(rf, "    \"worst_cpu_mean_diff\": %.9g,\n", st.worst_mean_diff);
+    fprintf(rf, "    \"worst_cpu_differing_pixels\": %d,\n", st.worst_differing_pixels);
     fprintf(rf, "    \"gpu_compared\": %d,\n", st.gpu_compared);
     fprintf(rf, "    \"worst_gpu_diff\": %.9g,\n", st.worst_gpu_diff);
     fprintf(rf, "    \"worst_gpu_diff_index\": %d,\n", st.worst_gpu_index);
+    fprintf(rf, "    \"worst_gpu_mean_diff\": %.9g,\n", st.worst_gpu_mean_diff);
+    fprintf(rf, "    \"worst_gpu_differing_pixels\": %d,\n", st.worst_gpu_differing_pixels);
+    fprintf(rf, "    \"image_compared\": %d,\n", st.image_compared);
+    fprintf(rf, "    \"worst_image_diff\": %.9g,\n", st.worst_image_diff);
+    fprintf(rf, "    \"worst_image_diff_index\": %d,\n", st.worst_image_index);
+    fprintf(rf, "    \"worst_image_mean_diff\": %.9g,\n", st.worst_image_mean_diff);
+    fprintf(rf, "    \"worst_image_differing_pixels\": %d,\n",
+            st.worst_image_differing_pixels);
+    fprintf(rf, "    \"gpu_image_compared\": %d,\n", st.gpu_image_compared);
+    fprintf(rf, "    \"worst_gpu_image_diff\": %.9g,\n", st.worst_gpu_image_diff);
+    fprintf(rf, "    \"worst_gpu_image_diff_index\": %d,\n", st.worst_gpu_image_index);
+    fprintf(rf, "    \"worst_gpu_image_mean_diff\": %.9g,\n",
+            st.worst_gpu_image_mean_diff);
+    fprintf(rf, "    \"worst_gpu_image_differing_pixels\": %d,\n",
+            st.worst_gpu_image_differing_pixels);
     fprintf(rf, "    \"worst_dev_gap_classic\": %.9g,\n", st.worst_dev_before);
     fprintf(rf, "    \"worst_dev_gap_migrated\": %.9g,\n", st.worst_dev_after);
     fprintf(rf, "    \"dev_gap_widened\": %d\n", st.dev_gap_widened);
     fputs("  }", rf);
   }
 
+  g_hash_table_destroy(seen);
+
   printf("[verify]\n");
-  printf("[verify] replayed          : %d\n", st.total);
+  printf("[verify] replayed          : %d  (%d distinct, %d exact repeats reused)\n",
+         st.total, replayed_unique, st.total - replayed_unique);
   printf("[verify]   identical       : %d\n", st.identical);
-  printf("[verify]   equivalent      : %d  (below 1/255, invisible)\n", st.equivalent);
+  printf("[verify]   equivalent      : %d"
+         "  (worst pixel below 1/255 and mean below 1/765, invisible)\n",
+         st.equivalent);
   printf("[verify]   DIFFERENT       : %d\n", st.different);
   printf("[verify]   skipped         : %d\n", st.skipped);
   printf("[verify]   errors          : %d\n", st.error);
@@ -1259,16 +1585,26 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
   printf("[verify]   inert (uniform mask) : %d   (proves nothing either way)\n",
          st.inert_before);
   if(st.worst_index >= 0)
-    printf("[verify] worst CPU difference: %.9g at edit %d\n",
-           st.worst_max_diff, st.worst_index);
+    printf("[verify] worst CPU difference: %.9g at edit %d"
+           " (mean %.9g over %d differing pixels)\n",
+           st.worst_max_diff, st.worst_index,
+           st.worst_mean_diff, st.worst_differing_pixels);
+
+  if(st.image_compared && st.worst_image_index >= 0)
+    printf("[verify] worst image difference: %.9g at edit %d"
+           " (mean %.9g over %d differing pixels)\n",
+           st.worst_image_diff, st.worst_image_index,
+           st.worst_image_mean_diff, st.worst_image_differing_pixels);
 
   if(st.gpu_compared)
   {
     printf("[verify]\n");
     printf("[verify] GPU (OpenCL blend), %d edits replayed on both paths:\n",
            st.gpu_compared);
-    printf("[verify]   migration on GPU, worst difference : %.9g at edit %d\n",
-           st.worst_gpu_diff, st.worst_gpu_index);
+    printf("[verify]   migration on GPU, worst difference : %.9g at edit %d"
+           " (mean %.9g over %d differing pixels)\n",
+           st.worst_gpu_diff, st.worst_gpu_index,
+           st.worst_gpu_mean_diff, st.worst_gpu_differing_pixels);
     // Reported side by side on purpose. The absolute CPU/GPU gap is not a
     // defect -- two separate implementations of the same blend never agree to
     // the last bit -- so the number that matters is whether migration made it
