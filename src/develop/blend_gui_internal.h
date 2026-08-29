@@ -284,8 +284,12 @@ void _reparent_into(GtkWidget *w, GtkWidget *parent,
 void _masks_flexi_relocate(dt_iop_module_t *module);
 /** move this module's panel content back into its own expander */
 void _masks_flexi_release(dt_iop_module_t *module);
-/** "collapse" button shown while hosted in a separate left/right panel */
+/** "collapse" button shown in the "blend mask" header */
 void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data);
+/** record whether the masking panel should be folded away. Shared by all three
+    positions, and only ever *applied* by _masks_flexi_relocate/-release, so a
+    caller states the intent and every position carries it out the same way */
+void _masks_panel_set_collapsed_pref(const gboolean collapsed);
 /** append the "blend mask panel position" section to an existing menu */
 void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module);
 
