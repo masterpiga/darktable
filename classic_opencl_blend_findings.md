@@ -31,26 +31,41 @@ at that pixel, 0 = not at all, 1 = fully. Over all six corpora (section 7):
 
 | | value | what it means |
 |---|---|---|
-| frequency | 1,358 / 41,730 edits (**3.3%**) | of real masked edits; 0% for drawn-only, 4.7-12.5% for modes using a parametric component |
-| typical (median) | 0.014 | ~1.4 percentage points of module strength, about 3.5 steps on a 0-255 scale -- a faint edge or band in smooth gradients, invisible in texture |
+| frequency | 1,443 / 42,275 edits (**3.4%**) | of real masked edits; 0% for drawn-only, 4.7-12.5% for modes using a parametric component |
+| typical (median) | 0.014 at the worst pixel, 7.7e-06 as a mean | ~3.5 steps on a 0-255 scale where it peaks, but two thousandths of a step averaged over the ~17% of the frame it touches -- see the severity table below |
 | worst observed | 1.0 | fully masked vs not masked at all: the module applies at full strength where it should be absent, or vice versa |
 
-**What that does NOT say: how much of the image is affected.** `_max_abs_diff()`
-returns the single largest disagreement anywhere in the frame, so a 1.0 is
+**How much of the image is affected — now measured.** `_max_abs_diff()` alone
+returns the single largest disagreement anywhere in the frame, so a 1.0 was
 consistent with half the photo being wrong *and* with one pixel landing on the
-wrong side of a threshold on a mask boundary. The per-edit rows carry
-`mean_diff` and `differing_pixels` only for the CPU comparison, not for the GPU
-one, so the affected *area* is currently unmeasured. Given the threshold
-sensitivity documented in section 2 (group B), some of the full-range cases are
-plausibly thin boundary effects rather than whole regions -- but that is a guess,
-not a measurement.
+wrong side of a threshold. `verify.c` now reports `gpu_mean_diff` and
+`gpu_differing_pixels` beside it, and over all 1,443 outliers in the seven
+corpora the answer splits into two quite different populations:
 
-Closing that gap is a small change and worth doing before this goes upstream: add
-`gpu_mean_diff` and `gpu_differing_pixels` next to the existing CPU fields in
-`verify.c` and re-run the corpora. "3.3% of edits, median 1.4% strength error,
-N% of pixels affected" is a much harder claim to wave away than a worst-pixel
-figure alone.
+| | worst pixel | mean over frame | share of frame differing |
+|---|---:|---:|---:|
+| all 1,443 outliers | median 0.0136 | median 7.7e-06 | median **16.8%**, p90 42% |
+| the 29 full-range (1.0) ones | 1.0 | up to 0.336 | median **0.003%**, max 4.6% |
 
+So the typical outlier is the opposite of what the worst-pixel figure suggests:
+a *broad* region -- around a sixth of the frame -- differing by an amount whose
+mean is 7.7e-06, two thousandths of an 8-bit step, with a handful of pixels
+reaching ~3.5 steps. Imperceptible over the area it covers, visible only where
+it peaks.
+
+The full-range cases are the reverse and are genuinely thin: 1.0 at the worst
+pixel over a median 0.003% of the frame, i.e. a handful of pixels on a mask
+boundary. That is consistent with the threshold sensitivity of group B in
+section 2 -- a small numeric difference landing on either side of a comparison
+-- and it means "six edits differ by the full range" should not be read as six
+badly wrong images.
+
+Neither population is a reason to leave the bug unfixed, but they call for
+different debugging: the broad-and-faint majority looks like an arithmetic
+difference, the narrow-and-total minority like a branch taken differently.
+
+Replay resolution: the verifier renders at 512px on the long edge (about
+175,000 pixels for a 3:2 frame), so the percentages above are of that canvas.
 
 ## 2. What is established, and what is not
 
@@ -266,12 +281,10 @@ Relevant machinery, all on the `masks_revamp` branch:
 4. **Check whether raster is downstream of the same cause** by testing a raster
    consumer whose producer has a drawn-only mask; the hypothesis predicts no
    divergence there.
-5. **Measure the affected area**, not just the worst pixel -- add
-   `gpu_mean_diff` and `gpu_differing_pixels` to the per-edit report in
-   `verify.c` and re-run the corpora. See the severity note at the end of
-   section 1: without it, a `1.0` verdict cannot be told apart from a
-   single-pixel boundary artefact, and that is the first thing an upstream
-   reviewer will ask.
+5. ~~Measure the affected area, not just the worst pixel.~~ **Done** -- see the
+   table in section 1. The split it revealed is worth carrying into the
+   debugging: chase a **broad, faint** case and a **full-range, tiny-area** case
+   separately, since they are unlikely to have the same cause.
 6. Once localised, this is an upstream `master` bug report, not a masks_revamp
    one. The verifier can produce a clean before/after per edit for the issue,
    now on two vendors.
