@@ -4,8 +4,9 @@ Handoff note. This is **not** a masks_revamp bug — it is a pre-existing defect
 darktable's *classic* blending on OpenCL, found incidentally by the migration
 verifier on the `masks_revamp` branch. It should be reproducible on `master`.
 
-Everything below is evidence gathered on 2026-08-28. Where something is a
-hypothesis rather than a measurement, it says so.
+Everything below is evidence gathered on 2026-08-28, plus the second-device
+confirmation of 2026-08-29 (section 2). Where something is a hypothesis rather
+than a measurement, it says so.
 
 
 ## 1. The finding
@@ -24,6 +25,31 @@ In every one of the 274:
   `gpu_max_diff`).
 
 So the odd one out is classic-on-GPU, and the other three agree.
+
+**Severity, in practical terms.** A mask value is how strongly the module applies
+at that pixel, 0 = not at all, 1 = fully. Over all six corpora (section 7):
+
+| | value | what it means |
+|---|---|---|
+| frequency | 1,358 / 41,730 edits (**3.3%**) | of real masked edits; 0% for drawn-only, 4.7-12.5% for modes using a parametric component |
+| typical (median) | 0.014 | ~1.4 percentage points of module strength, about 3.5 steps on a 0-255 scale -- a faint edge or band in smooth gradients, invisible in texture |
+| worst observed | 1.0 | fully masked vs not masked at all: the module applies at full strength where it should be absent, or vice versa |
+
+**What that does NOT say: how much of the image is affected.** `_max_abs_diff()`
+returns the single largest disagreement anywhere in the frame, so a 1.0 is
+consistent with half the photo being wrong *and* with one pixel landing on the
+wrong side of a threshold on a mask boundary. The per-edit rows carry
+`mean_diff` and `differing_pixels` only for the CPU comparison, not for the GPU
+one, so the affected *area* is currently unmeasured. Given the threshold
+sensitivity documented in section 2 (group B), some of the full-range cases are
+plausibly thin boundary effects rather than whole regions -- but that is a guess,
+not a measurement.
+
+Closing that gap is a small change and worth doing before this goes upstream: add
+`gpu_mean_diff` and `gpu_differing_pixels` next to the existing CPU fields in
+`verify.c` and re-run the corpora. "3.3% of edits, median 1.4% strength error,
+N% of pixels affected" is a much harder claim to wave away than a worst-pixel
+figure alone.
 
 
 ## 2. What is established, and what is not
@@ -134,10 +160,25 @@ from `dt_develop_blendif_process_parameters()`.
 
 **Hypothesis (untested):** the divergence lives in the blendif OpenCL kernels,
 in `data/kernels/blendop.cl`, against their host counterparts in
-`src/develop/blends/blendif_*.c`. That also explains why the *migrated* render
-agrees with the CPU -- flexi represents a parametric mask as a
-`DT_MASKS_PARAMETRIC` form, which the group renderer evaluates on the host, so
-the migrated path stops calling the blendif kernel at all.
+`src/develop/blends/blendif_*.c`.
+
+The shape of it is that classic has **two** implementations of the parametric
+mask -- host C for the CPU pipe, an OpenCL kernel for the GPU pipe -- which are
+maintained by hand and have drifted. Flexi has **one**: `mode_drawn` is
+`mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_FLEXI)` (blend.c:1343), so a flexi
+group is rendered by `dt_masks_group_render_roi()` on the host in *both* pipes,
+`DT_MASKS_PARAMETRIC` members included, and the result is uploaded like any drawn
+mask. Migration clears `DEVELOP_MASK_CONDITIONAL`, so the blendif kernel has
+nothing left to evaluate. That is why the migrated render agrees with the CPU.
+
+It is mask *generation* that is unified, not the whole path: feathering, blur and
+the details refinement still have separate CPU and GPU implementations
+(`guided_filter_cl()` vs the host guided filter), `kernel_mask` still runs to
+apply global opacity and combine, and a parametric form evaluates against
+`dev_in`/`dev_out` read back from the device, which can itself differ slightly
+from the CPU-computed image. That residue is what the non-zero migrated CPU/GPU
+gap is (0.00093 on AMD, 0.0025 on Apple) -- below 1/255 everywhere in the corpus,
+i.e. invisible, with `dev_gap_widened` 0 on both vendors.
 
 Raster's 12.5% is consistent with the same root cause rather than a second one:
 a raster mask is produced by another module's blend, so a producer with a
@@ -225,7 +266,13 @@ Relevant machinery, all on the `masks_revamp` branch:
 4. **Check whether raster is downstream of the same cause** by testing a raster
    consumer whose producer has a drawn-only mask; the hypothesis predicts no
    divergence there.
-5. Once localised, this is an upstream `master` bug report, not a masks_revamp
+5. **Measure the affected area**, not just the worst pixel -- add
+   `gpu_mean_diff` and `gpu_differing_pixels` to the per-edit report in
+   `verify.c` and re-run the corpora. See the severity note at the end of
+   section 1: without it, a `1.0` verdict cannot be told apart from a
+   single-pixel boundary artefact, and that is the first thing an upstream
+   reviewer will ask.
+6. Once localised, this is an upstream `master` bug report, not a masks_revamp
    one. The verifier can produce a clean before/after per edit for the issue,
    now on two vendors.
 
