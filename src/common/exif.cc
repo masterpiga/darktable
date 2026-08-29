@@ -2755,9 +2755,9 @@ gboolean dt_exif_get_dimensions(const char *path, int *width, int *height)
 {
   try
   {
-    std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(path));
+    std::unique_ptr<Exiv2::Image> image(Exiv2::ImageFactory::open(WIDEN(path)));
     if(!image.get()) return FALSE;
-    image->readMetadata();
+    read_metadata_threadsafe(image);
     const int w = (int)image->pixelWidth();
     const int h = (int)image->pixelHeight();
     if(w <= 0 || h <= 0) return FALSE;
