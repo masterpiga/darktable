@@ -263,7 +263,10 @@ typedef struct dt_develop_t
   // markers if the user edits the image and dt_dev_write_history_ext()
   // rewrites masks_history from dev->forms.
   //
-  // Holds mask_ids (GINT_TO_POINTER), always empty (NULL) between
+  // Holds malloc'd dt_masks_pending_split_t entries (see migrate_legacy.c),
+  // which carry the pre-migration blend params too: this pass is also the
+  // first point where the group's members exist, so it is where a migration
+  // flexi cannot render faithfully is undone. Always empty (NULL) between
   // dt_dev_read_history_ext() calls.
   GList *pending_flexi_group_splits;
 

@@ -2556,7 +2556,7 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   // same defensiveness for the post-read normalization queue (see
   // dt_masks_normalize_flexi_groups); a stale entry here would re-normalize a
   // group belonging to the previously loaded image
-  g_list_free(dev->pending_flexi_group_splits);
+  g_list_free_full(dev->pending_flexi_group_splits, free);
   dev->pending_flexi_group_splits = NULL;
 
   // Specific handling for None workflow (interdependency)
