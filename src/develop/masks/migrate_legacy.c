@@ -90,18 +90,6 @@
 // construction helpers
 // ---------------------------------------------------------------------------
 
-/* One reused classic drawn group, queued for the post-read pass (see
-   _queue_group_split() and dev->pending_flexi_group_splits in develop.h).
-   Carries the pre-migration blend params so that pass can also *undo* the
-   migration for a group flexi cannot render faithfully. */
-typedef struct dt_masks_pending_split_t
-{
-  dt_mask_id_t mask_id;
-  dt_iop_module_t *module;
-  dt_develop_blend_params_t *bp;    // the live params the migration wrote
-  dt_develop_blend_params_t classic; // what they held before it
-} dt_masks_pending_split_t;
-
 /* Classic applies a shape's combine operator once per SHAPE; the flexi fold
  * applies it once per RUN.
  *
@@ -163,64 +151,92 @@ static void _split_nonunion_runs(dt_develop_t *dev,
   }
 }
 
-/* Does any group in this tree hold a member classic renders as a REPLACE?
+/* Repair a group whose member list violates classic's own well-formedness rule.
  *
- * A member with no DT_MASKS_STATE_OP_COMBINE bit at all is the base entry
- * dt_masks_group_add_form() creates for a group's first shape (`if(grp->points)
- * state |= default_operator` -- the first member gets none, having nothing to
- * combine with). Classic's fold special-cases exactly that position:
- * `nb_ok == 0 || (state & UNION)` unions it onto the empty accumulator. But
- * when such a member ends up *after* one that already rendered, classic falls
- * through its entire if/else chain to the final else -- `buffer[i] = op * mask[i]`
- * -- which REPLACES the accumulator and discards every earlier member.
+ * Upstream's invariant is that only the BOTTOM member of a group carries no
+ * combine operator: dt_masks_group_add_form() sets one on every member after
+ * the first (`if(grp->points) state |= default_operator`), the classic mask
+ * manager draws no operator icon for a member without one, and it repairs any
+ * it finds -- "ensure that at least an operator is defined as we are going to
+ * show this mask operator" (libs/masks.c). The bottom member has nothing to
+ * combine with, which is why classic's fold ends in a bare
+ * `buffer[i] = op * mask[i]`: that is the base shape seeding an empty buffer,
+ * indistinguishable there from a union.
  *
- * Flexi cannot express that. _flexi_apply_group_op() (group.c) maps an
- * operator-less run head to union, and the panel agrees: blend_gui.c repairs
- * `(state & OP_COMBINE) == NONE` to DT_MASKS_STATE_UNION on sight, calling it
- * back-compat that is "never valid for new edits". The same bit pattern means
- * replace to the classic renderer and union to every part of flexi -- so a mask
- * whose earlier members classic throws away would come back after migration, at
- * full strength.
+ * Some libraries hold groups that break the rule -- a member with no operator
+ * that is not the bottom one. Classic's fold reaches the same base case for it
+ * and *overwrites* the accumulator, so every earlier member is silently
+ * discarded. Nothing in the UI can express that and nothing in it can produce
+ * it; the data is malformed, most likely by transient edit-mode groups leaking
+ * into masks_history (the affected trees carry orphan single-member groups that
+ * nothing references, which is exactly what dt_masks_set_edit_mode_single_form()
+ * builds).
  *
- * This is the trigger behind the nested-group failures the harvest campaign
- * found. Grouping shapes is what produces a second operator-less member, which
- * is why every failure had nested groups and no failure lacked them -- but
- * nesting was never the fault: 849 of thad's 858 nested-group edits migrate
- * exactly. Across seven contributed libraries, 52 edits carry this pattern
- * inside their own mask group and 9 rendered differently; the other 43 only
- * because whatever replaced the discarded members happened to cover them.
+ * Flexi cannot reproduce the overwrite: _flexi_apply_group_op() folds an
+ * operator-less run head as a union, and blend_gui.c repairs the same bit
+ * pattern to DT_MASKS_STATE_UNION on sight. Left alone, migration therefore
+ * brings back the members classic threw away, at full strength -- the
+ * nested-group failures the harvest campaign found. (Nesting was only a
+ * correlate: wrapping shapes in a group is what produces a second
+ * operator-less member. 849 of thad's 858 nested-group edits were always fine.)
  *
- * So: fail closed, per this file's standing rule. The module keeps its classic
- * mask_mode and its classic renderer -- exactly what it uses on master today.
- * A mask flexi renders wrong is worse than one flexi does not yet own.
+ * So repair the data instead of arguing with it, preserving the EFFECT rather
+ * than the encoding: everything before the last operator-less member is what
+ * classic discards, so disable exactly those. That member then really is the
+ * bottom one, the group satisfies the invariant, and both folds render what
+ * classic rendered all along. Disabled rather than deleted so the shapes stay
+ * in the panel and the user can bring them back -- they contribute nothing to
+ * either renderer (see the HIDDEN|DISABLE skips in both folds in group.c).
  *
- * Hidden and disabled members are skipped on both sides of the count: neither
- * renders, so neither can be the earlier member that turns a later one into a
- * replace, nor the replace itself. */
-static gboolean _group_has_replace_member(dt_develop_t *dev,
-                                          const dt_mask_id_t mask_id,
-                                          const int depth)
+ * Hidden and disabled members are not counted on either side: neither renders,
+ * so neither can be the earlier member an operator-less one overwrites, nor
+ * the overwriting member itself.
+ *
+ * Nothing is written back, exactly as with the run-boundary markers this runs
+ * beside -- see dt_masks_normalize_flexi_groups(). Idempotent: once the earlier
+ * members are disabled they stop counting as live, so a second pass finds the
+ * group already well-formed and changes nothing. */
+static void _repair_base_case_overwrite(dt_develop_t *dev,
+                                        dt_masks_form_t *grp,
+                                        const int depth)
 {
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
   // same bound as _split_nonunion_runs: a malformed/cyclic tree must not spin
-  if(depth > 8) return FALSE;
+  if(depth > 8) return;
 
-  const dt_masks_form_t *grp = dt_masks_get_from_id(dev, mask_id);
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
-
+  // the last live member with no operator -- the one whose base case wins
+  GList *overwriter = NULL;
   int live = 0;
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
-    if(!(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
-    {
-      if(live > 0 && (pt->state & DT_MASKS_STATE_OP_COMBINE) == DT_MASKS_STATE_NONE)
-        return TRUE;
-      live++;
-    }
-    // a member can itself be a group, folded by the same algebra
-    if(_group_has_replace_member(dev, pt->formid, depth + 1)) return TRUE;
+    if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    if(live > 0 && (pt->state & DT_MASKS_STATE_OP_COMBINE) == DT_MASKS_STATE_NONE)
+      overwriter = l;
+    live++;
   }
-  return FALSE;
+
+  if(overwriter)
+  {
+    for(GList *l = grp->points; l && l != overwriter; l = g_list_next(l))
+    {
+      dt_masks_point_group_t *pt = l->data;
+      if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+      pt->state |= DT_MASKS_STATE_DISABLE;
+    }
+    dt_print(DT_DEBUG_ALWAYS,
+             "[masks] group %d: a member with no combine operator sits above"
+             " others, which classic renders by discarding them -- disabling"
+             " them so the migrated mask keeps rendering the same",
+             grp->formid);
+  }
+
+  // a member can itself be a group, folded by the same algebra
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    _repair_base_case_overwrite(dev, dt_masks_get_from_id(dev, pt->formid), depth + 1);
+  }
 }
 
 /* Queue a reused classic drawn group for the normalization above, and do it
@@ -242,23 +258,18 @@ static gboolean _group_has_replace_member(dt_develop_t *dev,
  * decision is made where the forms finally are -- in
  * dt_masks_normalize_flexi_groups() -- and failing closed there means putting
  * back the blend params the migration overwrote. */
-static void _queue_group_split(dt_iop_module_t *module,
-                               const dt_mask_id_t mask_id,
-                               dt_develop_blend_params_t *bp,
-                               const dt_develop_blend_params_t *const classic)
+static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_id)
 {
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
 
-  _split_nonunion_runs(module->dev, dt_masks_get_from_id(module->dev, mask_id), 0);
+  dt_masks_form_t *grp = dt_masks_get_from_id(module->dev, mask_id);
+  _repair_base_case_overwrite(module->dev, grp, 0);
+  _split_nonunion_runs(module->dev, grp, 0);
 
-  dt_masks_pending_split_t *entry = malloc(sizeof(dt_masks_pending_split_t));
-  if(!entry) return;
-  entry->mask_id = mask_id;
-  entry->module = module;
-  entry->bp = bp;
-  entry->classic = *classic;
-  module->dev->pending_flexi_group_splits =
-    g_list_append(module->dev->pending_flexi_group_splits, entry);
+  const gpointer key = GINT_TO_POINTER(mask_id);
+  if(!g_list_find(module->dev->pending_flexi_group_splits, key))
+    module->dev->pending_flexi_group_splits =
+      g_list_append(module->dev->pending_flexi_group_splits, key);
 }
 
 static dt_masks_point_group_t *_new_group_point(const dt_mask_id_t formid,
@@ -874,7 +885,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
       // normalization that _dispatch()'s DEVELOP_MASK_MASK-alone case applies.
       // (DT_COND_CONSTANT just above does not: it sets mask_id to NO_MASKID,
       // so no group is rendered at all.)
-      _queue_group_split(module, o->mask_id, n, o);
+      _queue_group_split(module, o->mask_id);
       if(masks_pos != inv)
         n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
       else
@@ -979,7 +990,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   // reads the module's (now flexi) blend_params, so the inner group is folded
   // by the flexi run algebra too. It therefore needs the same run-boundary
   // normalization as the drawn-only case above.
-  _queue_group_split(module, o->mask_id, n, o);
+  _queue_group_split(module, o->mask_id);
 
   // the channel elements form their own run, separate from drawn_pt's (a
   // different operator always starts a new run, see the run-boundary test
@@ -1052,7 +1063,7 @@ static gboolean _dispatch(dt_iop_module_t *module,
     // _queue_group_split() marks the run boundaries that make the two agree;
     // see its comment for why that is all it takes.
     n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-    _queue_group_split(module, o->mask_id, n, o);
+    _queue_group_split(module, o->mask_id);
     ok = TRUE;
   }
   else // DEVELOP_MASK_CONDITIONAL alone
@@ -1118,32 +1129,6 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
   if(!module->dev) return TRUE;
 
   const dt_develop_blend_params_t o = *bp;
-
-  /* Fail closed on a group flexi cannot render faithfully, before anything is
-     written (see _group_has_replace_member()). Only when dev->forms can be
-     trusted -- history_num < 0 is exactly the "not inside the darkroom
-     history-load loop" condition _mask_id_has_content() documents, where
-     dev->forms still holds whatever the previous image left behind and a
-     lookup by id could match a stale form. The darkroom path makes the same
-     decision later instead, in dt_masks_normalize_flexi_groups(), which is the
-     first point where the group's members actually exist.
-
-     Returns TRUE, not FALSE: nothing failed. The migration looked at the mask
-     and declined it, exactly as the no-dev-context case above does, and bp
-     keeps its classic mask_mode. FALSE means "synthesis broke", which asks the
-     caller to fail the whole blend legacy upgrade -- far too big a hammer for
-     a mask that renders correctly the way it already is. */
-  if(history_num < 0
-     && (o.mask_mode & DEVELOP_MASK_MASK)
-     && !(o.mask_mode & DEVELOP_MASK_RASTER)
-     && _group_has_replace_member(module->dev, o.mask_id, 0))
-  {
-    dt_print(DT_DEBUG_ALWAYS,
-             "[masks] module '%s': mask group %d has a member classic renders as"
-             " a replace, which flexi cannot express -- keeping the mask in"
-             " classic mode", module->op, o.mask_id);
-    return TRUE;
-  }
 
   // drawn-only needs no new form at all (see _dispatch()), so it is always
   // safe to do immediately -- the existing form it reuses is already
@@ -1264,30 +1249,13 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 
   for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))
   {
-    dt_masks_pending_split_t *entry = l->data;
-
-    /* This is also the first moment the group's real member list exists on the
-       darkroom-load path, so it is where the fail-closed check has to happen
-       (see _group_has_replace_member()). Putting the classic params back is the
-       whole undo: drawn-only changed nothing but mask_mode, and for the other
-       two cases the snapshot restores mask_id/mask_combine/blendif as well.
-       Whatever those cases synthesized stays in dev->forms, referenced by
-       nothing -- which is exactly what dt_masks_cleanup_unused() already
-       prunes, and is why no bespoke teardown is needed here. */
-    if(_group_has_replace_member(dev, entry->mask_id, 0))
-    {
-      *entry->bp = entry->classic;
-      dt_print(DT_DEBUG_ALWAYS,
-               "[masks] module '%s': mask group %d has a member classic renders"
-               " as a replace, which flexi cannot express -- keeping the mask"
-               " in classic mode",
-               entry->module->op, entry->mask_id);
-      continue;
-    }
-
-    _split_nonunion_runs(dev, dt_masks_get_from_id(dev, entry->mask_id), 0);
+    dt_masks_form_t *grp = dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data));
+    // order matters: the repair decides which members are live, and the
+    // run-boundary split then marks boundaries among exactly those
+    _repair_base_case_overwrite(dev, grp, 0);
+    _split_nonunion_runs(dev, grp, 0);
   }
 
-  g_list_free_full(dev->pending_flexi_group_splits, free);
+  g_list_free(dev->pending_flexi_group_splits);
   dev->pending_flexi_group_splits = NULL;
 }
