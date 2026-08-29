@@ -150,7 +150,140 @@ own CPU/GPU gap worse. It is **0** across all corpora; a non-zero value there
 would be a migration regression and a different investigation.
 
 
-## 4. The lead
+## 4. The two causes
+
+**Both are now identified.** Section 4 originally carried a single hypothesis
+("it is somewhere in the blendif kernels"). Splitting the corpus by mask mode
+*and* by which post-processing is active separates it into two unrelated
+defects, one of which is an outright bug with a one-line fix and the other of
+which is not a coding error at all. What follows keeps the original evidence
+that led there, then states each cause and how it was confirmed.
+
+### 4.0 The split that separates them
+
+Classic's own CPU-vs-GPU disagreement (`dev_diff_before > 1/255`), over all
+42,078 edits that ran on both paths, bucketed by mask mode and active mask
+post-processing:
+
+| mask mode | parametric channels | post-processing | diverge | edits | rate |
+|---|---|---|---:|---:|---:|
+| raster | none | **any** (feather / blur / tone) | 61 | 61 | **100%** |
+| raster | none | none | 0 | 590 | **0%** |
+| drawn | none | any combination | 0 | 6,747 | 0% |
+| drawn + parametric | none | any combination | 0 | 5,905 | 0% |
+| drawn + parametric | yes | none | 389 | 888 | 43.8% |
+| drawn + parametric | yes | feather | 697 | 21,627 | 3.2% |
+| parametric | yes | various | ~50 | ~700 | 4-29% |
+
+Two populations that share nothing: one keyed on **raster + post-processing**
+and completely deterministic, one keyed on **an active parametric channel** and
+probabilistic. Note the third and fourth rows: drawn masks with feathering,
+blur and tone curve do *not* diverge, in thousands of edits. That rules the
+post-processing implementations themselves (`guided_filter_cl`,
+`dt_gaussian_blur_cl`, `blendop_mask_tone_curve`) out as a cause, which is what
+makes the 100% raster row so pointed.
+
+### 4.1 Cause A: the OpenCL path publishes a stale raster mask (FIXED)
+
+`dt_develop_blend_process_cl()` ended with:
+
+```c
+if(dt_iop_piece_is_raster_mask_used(piece, BLEND_RASTER_ID))
+{
+  // get back final mask from the device as the raster mask
+  if(!raster)
+  {
+    err = dt_opencl_copy_image_to_host(devid, mask, dev_mask, ...);
+    ...
+  }
+  dt_iop_piece_set_raster(piece, mask, roi_in, roi_out);
+}
+```
+
+The `if(!raster)` guard skips the device-to-host readback when this module's own
+mask *came from* a raster mask, on the reasoning that such a mask is built on
+the host and uploaded, so the host buffer already holds it. That is true only
+while nothing touches it on the device afterwards -- and the mask
+post-processing immediately above does exactly that, reading and writing
+`dev_mask`. With feathering, blur or the tone curve active, the host buffer is
+still the **unrefined** mask, and that is what gets published.
+
+So a module that consumes a raster mask, refines it, and is itself used as a
+raster source hands every downstream consumer a different mask than it blended
+with, and a different one than the CPU path publishes for the same edit. It
+also explains the 100%/0% split exactly: with no post-processing the shortcut is
+valid, which is why those 590 edits are clean.
+
+The fix is to read back unconditionally (blend.c, this branch). Confirmed on a
+76-edit corpus built from every distinct raster configuration in the seven
+libraries: **42 divergent before, 0 after**, worst classic CPU/GPU gap
+0.94 -> 0.000153.
+
+This one is worth reporting upstream on its own. It is not exotic -- chained
+raster masks with feathering are ordinary practice -- and the symptom (a
+downstream module masked by the *unfeathered* shape, but only with OpenCL on)
+is the kind of thing users report as "the GPU render looks different" without
+ever finding the cause.
+
+### 4.2 Cause B: hue is ill-conditioned near the achromatic axis
+
+The remaining population is `blend_cst = rgb_scene` almost exclusively: 1,426 of
+the 1,443 outliers, against 3 in `rgb_display` and 14 in `Lab`. Within it,
+`hz_in` -- the JzCzhz **hue** channel -- is active in 1,218 of them, and 694 have
+hue as their *only* active channel.
+
+A standalone differential (`jzdiff.c`, no darktable build involved: verbatim
+copies of `dt_XYZ_2_JzAzBz`/`dt_JzAzBz_2_JzCzhz` from
+`colorspaces_inline_conversions.h` and of `XYZ_to_JzAzBz`/`JzAzBz_to_JzCzhz`
+from `data/kernels/colorspace.h`, fed identical XYZ D65 values) settles what
+drifted, on 400,000 samples on the Apple M4 Pro:
+
+| channel | max difference | mean | samples over 1/255 |
+|---|---:|---:|---:|
+| Jz | 4.6e-07 | 5.3e-09 | 0 |
+| Cz | 7.5e-06 | 7.5e-08 | 0 |
+| **hz** | **0.045** | 1.0e-04 | 1.14% |
+
+And the hue disagreement is entirely confined to low chroma:
+
+| Cz | samples | hue max | over 1/255 |
+|---|---:|---:|---:|
+| < 1e-6 | 15,788 | 0.045 | 1.39% |
+| 1e-6 .. 1e-5 | 25,210 | 0.0095 | 1.22% |
+| 1e-5 .. 1e-4 | 83,284 | 0.017 | 4.82% |
+| 1e-4 .. 1e-3 | 40,961 | 0.0016 | **0%** |
+| 1e-3 .. 1e-2 | 159,549 | 0.0009 | **0%** |
+| > 1e-2 | 75,208 | 7.9e-05 | **0%** |
+
+**So there is no formula drift.** The two implementations agree on Jz and Cz to
+around 1e-6, and on hue to within 1e-4 wherever hue means anything. They differ
+only where `Az` and `Bz` are both within ~1e-9 of zero, and the angle
+`atan2(Bz, Az)` is therefore arbitrary -- the worst single sample is a *black*
+pixel (XYZ = 0, Cz = 1e-17) where the CPU says hue 0.436 and the GPU says 0.482.
+Both are meaningless; neither is wrong.
+
+That is the mechanism for the dominant population, and it also explains the
+shape of the severity table in section 1: a broad region of near-neutral pixels
+(shadows, sky, anything desaturated) each differing by a tiny amount, with the
+occasional pixel where a hue-band slider lands on opposite sides of its edge.
+
+The residual full-range cases on `Jz_in` or `Cz_in` alone (90 and 26 edits) are
+the second-order version of the same thing: those channels agree to 5e-7, but
+`_blendif_compute_factor` makes a hard `<=` comparison against a slider limit,
+so a 5e-7 input difference at a slider edge swings the factor between 0 and 1.
+That is the "group B" threshold sensitivity of section 2, seen from the other
+end.
+
+**A fix here is a rendering decision, not a bug fix**, and belongs upstream
+rather than in this branch. The honest options are to gate the hue channel's
+factor where chroma is below the point at which hue is defined (both paths, and
+arguably a quality improvement in its own right -- a hue selection on a black
+region is currently speckle), or to accept the divergence as noise on
+ill-conditioned input. Chasing ulps in the conversion will not help: the inputs
+that disagree are ones where no amount of precision produces a meaningful
+answer.
+
+### 4.3 The original evidence
 
 Outlier rate broken down by classic mask mode, over 5954 edits:
 
@@ -173,9 +306,11 @@ geometry cannot differ from the CPU run. The parametric mask is the part
 evaluated in-kernel, via `kernel_blendop_mask_*` fed by `dev_blendif_params`
 from `dt_develop_blendif_process_parameters()`.
 
-**Hypothesis (untested):** the divergence lives in the blendif OpenCL kernels,
-in `data/kernels/blendop.cl`, against their host counterparts in
-`src/develop/blends/blendif_*.c`.
+**Hypothesis (superseded by 4.2):** the divergence lives in the blendif OpenCL
+kernels, in `data/kernels/blendop.cl`, against their host counterparts in
+`src/develop/blends/blendif_*.c`. Half right: it is reached through those
+kernels, but nothing in them has drifted -- the disagreement is in the JzCzhz
+hue of near-achromatic pixels, which is ill-conditioned rather than wrong.
 
 The shape of it is that classic has **two** implementations of the parametric
 mask -- host C for the CPU pipe, an OpenCL kernel for the GPU pipe -- which are
@@ -195,10 +330,13 @@ from the CPU-computed image. That residue is what the non-zero migrated CPU/GPU
 gap is (0.00093 on AMD, 0.0025 on Apple) -- below 1/255 everywhere in the corpus,
 i.e. invisible, with `dev_gap_widened` 0 on both vendors.
 
-Raster's 12.5% is consistent with the same root cause rather than a second one:
-a raster mask is produced by another module's blend, so a producer with a
-parametric mask that ran on GPU stores an already-divergent mask. Worth
-confirming rather than assuming -- **open question #2**.
+~~Raster's 12.5% is consistent with the same root cause rather than a second
+one: a raster mask is produced by another module's blend, so a producer with a
+parametric mask that ran on GPU stores an already-divergent mask.~~ **Wrong** --
+this was the assumption flagged as open question #2, and checking it is what
+turned up cause A. Raster's divergence has nothing to do with the producer's
+mask: it is the stale readback of section 4.1, gated on post-processing rather
+than on anything the producer did.
 
 Module counts (a symptom of which modules the contributors used with parametric
 masks, not necessarily of which are implicated):
@@ -269,18 +407,22 @@ Relevant machinery, all on the `masks_revamp` branch:
 
 1. ~~Reproduce on a non-Apple OpenCL device.~~ **Done** -- see section 2. It
    reproduces on AMD; this is a darktable bug.
-2. **Confirm the blendif-kernel hypothesis** by dumping the mask from both paths
-   -- `-d masks -d opencl`, or `--dump-diff-pipe`, which exists for exactly this.
-   Use a **group A** case: deterministic across vendors, so anything found is
-   real rather than device noise. Edit 1 (`rgbcurve`, = leonidas #163) is both
-   full-range and group A, which makes it the single best target.
-3. **Treat group B as a separate question**, and only after A is understood. If
-   fixing the group A divergence also removes the group B spread, there was one
-   cause all along; if it does not, there is a genuinely precision-sensitive
-   comparison in the kernel to find.
-4. **Check whether raster is downstream of the same cause** by testing a raster
-   consumer whose producer has a drawn-only mask; the hypothesis predicts no
-   divergence there.
+2. ~~Confirm the blendif-kernel hypothesis by dumping the mask from both
+   paths.~~ **Done, and it was not the kernels** -- see section 4.2. Bucketing
+   the corpus by mask mode *and* by active post-processing, rather than by mask
+   mode alone, split the population in two; a standalone differential of the
+   two JzCzhz implementations then showed they agree everywhere hue is
+   defined.
+3. ~~Treat group B as a separate question.~~ Resolved as the same thing seen at
+   the other end: `_blendif_compute_factor` compares against slider limits with
+   a hard `<=`, so a 5e-7 input difference at a slider edge swings the factor
+   between 0 and 1. Group A is the hue population, where the input difference
+   is large enough (up to 0.045) that both vendors land the same side.
+4. ~~Check whether raster is downstream of the same cause.~~ **Done, and it is
+   not** -- it is cause A, an unconditional-readback bug in
+   `dt_develop_blend_process_cl()`, fixed and confirmed on a 76-edit corpus
+   (42 divergent -> 0). This is the piece to take upstream first: it is a
+   plain defect with a one-line fix, independent of everything else here.
 5. ~~Measure the affected area, not just the worst pixel.~~ **Done** -- see the
    table in section 1. The split it revealed is worth carrying into the
    debugging: chase a **broad, faint** case and a **full-range, tiny-area** case
