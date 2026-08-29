@@ -978,6 +978,15 @@ gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path)
     return FALSE;
   }
 
+  /* exiv2 talks to stderr on its own otherwise -- a CR3 whose maker note it
+     dislikes prints "Error: Directory Canon ... considered invalid", which is
+     harmless (the dimensions still come back) but reads like a failure to
+     someone running this on their own photos to help us. dt_exif_init()
+     installs darktable's handler, which prefixes and routes those properly.
+     Safe to call here: it registers namespaces and a log handler, and touches
+     nothing on disk. */
+  dt_exif_init();
+
   GList *files = NULL;
   _collect_xmps(dir, &files, 0);
   files = g_list_reverse(files);
@@ -1164,6 +1173,8 @@ gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path)
 
   fputs("\n}\n", f);
   fclose(f);
+
+  dt_exif_cleanup();
 
   printf("[harvest] %d edits from %d sidecars (%d with masks), %d forms\n",
          harvested, files_read, images_with_masks, total_forms);
