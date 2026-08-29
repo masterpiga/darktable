@@ -40,6 +40,29 @@ G_BEGIN_DECLS
     NULL on failure with `error` set; caller owns the parser. */
 JsonParser *dt_masks_harvest_load(const char *path, GError **error);
 
+/** A key identifying everything about one harvested edit that a replay depends
+    on: the module, the blend params, the forms and the image dimensions --
+    everything except where it sat in the harvest.
+
+    Real libraries are full of exact repeats: a preset or a copied history
+    applied across hundreds of images stores the same mask specification each
+    time. 61% of the edits in the seven contributed corpora are byte-identical
+    to an earlier one, 74% in the largest. Replaying them is not extra evidence
+    -- the same specification rendered against the same probe by the same
+    single-threaded code cannot produce a different answer -- so the checks
+    render each distinct edit once and reuse the verdict for its repeats, while
+    still counting every occurrence in the statistics.
+
+    Deliberately content-based rather than shape-based. The configuration
+    *shape* used for the reliability statistics (tools/masks_migration_confidence.py)
+    excludes geometry and parameter values on purpose, and 330 of the 5,521
+    recorded shapes contain more than one distinct outcome -- so sampling a few
+    edits per shape would be sampling, with a real chance of missing the
+    minority. Equal content is the only equivalence that is free.
+
+    Caller owns the returned string. */
+gchar *dt_masks_harvest_edit_key(JsonObject *edit);
+
 /** Rebuild the form list for one harvested edit from its "forms" array.
     Returns NULL if anything is unreconstructable, so a malformed record is
     skipped rather than replayed as something subtly different. Caller owns the
