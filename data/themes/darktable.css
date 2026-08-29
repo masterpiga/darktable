@@ -2322,7 +2322,20 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
    "background-color: @bg_color" rule here painted a visually close but not
    pixel-identical value (measured ~6/255 darker than #left/#right) -- going
    through the ancestor-reveal path instead of a fresh paint guarantees an
-   identical result since it's the exact mechanism #left/#right use. */
+   identical result since it's the exact mechanism #left/#right use.
+
+   That reveal has a precondition: something opaque behind it. True while the
+   panel is a column in the grid; false while it floats over the canvas during
+   a hover-peek (see _flexi_panel_set_floating in gui/gtk.c), where the only
+   thing behind it is the image -- so the transparency that normally goes
+   unnoticed made the whole panel read as semi-transparent. The floating state,
+   and only it, therefore paints its own background. The ~6/255 mismatch the
+   paragraph above is about cannot show here: the panel is over the image, with
+   no #left/#right edge next to it to compare against. */
+#flexi.flexi-floating
+{
+  background-color: @bg_color;
+}
 
 /* #bauhaus-slider always paints a flat @plugin_bg_color background (see that
    rule above) -- fine inside a normal module, which sits on a card tuned to

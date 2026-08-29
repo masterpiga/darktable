@@ -143,6 +143,24 @@ typedef struct dt_ui_t
   gboolean flexi_corner_icon_active;  // TRUE when the hosted module's mask is actually in use
   gchar *flexi_corner_icon_mask_label;  // human-readable current mask type, for the tooltip
   gboolean flexi_panel_right;      // current side (FALSE = left, TRUE = right)
+  /* hover-peek: pointing at the corner icon shows the whole panel for as long
+     as the pointer stays on it or in the panel, then it folds back. Purely
+     visual -- it does not touch the stored collapse state or on-canvas mask
+     editing, and an explicit expand (the icon's own click, the position menu)
+     clears the flag, so a peek can never fold a panel the user really opened.
+     See _flexi_peek_begin/_flexi_peek_end. */
+  gboolean flexi_peeking;          // a peek is currently showing the panel
+  gboolean flexi_pointer_in_panel; // pointer is inside the panel itself
+  guint flexi_peek_timeout;        // the pointer poll that owns a peek's lifetime
+  int flexi_peek_grace;            // poll ticks to wait for the layout to settle
+  /* folding the panel puts the corner icon back, often right under the pointer
+     that just clicked to fold it -- and an icon appearing under the pointer
+     counts as hovering it. Without this, the peek reopened the panel instantly
+     and the click looked like it had done nothing. So after a deliberate fold,
+     peeking is suppressed until the pointer has actually left the icon. */
+  gboolean flexi_peek_suppressed;
+  guint flexi_unsuppress_timeout;  // poll watching for the pointer to leave
+  GtkWidget *flexi_centerrow;      // the panel's home when docked as a real column
 } dt_ui_t;
 
 /* initialize the whole left panel */
@@ -3686,6 +3704,231 @@ static void _ui_init_panel_right(dt_ui_t *ui,
 // and DT_UI_PANEL_FLEXI is one of its side_panels[] -- all three columns take
 // width from the same center, so all three have to be arbitrated together.
 
+// ---- hover-peek on the collapsed panel's corner icon -----------------------
+//
+// Deliberately NOT routed through dt_ui_flexi_panel_set_collapsed(): a peek is
+// not a collapse-state change. It must not write the stored state, must not
+// stash/restore on-canvas mask editing, and must leave the corner icon on
+// screen -- expanding the panel takes width from the canvas, which shifts the
+// icon out from under the pointer, and hiding it as well would fold the panel
+// straight back and flicker. So the peek only toggles the panel's own
+// visibility, and ends when the pointer leaves the panel.
+
+// Where the panel is drawn. Docked (the persistent state) it is a real column
+// in centerrow, a sibling of the canvas, so opening it narrows the image.
+// Floating (a peek) it is an overlay on the canvas instead: a peek is a quick
+// look, and re-laying out the centre row would move the image -- and whatever
+// the pointer is aimed at -- on a mere hover. Covering a strip of canvas for a
+// moment is the cheaper price.
+static void _flexi_panel_set_floating(dt_ui_t *ui, const gboolean floating)
+{
+  GtkWidget *over = ui->flexi_panel_overlay;
+  if(!over) return;
+
+  GtkWidget *want = floating ? dt_ui_center_base(ui) : ui->flexi_centerrow;
+  GtkWidget *parent = gtk_widget_get_parent(over);
+  if(!want || parent == want) return;
+
+  // the panel is transparent by design, showing the grid's own background
+  // through (see darktable.css's "#flexi.flexi-floating") -- over the canvas
+  // there is no such background to reveal, only the image, so it has to paint
+  // its own or the whole panel reads as semi-transparent
+  if(ui->flexi_panel_body)
+  {
+    if(floating) dt_gui_add_class(ui->flexi_panel_body, "flexi-floating");
+    else dt_gui_remove_class(ui->flexi_panel_body, "flexi-floating");
+  }
+
+  // the reparent drops the container's reference, so hold one across it
+  g_object_ref(over);
+  if(parent) gtk_container_remove(GTK_CONTAINER(parent), over);
+
+  if(floating)
+  {
+    // pinned to the docked side, full canvas height, its own width honoured
+    // from the panel widget's size request
+    gtk_widget_set_halign(over, ui->flexi_panel_right ? GTK_ALIGN_END : GTK_ALIGN_START);
+    gtk_widget_set_valign(over, GTK_ALIGN_FILL);
+    gtk_overlay_add_overlay(GTK_OVERLAY(want), over);
+  }
+  else
+  {
+    gtk_widget_set_halign(over, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(over, GTK_ALIGN_FILL);
+    gtk_box_pack_start(GTK_BOX(want), over, FALSE, FALSE, 0);
+    // centerrow only ever holds this overlay and centergrid: 0 = before the
+    // canvas (left side), 1 = after it (right)
+    gtk_box_reorder_child(GTK_BOX(want), over, ui->flexi_panel_right ? 1 : 0);
+  }
+  g_object_unref(over);
+}
+
+// a canvas interaction the panel started and the canvas has to finish: drawing
+// a shape, or an armed colour picker waiting for its click. Reaching the canvas
+// means leaving the panel, and folding it away mid-gesture would pull the
+// controls out from under the very operation the user is completing.
+static gboolean _flexi_canvas_op_pending(void)
+{
+  const dt_develop_t *dev = darktable.develop;
+  if(dev && dev->form_gui
+     && (dev->form_gui->creation || dev->form_gui->creation_continuous))
+    return TRUE;
+  if(darktable.lib && darktable.lib->proxy.colorpicker.picker_proxy) return TRUE;
+  return FALSE;
+}
+
+static void _flexi_peek_cancel_timeout(dt_ui_t *ui)
+{
+  if(ui->flexi_peek_timeout)
+  {
+    g_source_remove(ui->flexi_peek_timeout);
+    ui->flexi_peek_timeout = 0;
+  }
+}
+
+static void _flexi_peek_end(dt_ui_t *ui)
+{
+  _flexi_peek_cancel_timeout(ui);
+  if(!ui->flexi_peeking) return;
+  ui->flexi_peeking = FALSE;
+  gtk_widget_set_visible(ui->flexi_panel_overlay, FALSE);
+  _flexi_panel_set_floating(ui, FALSE);
+  dt_iop_gui_blend_masks_panel_set_peek(FALSE);
+  // the panel is collapsed again, so the icon is the way back once more
+  if(ui->flexi_corner_icon) gtk_widget_set_visible(ui->flexi_corner_icon, TRUE);
+}
+
+// is the pointer, in root coordinates, inside this widget?
+static gboolean _widget_contains_pointer(GtkWidget *w, const gint px, const gint py)
+{
+  if(!w || !gtk_widget_get_realized(w) || !gtk_widget_is_visible(w)) return FALSE;
+  GdkWindow *win = gtk_widget_get_window(w);
+  if(!win) return FALSE;
+
+  gint ox, oy;
+  gdk_window_get_origin(win, &ox, &oy);
+  GtkAllocation a;
+  gtk_widget_get_allocation(w, &a);
+  // a widget with no window of its own draws on an ancestor's, and its
+  // allocation is relative to that window rather than to itself
+  if(!gtk_widget_get_has_window(w))
+  {
+    ox += a.x;
+    oy += a.y;
+  }
+  return px >= ox && px < ox + a.width && py >= oy && py < oy + a.height;
+}
+
+// Poll the pointer rather than watching crossing events on the panel.
+//
+// The event-driven version flickered: the panel body has no GdkWindow of its
+// own, and wrapping it in an input-only event box did not reliably deliver
+// enter/leave either (the child widgets' own windows take the crossings), so
+// "the pointer reached the panel" never registered. The peek then timed out,
+// the panel folded, the canvas grew back, the icon slid under the pointer
+// again, and the whole thing restarted several times a second.
+//
+// Position is unambiguous where crossing events are not: the peek lives as
+// long as the pointer is over the panel or still over the icon, full stop.
+static gboolean _flexi_peek_poll(gpointer user_data)
+{
+  dt_ui_t *ui = (dt_ui_t *)user_data;
+  if(!ui->flexi_peeking)
+  {
+    ui->flexi_peek_timeout = 0;
+    return G_SOURCE_REMOVE;
+  }
+
+  // a gesture the panel started and the canvas has to finish outlives the
+  // pointer leaving: hold the panel open until it is done
+  if(_flexi_canvas_op_pending()) return G_SOURCE_CONTINUE;
+
+  GdkDisplay *display = gtk_widget_get_display(ui->flexi_panel_overlay);
+  GdkDevice *pointer = gdk_seat_get_pointer(gdk_display_get_default_seat(display));
+  gint px = 0, py = 0;
+  gdk_device_get_position(pointer, NULL, &px, &py);
+
+  ui->flexi_pointer_in_panel =
+    _widget_contains_pointer(ui->flexi_panel_overlay, px, py);
+  if(ui->flexi_pointer_in_panel
+     || _widget_contains_pointer(ui->flexi_corner_icon, px, py))
+  {
+    // the pointer has arrived; from here a single tick outside ends the peek
+    ui->flexi_peek_grace = 0;
+    return G_SOURCE_CONTINUE;
+  }
+
+  // showing the panel re-lays out the whole centre row, and the first tick can
+  // beat that: hold on for a few ticks before believing "the pointer is
+  // nowhere near", or a stale allocation folds the panel right back and the
+  // icon lands under the pointer again -- the flicker this poll replaced
+  if(ui->flexi_peek_grace > 0)
+  {
+    ui->flexi_peek_grace--;
+    return G_SOURCE_CONTINUE;
+  }
+
+  ui->flexi_peek_timeout = 0;
+  _flexi_peek_end(ui);
+  return G_SOURCE_REMOVE;
+}
+
+// watches for the pointer to leave the corner icon after a deliberate fold,
+// which is what re-arms peeking. Position again rather than a leave-notify: the
+// icon may well have appeared *under* a stationary pointer, and a pointer that
+// never moves generates no crossing events to wait for.
+static gboolean _flexi_unsuppress_poll(gpointer user_data)
+{
+  dt_ui_t *ui = (dt_ui_t *)user_data;
+  GdkDisplay *display = gtk_widget_get_display(ui->flexi_panel_overlay);
+  GdkDevice *pointer = gdk_seat_get_pointer(gdk_display_get_default_seat(display));
+  gint px = 0, py = 0;
+  gdk_device_get_position(pointer, NULL, &px, &py);
+
+  if(_widget_contains_pointer(ui->flexi_corner_icon, px, py)) return G_SOURCE_CONTINUE;
+
+  ui->flexi_peek_suppressed = FALSE;
+  ui->flexi_unsuppress_timeout = 0;
+  return G_SOURCE_REMOVE;
+}
+
+static void _flexi_peek_set_suppressed(dt_ui_t *ui, const gboolean suppressed)
+{
+  if(ui->flexi_unsuppress_timeout)
+  {
+    g_source_remove(ui->flexi_unsuppress_timeout);
+    ui->flexi_unsuppress_timeout = 0;
+  }
+  ui->flexi_peek_suppressed = suppressed;
+  if(suppressed)
+    ui->flexi_unsuppress_timeout = g_timeout_add(150, _flexi_unsuppress_poll, ui);
+}
+
+static void _flexi_peek_begin(dt_ui_t *ui)
+{
+  if(ui->flexi_peeking || !ui->flexi_panel_overlay) return;
+  // the pointer never left the icon since the panel was deliberately folded:
+  // reopening now would undo that fold and read as a click that did nothing
+  if(ui->flexi_peek_suppressed) return;
+  // only from the collapsed state, and only with something to show (the icon
+  // is on screen exactly when both hold, but it can be stale for an instant)
+  if(gtk_widget_get_visible(ui->flexi_panel_overlay)) return;
+
+  ui->flexi_peeking = TRUE;
+  ui->flexi_pointer_in_panel = FALSE;
+  ui->flexi_peek_grace = 4;  // ~600ms for the pointer to land in the panel
+  _ui_init_flexi_panel_size(ui->panels[DT_UI_PANEL_FLEXI]);
+  // over the canvas, not beside it -- and the panel now covers the icon's own
+  // corner, so the icon would only be a hole in it
+  _flexi_panel_set_floating(ui, TRUE);
+  if(ui->flexi_corner_icon) gtk_widget_set_visible(ui->flexi_corner_icon, FALSE);
+  gtk_widget_set_visible(ui->flexi_panel_overlay, TRUE);
+  dt_iop_gui_blend_masks_panel_set_peek(TRUE);
+
+  _flexi_peek_cancel_timeout(ui);
+  ui->flexi_peek_timeout = g_timeout_add(150, _flexi_peek_poll, ui);
+}
+
 static void _flexi_corner_icon_clicked(GtkWidget *w, gpointer user_data)
 {
   // the icon is only ever shown for the module currently hosted in the
@@ -3826,6 +4069,7 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   gtk_widget_set_size_request(widget, width, -1);
 
   ui->flexi_panel_right = FALSE;
+  ui->flexi_centerrow = container;
   // container is centerrow (see _init_main_table) -- pack before centergrid
   // (its only sibling) so the default left side puts the panel between
   // LEFT and the canvas; dt_ui_flexi_panel_set_side reorders it after
@@ -3875,9 +4119,15 @@ void dt_ui_flexi_panel_set_side(dt_ui_t *ui, const gboolean right)
   ui->flexi_panel_right = right;
 
   // centerrow only ever has two children (this overlay + centergrid) --
-  // index 0 puts the panel before the canvas (left), index 1 after it (right)
-  GtkWidget *centerrow = gtk_widget_get_parent(ui->flexi_panel_overlay);
-  gtk_box_reorder_child(GTK_BOX(centerrow), ui->flexi_panel_overlay, right ? 1 : 0);
+  // index 0 puts the panel before the canvas (left), index 1 after it (right).
+  // While floating over the canvas (a peek) there is no box to reorder in:
+  // there it is an overlay child, and halign is what picks the side.
+  if(gtk_widget_get_parent(ui->flexi_panel_overlay) == ui->flexi_centerrow)
+    gtk_box_reorder_child(GTK_BOX(ui->flexi_centerrow), ui->flexi_panel_overlay,
+                          right ? 1 : 0);
+  else
+    gtk_widget_set_halign(ui->flexi_panel_overlay,
+                          right ? GTK_ALIGN_END : GTK_ALIGN_START);
 
   if(ui->flexi_handle)
     gtk_widget_set_halign(ui->flexi_handle, right ? GTK_ALIGN_START : GTK_ALIGN_END);
@@ -3953,10 +4203,17 @@ static gboolean _flexi_corner_icon_crossing(GtkWidget *w, GdkEventCrossing *e, g
       g_free(flat);
       g_free(text);
     }
+    // pointing at the icon shows the whole panel, for as long as the pointer
+    // stays with it (see _flexi_peek_begin)
+    _flexi_peek_begin(darktable.gui->ui);
   }
   else if(e->type == GDK_LEAVE_NOTIFY)
   {
     dt_control_hinter_message("");
+    // deliberately NOT ending the peek here: leaving the icon is normally the
+    // pointer moving *into* the panel that just appeared over it. What keeps
+    // the peek alive is where the pointer actually is, which _flexi_peek_poll
+    // owns from here.
   }
   return FALSE;
 }
@@ -3999,6 +4256,28 @@ void dt_ui_flexi_panel_set_collapsed(dt_ui_t *ui,
 {
   if(!ui->flexi_panel_overlay) return;
 
+  // a peek counts as still collapsed: it is a look at the panel, not a state.
+  // So expanding out of one is a real transition (and restores mask editing),
+  // while re-applying "collapsed" over one is not, and leaves editing alone.
+  const gboolean was_collapsed = dt_ui_flexi_panel_is_collapsed(ui) || ui->flexi_peeking;
+  // and either way this decides the panel's state now, so the peek is over --
+  // without this, a peek-expanded panel the user then really opened would fold
+  // itself the moment the pointer left it. A real state also means a real
+  // column: an expand here is the peek being pinned, and pinning is exactly
+  // the point at which the canvas should make room rather than be covered.
+  _flexi_peek_cancel_timeout(ui);
+  if(ui->flexi_peeking)
+  {
+    ui->flexi_peeking = FALSE;
+    dt_iop_gui_blend_masks_panel_set_peek(FALSE);
+  }
+  _flexi_panel_set_floating(ui, FALSE);
+
+  // a deliberate fold hands the corner icon back, quite possibly under the very
+  // pointer that asked for the fold -- don't let that count as a hover until
+  // the pointer has moved off it. Expanding clears any such block.
+  if(collapsed != was_collapsed) _flexi_peek_set_suppressed(ui, collapsed);
+
   if(persist) dt_conf_set_bool("plugins/darkroom/blend/masks_panel_collapsed", collapsed);
   if(!collapsed) _ui_init_flexi_panel_size(ui->panels[DT_UI_PANEL_FLEXI]);
   gtk_widget_set_visible(ui->flexi_panel_overlay, !collapsed);
@@ -4011,6 +4290,13 @@ void dt_ui_flexi_panel_set_collapsed(dt_ui_t *ui,
     if(show_icon) _flexi_ensure_corner_icon_side(ui);
     gtk_widget_set_visible(ui->flexi_corner_icon, show_icon);
   }
+
+  // the panel is where "edit on canvas" is driven from, so it must not stay
+  // armed once the panel folds away to the corner icon -- and re-expanding
+  // puts back the editing mode that collapsing interrupted. Only on a real
+  // transition: the same-state re-applications (see _masks_flexi_release)
+  // are not the user putting the panel away or bringing it back.
+  if(collapsed != was_collapsed) dt_iop_gui_blend_masks_panel_collapsed(collapsed);
 }
 
 void dt_ui_flexi_panel_set_icon(dt_ui_t *ui, const gboolean active, const char *mask_type_label)
@@ -4036,6 +4322,11 @@ gboolean dt_ui_flexi_panel_is_collapsed(dt_ui_t *ui)
 {
   if(!ui->flexi_panel_overlay) return TRUE;
   return !gtk_widget_get_visible(ui->flexi_panel_overlay);
+}
+
+gboolean dt_ui_flexi_panel_is_peeking(dt_ui_t *ui)
+{
+  return ui && ui->flexi_peeking;
 }
 
 static void _ui_init_panel_top(dt_ui_t *ui,

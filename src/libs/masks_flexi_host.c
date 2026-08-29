@@ -20,7 +20,9 @@
 // module" position only (masks_panel_position == MASKS_PANEL_POS_UTILITY,
 // see develop/blend_gui.c). Docked at DT_UI_CONTAINER_PANEL_LEFT_CENTER
 // like any ordinary lib (mask manager is the sibling precedent) -- always
-// visible while registered, no collapse behaviour.
+// visible while registered, and collapsed through its own expander like any
+// other lib (see expanded_state below, which ties on-canvas mask editing to
+// that, as the other two positions do to their own collapse controls).
 //
 // The "separate panel, left/right" positions do NOT use this lib at all --
 // those are a genuine extra grid column owned by src/gui/gtk.c
@@ -107,6 +109,18 @@ static void _reconfigure(dt_lib_module_t *self)
 
   const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
   gtk_widget_set_visible(self->expander, pos == MASKS_PANEL_POS_UTILITY);
+}
+
+// this lib's expander is the collapse control for the masking panel in the
+// "utility module" position -- the counterpart of the grid panel's corner icon
+// and of the embedded position's in-header arrow. Folding it hides the shapes
+// list, so the on-canvas editing it drives goes with it (and comes back on
+// expand), and a fold the user asked for is recorded as the panel's shared
+// collapse preference, the same as in the other two positions. Both are
+// masks_gui_panel_host.c's business, not this lib's; forward and let it decide.
+void expanded_state(dt_lib_module_t *self, const gboolean expanded)
+{
+  dt_iop_gui_blend_masks_panel_host_expanded(expanded);
 }
 
 void gui_init(dt_lib_module_t *self)

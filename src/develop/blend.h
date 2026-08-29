@@ -431,6 +431,14 @@ typedef struct dt_iop_gui_blend_data_t
   // side panel (see _masks_flexi_relocate in blend_gui.c and
   // "plugins/darkroom/blend/masks_panel_position" conf key).
   GtkBox *relocatable_box;
+  // everything inside relocatable_box *below* the "blend mask" header, as a
+  // single box, so the whole panel body can be folded away in place while
+  // the header (and the collapse arrow in it) stays put as the way back.
+  // Only used in the embedded position -- the two hosted positions collapse
+  // the host itself (the grid panel to its corner icon, the utility lib to
+  // its own expander header). Its children keep their own mode-driven
+  // visibility across a fold, since only this wrapper is hidden.
+  GtkBox *masks_panel_body;
   GtkBox *blendif_box;
   GtkBox *masks_box;
   GtkBox *raster_box;
@@ -478,6 +486,13 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_polarity;
   int *masks_combo_ids;
   dt_masks_edit_mode_t masks_shown;
+  // what masks_shown was when the masking panel was last folded away (see
+  // dt_iop_gui_blend_masks_panel_collapsed): collapsing turns on-canvas
+  // editing off, since the shapes are of no use without the panel that
+  // drives them, and re-expanding restores exactly the mode that was
+  // interrupted -- FULL vs RESTRICTED included. DT_MASKS_EDIT_OFF means
+  // "nothing to restore".
+  dt_masks_edit_mode_t masks_shown_stash;
 
   // in-module per-shape composition list + parametric forms (Phase 3 UI).
   // masks_list_box: one row per form in this module's mask group, each with an
@@ -551,11 +566,25 @@ typedef struct dt_iop_gui_blend_data_t
   // between masks_shapes_row (classic) and masks_toolbar_row1 (flexi) by
   // _masks_toolbar_place_shapes_box / _masks_apply_layout in blend_gui.c.
   GtkWidget *masks_shapes_box;
-  // the "blend mask" section header: label, on/off toggle, hamburger menu,
-  // showmask/suppress, and (when hosted in a side panel) the collapse
-  // button -- unrelated to the "mask elements" header above.
+  // the "blend mask" section header -- unrelated to the "mask elements" header
+  // above. One fixed reading order, everywhere:
+  //
+  //   expander | title | toggle | <space> | actions | hamburger
+  //
+  // taken from the utility lib's own header so the panel reads the same in
+  // every position (there the lib supplies the expander and title itself, and
+  // this one's expander stays hidden rather than doubling it up). The expander
+  // (flexi_inline_collapse_btn) is the header's own first child; the toggle
+  // sits in masks_left_cluster and the actions + hamburger in
+  // masks_right_cluster, each packed as one unit for ordering. Docked in the
+  // separate right panel, expander and hamburger trade ends -- the only header
+  // widgets that ever move (see _masks_header_apply_side).
   GtkWidget *masks_blend_header;
+  // display/suppress eyes + hamburger, packed END (so its first child is the
+  // rightmost one)
   GtkWidget *masks_right_cluster;
+  // the on/off toggle's home box -- the utility position lends the toggle to
+  // that lib's header and _masks_flexi_release hands it back here
   GtkWidget *masks_left_cluster;
   // the flexi group list: each group's header followed by that group's element rows,
   // nested (indented) directly under it (built by _pack_group_elements).
@@ -1024,6 +1053,29 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
 // panel corner icon: clicking it while the hosted module's mask is off
 // should turn the mask on, not just re-expand the panel to an inert editor.
 void dt_iop_gui_blend_mask_enable(dt_iop_module_t *module);
+// the masking panel just folded away (collapsed == TRUE) or came back
+// (FALSE), in whichever position it currently lives. Collapsing turns "edit
+// on canvas" (and any armed shape-add tool) off, stashing the edit mode in
+// bd->masks_shown_stash first, so no editing overlay is left live on canvas
+// with the panel that drives it hidden away; expanding restores exactly the
+// mode that was interrupted. No-op when there is no panel module, or when
+// there is nothing to turn off / restore.
+//
+// Called from all three collapse mechanisms: gtk.c's
+// dt_ui_flexi_panel_set_collapsed (separate left/right panel),
+// masks_flexi_host.c's expanded_state (utility lib), and the embedded
+// position's own in-header collapse arrow.
+void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed);
+// the masks_flexi_host lib's expander was toggled (its expanded_state hook).
+// Records the new state as the shared panel-collapse preference when it was
+// the user's own doing, then applies the on-canvas editing follow above. The
+// utility position's equivalent of the separate panel's collapse button and
+// the embedded position's in-header arrow, so all three fold alike.
+void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded);
+// a hover-peek on the separate panel started (TRUE) or ended (FALSE): its
+// in-header arrow pins the panel open while peeking instead of collapsing it,
+// so it is drawn and described as a pin for the duration.
+void dt_iop_gui_blend_masks_panel_set_peek(const gboolean peeking);
 // re-reads the active AI-object creation session's smoothing/cleanup (via
 // dt_masks_object_creation_get_preview_params) and pushes the values into
 // the flexi panel's pending-row sliders (bd->pending_ai_smoothing_slider/

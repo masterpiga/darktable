@@ -69,9 +69,235 @@ static const char *_mask_mode_label(const uint32_t mask_mode)
   }
 }
 
+// One collapse state shared by all three positions ("the mask panel is folded
+// away"), so it carries over when the panel is moved between them, and so all
+// three draw the same line: a fold the *user* asked for is a preference and is
+// stored here, a fold the panel does to itself (no mask to show) is visual
+// only and never touches this key.
+//
+// The utility position needs the flag below to keep that line, because its
+// collapse goes through dt_lib_gui_set_expanded(), the generic lib API, which
+// persists to the lib's own "plugins/<view>/masks_flexi_host/expanded" key
+// unconditionally -- it has no persist=FALSE the way the separate panel's
+// dt_ui_flexi_panel_set_collapsed() does. So this file drives that expander
+// itself from the shared preference (see _masks_utility_apply_collapsed and
+// _masks_flexi_relocate), which makes the lib's own key a mirror rather than a
+// source of truth in this position.
+static gboolean _masks_panel_collapsed_pref(void)
+{
+  return dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
+}
+
+void _masks_panel_set_collapsed_pref(const gboolean collapsed)
+{
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_collapsed", collapsed);
+}
+
+// set while we drive the utility lib's expander ourselves, so the
+// expanded_state callback it fires back is not mistaken for the user folding
+// the panel by hand. The utility position's counterpart of the persist
+// argument the other two positions' collapse calls take.
+static gboolean _driving_host_expander = FALSE;
+
+static void _masks_utility_apply_collapsed(dt_lib_module_t *host,
+                                           const gboolean collapsed)
+{
+  _driving_host_expander = TRUE;
+  dt_lib_gui_set_expanded(host, !collapsed);
+  _driving_host_expander = FALSE;
+}
+
+// apply the embedded position's collapse state to `module`'s panel: fold the
+// body away below the header (or bring it back), and point the header arrow
+// the way the next click will take it -- DOWN when open, RIGHT when folded,
+// as everywhere else in the UI.
+static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
+                                            const gboolean collapsed)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->masks_panel_body || !bd->flexi_inline_collapse_btn) return;
+
+  gtk_widget_set_visible(GTK_WIDGET(bd->masks_panel_body), !collapsed);
+  dtgtk_button_set_paint(DTGTK_BUTTON(bd->flexi_inline_collapse_btn),
+                         dtgtk_cairo_paint_solid_arrow,
+                         collapsed ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_DOWN, NULL);
+  gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn,
+                              collapsed
+                                ? _("show the blend mask panel")
+                                : _("hide the blend mask panel"));
+}
+
+// The header's fixed reading order is
+//
+//   expander | title | toggle | <space> | actions | hamburger
+//
+// which is the utility lib's own header layout (that lib supplies the first
+// three from its expander, its label and the toggle lent to it), adopted by
+// every position so the panel reads the same wherever it lives.
+//
+// The single exception, applied here: docked in the separate *right* panel, the
+// expander and the hamburger trade ends, so the arrow sits against the edge it
+// points at and folds toward. They are the only two header widgets that ever
+// move -- the toggle and the eyes stay put in both docks, being reached by
+// muscle memory and meaning the same thing whichever side the panel is on.
+//
+// Within masks_right_cluster every child is packed END, so the *first* child in
+// the list is the rightmost one -- hence reorder to 0 for "outermost right".
+static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
+                                     const gboolean mirrored)
+{
+  GtkWidget *pin = bd->flexi_inline_collapse_btn;
+  GtkWidget *burger = bd->masks_options_btn;
+  if(!pin || !burger || !bd->masks_blend_header || !bd->masks_right_cluster) return;
+
+  // the expander's slot is the header's own first child, ahead of the title --
+  // not inside masks_left_cluster, which is just the toggle's home box
+  GtkWidget *leading = mirrored ? burger : pin;
+  GtkWidget *trailing = mirrored ? pin : burger;
+
+  _reparent_into(leading, bd->masks_blend_header, FALSE, FALSE);
+  gtk_box_set_child_packing(GTK_BOX(bd->masks_blend_header), leading,
+                            FALSE, FALSE, 0, GTK_PACK_START);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_blend_header), leading, 0);
+
+  _reparent_into(trailing, bd->masks_right_cluster, TRUE, FALSE);
+  gtk_box_set_child_packing(GTK_BOX(bd->masks_right_cluster), trailing,
+                            FALSE, FALSE, 0, GTK_PACK_END);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), trailing, 0);
+}
+
 void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
 {
-  dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, TRUE, TRUE);
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+
+  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+  {
+    // while the panel is only being peeked at there is nothing to collapse --
+    // it is not open, it is being looked at, and it would fold by itself the
+    // moment the pointer left. So the arrow pins it open instead: this is the
+    // one control in reach that can turn a look into a state.
+    const gboolean peeking = dt_ui_flexi_panel_is_peeking(darktable.gui->ui);
+    // ...and otherwise it folds the panel away to the canvas corner icon,
+    // which is then the way back -- one-way, unlike the embedded arrow below.
+    // Either way dt_ui_flexi_panel_set_collapsed handles the edit-mode stash.
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, !peeking, TRUE, TRUE);
+    return;
+  }
+
+  // embedded: the header this arrow sits in stays put, so it toggles both ways.
+  // What it toggles is what is actually on screen, not the stored state: if the
+  // two ever disagree, deriving the click from the stored one "folds" an
+  // already-folded panel and the user has to click twice to open it.
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const gboolean collapsed =
+    bd && bd->masks_panel_body && gtk_widget_get_visible(GTK_WIDGET(bd->masks_panel_body));
+  _masks_panel_set_collapsed_pref(collapsed);
+  _masks_embedded_apply_collapsed(module, collapsed);
+  dt_iop_gui_blend_masks_panel_collapsed(collapsed);
+}
+
+// While the panel is only being peeked at, its collapse arrow pins it open
+// instead of folding it (see _flexi_inline_collapse_clicked) -- so make it look
+// like what it now does, rather than leaving a collapse arrow that collapses
+// nothing. Called from gtk.c as a peek starts and ends.
+void dt_iop_gui_blend_masks_panel_set_peek(const gboolean peeking)
+{
+  if(!darktable.develop) return;
+  dt_iop_module_t *module = darktable.develop->proxy.masks_flexi_host.hosted_module;
+  if(!module) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->flexi_inline_collapse_btn) return;
+
+  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  if(pos != MASKS_PANEL_POS_LEFT && pos != MASKS_PANEL_POS_RIGHT) return;
+
+  if(peeking)
+  {
+    dtgtk_button_set_paint(DTGTK_BUTTON(bd->flexi_inline_collapse_btn),
+                           dtgtk_cairo_paint_pin, 0, NULL);
+    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn,
+                                _("keep this panel open"));
+  }
+  else
+  {
+    dtgtk_button_set_paint(
+      DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
+      pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
+    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn,
+                                _("collapse this panel; click the icon it leaves behind\n"
+                                  "on the canvas to bring it back"));
+  }
+}
+
+// the utility lib's expander was toggled -- by the user from its header, or by
+// _masks_utility_apply_collapsed just above. Only the former is a preference:
+// it goes into the shared key, exactly as the separate panel's collapse button
+// and the embedded arrow do for their positions, so the panel folds and
+// unfolds the same way wherever it lives.
+void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded)
+{
+  if(dt_conf_get_int("plugins/darkroom/blend/masks_panel_position")
+     != MASKS_PANEL_POS_UTILITY)
+    return;
+
+  if(!_driving_host_expander) _masks_panel_set_collapsed_pref(!expanded);
+  dt_iop_gui_blend_masks_panel_collapsed(!expanded);
+}
+
+// The masking panel just folded away, or came back -- see the header comment
+// on this function in blend.h for the contract; this is called from all three
+// positions' own collapse mechanisms.
+//
+// The point: "edit on canvas" and the shape-add tools are driven from this
+// panel, so leaving them armed once it is gone strands a live editing overlay
+// on canvas with no visible control over it. Turning them off is not enough
+// on its own, though -- collapsing the panel to get a clear look at the image
+// and then re-opening it should not silently cost the user their editing
+// mode, so stash it and put it back.
+void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed)
+{
+  if(!darktable.develop) return;
+  // whatever is hosted in a flexi panel; embedded, the focused module (only
+  // the focused module's panel is on screen there -- see _masks_flexi_release)
+  dt_iop_module_t *module = darktable.develop->proxy.masks_flexi_host.hosted_module;
+  if(!module) module = darktable.develop->gui_module;
+  if(!module) return;
+
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->masks_support || !bd->masks_inited) return;
+
+  if(collapsed)
+  {
+    // an armed shape-add tool is just as unusable with the panel gone; it has
+    // no state worth restoring, unlike the edit mode below
+    for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[n]), FALSE);
+
+    // unconditionally, so a collapse with editing already off also clears any
+    // stale stash rather than leaving an older one to be restored later
+    bd->masks_shown_stash = bd->masks_shown;
+    if(bd->masks_shown == DT_MASKS_EDIT_OFF) return;
+    // this untoggles bd->masks_edit itself, and drops any solo-edit
+    dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
+  }
+  else
+  {
+    const dt_masks_edit_mode_t stash = bd->masks_shown_stash;
+    bd->masks_shown_stash = DT_MASKS_EDIT_OFF;
+    // nothing was interrupted, or the user turned editing back on by hand
+    // while the panel was away (via a shortcut) -- don't second-guess either
+    if(stash == DT_MASKS_EDIT_OFF || bd->masks_shown != DT_MASKS_EDIT_OFF) return;
+
+    // don't restore an overlay onto a mask that lost its shapes in the
+    // meantime (module reset, history jump, undo): same guard the "edit on
+    // canvas" toggle itself applies before entering edit mode
+    dt_masks_form_t *grp =
+      dt_masks_get_from_id(darktable.develop, module->blend_params->mask_id);
+    if(!grp || !(grp->type & DT_MASKS_GROUP) || !grp->points) return;
+
+    dt_masks_set_edit_mode(module, stash);
+  }
 }
 
 // move bd->relocatable_box back into this module's own expander (the
@@ -113,7 +339,17 @@ void _masks_flexi_release(dt_iop_module_t *module)
 
   _reparent_into(GTK_WIDGET(bd->relocatable_box), bd->iopw, FALSE, FALSE);
   gtk_widget_set_visible(GTK_WIDGET(bd->relocatable_box), show);
-  gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
+  // back in the module's own expander. When that is where the panel actually
+  // lives (embedded), the in-header arrow keeps working, now folding the panel
+  // body away in place; when the box only landed here because this module lost
+  // focus, its real home is a host and the arrow has nothing to act on.
+  const gboolean embedded =
+    dt_conf_get_int("plugins/darkroom/blend/masks_panel_position") == MASKS_PANEL_POS_EMBEDDED;
+  gtk_widget_set_visible(bd->flexi_inline_collapse_btn, embedded);
+  // the right-dock mirroring is that dock's alone -- back home, the header
+  // reads left-to-right like every other module's
+  _masks_header_apply_side(bd, FALSE);
+  _masks_embedded_apply_collapsed(module, embedded && _masks_panel_collapsed_pref());
   gtk_widget_set_visible(bd->masks_options_btn, TRUE);
   // back in the module's own content -- restore the embedded inset (see
   // darktable.css's "#blending-tabs.blending-tabs-embedded")
@@ -193,6 +429,11 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   darktable.develop->proxy.masks_flexi_host.hosted_module = module;
   _reparent_into(GTK_WIDGET(bd->relocatable_box), target, FALSE, FALSE);
+  // hosted: the host itself collapses (grid panel to its corner icon, utility
+  // lib to its expander header), so the body is never folded here -- undo any
+  // embedded fold the box is carrying over
+  if(bd->masks_panel_body)
+    gtk_widget_set_visible(GTK_WIDGET(bd->masks_panel_body), TRUE);
   // being hosted implies focused (see want_hosted above); make sure the box
   // is visible in case an earlier embedded-and-unfocused state left it hidden.
   gtk_widget_show(GTK_WIDGET(bd->relocatable_box));
@@ -212,8 +453,11 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     gtk_widget_set_visible(bd->masks_blend_header, FALSE);
 
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-    if(host)
-      dt_lib_gui_set_expanded(host, mask_mode != DEVELOP_MASK_DISABLED);
+    // the shared state, like the other two positions. Previously this derived
+    // expansion from mask_mode alone, so a relocate (a focus change, a mode
+    // change) re-expanded a lib the user had just folded -- and, since
+    // dt_lib_gui_set_expanded persists, overwrote the folded state as it went.
+    if(host) _masks_utility_apply_collapsed(host, _masks_panel_collapsed_pref());
   }
   else
   {
@@ -245,24 +489,24 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   {
     dt_ui_flexi_panel_set_icon(darktable.gui->ui, mask_mode != DEVELOP_MASK_DISABLED,
                                _mask_mode_label(mask_mode));
-    // with no mask there's nothing to show but the mode picker, so collapse
-    // to the corner icon; otherwise apply the user's stored preference --
-    // neither is a fresh user choice, so persist=FALSE either way
-    const gboolean want_collapsed =
-      mask_mode == DEVELOP_MASK_DISABLED
-        ? TRUE
-        : dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
-    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, want_collapsed, TRUE, FALSE);
+    // the shared state again -- applying it, not deciding it, so persist=FALSE
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, _masks_panel_collapsed_pref(),
+                                    TRUE, FALSE);
 
     // arrow points the direction the panel collapses toward (its docked side)
     dtgtk_button_set_paint(
       DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
       pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
+    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn,
+                                _("collapse this panel; click the icon it leaves behind\n"
+                                  "on the canvas to bring it back"));
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
+    _masks_header_apply_side(bd, pos == MASKS_PANEL_POS_RIGHT);
   }
   else
   {
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
+    _masks_header_apply_side(bd, FALSE);
   }
 }
 
@@ -298,30 +542,34 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
   if(pos != MASKS_PANEL_POS_LEFT && pos != MASKS_PANEL_POS_RIGHT)
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
 
+  // repositioning is a deliberate user action -- make sure the result is
+  // actually visible, in every position: unfold the panel and store that,
+  // before the relocate below applies it. Overriding _masks_flexi_relocate's
+  // "no mask -> fold to the corner icon / the collapsed header" is the point:
+  // explicitly picking a position should show what was picked.
+  _masks_panel_set_collapsed_pref(FALSE);
+
   // decide where this (focused) module's content should live now
   _masks_flexi_relocate(module);
 
-  // repositioning is a deliberate user action -- make sure the result is
-  // actually visible, regardless of collapse state or whether there's a
-  // mask to show right now
   switch(pos)
   {
   case MASKS_PANEL_POS_LEFT:
   case MASKS_PANEL_POS_RIGHT:
-    // force-expand and persist: unlike _masks_flexi_relocate's normal
-    // "no mask -> auto-collapse to the corner icon" behavior, explicitly
-    // picking a separate panel should show it open every time
+    // relocate folds the panel away when there is no mask; force it open
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
     break;
   case MASKS_PANEL_POS_UTILITY:
   {
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
     if(host)
-      dt_lib_gui_set_expanded(host, TRUE);
+      _masks_utility_apply_collapsed(host, FALSE);
     break;
   }
   case MASKS_PANEL_POS_EMBEDDED:
   default:
+    // ...and the same override of the no-mask fold as the two hosted cases
+    _masks_embedded_apply_collapsed(module, FALSE);
     // scrolls the already-expanded, focused module's own panel into
     // view -- dtgtk_expander_set_expanded(..., TRUE) re-triggers the
     // scroll-to-view animation even when already expanded (see its
