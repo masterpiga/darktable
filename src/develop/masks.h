@@ -696,6 +696,14 @@ extern const dt_masks_functions_t dt_masks_functions_gradient;
 extern const dt_masks_functions_t dt_masks_functions_group;
 extern const dt_masks_functions_t dt_masks_functions_parametric;
 extern const dt_masks_functions_t dt_masks_functions_raster;
+/** does this raster form's source still exist in `module`'s pipe? FALSE when
+    the source module was removed (or the form never had one), which is the
+    condition _raster_get_mask_roi() renders as all-zero. Callers outside the
+    renderer use it to keep a member that can contribute nothing from being
+    treated as if it could: the group fold skips its inversion, and the panel
+    badges the row. Returns FALSE for anything that is not a raster form. */
+gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
+                                       const dt_masks_form_t *form);
 #ifdef HAVE_AI
 extern const dt_masks_functions_t dt_masks_functions_object;
 /** check if AI object mask model is downloaded and AI is enabled */
