@@ -1041,6 +1041,13 @@ void dt_iop_gui_blending_reload_defaults(dt_iop_module_t *module);
 // GUI-only empty-group placeholders, since they have no counterpart in what
 // was just reloaded and would otherwise duplicate a group the reload restored.
 void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module);
+// re-evaluate the mask rows' warning badges in place. Cheap and safe to call
+// on a module with no mask list built (it returns immediately), which is what
+// lets a signal handler sweep the whole pipeline. Needed because a row's badge
+// can depend on state that lives *outside* that row: a raster element goes
+// inert when its source module is switched off or removed, and nothing in this
+// module's own mask list changes when that happens.
+void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module);
 // opens the masking options menu (blend colorspace, masking panel
 // position, ...) for whichever module is currently hosted in
 // the flexi masks panel utility lib -- used by masks_flexi_host.c to
