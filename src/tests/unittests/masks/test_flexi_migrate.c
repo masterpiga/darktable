@@ -284,6 +284,131 @@ static void test_raster_inversion_moves_onto_the_state_bit(void **state)
   assert_true(found_inverted);
 }
 
+// ... but not when there is nothing to invert. A raster whose source module was
+// removed can never resolve; classic reads its invert flag only inside the
+// branch that got a mask back, so with no source it fills 0.0f and the module
+// contributes nothing. Carrying the bit across would make the element render as
+// 1.0 everywhere instead -- the module going from doing nothing to applying at
+// full strength, which is what a real harvested edit did (kofa_1: the whole mask
+// off by 1.0, the image by 15.9).
+static void test_raster_inversion_is_dropped_when_the_source_is_gone(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER);
+  flexi_bp.raster_mask_source[0] = '\0';
+  flexi_bp.raster_mask_id = -1;
+  flexi_bp.raster_mask_invert = TRUE;
+
+  assert_true(_migrate());
+  _assert_flexi();
+
+  dt_masks_form_t *grp = dt_masks_get_from_id(&flexi_dev, flexi_bp.mask_id);
+  assert_non_null(grp);
+  gboolean saw_raster = FALSE;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    const dt_masks_form_t *f = dt_masks_get_from_id(&flexi_dev, pt->formid);
+    if(f && (f->type & DT_MASKS_RASTER))
+    {
+      saw_raster = TRUE;
+      assert_false(pt->state & DT_MASKS_STATE_INVERSE);
+    }
+  }
+  assert_true(saw_raster);
+}
+
+// ---------------------------------------------------------------------------
+// the broken-raster rule
+// ---------------------------------------------------------------------------
+
+// Migration can only drop the inversion for a source that is already gone when
+// it runs. A source deleted *afterwards* leaves a form that looks perfectly
+// well-formed, so the renderer has to make the same call at render time -- it
+// asks dt_masks_raster_is_unresolved(), and the group fold skips the inversion
+// when it says yes. This pins the predicate that decision rests on.
+
+static dt_masks_form_t *_raster_form(const char *source, const int instance)
+{
+  dt_masks_form_t *f = calloc(1, sizeof(dt_masks_form_t));
+  f->type = DT_MASKS_RASTER;
+  f->formid = 4242;
+  dt_masks_point_raster_t *p = calloc(1, sizeof(dt_masks_point_raster_t));
+  g_strlcpy(p->source, source, sizeof(p->source));
+  p->instance = instance;
+  p->id = 0;
+  f->points = g_list_append(f->points, p);
+  return f;
+}
+
+static void _free_raster_form(dt_masks_form_t *f)
+{
+  g_list_free_full(f->points, free);
+  free(f);
+}
+
+// a source module sitting in the pipe at the instance the form names
+static void _push_source_module(dt_iop_module_t *mod,
+                                dt_iop_module_so_t *so,
+                                const char *op,
+                                const int instance)
+{
+  memset(mod, 0, sizeof(*mod));
+  memset(so, 0, sizeof(*so));
+  g_strlcpy(so->op, op, sizeof(so->op));
+  mod->so = so;
+  mod->multi_priority = instance;
+  flexi_dev.iop = g_list_append(flexi_dev.iop, mod);
+}
+
+static void test_raster_with_no_source_is_unresolved(void **state)
+{
+  dt_masks_form_t *f = _raster_form("", 0);
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, f));
+  _free_raster_form(f);
+}
+
+static void test_raster_whose_module_is_absent_is_unresolved(void **state)
+{
+  dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
+  // nothing in the pipe at all: the module was deleted after this form was made
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, f));
+  _free_raster_form(f);
+}
+
+static void test_raster_resolves_to_a_live_module(void **state)
+{
+  dt_iop_module_t mod;
+  dt_iop_module_so_t so;
+  _push_source_module(&mod, &so, "colorbalancergb", 0);
+
+  dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
+  assert_false(dt_masks_raster_is_unresolved(&flexi_module, f));
+  _free_raster_form(f);
+
+  // the same op at a different instance is a different module, and does not
+  // satisfy a form that names instance 0
+  dt_masks_form_t *other = _raster_form("colorbalancergb", 3);
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, other));
+  _free_raster_form(other);
+
+  g_list_free(flexi_dev.iop);
+  flexi_dev.iop = NULL;
+}
+
+// the rule is about raster forms only: everything else resolves vacuously, so a
+// shape or a parametric channel must never be reported as broken
+static void test_non_raster_forms_are_never_unresolved(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  assert_non_null(grp);
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    const dt_masks_form_t *f = dt_masks_get_from_id(&flexi_dev, pt->formid);
+    assert_false(dt_masks_raster_is_unresolved(&flexi_module, f));
+  }
+}
+
 // ---------------------------------------------------------------------------
 // case 6: RASTER combined with MASK / CONDITIONAL -- unreachable from the GUI
 // ---------------------------------------------------------------------------
@@ -778,6 +903,12 @@ int main(void)
     cmocka_unit_test_teardown(test_drawn_and_parametric_stacks_a_parametric_element, _teardown),
     cmocka_unit_test_teardown(test_raster_synthesizes_a_raster_form, _teardown),
     cmocka_unit_test_teardown(test_raster_inversion_moves_onto_the_state_bit, _teardown),
+    cmocka_unit_test_teardown(test_raster_inversion_is_dropped_when_the_source_is_gone,
+                              _teardown),
+    cmocka_unit_test_teardown(test_raster_with_no_source_is_unresolved, _teardown),
+    cmocka_unit_test_teardown(test_raster_whose_module_is_absent_is_unresolved, _teardown),
+    cmocka_unit_test_teardown(test_raster_resolves_to_a_live_module, _teardown),
+    cmocka_unit_test_teardown(test_non_raster_forms_are_never_unresolved, _teardown),
     cmocka_unit_test_teardown(test_raster_wins_over_drawn, _teardown),
     cmocka_unit_test_teardown(test_raster_wins_over_parametric, _teardown),
     cmocka_unit_test_teardown(test_raster_wins_over_both, _teardown),
