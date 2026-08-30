@@ -5408,10 +5408,17 @@ dt_masks_badge_kind_t _model_badge_kind(const float opacity, const gboolean is_n
                                            : DT_MASKS_BADGE_NONE;
 }
 
+// `noop_reason`, when non-NULL, replaces the default parametric wording with a
+// reason of the caller's own. The badge itself is deliberately the same one:
+// both cases are "this element is in the list but contributes nothing", which
+// is what the badge means, and giving a broken raster its own glyph would add a
+// second thing to learn for a state the user resolves the same way -- by fixing
+// the row or removing it.
 static void _update_lowop_badge(GtkWidget *badge,
                                 const float opacity,
                                 const gboolean is_group,
-                                const gboolean is_noop)
+                                const gboolean is_noop,
+                                const char *noop_reason)
 {
   if(!badge) return;
   if(is_noop)
@@ -5420,9 +5427,11 @@ static void _update_lowop_badge(GtkWidget *badge,
     dt_gui_remove_class(badge, "mask-lowop-warn");
     dt_gui_add_class(badge, "mask-noop-warn");
     _set_badge_active(badge, TRUE,
-                      _("this channel's range still covers its entire span, so it "
-                        "does not restrict the mask at all yet -- adjust it to "
-                        "have an effect"));
+                      noop_reason
+                      ? noop_reason
+                      : _("this channel's range still covers its entire span, so it "
+                          "does not restrict the mask at all yet -- adjust it to "
+                          "have an effect"));
     return;
   }
   g_object_set_data(G_OBJECT(badge), "badge-noop", GINT_TO_POINTER(0));
@@ -5633,7 +5642,7 @@ static void _apply_group_lowop_badges(GtkWidget *w, dt_masks_form_t *grp)
       GtkWidget *badge = g_object_get_data(G_OBJECT(child), "lowop-badge");
       if(badge)
         _update_lowop_badge(badge, _group_own_opacity(grp, (dt_mask_id_t)cid), TRUE,
-                            FALSE);
+                            FALSE, NULL);
     }
     else
       _apply_group_lowop_badges(child, grp); // recurse into expanders / boxes
@@ -5664,9 +5673,20 @@ static void _refresh_lowop_badges(dt_iop_module_t *module)
     {
       const dt_masks_form_t *const sel =
         dt_masks_get_from_id(darktable.develop, pt->formid);
+      // a raster element whose source module is gone can never contribute --
+      // the renderer draws it as zero and skips its inversion (see
+      // dt_masks_raster_is_unresolved) -- so it earns the same badge as a
+      // parametric channel that restricts nothing, with its own reason
+      const gboolean raster_broken = dt_masks_raster_is_unresolved(module, sel);
       _update_lowop_badge(g_object_get_data(G_OBJECT(row_vbox), "lowop-badge"),
                           pt->opacity * run_group_opacity, FALSE,
-                          _parametric_form_is_noop(sel));
+                          raster_broken || _parametric_form_is_noop(sel),
+                          raster_broken
+                          ? _("the module this raster mask came from no longer "
+                              "exists, so this element selects nothing -- remove it "
+                              "and, if you still need it, add a raster mask from a "
+                              "module that is still in the pipeline")
+                          : NULL);
     }
   }
   _apply_group_lowop_badges(GTK_WIDGET(bd->masks_list_box), grp);
