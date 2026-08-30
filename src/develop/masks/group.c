@@ -1267,7 +1267,18 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
                                             &m->refinement);
 
         const float op = m->opacity;
-        const int inverted = (m->state & DT_MASKS_STATE_INVERSE);
+        // A raster element whose source module is gone renders as all-zero
+        // (_raster_unresolved() in raster.c) and contributes nothing -- but
+        // zero is not a fixed point of the compositor: inverting it would turn
+        // "this element selects nothing" into "this element selects the entire
+        // frame", so a broken reference would apply the module at full strength
+        // everywhere. Drop the inversion instead, matching what the classic
+        // renderer does with the same situation (its raster branch fills 0.0f
+        // and never reaches the invert, see blend.c) and keeping a broken
+        // element harmless until the user fixes it. The panel badges the row
+        // so it is visible rather than silent.
+        const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
+                             && !dt_masks_raster_is_unresolved(module, sel);
         if(isect)
           _combine_masks_intersect(grp, bufs, npixels, op, inverted);
         else if(screen)
@@ -1435,8 +1446,11 @@ int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
                                             (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
                                             &fpt->refinement);
 
-        // first see if we need to invert this shape
-        const int inverted = (state & DT_MASKS_STATE_INVERSE);
+        // first see if we need to invert this shape -- except for a raster
+        // element whose source is gone, which renders zero and must stay zero
+        // (see the same guard in _group_get_mask_roi_flexi above)
+        const int inverted = (state & DT_MASKS_STATE_INVERSE)
+                             && !dt_masks_raster_is_unresolved(module, sel);
 
         // the first *visible* shape always composites as ADD onto the empty
         // accumulator, whatever its explicit operator says: the rendered mask

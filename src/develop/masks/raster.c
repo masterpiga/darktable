@@ -167,6 +167,13 @@ static int _raster_unresolved(float *const buffer, const dt_iop_roi_t *const roi
   return 1;
 }
 
+gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
+                                       const dt_masks_form_t *form)
+{
+  if(!form || !(form->type & DT_MASKS_RASTER) || !form->points) return FALSE;
+  return _raster_resolve_source(module, form->points->data) == NULL;
+}
+
 static int _raster_get_mask_roi(const dt_iop_module_t *const module,
                                 const dt_dev_pixelpipe_iop_t *const piece,
                                 dt_masks_form_t *const form,
