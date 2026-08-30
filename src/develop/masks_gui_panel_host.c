@@ -327,8 +327,6 @@ void _masks_flexi_release(dt_iop_module_t *module)
   {
     if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
       _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
-    if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-      _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
   }
   if(bd->masks_left_cluster)
   {
@@ -448,7 +446,6 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     if(actions_box)
     {
       _reparent_into(bd->suppress, GTK_WIDGET(actions_box), FALSE, FALSE);
-      _reparent_into(bd->showmask, GTK_WIDGET(actions_box), FALSE, FALSE);
     }
     gtk_widget_set_visible(bd->masks_blend_header, FALSE);
 
@@ -465,8 +462,6 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     {
       if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
         _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
-      if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-        _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
     }
     if(bd->masks_left_cluster)
     {
