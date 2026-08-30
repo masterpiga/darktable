@@ -747,8 +747,27 @@ static gboolean _migrate_raster(dt_iop_module_t *module,
   // member's own DT_MASKS_STATE_INVERSE bit with the identical formula (see
   // _combine_masks_union() in group.c), so this is an exact equivalent, not
   // an approximation.
+  //
+  // Except when the source is empty, i.e. the source module was removed at some
+  // point and this raster can never resolve. Classic reads the invert flag only
+  // *inside* the branch that got a mask back: with none, it fills 0.0f and the
+  // module contributes nothing, invert flag or not (see the `else` at the end of
+  // the raster branch in blend.c). Flexi renders the unresolvable element as
+  // zero to match (_raster_unresolved() in raster.c), but zero is not a fixed
+  // point of the compositor -- an INVERSE bit turns it into 1.0 everywhere, and
+  // the module goes from doing nothing to applying at full strength. So do not
+  // carry the bit across when there is nothing for it to invert.
+  const gboolean resolvable = o->raster_mask_source[0] != '\0';
+
   int state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
-  if(o->raster_mask_invert) state |= DT_MASKS_STATE_INVERSE;
+  if(o->raster_mask_invert && resolvable) state |= DT_MASKS_STATE_INVERSE;
+
+  if(o->raster_mask_invert && !resolvable)
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] module '%s': raster mask has no source and is inverted --"
+             " dropping the inversion, which classic never applies to the"
+             " no-source fallback either",
+             module->op);
 
   dt_masks_point_group_t *pt = _new_group_point(raster_form->formid, state);
   if(!pt)
