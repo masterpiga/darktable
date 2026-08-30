@@ -696,13 +696,23 @@ extern const dt_masks_functions_t dt_masks_functions_gradient;
 extern const dt_masks_functions_t dt_masks_functions_group;
 extern const dt_masks_functions_t dt_masks_functions_parametric;
 extern const dt_masks_functions_t dt_masks_functions_raster;
-/** does this raster form's source still exist in `module`'s pipe? FALSE when
-    the source module was removed (or the form never had one), which is the
-    condition _raster_get_mask_roi() renders as all-zero. Callers outside the
+/** can this raster form still obtain a mask? TRUE (unresolved) when the source
+    module was removed, was never named, is switched off, or writes no raster
+    mask at all -- every structural reason dt_dev_get_raster_mask() hands back
+    NULL and _raster_get_mask_roi() renders all-zero. Callers outside the
     renderer use it to keep a member that can contribute nothing from being
     treated as if it could: the group fold skips its inversion, and the panel
-    badges the row. Returns FALSE for anything that is not a raster form. */
+    badges the row. Returns FALSE for anything that is not a raster form.
+
+    `piece` may be NULL outside a pipe (the panel). Inside one, pass it: the
+    source's *piece* owns the enabled state, module->enabled is not maintained
+    in an export pipe.
+
+    Deliberately not included: a mask that is merely absent from the source's
+    hash table this pass. That is transient -- it resolves on the next render --
+    and badging it would make the marker flicker. */
 gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
+                                       const dt_dev_pixelpipe_iop_t *piece,
                                        const dt_masks_form_t *form);
 #ifdef HAVE_AI
 extern const dt_masks_functions_t dt_masks_functions_object;

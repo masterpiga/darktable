@@ -346,24 +346,39 @@ static void _free_raster_form(dt_masks_form_t *f)
   free(f);
 }
 
-// a source module sitting in the pipe at the instance the form names
+// no module flags in particular: what makes the stand-in a raster writer here
+// is its own mask_mode, the other half of the same test in the predicate
+static int _no_flags(void)
+{
+  return 0;
+}
+
+// a source module sitting in the pipe at the instance the form names, switched
+// on and carrying a mask of its own -- i.e. one that genuinely publishes a
+// raster mask, which is the only state the predicate calls resolved
 static void _push_source_module(dt_iop_module_t *mod,
                                 dt_iop_module_so_t *so,
+                                dt_develop_blend_params_t *bp,
                                 const char *op,
                                 const int instance)
 {
   memset(mod, 0, sizeof(*mod));
   memset(so, 0, sizeof(*so));
+  memset(bp, 0, sizeof(*bp));
   g_strlcpy(so->op, op, sizeof(so->op));
   mod->so = so;
   mod->multi_priority = instance;
+  mod->enabled = TRUE;
+  mod->flags = _no_flags;
+  bp->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK;
+  mod->blend_params = bp;
   flexi_dev.iop = g_list_append(flexi_dev.iop, mod);
 }
 
 static void test_raster_with_no_source_is_unresolved(void **state)
 {
   dt_masks_form_t *f = _raster_form("", 0);
-  assert_true(dt_masks_raster_is_unresolved(&flexi_module, f));
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
   _free_raster_form(f);
 }
 
@@ -371,7 +386,7 @@ static void test_raster_whose_module_is_absent_is_unresolved(void **state)
 {
   dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
   // nothing in the pipe at all: the module was deleted after this form was made
-  assert_true(dt_masks_raster_is_unresolved(&flexi_module, f));
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
   _free_raster_form(f);
 }
 
@@ -379,17 +394,60 @@ static void test_raster_resolves_to_a_live_module(void **state)
 {
   dt_iop_module_t mod;
   dt_iop_module_so_t so;
-  _push_source_module(&mod, &so, "colorbalancergb", 0);
+  dt_develop_blend_params_t bp;
+  _push_source_module(&mod, &so, &bp, "colorbalancergb", 0);
 
   dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
-  assert_false(dt_masks_raster_is_unresolved(&flexi_module, f));
+  assert_false(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
   _free_raster_form(f);
 
   // the same op at a different instance is a different module, and does not
   // satisfy a form that names instance 0
   dt_masks_form_t *other = _raster_form("colorbalancergb", 3);
-  assert_true(dt_masks_raster_is_unresolved(&flexi_module, other));
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, NULL, other));
   _free_raster_form(other);
+
+  g_list_free(flexi_dev.iop);
+  flexi_dev.iop = NULL;
+}
+
+// a switched-off source publishes nothing: dt_dev_get_raster_mask() drops its
+// mask (and deletes it as stale), so the element is just as unable to draw
+// anything as one whose module was deleted outright
+static void test_raster_from_a_disabled_module_is_unresolved(void **state)
+{
+  dt_iop_module_t mod;
+  dt_iop_module_so_t so;
+  dt_develop_blend_params_t bp;
+  _push_source_module(&mod, &so, &bp, "colorbalancergb", 0);
+  mod.enabled = FALSE;
+
+  dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
+
+  // and it comes back the moment the source is switched on again -- the state
+  // is transient in the user's hands, so the predicate must not latch
+  mod.enabled = TRUE;
+  assert_false(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
+
+  _free_raster_form(f);
+  g_list_free(flexi_dev.iop);
+  flexi_dev.iop = NULL;
+}
+
+// an enabled module with no mask of its own and no IOP_FLAGS_WRITE_RASTER never
+// puts anything in the raster table, so a reference to it is equally empty
+static void test_raster_from_a_module_that_writes_no_mask_is_unresolved(void **state)
+{
+  dt_iop_module_t mod;
+  dt_iop_module_so_t so;
+  dt_develop_blend_params_t bp;
+  _push_source_module(&mod, &so, &bp, "colorbalancergb", 0);
+  bp.mask_mode = DEVELOP_MASK_ENABLED;   // uniform opacity: no mask published
+
+  dt_masks_form_t *f = _raster_form("colorbalancergb", 0);
+  assert_true(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
+  _free_raster_form(f);
 
   g_list_free(flexi_dev.iop);
   flexi_dev.iop = NULL;
@@ -405,7 +463,7 @@ static void test_non_raster_forms_are_never_unresolved(void **state)
   {
     const dt_masks_point_group_t *pt = l->data;
     const dt_masks_form_t *f = dt_masks_get_from_id(&flexi_dev, pt->formid);
-    assert_false(dt_masks_raster_is_unresolved(&flexi_module, f));
+    assert_false(dt_masks_raster_is_unresolved(&flexi_module, NULL, f));
   }
 }
 
@@ -908,6 +966,9 @@ int main(void)
     cmocka_unit_test_teardown(test_raster_with_no_source_is_unresolved, _teardown),
     cmocka_unit_test_teardown(test_raster_whose_module_is_absent_is_unresolved, _teardown),
     cmocka_unit_test_teardown(test_raster_resolves_to_a_live_module, _teardown),
+    cmocka_unit_test_teardown(test_raster_from_a_disabled_module_is_unresolved, _teardown),
+    cmocka_unit_test_teardown(test_raster_from_a_module_that_writes_no_mask_is_unresolved,
+                              _teardown),
     cmocka_unit_test_teardown(test_non_raster_forms_are_never_unresolved, _teardown),
     cmocka_unit_test_teardown(test_raster_wins_over_drawn, _teardown),
     cmocka_unit_test_teardown(test_raster_wins_over_parametric, _teardown),
