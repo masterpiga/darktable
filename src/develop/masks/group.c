@@ -1278,7 +1278,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         // element harmless until the user fixes it. The panel badges the row
         // so it is visible rather than silent.
         const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
-                             && !dt_masks_raster_is_unresolved(module, sel);
+                             && !dt_masks_raster_is_unresolved(module, piece, sel);
         if(isect)
           _combine_masks_intersect(grp, bufs, npixels, op, inverted);
         else if(screen)
@@ -1450,7 +1450,7 @@ int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
         // element whose source is gone, which renders zero and must stay zero
         // (see the same guard in _group_get_mask_roi_flexi above)
         const int inverted = (state & DT_MASKS_STATE_INVERSE)
-                             && !dt_masks_raster_is_unresolved(module, sel);
+                             && !dt_masks_raster_is_unresolved(module, piece, sel);
 
         // the first *visible* shape always composites as ADD onto the empty
         // accumulator, whatever its explicit operator says: the rendered mask
