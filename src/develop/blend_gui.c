@@ -5673,19 +5673,22 @@ static void _refresh_lowop_badges(dt_iop_module_t *module)
     {
       const dt_masks_form_t *const sel =
         dt_masks_get_from_id(darktable.develop, pt->formid);
-      // a raster element whose source module is gone can never contribute --
-      // the renderer draws it as zero and skips its inversion (see
+      // a raster element that cannot reach a mask can never contribute -- the
+      // renderer draws it as zero and skips its inversion (see
       // dt_masks_raster_is_unresolved) -- so it earns the same badge as a
-      // parametric channel that restricts nothing, with its own reason
-      const gboolean raster_broken = dt_masks_raster_is_unresolved(module, sel);
+      // parametric channel that restricts nothing, with its own reason. The
+      // wording covers both ways it gets there: a module that is gone (the row
+      // is only removable) and one that is merely switched off or no longer
+      // masking (fixable at the source, so do not tell the user to delete it).
+      const gboolean raster_broken = dt_masks_raster_is_unresolved(module, NULL, sel);
       _update_lowop_badge(g_object_get_data(G_OBJECT(row_vbox), "lowop-badge"),
                           pt->opacity * run_group_opacity, FALSE,
                           raster_broken || _parametric_form_is_noop(sel),
                           raster_broken
-                          ? _("the module this raster mask came from no longer "
-                              "exists, so this element selects nothing -- remove it "
-                              "and, if you still need it, add a raster mask from a "
-                              "module that is still in the pipeline")
+                          ? _("this raster mask has no mask to read: the module it "
+                              "came from is switched off, no longer carries a mask, "
+                              "or is gone -- so this element selects nothing. Restore "
+                              "the source module, or remove this element")
                           : NULL);
     }
   }
