@@ -41,6 +41,7 @@
 // gtk_widget_hide() of self->expander instead.
 
 #include "control/conf.h"
+#include "control/signal.h"
 #include "develop/blend.h"
 #include "develop/develop.h"
 #include "dtgtk/expander.h"
@@ -123,6 +124,31 @@ void expanded_state(dt_lib_module_t *self, const gboolean expanded)
   dt_iop_gui_blend_masks_panel_host_expanded(expanded);
 }
 
+/* A mask row's warning badge can depend on state that lives outside the mask
+ * list showing it: a raster element goes inert the moment its source module is
+ * switched off, no longer carries a mask, or is removed. None of that touches
+ * this module's own forms, so nothing in the panel's usual update paths fires
+ * and the badge would keep saying whatever it said when the list was built.
+ *
+ * A history change is the signal every one of those arrives as (toggling a
+ * module off adds a history item, as does deleting one), so re-evaluate the
+ * badges then. The sweep is over the whole pipeline rather than the focused
+ * module: the badge is a property of the *reader* of the raster mask, which is
+ * a different module from the one the user just touched. Refreshing a module
+ * with no mask list built returns immediately, so this costs a null check per
+ * module.
+ *
+ * This lib is the hook's home because it is the panel's host and has a
+ * darkroom-scoped lifecycle to hang connect/disconnect on -- the sweep itself
+ * is not specific to the utility position and runs whatever position the panel
+ * is in. */
+static void _history_change_callback(gpointer instance, gpointer user_data)
+{
+  if(!darktable.develop) return;
+  for(GList *m = darktable.develop->iop; m; m = g_list_next(m))
+    dt_iop_gui_blend_refresh_mask_badges((dt_iop_module_t *)m->data);
+}
+
 void gui_init(dt_lib_module_t *self)
 {
   dt_lib_masks_flexi_host_t *d = g_malloc0(sizeof(dt_lib_masks_flexi_host_t));
@@ -140,6 +166,8 @@ void gui_init(dt_lib_module_t *self)
   darktable.develop->proxy.masks_flexi_host.toggle_box = d->toggle_box;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = _reconfigure;
+
+  DT_CONTROL_SIGNAL_HANDLE(DT_SIGNAL_DEVELOP_HISTORY_CHANGE, _history_change_callback);
 
   // deliberately NOT calling dt_lib_set_visible(self, FALSE) here even
   // when the current position isn't utility -- see file comment.
@@ -193,6 +221,8 @@ void view_enter(dt_lib_module_t *self,
 
 void gui_cleanup(dt_lib_module_t *self)
 {
+  DT_CONTROL_SIGNAL_DISCONNECT(_history_change_callback, self);
+
   darktable.develop->proxy.masks_flexi_host.module = NULL;
   darktable.develop->proxy.masks_flexi_host.content_box = NULL;
   darktable.develop->proxy.masks_flexi_host.actions_box = NULL;
