@@ -611,18 +611,86 @@ dialog .sidebar row:selected:hover label,
   padding: 0.28em 0.65em;
 }
 
-/* #blending-tabs (the "blend mask" header): thicker when docked in dedicated panel, flush/compact when embedded */
-#blending-tabs:not(.blending-tabs-embedded)
+/* #blending-tabs (the "blend mask" header): thicker when docked in dedicated
+   panel, flush/compact when embedded.
+
+   Both rules qualify on .dt_section_label, the class the header carries, and
+   that is not decoration: ".dt_section_label:not(#blending-box)" further down
+   sets "padding: 0.14em 0", and :not() carries the specificity of its argument,
+   so an id plus a class ties with it and loses on source order. Without the
+   extra class here the horizontal padding silently comes out as 0. */
+#blending-tabs.dt_section_label:not(.blending-tabs-embedded)
 {
   padding: 0.45em 0.5em;
   min-height: 2em;
 }
 
-#blending-tabs.blending-tabs-embedded
+/* Embedded, this header sits directly below the module's own header, so the
+   two rows' icons have to read as one column: the same container inset as
+   #module-header (0.5em) and the same button box as the buttons in it (the
+   .dt_module_btn base metrics plus the global 1px button padding), rather than
+   the wider, taller box the dedicated panel uses. Both headers span the same
+   width -- #blending-wrapper, between this and the expander, adds no inset of
+   its own -- so matching these two is all the alignment takes. The section
+   rule and the vertical margin .dt_section_label brings belong to a section
+   title inside a module, not to a header row, so both go. */
+#blending-tabs.dt_section_label.blending-tabs-embedded
 {
-  padding: 0.14em 0.3em;
+  padding: 0.5em;
+  margin: 0;
+  border-bottom: none;
+}
+
+.dt_plugin_ui #blending-tabs.blending-tabs-embedded .dt_module_btn
+{
+  min-width: 1.15em;
+  min-height: 1.15em;
+  margin: 0.07em;
+  padding: 1px;
+}
+
+/* #button-canvas is the icon's own inset inside the button, and it is what
+   actually decides where a glyph lands: the module header widens it from the
+   5px default to 12px, so without this the whole row's glyphs sit a few pixels
+   left of the module header's and the caption a few pixels right of the module
+   name -- matching button boxes alone is not enough */
+#blending-tabs.blending-tabs-embedded #button-canvas
+{
+  margin: 12px;
+}
+
+/* the collapse arrow keeps its pill background only in the dedicated panel,
+   where it has to stand apart from the mask controls beside it. Embedded, it
+   is the leading icon of a module header row and has to read like one: no
+   fill of its own (the pill is invisible against the lighter mask-enabled
+   header but not against the disabled one), same box as the buttons around it */
+#blending-tabs.blending-tabs-embedded #flexi-inline-collapse
+{
+  background-color: transparent;
+  margin: 0.07em;
+  padding: 1px;
+}
+
+#blending-tabs.blending-tabs-embedded #flexi-inline-collapse:hover
+{
+  background-color: alpha(@fg_color, 0.18);
+}
+
+/* the "blend mask" caption: a small gap after the collapse arrow is all it
+   needs in the dedicated panel */
+#blending-tabs-caption
+{
+  margin-left: 0.3em;
+}
+
+/* embedded, it sits one row under the module's own name and has to read as
+   the same kind of title, so it takes the box and size of #iop-panel-label
+   (color is left alone: this header dims with the mask's on/off state) */
+#blending-tabs.blending-tabs-embedded #blending-tabs-caption
+{
   margin-left: 0;
-  margin-right: 0;
+  padding: 0 0.14em 0.14em 0.45em;
+  font-size: 1.1em;
 }
 
 /* Frame around blending boxes */
@@ -2369,70 +2437,69 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   background-color: alpha(@fg_color, 0.22);
 }
 
-/* collapsed-panel corner icon overlay: bigger hit target so it reads as a
-   real button floating on the canvas, not a bare icon. Sits flush in the
-   canvas's actual top corner (no margin, no border, square corners) so it
-   reads as protruding from the top/side dedicated panel it belongs to,
-   rather than floating free above it -- the .flexi-corner-icon-left/-right
-   variants below (set alongside halign, see _flexi_ensure_corner_icon_side)
-   zero the padding on whichever side touches the panel; the other two
-   (unflush) sides keep equal padding so the icon glyph sits centered within
-   its own visible area. Background matches @darkroom_bg_color (the canvas
-   fill itself) rather than the usual panel background, so it blends into
-   the canvas instead of standing out as a foreign panel-colored patch.
-   border/box-shadow/outline are all explicitly zeroed (not just relying on
-   the generic "button" rule's border:none being lower-specificity) since a
-   flat-colored rectangle sitting directly on photo content already reads as
-   an edge on its own -- an actual drawn border on top of that only doubled
-   up the effect. Whether a mask is actually active is conveyed two ways:
-   the "flexi-corner-icon-active" class (see dt_ui_flexi_panel_set_icon)
-   swaps the background to @selected_bg_color and lifts it to full opacity,
-   and the icon glyph itself (dtgtk_cairo_paint_masks_panel) fills its front
-   sheet solid instead of outline-only -- so the state reads even without
-   color (e.g. for color-blind users, or at a glance while dimmed). */
+/* collapsed-panel corner icon overlay: the panel's own header icon, moved to
+   the canvas corner, so it takes the plain .dt_module_btn box the header's
+   buttons use rather than a size of its own -- only margin and border need
+   zeroing here, to sit flush in the canvas's actual corner. It carries no
+   background: a flat-colored patch on photo content reads as a foreign
+   rectangle whatever color it is (matching @darkroom_bg_color only hides it
+   where the canvas happens to be empty), and the glyph alone is enough to
+   find. border/box-shadow/outline are explicitly zeroed rather than left to
+   the generic "button" rule, which is lower-specificity. State rides entirely
+   on the glyph and its opacity: dtgtk_cairo_paint_masks_panel fills its front
+   sheet solid instead of outline-only when a mask is in use (see
+   dt_ui_flexi_panel_set_icon and the "flexi-corner-icon-active" class), so it
+   reads without color too -- for color-blind users, or at a glance.
+
+   The margins below put it exactly where the panel's own collapse/pin button
+   sits, so expanding does not make it jump: the icon overlays
+   dt_ui_center_base, the same overlay the panel is reparented into while it
+   floats during a peek, and the collapsed panel's edge is where the canvas
+   edge now is -- so the offset to match is simply the panel header's own
+   inset. Both values therefore have to track "#blending-tabs.dt_section_label
+   :not(.blending-tabs-embedded)" above; nothing else between the panel edge
+   and that header adds any padding of its own. */
 #flexi-corner-icon
 {
-  min-width: 1.7em;
-  min-height: 1.7em;
   margin: 0;
-  padding: 0.14em;
+  margin-top: 0.45em;
   opacity: 0.65;
-  background-color: @darkroom_bg_color;
+  background-color: transparent;
   border: none;
   border-radius: 0;
   box-shadow: none;
   outline: none;
 }
 
-/* the edge touching the dedicated panel (left panel -> left edge, right
-   panel -> right edge) is flush, so the icon reads as an extension of the
-   panel rather than a separate floating button */
+/* the halign side (left panel -> left edge, right panel -> right edge, see
+   _flexi_ensure_corner_icon_side) is the one the panel's header inset is
+   measured from */
 #flexi-corner-icon.flexi-corner-icon-left
 {
-  padding-left: 0;
+  margin-left: 0.5em;
 }
 
 #flexi-corner-icon.flexi-corner-icon-right
 {
-  padding-right: 0;
+  margin-right: 0.5em;
 }
 
 #flexi-corner-icon:hover
 {
-  opacity: 0.8;
+  opacity: 0.85;
 }
 
 #flexi-corner-icon.flexi-corner-icon-active
 {
   opacity: 1;
-  background-color: @field_selected_bg;
+  background-color: transparent;
   color: @field_active_fg;
 }
 
 #flexi-corner-icon.flexi-corner-icon-active:hover
 {
   opacity: 1;
-  background-color: @field_hover_bg;
+  background-color: transparent;
   color: @field_hover_fg;
 }
 
