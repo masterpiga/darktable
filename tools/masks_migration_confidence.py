@@ -199,11 +199,19 @@ def _verify_outcome(row):
     """
     if row.get("result") == "skipped":
         return "skipped"
-    if row.get("inert"):
-        return "inert"
 
+    # Before the inert bucket, not after it. "Inert" means the *classic* mask is
+    # uniform, which normally makes the comparison uninformative -- a flat mask
+    # matches a flat mask however the two renderers got there. It stops being
+    # uninformative the moment migration disagrees with it: a uniform classic
+    # mask the migrated render does not reproduce is not weak evidence, it is a
+    # module that went from doing nothing to applying everywhere. Testing inert
+    # first swallowed exactly that case.
     if row.get("max_diff", 0) > EPS:
         return "cpu_fail"
+
+    if row.get("inert"):
+        return "inert"
 
     if row.get("gpu_ran"):
         before = row.get("dev_diff_before", 0.0)
