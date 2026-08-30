@@ -5695,6 +5695,11 @@ static void _refresh_lowop_badges(dt_iop_module_t *module)
   _apply_group_lowop_badges(GTK_WIDGET(bd->masks_list_box), grp);
 }
 
+void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
+{
+  _refresh_lowop_badges(module);
+}
+
 // is cid the base (bottom-most) group? grp->points is ordered bottom-up (see
 // _starts_group), so the very first point is always a run head and is the
 // base group's own cid.
