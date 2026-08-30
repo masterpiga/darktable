@@ -168,10 +168,46 @@ static int _raster_unresolved(float *const buffer, const dt_iop_roi_t *const roi
 }
 
 gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
+                                       const dt_dev_pixelpipe_iop_t *piece,
                                        const dt_masks_form_t *form)
 {
   if(!form || !(form->type & DT_MASKS_RASTER) || !form->points) return FALSE;
-  return _raster_resolve_source(module, form->points->data) == NULL;
+
+  const dt_iop_module_t *source = _raster_resolve_source(module, form->points->data);
+  if(!source) return TRUE;
+
+  // Whether the source is on. Inside a pipe its piece is the authority --
+  // module->enabled is not maintained in an export pipe (a source that is on
+  // for the darkroom can read as off there, and vice versa), so a piece-less
+  // check would answer for the wrong pipe.
+  gboolean enabled = source->enabled;
+  if(piece && piece->pipe)
+  {
+    const dt_dev_pixelpipe_iop_t *source_piece = NULL;
+    for(GList *n = piece->pipe->nodes; n; n = g_list_next(n))
+    {
+      const dt_dev_pixelpipe_iop_t *cand = n->data;
+      if(cand->module == source)
+      {
+        source_piece = cand;
+        break;
+      }
+    }
+    // in this pipe the module does not exist at all
+    if(!source_piece) return TRUE;
+    enabled = source_piece->enabled;
+  }
+  if(!enabled) return TRUE;
+
+  // ...and whether it publishes anything. An enabled module with no mask of its
+  // own and no IOP_FLAGS_WRITE_RASTER never puts a mask in the table, so this
+  // element has nothing to read however healthy the reference looks. Same test
+  // dt_dev_get_raster_mask() makes before it gives up (pixelpipe_hb.c).
+  const dt_develop_mask_mode_t mask_mode =
+    source->blend_params ? source->blend_params->mask_mode : DEVELOP_MASK_DISABLED;
+  const gboolean writes_masks = (mask_mode > DEVELOP_MASK_ENABLED)
+                             || (source->flags() & IOP_FLAGS_WRITE_RASTER);
+  return !writes_masks;
 }
 
 static int _raster_get_mask_roi(const dt_iop_module_t *const module,
