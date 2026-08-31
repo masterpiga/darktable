@@ -567,21 +567,14 @@ typedef struct dt_iop_gui_blend_data_t
   // _masks_toolbar_place_shapes_box / _masks_apply_layout in blend_gui.c.
   GtkWidget *masks_shapes_box;
   // the "blend mask" section header -- unrelated to the "mask elements" header
-  // above. One fixed reading order, everywhere:
+  // above. Reading order:
   //
-  //   expander | title | toggle | <space> | actions | hamburger
+  //   expander | title | <space> | show_mask_overlay | preferences | toggle
   //
-  // taken from the utility lib's own header so the panel reads the same in
-  // every position (there the lib supplies the expander and title itself, and
-  // this one's expander stays hidden rather than doubling it up). The expander
-  // (flexi_inline_collapse_btn) is the header's own first child; the toggle
-  // sits in masks_left_cluster and the actions + hamburger in
-  // masks_right_cluster, each packed as one unit for ordering. Docked in the
-  // separate right panel, expander and hamburger trade ends -- the only header
-  // widgets that ever move (see _masks_header_apply_side).
+  // (mirrored to preferences | title | <space> | show_mask_overlay | toggle | expander
+  // when docked in the separate right panel -- see _masks_header_apply_side).
   GtkWidget *masks_blend_header;
-  // display/suppress eyes + hamburger, packed END (so its first child is the
-  // rightmost one)
+  // show_mask_overlay + preferences + toggle, packed END
   GtkWidget *masks_right_cluster;
   // the on/off toggle's home box -- the utility position lends the toggle to
   // that lib's header and _masks_flexi_release hands it back here

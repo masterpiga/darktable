@@ -3355,7 +3355,6 @@ void dt_iop_add_remove_mask_indicator(dt_iop_module_t *module, gboolean add)
   else if(show)
   {
     module->mask_indicator = dtgtk_togglebutton_new(dtgtk_cairo_paint_showmask, 0, NULL);
-    dt_gui_add_class(module->mask_indicator, "dt_transparent_background");
     g_signal_connect(G_OBJECT(module->mask_indicator), "toggled",
                      G_CALLBACK(_display_mask_indicator_callback), module);
     g_signal_connect(G_OBJECT(module->mask_indicator), "query-tooltip",
