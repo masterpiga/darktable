@@ -9,7 +9,7 @@ renders the same edit differently depending on whether OpenCL is enabled.
 |---|---|---|
 | 1 | the OpenCL path publishes a stale raster mask | **fixed and merged** (`f54402ea96`) |
 | 2 | JzCzhz hue is ill-conditioned in the shared JzAzBz transform | diagnosed; fix written and measured in isolation, not implemented |
-| 3 | mask feathering is ill-conditioned at guide weight 100 | diagnosed and localised; fix proposed, **not** implemented or measured |
+| 3 | mask feathering is near-singular for grey guides at guide weight 100 | diagnosed, localised and **measured**; the fix is a rendering decision, not a numerical one |
 
 They are ordered by how much evidence stands behind them, strongest first.
 
@@ -264,7 +264,7 @@ confined to the achromatic axis. Recorded here so nobody spends the day on it
 twice.
 
 
-## Finding 3 -- mask feathering is ill-conditioned, and the two guided filters round it differently
+## Finding 3 -- mask feathering solves a near-singular system, and the two implementations resolve it differently
 
 ### The problem
 
@@ -279,9 +279,10 @@ in a bad numerical regime:
    scene-referred highlights.
 2. The covariance matrix is built in the textbook-unstable form
    `Var = E[x^2] - E[x]^2` (`Sigma_0_0 = varpx[VAR_RR] - guide_r*guide_r + eps`
-   and its five siblings). Over a locally flat guide, that is a difference of
-   two near-equal large numbers, and what survives is the part float32 is least
-   sure of.
+   and its five siblings), and then inverted by Cramer's rule. Over a flat or
+   near-achromatic guide that matrix is close to singular -- see "What the
+   divergence actually is" below, where measurement corrects the obvious first
+   guess about which of these two facts is doing the damage.
 
 The regularizer does not rescue it: `eps` is **absolute** (1.0 at
 `feather_version == 0`), while the quantity it regularizes scales as
@@ -351,57 +352,87 @@ that is flat where the mask has structure -- but the exposure is not a corner
 case, and every one of those edits renders differently with OpenCL on than off
 by some amount.
 
-### The proposed fix
+### What the divergence actually is
 
-Two parts, of very different risk.
+The first guess -- that this is plain float32 cancellation in
+`E[x^2] - E[x]^2` -- is not sufficient, and measurement rules it out. The
+cancellation leaves an absolute error of order `2^-24 * mean^2`, which for a
+mid-grey guide at weight 100 is about 2e-05, i.e. five orders of magnitude below
+`eps = 1.0`. Rounding alone cannot be decided by a term that small.
 
-**(a) Build the covariances shift-invariantly.** Variance is invariant under a
-constant offset, so subtract one before forming any product: pick `K` per tile
-(its own guide mean is free -- the filter already computes box means) and
-accumulate `(x - K)` and `(x - K)^2` instead of `x` and `x^2`. Same algebra, no
-cancellation, because the values being squared are now the size of the local
-variation rather than the size of the guide. Applies identically to both
-implementations and is not a semantic change.
+What makes it matter is that **the 3x3 system is near-singular to begin with**.
+The guide is RGB, and for any achromatic or near-achromatic region R, G and B
+are the same signal: the covariance matrix collapses towards rank 1, and the
+only thing keeping it invertible is `eps` on the diagonal. At guide weight 100
+the matrix entries are ~1e4 while `eps` is 1, so the regularization is
+relatively 1e-4 -- and Cramer's rule then amplifies whatever each
+implementation's rounding left behind. Grey and near-grey guide regions are
+ordinary, not exotic, which is why this is visible across a third of the corpus.
 
-**(b) Scale `eps` with `guide_weight^2`.** The regularizer is meant to say "call
-the guide flat below this much variation", which is a statement about the
-*image*, not about the arbitrary factor the guide was multiplied by. Tying it to
-that factor is what leaves the solve near-singular at weight 100. This *is* a
-semantic change and needs a `feather_version` bump -- the mechanism already
-exists and was already used once for exactly this parameterization.
+That also explains the `feather_version` result: version 1 does not merely
+rescale, it makes `eps` relatively 25x larger, which is a real conditioning
+improvement, and the divergence falls 41x.
 
-### Evidence that they fix it -- and what is still missing
+### The proposed fix, and what measuring it showed
 
-**Be clear about the state of this finding: unlike findings 1 and 2, the fix has
-not been implemented or measured.** What is established is the diagnosis: that
-feathering is the entire source (feathering off -> gap exactly 0), and that the
-conditioning is what drives it (10x the guide weight -> 41x the divergence).
+The regularization has to be **relative to the guide's scale** rather than
+absolute. Implemented as a floor on the covariance diagonal proportional to what
+was subtracted (`floor * mean^2`, added identically in `guided_filter.c` and
+`guided_filter.cl`), swept on the edit above:
 
-The 41x is also, in effect, a partial measurement of (b): `feather_version 1`
-already lowered the guide weight and raised `eps` relative to it, and edits
-carrying it diverge ~40x less. That is corroboration from a change upstream
-already shipped, not a claim about a patch that does not exist yet.
+| floor | migrated CPU/OpenCL gap |
+|---|---:|
+| 0 (current master) | 0.0642 |
+| 2^-20 | 0.0279 |
+| 1e-05 | 0.0197 |
+| 1e-04 | 0.0070 |
+| 1e-03 | **0.00184** |
+| 1e-02 | 0.00064 |
 
-Part (a) is unmeasured. It should be measured before it is proposed as a patch,
-by the same method: implement it in both paths and re-run the sweep above.
+Monotonic, with no threshold at which it snaps clean: the disagreement is
+governed by how well-conditioned the solve is, exactly as the diagnosis says.
+Over the whole akgt94 corpus (2,521 edits), a 1e-03 floor takes the worst
+migrated CPU/OpenCL gap from **0.0649 to 0.00955**, a 6.8x improvement, and
+moves 12 edits from "differs" to "identical".
+
+**The uncomfortable part, stated plainly.** A floor large enough to fix
+consistency is large enough to change rendering. At 1e-03 and a mid-grey guide
+the added term is ~40% of `eps` -- that is not a rounding correction, it is a
+different amount of feathering in flat regions. Conversely a floor small enough
+to be invisible (2^-20 adds 0.04% of `eps`) only buys 2.3x, leaving the gap at
+0.028, still 7x over 1/255. There is no value that is both invisible and
+sufficient, because the quantity being stabilized *is* the filter's own
+behaviour near flat guides.
+
+So this cannot be fixed the way finding 2 can. It is not a more accurate way to
+evaluate the same function; it is a decision about how strongly to regularize,
+and any answer that fixes the CPU/OpenCL disagreement changes what feathering
+does on flat, near-achromatic guides.
+
+### Recommendation
+
+Ship a `feather_version 2` whose `eps` is proportional to `guide_weight^2`
+(equivalently: apply the floor above with a value around 1e-03), leaving
+existing edits on their current version and their current rendering. This is the
+mechanism `feather_version 1` already used, for the same reason, and the numbers
+above give the constant a basis rather than a guess.
+
+What should *not* be done is to add a small floor ungated and call the problem
+solved: the measurement above shows that buys less than a factor of three and
+leaves the disagreement well above the visible threshold.
 
 ### Does it break existing edits?
 
-**(a) essentially not.** It changes only the rounding of a quantity both paths
-already intend to compute, in the direction of the exact answer. Renders move by
-less than the CPU/OpenCL disagreement it removes -- but that statement needs the
-measurement above before it is quoted as a number.
+Version-gated, no -- that is the point of gating it. Existing edits keep
+`feather_version 0` or `1` and render exactly as they do now, including their
+CPU/OpenCL disagreement. New edits get the conditioned parameters.
 
-**(b) yes, visibly, and it must be version-gated.** Changing `eps` changes what
-the filter treats as a flat region, which changes the feathering itself, not
-just its last bits. Gated behind a new `feather_version`, existing edits keep
-their current rendering and only new ones get the better-conditioned parameters
--- exactly how `feather_version 1` was introduced.
+Left ungated it would break them, mildly but genuinely: flat, near-achromatic
+regions would feather slightly differently. That is a real change to how the
+filter behaves, not a change in its rounding.
 
-There is a real argument for *not* doing (b) at all and shipping only (a): the
-conditioning problem is already fixed for new edits by `feather_version 1`, and
-(a) alone removes most of the CPU/OpenCL disagreement for the 31% of existing
-edits still on version 0, without changing what any of them look like.
+The experiment was implemented, measured and then **reverted** -- the branch
+carries none of it, and the numbers above are all that was wanted from it.
 
 
 ## What this means for flexi
