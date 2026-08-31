@@ -1,12 +1,17 @@
-# Two classic-blending rendering defects found while verifying the flexi mask migration
+# Three classic-blending rendering defects found while verifying the flexi mask migration
 
-Both are **pre-existing bugs in `master`**, unrelated to the mask revamp. They
-were found by a tool built to verify something else, and both are worth fixing
-upstream on their own merits.
+All three are **pre-existing in `master`**, unrelated to the mask revamp. They
+were found by a tool built to verify something else, and each is worth fixing
+upstream on its own merits. In every case the symptom is the same: darktable
+renders the same edit differently depending on whether OpenCL is enabled.
 
-**Status: finding 1 is fixed and merged** (`f54402ea96`). Finding 2 is
-diagnosed and has a validated fix, but is not implemented; it is the open item
-this document is now mainly about.
+| | what | state |
+|---|---|---|
+| 1 | the OpenCL path publishes a stale raster mask | **fixed and merged** (`f54402ea96`) |
+| 2 | JzCzhz hue is ill-conditioned in the shared JzAzBz transform | diagnosed; fix written and measured in isolation, not implemented |
+| 3 | mask feathering is ill-conditioned at guide weight 100 | diagnosed and localised; fix proposed, **not** implemented or measured |
+
+They are ordered by how much evidence stands behind them, strongest first.
 
 The tool (`--verify-masks` on the `masks_revamp` branch) replays a harvested
 mask edit four ways -- classic and migrated, each on the CPU and on OpenCL --
@@ -259,9 +264,150 @@ confined to the achromatic axis. Recorded here so nobody spends the day on it
 twice.
 
 
+## Finding 3 -- mask feathering is ill-conditioned, and the two guided filters round it differently
+
+### The problem
+
+Mask feathering is a guided filter (`src/common/guided_filter.c`, and its
+separate OpenCL implementation in the same file plus
+`data/kernels/guided_filter.cl`). Two things about how blending calls it put it
+in a bad numerical regime:
+
+1. The guide is pre-multiplied by `guide_weight`, which for an RGB blend at
+   `feather_version == 0` is **100** (`_get_guide_weight`, blend.c). Guide
+   values therefore sit around 1e2, and their squares around 1e4 -- far more for
+   scene-referred highlights.
+2. The covariance matrix is built in the textbook-unstable form
+   `Var = E[x^2] - E[x]^2` (`Sigma_0_0 = varpx[VAR_RR] - guide_r*guide_r + eps`
+   and its five siblings). Over a locally flat guide, that is a difference of
+   two near-equal large numbers, and what survives is the part float32 is least
+   sure of.
+
+The regularizer does not rescue it: `eps` is **absolute** (1.0 at
+`feather_version == 0`), while the quantity it regularizes scales as
+`guide_weight^2`. At weight 100 it is four orders of magnitude smaller than the
+matrix entries, so a near-flat guide leaves the 3x3 solve close to singular, and
+Cramer's rule amplifies whatever the cancellation left behind.
+
+Nothing here is *wrong* on either path. The CPU keeps the whole expression in
+registers inside one loop, where the compiler may contract to FMA; the OpenCL
+path computes each product in its own kernel, rounds it into a float image, and
+subtracts in the next. Same algebra, different rounding, on an expression that
+cannot afford any.
+
+### The evidence
+
+All from one harvested edit (`colorbalancergb`, parametric mask, feathering
+radius 10, `feather_version 0`, `rgb_scene`), replayed on both pipes. "Gap"
+is CPU vs OpenCL on the same edit; the migrated column isolates the filter,
+because a migrated mask is built on the host for both pipes and the filter is
+then the only thing left that differs.
+
+| variant | CPU max | classic gap | migrated gap |
+|---|---:|---:|---:|
+| as harvested | 0 | 0.06092 | 0.06488 |
+| **feathering off** | 0 | 0.00341 | **0.00000** |
+| blur off | 0 | 0.06421 | 0.06419 |
+| feathering and blur off | 0 | 0.00367 | **0.00000** |
+
+With feathering off the migrated edit is bit-identical across CPU and OpenCL.
+The blur is irrelevant. The whole 0.065 is the guided filter.
+
+Sweeping the two parameters the diagnosis predicts:
+
+| `guide_weight` | r=2 | r=5 | r=10 | r=20 | r=40 |
+|---|---:|---:|---:|---:|---:|
+| **100** (`feather_version 0`) | 0.0642 | 0.0642 | 0.0642 | 0.00073 | 0.00017 |
+| **10** (`feather_version 1`) | 0.00154 | 0.00154 | 0.00154 | 0.00010 | 0.00003 |
+
+Dropping the guide weight by 10x drops the divergence by **41x**, with
+everything else identical -- which is what an `eps` that does not scale with
+`guide_weight^2` predicts, and which is not explainable by the filter's own
+behaviour. Larger radii recover as well: a wider window admits more genuine
+variation, so the matrix moves away from singular.
+
+It is not confined to parametric masks or to migration. In one library's classic
+edits, plain **drawn-only** masks show the same signature, and only when
+feathered:
+
+| classic drawn-only | n | median gap | max | over 1/255 |
+|---|---:|---:|---:|---:|
+| feathered | 480 | 0 | 0.00523 | 1 |
+| not feathered | 260 | 0 | 0.00000 | 0 |
+
+### How much of the corpus is exposed
+
+Across 61,387 masked edits from 14 libraries:
+
+| | edits | share |
+|---|---:|---:|
+| feathered at all | 38,151 | **62.1%** |
+| feathered, `feather_version 0`, RGB (guide weight 100) | 19,169 | **31.2%** |
+| feathered, `feather_version 1` (guide weight 10) | 17,728 | 28.9% |
+
+So roughly a third of all masked edits sit in the badly-conditioned
+configuration. The divergence is usually far below 1/255 -- it needs a guide
+that is flat where the mask has structure -- but the exposure is not a corner
+case, and every one of those edits renders differently with OpenCL on than off
+by some amount.
+
+### The proposed fix
+
+Two parts, of very different risk.
+
+**(a) Build the covariances shift-invariantly.** Variance is invariant under a
+constant offset, so subtract one before forming any product: pick `K` per tile
+(its own guide mean is free -- the filter already computes box means) and
+accumulate `(x - K)` and `(x - K)^2` instead of `x` and `x^2`. Same algebra, no
+cancellation, because the values being squared are now the size of the local
+variation rather than the size of the guide. Applies identically to both
+implementations and is not a semantic change.
+
+**(b) Scale `eps` with `guide_weight^2`.** The regularizer is meant to say "call
+the guide flat below this much variation", which is a statement about the
+*image*, not about the arbitrary factor the guide was multiplied by. Tying it to
+that factor is what leaves the solve near-singular at weight 100. This *is* a
+semantic change and needs a `feather_version` bump -- the mechanism already
+exists and was already used once for exactly this parameterization.
+
+### Evidence that they fix it -- and what is still missing
+
+**Be clear about the state of this finding: unlike findings 1 and 2, the fix has
+not been implemented or measured.** What is established is the diagnosis: that
+feathering is the entire source (feathering off -> gap exactly 0), and that the
+conditioning is what drives it (10x the guide weight -> 41x the divergence).
+
+The 41x is also, in effect, a partial measurement of (b): `feather_version 1`
+already lowered the guide weight and raised `eps` relative to it, and edits
+carrying it diverge ~40x less. That is corroboration from a change upstream
+already shipped, not a claim about a patch that does not exist yet.
+
+Part (a) is unmeasured. It should be measured before it is proposed as a patch,
+by the same method: implement it in both paths and re-run the sweep above.
+
+### Does it break existing edits?
+
+**(a) essentially not.** It changes only the rounding of a quantity both paths
+already intend to compute, in the direction of the exact answer. Renders move by
+less than the CPU/OpenCL disagreement it removes -- but that statement needs the
+measurement above before it is quoted as a number.
+
+**(b) yes, visibly, and it must be version-gated.** Changing `eps` changes what
+the filter treats as a flat region, which changes the feathering itself, not
+just its last bits. Gated behind a new `feather_version`, existing edits keep
+their current rendering and only new ones get the better-conditioned parameters
+-- exactly how `feather_version 1` was introduced.
+
+There is a real argument for *not* doing (b) at all and shipping only (a): the
+conditioning problem is already fixed for new edits by `feather_version 1`, and
+(a) alone removes most of the CPU/OpenCL disagreement for the 31% of existing
+edits still on version 0, without changing what any of them look like.
+
+
 ## What this means for flexi
 
-Neither bug reaches the flexi mask path, and the reason is the same for both.
+None of the three bugs is caused by migration, and the first two cannot occur in
+a migrated edit at all.
 
 Flexi renders its whole group -- `DT_MASKS_PARAMETRIC` members included -- with
 `dt_masks_group_render_roi()` on the host, in *both* pipes, and uploads the
@@ -280,15 +426,24 @@ Consequences:
   on the host, for both pipes. Fixing it upstream would still be worth doing --
   every non-mask consumer of JzAzBz has the same problem -- but flexi masks do
   not depend on it.
-- The price flexi pays for this is a device-to-host readback of `dev_in`/`dev_out`
-  when a group contains a parametric member or per-shape feathering
-  (`_group_needs_host_guides()`), and a residual CPU/GPU gap of 0.0025 (Apple) /
-  0.00093 (AMD) from the refinement stages, which still have separate
-  implementations. Both below 1/255 across the whole corpus.
-- Neither of these findings should be charged to the migration statistics. The
-  discriminator is in `classic_opencl_blend_findings.md`; `dev_gap_widened` is 0
-  in every corpus on both vendors, meaning migration never widens an edit's own
-  CPU/GPU gap.
+- **Finding 3 reaches flexi in full.** Feathering is the same guided filter
+  wherever the mask came from, so a flexi mask feathered at guide weight 100
+  diverges exactly as a classic one does. Migration neither causes nor cures it:
+  it does not touch `feathering_radius` or `feather_version`, and a migrated
+  edit keeps whatever the classic one had. This is the one finding here that is
+  worth fixing *for* flexi rather than merely around it.
+- The price flexi pays for the first two is a device-to-host readback of
+  `dev_in`/`dev_out` when a group contains a parametric member or per-shape
+  feathering (`_group_needs_host_guides()`), and a residual CPU/GPU gap of
+  0.0025 (Apple) / 0.00093 (AMD) from the refinement stages, which still have
+  separate implementations. Both below 1/255 across the whole corpus.
+- None of the three should be charged to the migration statistics, and the
+  verifier now proves that rather than asserting it. Where migration appears to
+  widen an edit's own CPU/GPU gap, it re-renders the migrated pair with the mask
+  post-processing switched off and reports `dev_diff_after_nopost`: if the gap
+  survives it is migration's, and if it collapses the amplifier was a stage
+  classic runs too. Over 61,332 edits the count of widenings that survive is
+  **0**.
 
 
 ## Reproducing
@@ -314,7 +469,12 @@ condition is `max_diff <= 1/255 && gpu_max_diff > 1/255`, equivalently
   (`jzdiff.c`, `stage.c`, `powtest.c`, `stable.c`) need only `clang` and
   `-framework OpenCL` (or any OpenCL SDK); they contain verbatim copies of both
   darktable implementations and no darktable dependency.
+- Finding 3: take any feathered edit and vary one field at a time in the
+  harvest JSON -- `feathering_radius` to 0 (the gap goes to 0), and
+  `feather_version` to 1 (the gap drops ~40x) -- then re-run the command above.
+  Both tables in that section were produced that way, from a single harvested
+  edit, with no code changes at all.
 
 Reproduced on Apple M4 Pro (Apple OpenCL 1.2) and, for finding 2's signature, on
-AMD gfx1150 with `OPENCL FAST MODE: NO` -- so neither is a vendor compiler
+AMD gfx1150 with `OPENCL FAST MODE: NO` -- so none of them is a vendor compiler
 issue, and `-cl-fast-relaxed-math` is not involved.
