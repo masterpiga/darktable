@@ -155,8 +155,11 @@ void gui_init(dt_lib_module_t *self)
   self->data = (void *)d;
 
   d->content_box = GTK_BOX(dt_gui_vbox());
+  gtk_widget_set_name(GTK_WIDGET(d->content_box), "masks-flexi-host-content");
   d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
   d->toggle_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+  gtk_widget_show(GTK_WIDGET(d->actions_box));
+  gtk_widget_show(GTK_WIDGET(d->toggle_box));
   self->widget = GTK_WIDGET(d->content_box);
   gtk_widget_show_all(self->widget);
 
@@ -188,9 +191,15 @@ void view_enter(dt_lib_module_t *self,
   if(self->expander && d && d->toggle_box && !gtk_widget_get_parent(GTK_WIDGET(d->toggle_box)))
   {
     GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
-    gtk_box_pack_start(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
-    // position 2: right after the module label (1)
+    gtk_box_pack_end(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
+    // visual reading order from left to right: overlay | preferences | toggle
+    // For GTK_PACK_END, the earlier child in the list is placed further to the right.
+    // child 2 = toggle (rightmost), child 3 = preferences (middle), child 4 = overlay (leftmost)
     gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->toggle_box), 2);
+    if(self->presets_button)
+      gtk_box_reorder_child(GTK_BOX(header), self->presets_button, 3);
+    if(d->actions_box)
+      gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->actions_box), 4);
     gtk_widget_show(GTK_WIDGET(d->toggle_box));
   }
 
@@ -200,11 +209,13 @@ void view_enter(dt_lib_module_t *self,
   // this lib has no presets/preferences of its own, so lib.c's default
   // header hamburger would otherwise sit there permanently disabled and
   // useless -- repurpose it instead to the same "masking options" menu the
-  // mode-select row's own hamburger opens elsewhere (see
+  // mode-select row's own preferences gear opens elsewhere (see
   // dt_iop_gui_blend_masks_options_popup and bd->masks_options_btn, which
   // is hidden in this position so there's only ever one such button)
   if(self->presets_button)
   {
+    dtgtk_button_set_paint(DTGTK_BUTTON(self->presets_button),
+                           dtgtk_cairo_paint_preferences, 0, NULL);
     // view_enter can run more than once (leaving/re-entering darkroom) --
     // both disconnects are no-ops on repeat calls, so this stays idempotent
     // rather than stacking duplicate "clicked" handlers
