@@ -127,43 +127,50 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
                                 : _("hide the blend mask panel"));
 }
 
-// The header's fixed reading order is
+// The header's reading order is:
 //
-//   expander | title | toggle | <space> | actions | hamburger
+// Standard / Embedded / Separate Left:
+//   expander | caption | <space> | overlay | preferences | toggle
 //
-// which is the utility lib's own header layout (that lib supplies the first
-// three from its expander, its label and the toggle lent to it), adopted by
-// every position so the panel reads the same wherever it lives.
-//
-// The single exception, applied here: docked in the separate *right* panel, the
-// expander and the hamburger trade ends, so the arrow sits against the edge it
-// points at and folds toward. They are the only two header widgets that ever
-// move -- the toggle and the eyes stay put in both docks, being reached by
-// muscle memory and meaning the same thing whichever side the panel is on.
-//
-// Within masks_right_cluster every child is packed END, so the *first* child in
-// the list is the rightmost one -- hence reorder to 0 for "outermost right".
+// Separate Right:
+//   caption | <space> | overlay | preferences | toggle | expander
 static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
                                      const gboolean mirrored)
 {
   GtkWidget *pin = bd->flexi_inline_collapse_btn;
-  GtkWidget *burger = bd->masks_options_btn;
-  if(!pin || !burger || !bd->masks_blend_header || !bd->masks_right_cluster) return;
+  GtkWidget *pref = bd->masks_options_btn;
+  GtkWidget *toggle = bd->mask_enable_toggle;
+  GtkWidget *showmask = bd->showmask;
+  if(!pin || !pref || !toggle || !showmask || !bd->masks_blend_header || !bd->masks_right_cluster) return;
+  if(!GTK_IS_WIDGET(pin) || !GTK_IS_WIDGET(pref) || !GTK_IS_WIDGET(toggle) || !GTK_IS_WIDGET(showmask)
+     || !GTK_IS_BOX(bd->masks_blend_header) || !GTK_IS_BOX(bd->masks_right_cluster)) return;
 
-  // the expander's slot is the header's own first child, ahead of the title --
-  // not inside masks_left_cluster, which is just the toggle's home box
-  GtkWidget *leading = mirrored ? burger : pin;
-  GtkWidget *trailing = mirrored ? pin : burger;
+  _reparent_into(showmask, bd->masks_right_cluster, FALSE, FALSE);
+  _reparent_into(pref, bd->masks_right_cluster, FALSE, FALSE);
+  _reparent_into(toggle, bd->masks_right_cluster, FALSE, FALSE);
 
-  _reparent_into(leading, bd->masks_blend_header, FALSE, FALSE);
-  gtk_box_set_child_packing(GTK_BOX(bd->masks_blend_header), leading,
-                            FALSE, FALSE, 0, GTK_PACK_START);
-  gtk_box_reorder_child(GTK_BOX(bd->masks_blend_header), leading, 0);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), showmask, 0);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pref, 1);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, 2);
 
-  _reparent_into(trailing, bd->masks_right_cluster, TRUE, FALSE);
-  gtk_box_set_child_packing(GTK_BOX(bd->masks_right_cluster), trailing,
-                            FALSE, FALSE, 0, GTK_PACK_END);
-  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), trailing, 0);
+  if(mirrored)
+  {
+    // separate panel right: no icon left of caption; expand/collapse arrow is at the far right
+    _reparent_into(pin, bd->masks_right_cluster, FALSE, FALSE);
+    gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pin, 3);
+  }
+  else
+  {
+    // standard / embedded / separate panel left: expander arrow is ahead of caption
+    _reparent_into(pin, bd->masks_blend_header, FALSE, FALSE);
+    gtk_box_reorder_child(GTK_BOX(bd->masks_blend_header), pin, 0);
+  }
+
+  const gboolean is_mask_enabled = (bd->module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
+  gtk_widget_show(pin);
+  gtk_widget_set_visible(showmask, is_mask_enabled && !bd->module->hide_enable_button);
+  gtk_widget_show(pref);
+  gtk_widget_show(toggle);
 }
 
 void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
@@ -315,28 +322,30 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed)
 // the user's point of view (BUG, previously only the first was covered).
 void _masks_flexi_release(dt_iop_module_t *module)
 {
+  if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd || !bd->relocatable_box) return;
+  if(!bd->relocatable_box || !GTK_IS_WIDGET(bd->relocatable_box)) return;
   const gboolean show = darktable.develop->gui_module == module;
 
   const gboolean was_hosted =
     darktable.develop->proxy.masks_flexi_host.hosted_module == module;
   if(was_hosted) darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
 
-  if(bd->masks_right_cluster)
+  if(bd->masks_right_cluster && GTK_IS_WIDGET(bd->masks_right_cluster))
   {
-    if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
-      _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
+    if(bd->showmask && GTK_IS_WIDGET(bd->showmask) && gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
+      _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
+    if(bd->mask_enable_toggle && GTK_IS_WIDGET(bd->mask_enable_toggle) && gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
+      _reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
   }
-  if(bd->masks_left_cluster)
-  {
-    if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_left_cluster)
-      _reparent_into(bd->mask_enable_toggle, bd->masks_left_cluster, FALSE, FALSE);
-  }
-  gtk_widget_set_visible(bd->masks_blend_header, TRUE);
+  if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header))
+    gtk_widget_set_visible(bd->masks_blend_header, TRUE);
 
-  _reparent_into(GTK_WIDGET(bd->relocatable_box), bd->iopw, FALSE, FALSE);
-  gtk_widget_set_visible(GTK_WIDGET(bd->relocatable_box), show);
+  if(bd->iopw && GTK_IS_WIDGET(bd->iopw))
+  {
+    _reparent_into(GTK_WIDGET(bd->relocatable_box), bd->iopw, FALSE, FALSE);
+    gtk_widget_set_visible(GTK_WIDGET(bd->relocatable_box), show);
+  }
   // back in the module's own expander. When that is where the panel actually
   // lives (embedded), the in-header arrow keeps working, now folding the panel
   // body away in place; when the box only landed here because this module lost
@@ -441,11 +450,18 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   {
     GtkBox *toggle_box = darktable.develop->proxy.masks_flexi_host.toggle_box;
     if(toggle_box)
+    {
       _reparent_into(bd->mask_enable_toggle, GTK_WIDGET(toggle_box), FALSE, FALSE);
+      gtk_widget_show(bd->mask_enable_toggle);
+      gtk_widget_show(GTK_WIDGET(toggle_box));
+    }
     GtkBox *actions_box = darktable.develop->proxy.masks_flexi_host.actions_box;
     if(actions_box)
     {
-      _reparent_into(bd->suppress, GTK_WIDGET(actions_box), FALSE, FALSE);
+      _reparent_into(bd->showmask, GTK_WIDGET(actions_box), FALSE, FALSE);
+      const gboolean is_mask_enabled = (module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
+      gtk_widget_set_visible(bd->showmask, is_mask_enabled && !module->hide_enable_button);
+      gtk_widget_show(GTK_WIDGET(actions_box));
     }
     gtk_widget_set_visible(bd->masks_blend_header, FALSE);
 
@@ -460,13 +476,10 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   {
     if(bd->masks_right_cluster)
     {
-      if(gtk_widget_get_parent(bd->suppress) != bd->masks_right_cluster)
-        _reparent_into(bd->suppress, bd->masks_right_cluster, FALSE, FALSE);
-    }
-    if(bd->masks_left_cluster)
-    {
-      if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_left_cluster)
-        _reparent_into(bd->mask_enable_toggle, bd->masks_left_cluster, FALSE, FALSE);
+      if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
+        _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
+      if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
+        _reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
     }
     gtk_widget_set_visible(bd->masks_blend_header, TRUE);
     // hosted elsewhere now -- drop the embedded inset, the host already
@@ -498,10 +511,14 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
     _masks_header_apply_side(bd, pos == MASKS_PANEL_POS_RIGHT);
   }
-  else
+  else if(pos == MASKS_PANEL_POS_EMBEDDED)
+  {
+    gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
+    _masks_header_apply_side(bd, FALSE);
+  }
+  else // MASKS_PANEL_POS_UTILITY
   {
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
-    _masks_header_apply_side(bd, FALSE);
   }
 }
 

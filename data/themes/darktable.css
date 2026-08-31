@@ -604,11 +604,16 @@ dialog .sidebar row:selected:hover label,
   background-color: @plugin_bg_color;
 }
 
-.dt_plugin_ui_main,
+.dt_plugin_ui_main:not(#masks-flexi-host-content),
 #blending-box,
 #guides-module-combobox
 {
   padding: 0.28em 0.65em;
+}
+
+#masks-flexi-host-content
+{
+  padding: 0;
 }
 
 /* #blending-tabs (the "blend mask" header): thicker when docked in dedicated
