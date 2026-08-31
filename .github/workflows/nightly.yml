@@ -11,7 +11,7 @@ permissions:
 
 jobs:
   AppImage:
-    if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'darktable-org/darktable' || github.repository == 'masterpiga/darktable' || github.event_name == 'workflow_dispatch'
     name: Nightly darktable AppImage
     runs-on: ${{ matrix.os }}
     strategy:
@@ -194,7 +194,7 @@ jobs:
           retention-days: 1
 
   Windows:
-    if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'darktable-org/darktable' || github.repository == 'masterpiga/darktable' || github.event_name == 'workflow_dispatch'
     name: Nightly darktable Windows
     runs-on: ${{ matrix.os }}
     strategy:
@@ -342,11 +342,11 @@ jobs:
           retention-days: 1
 
   macOS:
-    if: github.repository == 'darktable-org/darktable' || github.event_name == 'workflow_dispatch'
+    if: github.repository == 'darktable-org/darktable' || github.repository == 'masterpiga/darktable' || github.event_name == 'workflow_dispatch'
     name: Nightly darktable macOS
     runs-on: ${{ matrix.build.os }}
     strategy:
-      fail-fast: true
+      fail-fast: false
       matrix:
         build:
           - { os: macos-14,       xcode: 16.2, deployment: 14.0 } # AppleClang 16, arm64
@@ -390,6 +390,22 @@ jobs:
           cd src/.ci
           export HOMEBREW_NO_INSTALL_UPGRADE=1
           brew bundle --verbose || true
+          if ! brew list exiv2 &>/dev/null; then
+            git clone --branch v0.28.9 --depth 1 https://github.com/Exiv2/exiv2 src-exiv2
+            cmake -S src-exiv2 -B src-exiv2/build -G Ninja \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DBUILD_SHARED_LIBS=ON \
+              -DEXIV2_ENABLE_BMFF=ON \
+              -DEXIV2_ENABLE_NLS=ON \
+              -DEXIV2_ENABLE_VIDEO=OFF \
+              -DEXIV2_BUILD_SAMPLES=OFF \
+              -DEXIV2_BUILD_UNIT_TESTS=OFF \
+              -DEXIV2_ENABLE_INIH=OFF \
+              -DCMAKE_INSTALL_PREFIX=$(brew --prefix)
+            cmake --build src-exiv2/build
+            sudo cmake --install src-exiv2/build
+            rm -rf src-exiv2
+          fi
 
           # Rebuild GraphicsMagick for macOS bundling
           export HOMEBREW_NO_INSTALL_FROM_API=1
