@@ -9,7 +9,7 @@ renders the same edit differently depending on whether OpenCL is enabled.
 |---|---|---|
 | 1 | the OpenCL path publishes a stale raster mask | **fixed and merged** (`f54402ea96`) |
 | 2 | JzCzhz hue is ill-conditioned in the shared JzAzBz transform | diagnosed; fix written and measured in isolation, not implemented |
-| 3 | mask feathering is near-singular for grey guides at guide weight 100 | diagnosed, localised and **measured**; the fix is a rendering decision, not a numerical one |
+| 3 | mask feathering is near-singular for grey guides at guide weight 100 | diagnosed and measured; **no patch proposed** -- new edits are already unaffected, old ones cannot be fixed without changing their rendering |
 
 They are ordered by how much evidence stands behind them, strongest first.
 
@@ -207,11 +207,28 @@ A 14x improvement on Az/Bz and **54x on hue**. It is also more accurate in
 absolute terms, not merely more consistent -- less cancellation means closer to
 the true value on both paths.
 
-**This has been validated in isolation, not yet implemented in darktable.**
-That is deliberate: `dt_XYZ_2_JzAzBz` is used well beyond blending
-(`colorbalancergb`, `colorequal`, `diffuse`, the JzCzhz colour picker), so it
-belongs in its own upstream change with its own review, not bundled into a mask
-branch.
+**Implemented and measured on real edits.** The patch is one commit against
+master, touching `src/common/colorspaces_inline_conversions.h` and
+`data/kernels/colorspace.h`. Replaying two contributed libraries with it:
+
+| corpus | edits where classic disagrees with itself | |
+|---|---:|---|
+| akgt94 | 274 -> **32** | -88% |
+| kofa_1 | 135 -> **27** | -80% |
+
+350 divergent edits down to 59, no errors, and no edit whose own CPU/OpenCL gap
+widened. Those are real harvested edits that rendered differently with OpenCL
+enabled than without, and now do not.
+
+The residual is expected and is not this conversion: some of it is the
+feathering guided filter (finding 3), and some is `_blendif_compute_factor`'s
+hard `<=` against a slider limit, which swings 0 to 1 on an input difference of
+5e-07 and is a separate issue.
+
+It stays its own change rather than being bundled into a mask branch, because
+`dt_XYZ_2_JzAzBz` is used well beyond blending (`colorbalancergb`,
+`colorequal`, `diffuse`, the JzCzhz colour picker) and deserves its own
+review.
 
 ### Does it break existing edits?
 
@@ -373,7 +390,7 @@ That also explains the `feather_version` result: version 1 does not merely
 rescale, it makes `eps` relatively 25x larger, which is a real conditioning
 improvement, and the divergence falls 41x.
 
-### The proposed fix, and what measuring it showed
+### The proposed fix, measured -- and why there is nothing to ship
 
 The regularization has to be **relative to the guide's scale** rather than
 absolute. Implemented as a floor on the covariance diagonal proportional to what
@@ -391,48 +408,56 @@ was subtracted (`floor * mean^2`, added identically in `guided_filter.c` and
 
 Monotonic, with no threshold at which it snaps clean: the disagreement is
 governed by how well-conditioned the solve is, exactly as the diagnosis says.
-Over the whole akgt94 corpus (2,521 edits), a 1e-03 floor takes the worst
-migrated CPU/OpenCL gap from **0.0649 to 0.00955**, a 6.8x improvement, and
-moves 12 edits from "differs" to "identical".
+Over the whole akgt94 corpus a 1e-03 floor takes the worst migrated CPU/OpenCL
+gap from 0.0649 to 0.00955.
 
-**The uncomfortable part, stated plainly.** A floor large enough to fix
-consistency is large enough to change rendering. At 1e-03 and a mid-grey guide
-the added term is ~40% of `eps` -- that is not a rounding correction, it is a
-different amount of feathering in flat regions. Conversely a floor small enough
-to be invisible (2^-20 adds 0.04% of `eps`) only buys 2.3x, leaving the gap at
-0.028, still 7x over 1/255. There is no value that is both invisible and
-sufficient, because the quantity being stabilized *is* the filter's own
-behaviour near flat guides.
+A floor large enough to fix consistency is also large enough to change
+rendering -- at 1e-03 the added term is a few percent of `eps` for a mid-grey
+guide -- so the obvious way to ship it is behind a `feather_version 2`, exactly
+as version 1 was introduced.
 
-So this cannot be fixed the way finding 2 can. It is not a more accurate way to
-evaluate the same function; it is a decision about how strongly to regularize,
-and any answer that fixes the CPU/OpenCL disagreement changes what feathering
-does on flat, near-achromatic guides.
+**That was implemented, and then measured against the right baseline, and it
+turns out to be pointless.** Every figure above compares against
+`feather_version 0`. A version gate, by construction, does not apply to
+version 0 edits -- they keep the version they were authored with. What it
+applies to is *new* edits, and those have defaulted to `feather_version 1`
+since it shipped. So the comparison that decides the question is version 1
+against version 2, on the 774 feathered edits of one library:
 
-### Recommendation
+| | median gap | p90 | max | over 1/255 |
+|---|---:|---:|---:|---:|
+| `feather_version 1` | 0.000159 | 0.000813 | 0.002515 | **0** |
+| `feather_version 2` | 0.000140 | 0.000341 | 0.002799 | **0** |
 
-Ship a `feather_version 2` whose `eps` is proportional to `guide_weight^2`
-(equivalently: apply the floor above with a value around 1e-03), leaving
-existing edits on their current version and their current rendering. This is the
-mechanism `feather_version 1` already used, for the same reason, and the numbers
-above give the constant a basis rather than a guess.
+Version 1 already has **no edit** whose CPU/OpenCL gap reaches the visible
+threshold. Version 2 tightens the ninetieth percentile, slightly worsens the
+worst case, and changes nothing that matters. The gate itself works -- replaying
+the unmodified corpus on the patched build reproduces the baseline exactly,
+1785 identical / 274 different / worst gap 0.0649 -- which is precisely why the
+change cannot reach anything it would help.
 
-What should *not* be done is to add a small floor ungated and call the problem
-solved: the measurement above shows that buys less than a factor of three and
-leaves the disagreement well above the visible threshold.
+### Where that leaves finding 3
+
+- **New edits are already fine.** They default to `feather_version 1`, and at
+  that setting the divergence is below the visible threshold across the corpus.
+  Nothing needs shipping for them.
+- **Existing `feather_version 0` edits -- 31% of the corpus -- cannot be fixed
+  without changing how they render.** That is not a numerical repair that can be
+  hidden behind a gate; the ill-conditioning *is* the filter's behaviour there.
+  The options are to leave them as they are (rendering consistently without
+  OpenCL, inconsistently with it), or to offer an explicit opt-in upgrade so the
+  user chooses per edit. Both are product decisions, not engineering ones.
+
+So finding 3 is reported here as a diagnosis, with no patch attached. The
+implementation exists and was measured; it is not proposed, because the
+measurement says it would buy nothing.
 
 ### Does it break existing edits?
 
-Version-gated, no -- that is the point of gating it. Existing edits keep
-`feather_version 0` or `1` and render exactly as they do now, including their
-CPU/OpenCL disagreement. New edits get the conditioned parameters.
-
-Left ungated it would break them, mildly but genuinely: flat, near-achromatic
-regions would feather slightly differently. That is a real change to how the
-filter behaves, not a change in its rounding.
-
-The experiment was implemented, measured and then **reverted** -- the branch
-carries none of it, and the numbers above are all that was wanted from it.
+Nothing is being proposed, so nothing breaks. Recorded for the reader who
+reaches for the same fix: gated, it changes nothing at all (measured above);
+ungated, it would change flat, near-achromatic regions in every feathered edit,
+which is a real rendering change and not a rounding one.
 
 
 ## What this means for flexi
