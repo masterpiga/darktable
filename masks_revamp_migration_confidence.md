@@ -6,19 +6,19 @@
      which merges a newly checked corpus into
      masks_revamp_migration_ledger.json and rewrites this file. -->
 
-_Last updated 2026-08-30, over 13 contributed libraries._
+_Last updated 2026-08-31, over 14 contributed libraries._
 
 ## Where we stand
 
-**0 migration failures in 7511 distinct configuration shapes &rarr; the failure rate is below 0.040% (1 in 2,507) at 95% confidence.**
+**0 migration failures in 7932 distinct configuration shapes &rarr; the failure rate is below 0.038% (1 in 2,648) at 95% confidence.**
 
 | | |
 |---|---:|
-| contributed libraries | 13 |
-| harvested edits | 58811 |
-| distinct configuration shapes | 7511 |
+| contributed libraries | 14 |
+| harvested edits | 61332 |
+| distinct configuration shapes | 7932 |
 | migration failures | 0 |
-| classic-GPU outliers | 290 |
+| classic-GPU outliers | 330 |
 | shapes proving nothing (inert/skipped) | 32 |
 
 Classic-GPU outliers are counted separately on purpose: there the CPU
@@ -46,6 +46,7 @@ its job rather than the measurement regressing.
 
 | corpus | recorded | edits | shapes | darktable |
 |---|---|---:|---:|---|
+| `akgt94` | 2026-08-31 | 2521 | 626 | 5.7.0+715~g7fde21688a-dirty |
 | `christian_pfister` | 2026-08-29 | 7765 | 1601 | 5.7.0+683~g2f70917066-dirty |
 | `dudo` | 2026-08-29 | 2466 | 824 | 5.7.0+683~g2f70917066-dirty |
 | `finestructure` | 2026-08-29 | 890 | 295 | 5.7.0+687~g33bf75f33c-dirty |
@@ -64,10 +65,10 @@ its job rather than the measurement regressing.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `uniform\|drawn` | 3103 | 14254 | 0 | 13 | 0.096% (1 in 1,036) |
-| `uniform\|drawn\|parametric` | 2934 | 32109 | 0 | 13 | 0.102% (1 in 979) |
-| `uniform\|parametric` | 1063 | 10464 | 0 | 13 | 0.281% (1 in 355) |
-| `uniform\|raster` | 396 | 1832 | 0 | 12 | 0.754% (1 in 132) |
+| `uniform\|drawn\|parametric` | 3259 | 34297 | 0 | 14 | 0.092% (1 in 1,088) |
+| `uniform\|drawn` | 3135 | 14339 | 0 | 14 | 0.096% (1 in 1,046) |
+| `uniform\|parametric` | 1076 | 10528 | 0 | 14 | 0.278% (1 in 359) |
+| `uniform\|raster` | 447 | 2016 | 0 | 13 | 0.668% (1 in 149) |
 | `drawn\|parametric\|raster` | 14 | 19 | 0 | 1 | _too few_ |
 | `uniform\|drawn\|raster` | 1 | 1 | 0 | 1 | _too few_ |
 | `uniform\|drawn\|flexi` | 0 | 47 | 0 | 2 | _too few_ |
@@ -77,18 +78,18 @@ its job rather than the measurement regressing.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `group` | 6750 | 25427 | 0 | 13 | 0.044% (1 in 2,253) |
-| `path` | 3848 | 13654 | 0 | 13 | 0.078% (1 in 1,284) |
-| `brush` | 2599 | 7388 | 0 | 12 | 0.115% (1 in 868) |
-| `group\|clone` | 2415 | 5697 | 0 | 12 | 0.124% (1 in 806) |
-| `gradient` | 1778 | 4752 | 0 | 12 | 0.168% (1 in 594) |
-| `ellipse` | 1591 | 5499 | 0 | 13 | 0.188% (1 in 531) |
-| `circle\|clone` | 1398 | 3228 | 0 | 11 | 0.214% (1 in 467) |
-| `path\|clone` | 833 | 2306 | 0 | 10 | 0.359% (1 in 278) |
-| `circle` | 708 | 1392 | 0 | 13 | 0.422% (1 in 236) |
-| `clone\|brush` | 535 | 820 | 0 | 11 | 0.558% (1 in 179) |
-| `clone\|ellipse` | 401 | 694 | 0 | 9 | 0.744% (1 in 134) |
-| `path\|non-clone` | 276 | 522 | 0 | 6 | 1.080% (1 in 92) |
+| `group` | 7150 | 27306 | 0 | 14 | 0.042% (1 in 2,387) |
+| `path` | 4078 | 14678 | 0 | 14 | 0.073% (1 in 1,361) |
+| `brush` | 2697 | 7594 | 0 | 13 | 0.111% (1 in 900) |
+| `group\|clone` | 2474 | 5828 | 0 | 13 | 0.121% (1 in 826) |
+| `gradient` | 1994 | 5539 | 0 | 13 | 0.150% (1 in 666) |
+| `ellipse` | 1704 | 5856 | 0 | 14 | 0.176% (1 in 569) |
+| `circle\|clone` | 1414 | 3266 | 0 | 12 | 0.212% (1 in 472) |
+| `path\|clone` | 839 | 2317 | 0 | 11 | 0.356% (1 in 280) |
+| `circle` | 756 | 1513 | 0 | 14 | 0.395% (1 in 252) |
+| `clone\|brush` | 537 | 823 | 0 | 12 | 0.556% (1 in 179) |
+| `clone\|ellipse` | 442 | 785 | 0 | 10 | 0.675% (1 in 148) |
+| `path\|non-clone` | 277 | 524 | 0 | 7 | 1.076% (1 in 92) |
 | `brush\|non-clone` | 108 | 176 | 0 | 6 | 2.736% (1 in 36) |
 | `circle\|non-clone` | 16 | 42 | 0 | 4 | _too few_ |
 | `512` | 1 | 83 | 0 | 1 | _too few_ |
@@ -98,11 +99,11 @@ its job rather than the measurement regressing.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `norm\|excl` | 6456 | 55189 | 0 | 13 | 0.046% (1 in 2,155) |
-| `norm\|excl\|masks_pos` | 975 | 3439 | 0 | 13 | 0.307% (1 in 325) |
-| `norm\|incl\|masks_pos` | 41 | 101 | 0 | 9 | 7.046% (1 in 14) |
-| `norm\|incl` | 27 | 54 | 0 | 7 | _too few_ |
-| `inv\|excl` | 7 | 23 | 0 | 4 | _too few_ |
+| `norm\|excl` | 6813 | 57323 | 0 | 14 | 0.044% (1 in 2,274) |
+| `norm\|excl\|masks_pos` | 1035 | 3819 | 0 | 14 | 0.289% (1 in 345) |
+| `norm\|incl\|masks_pos` | 42 | 104 | 0 | 10 | 6.884% (1 in 14) |
+| `norm\|incl` | 29 | 57 | 0 | 8 | _too few_ |
+| `inv\|excl` | 8 | 24 | 0 | 5 | _too few_ |
 | `inv\|incl` | 4 | 4 | 0 | 4 | _too few_ |
 | `inv\|excl\|masks_pos` | 1 | 1 | 0 | 1 | _too few_ |
 
@@ -110,8 +111,8 @@ its job rather than the measurement regressing.
 
 | | shapes | edits | failures | contributors | 95% upper bound |
 |---|---:|---:|---:|---:|---|
-| `first instance` | 4049 | 24801 | 0 | 13 | 0.074% (1 in 1,352) |
-| `second instance` | 3462 | 34010 | 0 | 13 | 0.086% (1 in 1,156) |
+| `first instance` | 4161 | 25309 | 0 | 14 | 0.072% (1 in 1,389) |
+| `second instance` | 3771 | 36023 | 0 | 14 | 0.079% (1 in 1,259) |
 
 ## Coverage gaps
 
@@ -129,14 +130,14 @@ contributors for.**
 | `inv\|excl\|masks_pos` | 1 | 1 |
 | `uniform\|drawn\|raster` | 1 | 1 |
 | `inv\|incl` | 4 | 4 |
-| `inv\|excl` | 7 | 4 |
+| `inv\|excl` | 8 | 5 |
 | `drawn\|parametric\|raster` | 14 | 1 |
 | `circle\|non-clone` | 16 | 4 |
-| `norm\|incl` | 27 | 7 |
+| `norm\|incl` | 29 | 8 |
 
 ## What this still cannot tell you
 
-Contributors are the real sampling unit and there are 13 of them.
+Contributors are the real sampling unit and there are 14 of them.
 Shapes within one library stay correlated even after collapsing, so
 the headline bound is optimistic as a statement about darktable users
 at large. More *libraries* widen coverage far faster than more edits

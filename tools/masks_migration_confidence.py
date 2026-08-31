@@ -191,11 +191,12 @@ def _verify_outcome(row):
       'cpu_fail'       -- migration changed the mask on the CPU: a real failure
       'gpu_regression' -- migration widened this edit's own CPU/GPU gap
       'classic_gpu'    -- classic GPU render is the outlier, migration is not
+      'postproc_gpu'   -- the gap widened, but only through a post-mask stage
+                          that classic runs too (measured, see below)
 
-    The last is the discriminator that keeps a pre-existing OpenCL bug in
-    *classic* blending from being charged to migration. It is only reached when
-    the CPU comparison is clean and the migrated render is the one agreeing
-    with the CPU; anything else lands in a failure bucket.
+    The last two are the discriminators that keep a pre-existing OpenCL bug in
+    *classic* blending from being charged to migration. Both are only reached
+    when the CPU comparison is clean; anything else lands in a failure bucket.
     """
     if row.get("result") == "skipped":
         return "skipped"
@@ -217,7 +218,29 @@ def _verify_outcome(row):
         before = row.get("dev_diff_before", 0.0)
         after = row.get("dev_diff_after", 0.0)
         if after - before > EPS:
-            return "gpu_regression"
+            # A widened CPU/GPU gap has two possible authors. Either migration
+            # made the migrated pipeline inconsistent -- which is a failure --
+            # or a stage that runs after the mask and is identical on both
+            # sides of the migration diverges between CPU and OpenCL, and
+            # merely got handed a slightly different input. Feathering is the
+            # one that does this: a guided filter with separate CPU and OpenCL
+            # implementations, and it amplifies.
+            #
+            # The verifier settles it by measurement rather than by argument:
+            # for exactly these edits it re-renders the migrated pair with the
+            # post-processing off. If the gap survives, it is migration's. If
+            # it collapses, the amplifier is a stage classic runs too, and
+            # charging it here would book a pre-existing rendering divergence
+            # against the migration.
+            #
+            # An older report without the probe has no such evidence, so it is
+            # charged -- the statistic must not improve just because the data
+            # is older than the check.
+            if not row.get("nopost_ran"):
+                return "gpu_regression"
+            if row.get("dev_diff_after_nopost", 0.0) > EPS:
+                return "gpu_regression"
+            return "postproc_gpu"
         if row.get("gpu_max_diff", 0.0) > EPS:
             return "classic_gpu"
 
@@ -445,7 +468,7 @@ class Shape:
         counts = self.outcomes[check]
         if any(counts[o] for o in FAILURE_OUTCOMES):
             return "fail"
-        if counts["classic_gpu"]:
+        if counts["classic_gpu"] or counts["postproc_gpu"]:
             return "classic_gpu"
         if counts["ok"]:
             return "ok"
