@@ -109,6 +109,10 @@ typedef struct
   double worst_dev_before;       // worst CPU/GPU gap on classic edits
   double worst_dev_after;        // ... and on migrated ones
   int dev_gap_widened;           // migrated gap worse than classic by >1/255
+  // ... and how many of those survive with the mask post-processing switched
+  // off, i.e. are migration's to answer for rather than a downstream stage's
+  // (see dev_diff_after_nopost)
+  int dev_gap_widened_own;
 } verify_stats_t;
 
 // ---------------------------------------------------------------------------
@@ -1030,6 +1034,23 @@ typedef struct
   // alarming.
   double dev_diff_before;
   double dev_diff_after;
+
+  /* The migrated gap again, with the mask post-processing switched off --
+     measured only for the few edits where the gap widened past the threshold,
+     which is what makes the extra pair of renders affordable.
+     `nopost_ran` says whether the number means anything.
+
+     A widened gap has two possible authors and the two numbers above cannot
+     tell them apart. Either migration made the migrated pipeline itself
+     inconsistent across CPU and OpenCL -- a real defect -- or a stage that runs
+     *after* the mask, identically on both sides of the migration, diverges
+     between CPU and OpenCL and merely got handed a slightly different input.
+     Feathering is the one that matters: it is a guided filter with separate CPU
+     and OpenCL implementations, and it amplifies. Re-rendering without it
+     answers the question by measurement: if the gap survives, migration owns
+     it; if it collapses to nothing, the post-processing does. */
+  gboolean nopost_ran;
+  double dev_diff_after_nopost;
 } edit_report_t;
 
 static void _verify_edit(JsonObject *edit, edit_report_t *rep)
@@ -1175,6 +1196,45 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
     }
     rep->dev_diff_before = _max_abs_diff(before, before_cl, npix);
     rep->dev_diff_after = _max_abs_diff(after, after_cl, npix);
+
+    // Only when the gap actually widened: re-render the migrated pair with the
+    // mask post-processing off, to find out whether migration or a shared
+    // downstream stage owns the widening (see dev_diff_after_nopost). Migration
+    // leaves these fields alone -- feathering and friends stay in blend_params
+    // for a migrated edit exactly as they were -- so zeroing them here disables
+    // the same stages on both sides, and _render_mask commits the params afresh
+    // on every call.
+    if(rep->dev_diff_after - rep->dev_diff_before > VERIFY_EPS_EQUIVALENT)
+    {
+      dt_develop_blend_params_t *const p = r.module.blend_params;
+      const float keep_feather = p->feathering_radius;
+      const float keep_blur = p->blur_radius;
+      const float keep_contrast = p->contrast;
+      const float keep_brightness = p->brightness;
+      const float keep_details = p->details;
+
+      p->feathering_radius = 0.0f;
+      p->blur_radius = 0.0f;
+      p->contrast = 0.0f;
+      p->brightness = 0.0f;
+      p->details = 0.0f;
+
+      float *np = _render_mask(&r, NULL);
+      float *np_cl = _render_mask_cl(&r, NULL);
+      if(np && np_cl)
+      {
+        rep->nopost_ran = TRUE;
+        rep->dev_diff_after_nopost = _max_abs_diff(np, np_cl, npix);
+      }
+      dt_free_align(np);
+      dt_free_align(np_cl);
+
+      p->feathering_radius = keep_feather;
+      p->blur_radius = keep_blur;
+      p->contrast = keep_contrast;
+      p->brightness = keep_brightness;
+      p->details = keep_details;
+    }
   }
 
   // --- compare ----------------------------------------------------------
@@ -1467,7 +1527,14 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
         st.worst_dev_before = MAX(st.worst_dev_before, rep.dev_diff_before);
         st.worst_dev_after = MAX(st.worst_dev_after, rep.dev_diff_after);
         if(rep.dev_diff_after - rep.dev_diff_before > VERIFY_EPS_EQUIVALENT)
+        {
           st.dev_gap_widened++;
+          // the migrated pipeline disagreeing with itself once nothing runs
+          // after the mask is migration's own inconsistency; a widening that
+          // vanishes here was amplification by a stage classic runs too
+          if(!rep.nopost_ran || rep.dev_diff_after_nopost > VERIFY_EPS_EQUIVALENT)
+            st.dev_gap_widened_own++;
+        }
       }
     }
 
@@ -1487,7 +1554,8 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
                   " \"gpu_image_mean_diff\": %.9g,"
                   " \"gpu_image_differing_pixels\": %d,"
                   " \"dev_diff_before\": %.9g,"
-                  " \"dev_diff_after\": %.9g%s%s%s}",
+                  " \"dev_diff_after\": %.9g,"
+                  " \"nopost_ran\": %s, \"dev_diff_after_nopost\": %.9g%s%s%s}",
               first_report ? "" : ",", i,
               _obj_str(edit, "operation", "?"),
               _result_name(rep.result),
@@ -1502,6 +1570,7 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
               rep.gpu_image_max_diff, rep.gpu_image_mean_diff,
               rep.gpu_image_differing_pixels,
               rep.dev_diff_before, rep.dev_diff_after,
+              rep.nopost_ran ? "true" : "false", rep.dev_diff_after_nopost,
               rep.skip_reason ? ", \"reason\": \"" : "",
               rep.skip_reason ? rep.skip_reason : "",
               rep.skip_reason ? "\"" : "");
@@ -1560,7 +1629,8 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
             st.worst_gpu_image_differing_pixels);
     fprintf(rf, "    \"worst_dev_gap_classic\": %.9g,\n", st.worst_dev_before);
     fprintf(rf, "    \"worst_dev_gap_migrated\": %.9g,\n", st.worst_dev_after);
-    fprintf(rf, "    \"dev_gap_widened\": %d\n", st.dev_gap_widened);
+    fprintf(rf, "    \"dev_gap_widened\": %d,\n", st.dev_gap_widened);
+    fprintf(rf, "    \"dev_gap_widened_own\": %d\n", st.dev_gap_widened_own);
     fputs("  }", rf);
   }
 
@@ -1614,6 +1684,9 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
     printf("[verify]   CPU vs GPU gap, migrated : %.9g\n", st.worst_dev_after);
     printf("[verify]   edits where migration widened that gap by >1/255 : %d\n",
            st.dev_gap_widened);
+    if(st.dev_gap_widened)
+      printf("[verify]     of those, still widened with mask post-processing off"
+             " (migration's own) : %d\n", st.dev_gap_widened_own);
   }
   else
     printf("[verify] GPU: not replayed (no OpenCL device)\n");
