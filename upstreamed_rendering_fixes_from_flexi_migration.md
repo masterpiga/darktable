@@ -452,6 +452,25 @@ So finding 3 is reported here as a diagnosis, with no patch attached. The
 implementation exists and was measured; it is not proposed, because the
 measurement says it would buy nothing.
 
+**And the upgrade path for the version 0 edits already exists, in the right
+place.** `_blendop_blendif_feathering_callback` bumps an edit from version 0 to
+version 1 when the user moves the feathering slider (blend_gui.c). That is the
+correct trigger, and worth stating explicitly since it is easy to reach for
+something broader: version 0 -> 1 changes the guide weight from 100 to 10 and
+eps from 1.0 to 0.5, which is a change in feathering strength rather than in
+rounding, so it should happen when the user is deliberately adjusting
+feathering -- not on merely opening an image, which would alter the render, dirty
+the history and desynchronise the edit from its own past exports without anyone
+asking. An edit nobody touches keeps rendering exactly as it always has; an edit
+somebody works on picks up the better-conditioned parameters as a side effect of
+the work.
+
+The one thing that remains unmeasured, should anyone want to migrate version 0
+edits en masse: how much a given edit actually changes when moved from version 0
+to version 1. The harness compares classic against migrated within a single
+render, so answering that needs a second pass at a different feather_version.
+Nobody should propose a bulk migration without that number.
+
 ### Does it break existing edits?
 
 Nothing is being proposed, so nothing breaks. Recorded for the reader who
