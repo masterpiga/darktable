@@ -16727,6 +16727,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                      G_CALLBACK(_flexi_inline_collapse_clicked), module);
     gtk_widget_set_no_show_all(bd->flexi_inline_collapse_btn, TRUE);
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
+    dt_action_define_iop(module, "blend`masks", N_("show/hide mask panel"),
+                         bd->flexi_inline_collapse_btn, &dt_action_def_button);
 
     // on/off toggle for the whole blend mask (DEVELOP_MASK_DISABLED vs
     // DEVELOP_MASK_ENABLED|DEVELOP_MASK_FLEXI) -- flexi is the only mask
@@ -16787,6 +16789,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     {
       gtk_widget_set_sensitive(GTK_WIDGET(presets_button), FALSE);
     }
+    dt_action_define_iop(module, "blend`masks", N_("preferences"),
+                         presets_button, &dt_action_def_button);
 
     bd->showmask = dt_iop_togglebutton_new(
       module, "blend`tools", N_("display mask and/or color channel"), NULL,
