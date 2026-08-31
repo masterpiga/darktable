@@ -8,7 +8,7 @@ renders the same edit differently depending on whether OpenCL is enabled.
 | | what | state |
 |---|---|---|
 | 1 | the OpenCL path publishes a stale raster mask | **fixed and merged** (`f54402ea96`) |
-| 2 | JzCzhz hue is ill-conditioned in the shared JzAzBz transform | diagnosed; fix written and measured in isolation, not implemented |
+| 2 | JzCzhz hue is ill-conditioned in the shared JzAzBz transform | **fixed and merged** (PR #22093) |
 | 3 | mask feathering is near-singular for grey guides at guide weight 100 | diagnosed and measured; **no patch proposed** -- new edits are already unaffected, old ones cannot be fixed without changing their rendering |
 
 They are ordered by how much evidence stands behind them, strongest first.
@@ -114,7 +114,31 @@ intent.
 behaviour to preserve.
 
 
-## Finding 2 -- JzCzhz hue diverges by design, not by drift
+## Finding 2 -- JzCzhz hue diverges by design, not by drift (FIXED, merged)
+
+Merged as PR #22093, in two commits: the cancellation-free rewrite of Az and
+Bz, then a follow-up that answers review comments -- the 1/10000 nit scaling
+became a multiply, and both paths stopped recomputing powers they already held.
+
+The follow-up was measured on the integration suite, all 179 tests rendered
+with both binaries on CPU and OpenCL. Where the conversion is exercised, the
+number of pixels on which a build disagrees *with itself* falls sharply:
+6821 -> 382 on `0120-blending-rgb-scene-2`, 2880 -> 76 on
+`0119-blending-rgb-scene-1`, 3218 -> 2055 on `0083-colorbalancergb`. 162 tests
+are untouched.
+
+The precision is not free: on `colorbalancergb` at 10mpix the module's own time
+rises 12% on both paths (OpenCL 0.021s -> 0.024s, median of 20 runs; CPU 0.506s
+-> 0.568s, min of 7). Three `log1p` and three `expm1` per pixel are the cost.
+Dropping the recomputed powers recovered about a third of the GPU overhead.
+
+Two integration tests change output by more than one 8-bit level
+(`0120-blending-rgb-scene-2`, max 15/255, and `0121-blending-rgb-scene-3`, max
+6/255), and their references need regenerating. Neither is new divergence: both
+render identically on CPU and OpenCL before and after. The cause is
+`_blendif_compute_factor`'s hard `<=` against the slider limit, which swings
+0 -> 1 on an input difference of 5e-07, so an ulp of movement in the conversion
+becomes a whole mask step.
 
 ### The problem
 
@@ -498,8 +522,8 @@ Consequences:
   Confirmed by the verifier -- `dev_diff_after` (migrated CPU vs migrated GPU) is
   ~0 on every one of the 61 edits where classic diverges.
 - **Finding 2 cannot occur** in a migrated edit: the JzCzhz conversion runs once,
-  on the host, for both pipes. Fixing it upstream would still be worth doing --
-  every non-mask consumer of JzAzBz has the same problem -- but flexi masks do
+  on the host, for both pipes. Fixing it upstream was still worth doing --
+  every non-mask consumer of JzAzBz had the same problem -- but flexi masks do
   not depend on it.
 - **Finding 3 reaches flexi in full.** Feathering is the same guided filter
   wherever the mask came from, so a flexi mask feathered at guide weight 100
