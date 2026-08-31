@@ -173,6 +173,56 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   gtk_widget_show(toggle);
 }
 
+static gboolean _scroll_widget_into_view_idle(gpointer user_data)
+{
+  GtkWidget *widget = GTK_WIDGET(user_data);
+  if(!widget || !GTK_IS_WIDGET(widget) || !gtk_widget_get_realized(widget))
+    return G_SOURCE_REMOVE;
+
+  GtkWidget *sw = gtk_widget_get_ancestor(widget, GTK_TYPE_SCROLLED_WINDOW);
+  if(!sw) return G_SOURCE_REMOVE;
+
+  GtkAdjustment *adj = gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw));
+  if(!adj) return G_SOURCE_REMOVE;
+
+  GtkWidget *child = gtk_bin_get_child(GTK_BIN(sw));
+  if(GTK_IS_VIEWPORT(child))
+    child = gtk_bin_get_child(GTK_BIN(child));
+  if(!child) return G_SOURCE_REMOVE;
+
+  gint wx = 0, wy = 0;
+  if(!gtk_widget_translate_coordinates(widget, child, 0, 0, &wx, &wy))
+    return G_SOURCE_REMOVE;
+
+  gint total_height = gtk_widget_get_allocated_height(widget);
+  GtkWidget *extra = g_object_get_data(G_OBJECT(widget), "scroll-extra-child");
+  if(extra && GTK_IS_WIDGET(extra) && gtk_widget_get_visible(extra))
+    total_height += gtk_widget_get_allocated_height(extra);
+
+  const gdouble cur_val = gtk_adjustment_get_value(adj);
+  const gdouble page_size = gtk_adjustment_get_page_size(adj);
+  const gdouble lower = gtk_adjustment_get_lower(adj);
+  const gdouble upper = gtk_adjustment_get_upper(adj);
+
+  gdouble target_val = cur_val;
+
+  if(wy < cur_val)
+    target_val = wy;
+  else if(wy + total_height > cur_val + page_size)
+  {
+    if(total_height <= page_size)
+      target_val = wy + total_height - page_size;
+    else
+      target_val = wy;
+  }
+
+  target_val = CLAMP(target_val, lower, MAX(lower, upper - page_size));
+  if(target_val != cur_val)
+    gtk_adjustment_set_value(adj, target_val);
+
+  return G_SOURCE_REMOVE;
+}
+
 void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)user_data;
@@ -180,15 +230,30 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
 
   if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
   {
-    // while the panel is only being peeked at there is nothing to collapse --
+    // while the panel is only being peeked at there is nothing to collapse:
     // it is not open, it is being looked at, and it would fold by itself the
     // moment the pointer left. So the arrow pins it open instead: this is the
-    // one control in reach that can turn a look into a state.
+    // one control in reach that can turn a look into a state
     const gboolean peeking = dt_ui_flexi_panel_is_peeking(darktable.gui->ui);
-    // ...and otherwise it folds the panel away to the canvas corner icon,
-    // which is then the way back -- one-way, unlike the embedded arrow below.
-    // Either way dt_ui_flexi_panel_set_collapsed handles the edit-mode stash.
-    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, !peeking, TRUE, TRUE);
+    const gboolean collapsed = dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
+    if(peeking)
+      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
+    else
+      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, !collapsed, TRUE, TRUE);
+    return;
+  }
+
+  if(pos == MASKS_PANEL_POS_UTILITY)
+  {
+    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
+    if(host)
+    {
+      const gboolean exp =
+        host->expander && dtgtk_expander_get_expanded(DTGTK_EXPANDER(host->expander));
+      dt_lib_gui_set_expanded(host, !exp);
+      if(!exp && host->expander)
+        g_idle_add(_scroll_widget_into_view_idle, host->expander);
+    }
     return;
   }
 
@@ -202,6 +267,12 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
   _masks_panel_set_collapsed_pref(collapsed);
   _masks_embedded_apply_collapsed(module, collapsed);
   dt_iop_gui_blend_masks_panel_collapsed(collapsed);
+  if(!collapsed && bd && bd->masks_blend_header)
+  {
+    g_object_set_data(G_OBJECT(bd->masks_blend_header), "scroll-extra-child",
+                      bd->masks_panel_body);
+    g_idle_add(_scroll_widget_into_view_idle, bd->masks_blend_header);
+  }
 }
 
 // While the panel is only being peeked at, its collapse arrow pins it open
