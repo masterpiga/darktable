@@ -1284,8 +1284,13 @@ int dt_init(int argc,
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
-      else if(!strcmp(argv[k], "--harvest-masks-xmp") && argc > k + 2)
+      else if(!strcmp(argv[k], "--harvest-masks-xmp"))
       {
+        if(argc <= k + 2 || argv[k + 1][0] == '-' || argv[k + 2][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         harvest_masks_xmp_dir = argv[++k];
         harvest_masks_output = argv[++k];
         argv[k - 2] = NULL;
@@ -1294,32 +1299,57 @@ int dt_init(int argc,
         // handled below, before anything opens a database
         continue;
       }
-      else if(!strcmp(argv[k], "--harvest-masks") && argc > k + 1)
+      else if(!strcmp(argv[k], "--harvest-masks"))
       {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         harvest_masks_output = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
-      else if(!strcmp(argv[k], "--verify-masks") && argc > k + 1)
+      else if(!strcmp(argv[k], "--verify-masks"))
       {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         verify_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
-      else if(!strcmp(argv[k], "--roundtrip-masks") && argc > k + 1)
+      else if(!strcmp(argv[k], "--roundtrip-masks"))
       {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         roundtrip_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
-      else if(!strcmp(argv[k], "--styleapply-masks") && argc > k + 1)
+      else if(!strcmp(argv[k], "--styleapply-masks"))
       {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         styleapply_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
-      else if(!strcmp(argv[k], "--check-masks") && argc > k + 1)
+      else if(!strcmp(argv[k], "--check-masks"))
       {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
         check_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
