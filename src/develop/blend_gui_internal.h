@@ -253,6 +253,25 @@ dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
                                                  const gboolean out_used,
                                                  const gboolean boost_enabled);
 
+/** state transition decisions for the mask panel and corner icon */
+typedef struct dt_masks_panel_state_t
+{
+  gboolean want_hosted;
+  gboolean panel_collapsed;
+  gboolean corner_icon_visible;
+  gboolean corner_icon_active;
+} dt_masks_panel_state_t;
+
+dt_masks_panel_state_t _model_masks_panel_state(const int pos,
+                                                const gboolean is_focused,
+                                                const gboolean has_masking,
+                                                const gboolean is_expanded,
+                                                const gboolean mask_active,
+                                                const gboolean panel_pref_collapsed);
+
+gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
+                                            const gboolean is_peeking_or_collapsed);
+
 /** group numbering: identity that must survive a group emptying and refilling */
 int _op_index_for_state(const int state);
 int _group_ord_max_for_op(dt_iop_module_t *module, const int opidx);

@@ -236,6 +236,12 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
     // one control in reach that can turn a look into a state
     const gboolean peeking = dt_ui_flexi_panel_is_peeking(darktable.gui->ui);
     const gboolean collapsed = dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
+    if(module && _model_masks_pin_should_expand_iop(module->expanded, peeking || collapsed))
+    {
+      const gboolean collapse_others = dt_conf_get_bool("darkroom/ui/single_module");
+      dt_iop_gui_set_expanded(module, TRUE, collapse_others);
+    }
+
     if(peeking)
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
     else
@@ -391,12 +397,52 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed)
 // preference IS "embedded", or because it used to be hosted elsewhere
 // (utility/left/right) and just lost focus -- both are the same case from
 // the user's point of view (BUG, previously only the first was covered).
+dt_masks_panel_state_t _model_masks_panel_state(const int pos,
+                                                const gboolean is_focused,
+                                                const gboolean has_masking,
+                                                const gboolean is_expanded,
+                                                const gboolean mask_active,
+                                                const gboolean panel_pref_collapsed)
+{
+  dt_masks_panel_state_t s = { 0 };
+  s.want_hosted = (pos != MASKS_PANEL_POS_EMBEDDED) && is_focused && has_masking;
+  if(s.want_hosted)
+  {
+    // the saved expanded/collapsed state is relevant only if masking is enabled;
+    // with masking disabled, the masking panel is collapsed by default
+    s.panel_collapsed = !is_expanded || !mask_active || panel_pref_collapsed;
+    s.corner_icon_visible = s.panel_collapsed && (pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT);
+    s.corner_icon_active = mask_active;
+  }
+  else if(pos == MASKS_PANEL_POS_EMBEDDED && is_focused && has_masking)
+  {
+    s.panel_collapsed = !is_expanded || !mask_active || panel_pref_collapsed;
+    s.corner_icon_visible = FALSE;
+    s.corner_icon_active = mask_active;
+  }
+  else
+  {
+    s.panel_collapsed = TRUE;
+    s.corner_icon_visible = FALSE;
+    s.corner_icon_active = FALSE;
+  }
+  return s;
+}
+
+gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
+                                            const gboolean is_peeking_or_collapsed)
+{
+  return !is_expanded && is_peeking_or_collapsed;
+}
+
 void _masks_flexi_release(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd->relocatable_box || !GTK_IS_WIDGET(bd->relocatable_box)) return;
-  const gboolean show = darktable.develop->gui_module == module;
+
+  const gboolean is_focused = darktable.develop && darktable.develop->gui_module == module;
+  const gboolean show = is_focused && module->expanded;
 
   const gboolean was_hosted =
     darktable.develop->proxy.masks_flexi_host.hosted_module == module;
@@ -427,7 +473,9 @@ void _masks_flexi_release(dt_iop_module_t *module)
   // the right-dock mirroring is that dock's alone -- back home, the header
   // reads left-to-right like every other module's
   _masks_header_apply_side(bd, FALSE);
-  _masks_embedded_apply_collapsed(module, embedded && _masks_panel_collapsed_pref());
+  const gboolean mask_active =
+    module->blend_params && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
+  _masks_embedded_apply_collapsed(module, embedded && (!module->expanded || !mask_active || _masks_panel_collapsed_pref()));
   gtk_widget_set_visible(bd->masks_options_btn, TRUE);
   // back in the module's own content -- restore the embedded inset (see
   // darktable.css's "#blending-tabs.blending-tabs-embedded")
@@ -439,20 +487,27 @@ void _masks_flexi_release(dt_iop_module_t *module)
     // dev->gui_module is already updated to the new focus target (or NULL)
     // by the time this runs -- see dt_iop_gui_set_focus in imageop.c, which
     // sets it before calling lose_focus on the outgoing module
-    if(darktable.develop->gui_module)
+    dt_iop_module_t *next = darktable.develop->gui_module;
+    dt_iop_gui_blend_data_t *next_bd = next ? next->blend_data : NULL;
+    const gboolean next_wants_host = next && next_bd && next_bd->masks_support;
+    if(next_wants_host)
     {
-      // another module is about to (or already did) take over hosting --
-      // just re-apply whatever visibility the panel already had, not a new
-      // user choice, so don't persist it
+      const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+      const gboolean next_mask_active =
+        next->blend_params && next->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
+      const dt_masks_panel_state_t state =
+        _model_masks_panel_state(pos, TRUE, TRUE, next->expanded,
+                                 next_mask_active, _masks_panel_collapsed_pref());
+      dt_ui_flexi_panel_set_icon(darktable.gui->ui, state.corner_icon_active,
+                                 _mask_mode_label(next->blend_params ? next->blend_params->mask_mode : 0));
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui,
-                                      dt_ui_flexi_panel_is_collapsed(darktable.gui->ui),
-                                      FALSE, FALSE);
+                                      state.panel_collapsed,
+                                      TRUE, FALSE);
     }
     else
     {
-      // nothing is focused anymore: there's no content left to host, so
-      // hide the panel and its corner icon entirely instead of leaving an
-      // empty panel visible
+      // nothing is focused anymore (or the focused module has no masking):
+      // hide the panel and its corner icon entirely
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
     }
   }
@@ -478,16 +533,20 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
   const uint32_t mask_mode = module->blend_params->mask_mode;
   const gboolean is_focused = darktable.develop->gui_module == module;
-  const gboolean want_hosted = pos != MASKS_PANEL_POS_EMBEDDED && is_focused;
+  const gboolean has_masking = bd->masks_support;
+  const gboolean mask_active = mask_mode != DEVELOP_MASK_DISABLED;
+  const dt_masks_panel_state_t state =
+    _model_masks_panel_state(pos, is_focused, has_masking, module->expanded,
+                             mask_active, _masks_panel_collapsed_pref());
 
   GtkWidget *target = NULL;
-  if(want_hosted && pos == MASKS_PANEL_POS_UTILITY)
+  if(state.want_hosted && pos == MASKS_PANEL_POS_UTILITY)
   {
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
     GtkBox *content_box = darktable.develop->proxy.masks_flexi_host.content_box;
     if(host && content_box) target = GTK_WIDGET(content_box);
   }
-  else if(want_hosted) // LEFT / RIGHT
+  else if(state.want_hosted) // LEFT / RIGHT
   {
     target = dt_ui_flexi_panel_content(darktable.gui->ui);
     dt_ui_flexi_panel_set_side(darktable.gui->ui, pos == MASKS_PANEL_POS_RIGHT);
@@ -541,7 +600,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     // expansion from mask_mode alone, so a relocate (a focus change, a mode
     // change) re-expanded a lib the user had just folded -- and, since
     // dt_lib_gui_set_expanded persists, overwrote the folded state as it went.
-    if(host) _masks_utility_apply_collapsed(host, _masks_panel_collapsed_pref());
+    if(host) _masks_utility_apply_collapsed(host, state.panel_collapsed);
   }
   else
   {
@@ -566,10 +625,10 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
   {
-    dt_ui_flexi_panel_set_icon(darktable.gui->ui, mask_mode != DEVELOP_MASK_DISABLED,
+    dt_ui_flexi_panel_set_icon(darktable.gui->ui, state.corner_icon_active,
                                _mask_mode_label(mask_mode));
     // the shared state again -- applying it, not deciding it, so persist=FALSE
-    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, _masks_panel_collapsed_pref(),
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, state.panel_collapsed,
                                     TRUE, FALSE);
 
     // arrow points the direction the panel collapses toward (its docked side)
