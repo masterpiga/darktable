@@ -2673,14 +2673,26 @@ const dt_iop_gui_blendif_channel_t *dt_develop_blendif_channels_for_csp(const in
 }
 
 const char *slider_tooltip[] =
-  { N_("adjustment based on input received by this module:\n"
-       "* range defined by upper markers: blend fully\n"
-       "* range defined by lower markers: do not blend at all\n"
-       "* range between adjacent upper/lower markers: blend gradually"),
+  { N_("adjustment based on input image received by this module:\n"
+       "- upper markers: full opacity (100% mask)\n"
+       "- lower markers: zero opacity (0% mask)\n"
+       "- between upper/lower markers: opacity transition\n\n"
+       "drag marker to adjust (shift+drag to move range)\n"
+       "right-click marker for precise numeric entry\n"
+       "double-click to reset\n"
+       "press 'c' to toggle view of channel data\n"
+       "press 'm' to toggle mask view\n"
+       "press 'a' to toggle display modes"),
     N_("adjustment based on unblended output of this module:\n"
-       "* range defined by upper markers: blend fully\n"
-       "* range defined by lower markers: do not blend at all\n"
-       "* range between adjacent upper/lower markers: blend gradually") };
+       "- upper markers: full opacity (100% mask)\n"
+       "- lower markers: zero opacity (0% mask)\n"
+       "- between upper/lower markers: opacity transition\n\n"
+       "drag marker to adjust (shift+drag to move range)\n"
+       "right-click marker for precise numeric entry\n"
+       "double-click to reset\n"
+       "press 'c' to toggle view of channel data\n"
+       "press 'm' to toggle mask view\n"
+       "press 'a' to toggle display modes") };
 
 static void _rebuild_param_channel_buttons(dt_iop_module_t *module);
 
@@ -5963,6 +5975,76 @@ static void _paint_masks_bypass(cairo_t *cr,
                                 void *data)
 {
   dtgtk_cairo_paint_eye_toggle(cr, x, y, w, h, flags | CPF_ACTIVE, data);
+}
+
+// input channel icon for parametric editor rows (arrow entering module)
+static void _paint_param_input(cairo_t *cr,
+                               const gint x,
+                               const gint y,
+                               const gint w,
+                               const gint h,
+                               const gint flags,
+                               void *data)
+{
+  cairo_save(cr);
+  cairo_translate(cr, x, y);
+  cairo_scale(cr, w, h);
+  cairo_set_line_width(cr, 0.11);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+
+  // vertical target line / barrier on the right
+  cairo_move_to(cr, 0.82, 0.18);
+  cairo_line_to(cr, 0.82, 0.82);
+  cairo_stroke(cr);
+
+  // arrow shaft pointing into it
+  cairo_move_to(cr, 0.15, 0.5);
+  cairo_line_to(cr, 0.65, 0.5);
+  cairo_stroke(cr);
+
+  // arrowhead pointing right
+  cairo_move_to(cr, 0.42, 0.27);
+  cairo_line_to(cr, 0.65, 0.5);
+  cairo_line_to(cr, 0.42, 0.73);
+  cairo_stroke(cr);
+
+  cairo_restore(cr);
+}
+
+// output channel icon for parametric editor rows (arrow leaving module)
+static void _paint_param_output(cairo_t *cr,
+                                const gint x,
+                                const gint y,
+                                const gint w,
+                                const gint h,
+                                const gint flags,
+                                void *data)
+{
+  cairo_save(cr);
+  cairo_translate(cr, x, y);
+  cairo_scale(cr, w, h);
+  cairo_set_line_width(cr, 0.11);
+  cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
+  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+
+  // vertical source line / barrier on the left
+  cairo_move_to(cr, 0.18, 0.18);
+  cairo_line_to(cr, 0.18, 0.82);
+  cairo_stroke(cr);
+
+  // arrow shaft pointing out of it
+  cairo_move_to(cr, 0.35, 0.5);
+  cairo_line_to(cr, 0.85, 0.5);
+  cairo_stroke(cr);
+
+  // arrowhead pointing right
+  cairo_move_to(cr, 0.62, 0.27);
+  cairo_line_to(cr, 0.85, 0.5);
+  cairo_line_to(cr, 0.62, 0.73);
+  cairo_stroke(cr);
+
+  cairo_restore(cr);
 }
 
 // operator descriptors: the same icons (and order) the mask manager uses
@@ -12032,16 +12114,16 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
   if(ed->input_slot) gtk_widget_set_visible(ed->input_slot, show_input);
   if(ed->input_bypass_btn)
   {
-    gtk_widget_set_visible(ed->input_bypass_btn, show_input);
-    gtk_widget_set_opacity(ed->input_bypass_btn, show_bypass ? 1.0 : 0.0);
+    gtk_widget_set_visible(ed->input_bypass_btn, show_input && show_bypass);
+    gtk_widget_set_opacity(ed->input_bypass_btn, 1.0);
     gtk_widget_set_sensitive(ed->input_bypass_btn, show_bypass);
   }
   if(ed->output_lbl) gtk_widget_set_visible(ed->output_lbl, show_output);
   if(ed->output_slot) gtk_widget_set_visible(ed->output_slot, show_output);
   if(ed->output_bypass_btn)
   {
-    gtk_widget_set_visible(ed->output_bypass_btn, show_output);
-    gtk_widget_set_opacity(ed->output_bypass_btn, show_bypass ? 1.0 : 0.0);
+    gtk_widget_set_visible(ed->output_bypass_btn, show_output && show_bypass);
+    gtk_widget_set_opacity(ed->output_bypass_btn, 1.0);
     gtk_widget_set_sensitive(ed->output_bypass_btn, show_bypass);
   }
 
@@ -12131,10 +12213,7 @@ static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
     gchar *full_tip =
       g_strdup_printf("%s: %s  %s  %s  %s\n\n%s", in_out ? _("output") : _("input"),
                       range_text[0], range_text[1], range_text[2], range_text[3],
-                      _("double-click to reset.\n"
-                        "press 'a' to toggle available slider modes.\n"
-                        "press 'c' to toggle view of channel data.\n"
-                        "press 'm' to toggle mask view."));
+                      _(slider_tooltip[in_out]));
     gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider), full_tip);
     g_free(full_tip);
 
@@ -12261,10 +12340,7 @@ static void _param_row_slider_callback(GtkDarktableGradientSlider *slider,
   gchar *full_tip =
     g_strdup_printf("%s: %s  %s  %s  %s\n\n%s", in_out ? _("output") : _("input"),
                     range_text[0], range_text[1], range_text[2], range_text[3],
-                    _("double-click to reset.\n"
-                      "press 'a' to toggle available slider modes.\n"
-                      "press 'c' to toggle view of channel data.\n"
-                      "press 'm' to toggle mask view."));
+                    _(slider_tooltip[in_out]));
   gtk_widget_set_tooltip_text(GTK_WIDGET(slider), full_tip);
   g_free(full_tip);
 
@@ -13287,12 +13363,7 @@ static void _build_param_row_filter(dt_iop_gui_blendif_filter_t *sl, const int i
     gtk_overlay_add_overlay(GTK_OVERLAY(overlay), GTK_WIDGET(sl->label[k]));
   }
 
-  gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider),
-                              _("double-click to reset.\n"
-                                "press 'a' to toggle available slider modes.\n"
-                                "press 'c' to toggle view of channel data.\n"
-                                "press 'm' to toggle mask view."));
-  gtk_widget_set_tooltip_text(GTK_WIDGET(sl->head), _(slider_tooltip[in_out]));
+  gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider), _(slider_tooltip[in_out]));
 
   sl->head_compact = GTK_LABEL(dt_ui_label_new(in_out ? _("output") : _("input")));
   gtk_widget_set_tooltip_text(GTK_WIDGET(sl->head_compact), _(slider_tooltip[in_out]));
@@ -13473,9 +13544,9 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_grid_set_column_spacing(GTK_GRID(sliders_grid), DT_PIXEL_APPLY_DPI(4));
   gtk_grid_set_row_spacing(GTK_GRID(sliders_grid), DT_PIXEL_APPLY_DPI(2));
 
-  GtkWidget *input_lbl = dt_ui_label_new(_("input"));
-  gtk_label_set_xalign(GTK_LABEL(input_lbl), 0.0f);
-  dt_gui_add_class(input_lbl, "mask-param-channel-label");
+  GtkWidget *input_lbl = _make_icon_widget(_paint_param_input);
+  gtk_widget_set_tooltip_text(input_lbl, _(slider_tooltip[0]));
+  dt_gui_add_class(input_lbl, "mask-param-channel-icon");
   gtk_grid_attach(GTK_GRID(sliders_grid), input_lbl, 0, 0, 1, 1);
   ed->input_lbl = input_lbl;
 
@@ -13498,9 +13569,9 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_grid_attach(GTK_GRID(sliders_grid), input_bypass_btn, 2, 0, 1, 1);
   ed->input_bypass_btn = input_bypass_btn;
 
-  GtkWidget *output_lbl = dt_ui_label_new(_("output"));
-  gtk_label_set_xalign(GTK_LABEL(output_lbl), 0.0f);
-  dt_gui_add_class(output_lbl, "mask-param-channel-label");
+  GtkWidget *output_lbl = _make_icon_widget(_paint_param_output);
+  gtk_widget_set_tooltip_text(output_lbl, _(slider_tooltip[1]));
+  dt_gui_add_class(output_lbl, "mask-param-channel-icon");
   gtk_grid_attach(GTK_GRID(sliders_grid), output_lbl, 0, 1, 1, 1);
   ed->output_lbl = output_lbl;
 
