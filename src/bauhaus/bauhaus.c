@@ -3328,8 +3328,11 @@ static void _widget_get_preferred_height(GtkWidget *widget,
   dt_bauhaus_widget_t *w = (dt_bauhaus_widget_t *)widget;
   _margins_retrieve(w);
 
-  *minimum_height = w->margin.top + w->margin.bottom + w->padding.top + w->padding.bottom
-                    + darktable.bauhaus->line_height;
+  *minimum_height = w->margin.top + w->margin.bottom + w->padding.top + w->padding.bottom;
+  if(w->show_label || w->type != DT_BAUHAUS_SLIDER)
+  {
+    *minimum_height += darktable.bauhaus->line_height;
+  }
   if(w->type == DT_BAUHAUS_SLIDER)
   {
     // the lower thing to draw is indicator. See _draw_baseline for compute details

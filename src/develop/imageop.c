@@ -1369,6 +1369,7 @@ void dt_iop_gui_update_header(dt_iop_module_t *module)
   // set panel name to display correct multi-instance
   _iop_panel_name(module);
   dt_iop_gui_set_enable_button(module);
+  dt_iop_gui_blend_masks_panel_relocate(module);
 
   DT_LEAVE_GUI_UPDATE();
 }
@@ -3288,6 +3289,61 @@ static void _display_mask_indicator_callback(GtkToggleButton *bt,
   dt_iop_refresh_center(module);
 }
 
+static void _collect_mask_counts(const dt_develop_t *dev,
+                                 const dt_masks_form_t *form,
+                                 int *total,
+                                 int *circles,
+                                 int *ellipses,
+                                 int *paths,
+                                 int *gradients,
+                                 int *brushes,
+                                 int *objects,
+                                 int *rasters,
+                                 GHashTable *param_counts)
+{
+  if(!form || !dev) return;
+
+  if(form->type & DT_MASKS_GROUP)
+  {
+    for(const GList *l = form->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      const dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
+      if(child)
+      {
+        if(child->type & DT_MASKS_GROUP)
+        {
+          _collect_mask_counts(dev, child, total, circles, ellipses, paths,
+                               gradients, brushes, objects, rasters, param_counts);
+        }
+        else
+        {
+          (*total)++;
+          if(child->type & DT_MASKS_CIRCLE) (*circles)++;
+          else if(child->type & DT_MASKS_ELLIPSE) (*ellipses)++;
+          else if(child->type & DT_MASKS_PATH) (*paths)++;
+          else if(child->type & DT_MASKS_GRADIENT) (*gradients)++;
+          else if(child->type & DT_MASKS_BRUSH) (*brushes)++;
+#ifdef HAVE_AI
+          else if(child->type & DT_MASKS_OBJECT) (*objects)++;
+#endif
+          else if(child->type & DT_MASKS_RASTER) (*rasters)++;
+          else if(child->type & DT_MASKS_PARAMETRIC)
+          {
+            const char *label = dt_masks_parametric_type_label(child);
+            if(param_counts && label)
+            {
+              gpointer count_ptr = g_hash_table_lookup(param_counts, label);
+              g_hash_table_insert(param_counts, (gpointer)label,
+                                  GINT_TO_POINTER(GPOINTER_TO_INT(count_ptr) + 1));
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
                                         gint x,
                                         gint y,
@@ -3295,47 +3351,100 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
                                         GtkTooltip* tooltip,
                                         dt_iop_module_t *module)
 {
-  gboolean res = FALSE;
+  if(!module || !module->mask_indicator || !module->blend_params) return FALSE;
+
   const gboolean raster = module->blend_params->mask_mode & DEVELOP_MASK_RASTER;
-  if(module->mask_indicator)
+  int total = 0, circles = 0, ellipses = 0, paths = 0, gradients = 0;
+  int brushes = 0, objects = 0, rasters = 0;
+  GHashTable *param_counts = g_hash_table_new_full(g_str_hash, g_str_equal, NULL, NULL);
+
+  if(raster)
   {
-    gchar *type = _("unknown mask");
-    gchar *text;
-    const uint32_t mm = module->blend_params->mask_mode;
-    if((mm & DEVELOP_MASK_MASK) && (mm & DEVELOP_MASK_CONDITIONAL))
-      type=_("drawn + parametric mask");
-    else if(mm & DEVELOP_MASK_MASK)
-      type=_("drawn mask");
-    else if(mm & DEVELOP_MASK_CONDITIONAL)
-      type=_("parametric mask");
-    else if(mm & DEVELOP_MASK_RASTER)
-      type=_("raster mask");
-    else
-      dt_print(DT_DEBUG_PARAMS, "unknown mask mode '%u' in module '%s'", mm, module->op);
-    gchar *part1 = g_strdup_printf(_("this module has a `%s'"), type);
-    gchar *part2 = NULL;
-    if(raster && module->raster_mask.sink.source)
+    total = 1;
+    rasters = 1;
+  }
+  else
+  {
+    const dt_masks_form_t *grp =
+      dt_masks_get_from_id(module->dev, module->blend_params->mask_id);
+    _collect_mask_counts(module->dev, grp, &total, &circles, &ellipses, &paths,
+                         &gradients, &brushes, &objects, &rasters, param_counts);
+  }
+
+  gchar *part1 = NULL;
+  if(total == 0)
+  {
+    part1 = g_strdup(_("this module has a mask with 0 elements (uniform mask)"));
+  }
+  else
+  {
+    GString *breakdown = g_string_new(NULL);
+    if(circles > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             circles, (circles == 1 ? _("circle") : _("circles")));
+    if(ellipses > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             ellipses, (ellipses == 1 ? _("ellipse") : _("ellipses")));
+    if(paths > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             paths, (paths == 1 ? _("path") : _("paths")));
+    if(gradients > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             gradients, (gradients == 1 ? _("gradient") : _("gradients")));
+    if(brushes > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             brushes, (brushes == 1 ? _("brush") : _("brushes")));
+#ifdef HAVE_AI
+    if(objects > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             objects, (objects == 1 ? _("AI object") : _("AI objects")));
+#endif
+    if(rasters > 0)
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             rasters, (rasters == 1 ? _("raster") : _("rasters")));
+
+    GHashTableIter iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&iter, param_counts);
+    while(g_hash_table_iter_next(&iter, &key, &value))
     {
-      gchar *source = dt_history_item_get_name(module->raster_mask.sink.source);
-      part2 = g_strdup_printf(_("taken from module %s"), source);
-      g_free(source);
+      const int cnt = GPOINTER_TO_INT(value);
+      const char *label = (const char *)key;
+      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
+                             cnt, label);
     }
 
-    if(!raster && !part2)
-      part2 = g_strdup(_("click to display (module must be activated first)"));
-
-    if(part2)
-      text = g_strconcat(part1, "\n", part2, NULL);
+    if(total == 1)
+      part1 = g_strdup_printf(_("this module has a mask with 1 element (%s)"), breakdown->str);
     else
-      text = g_strdup(part1);
+      part1 = g_strdup_printf(_("this module has a mask with %d elements (%s)"), total, breakdown->str);
 
-    gtk_tooltip_set_text(tooltip, text);
-    res = TRUE;
-    g_free(part1);
-    g_free(part2);
-    g_free(text);
+    g_string_free(breakdown, TRUE);
   }
-  return res;
+  g_hash_table_destroy(param_counts);
+
+  gchar *part2 = NULL;
+  if(raster && module->raster_mask.sink.source)
+  {
+    gchar *source = dt_history_item_get_name(module->raster_mask.sink.source);
+    part2 = g_strdup_printf(_("taken from module %s"), source);
+    g_free(source);
+  }
+
+  if(!raster && !part2)
+    part2 = g_strdup(_("click to display (module must be activated first)"));
+
+  gchar *text;
+  if(part2)
+    text = g_strconcat(part1, "\n", part2, NULL);
+  else
+    text = g_strdup(part1);
+
+  gtk_tooltip_set_text(tooltip, text);
+  g_free(part1);
+  g_free(part2);
+  g_free(text);
+  return TRUE;
 }
 
 void dt_iop_add_remove_mask_indicator(dt_iop_module_t *module, gboolean add)

@@ -272,6 +272,21 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
 gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
                                             const gboolean is_peeking_or_collapsed);
 
+gboolean _model_masks_pin_should_enable_mask(const uint32_t mask_mode);
+
+char *_model_masks_corner_icon_tooltip(const char *module_name,
+                                       const char *instance_name,
+                                       const gboolean is_active,
+                                       const char *mask_label);
+
+char *_model_masks_panel_header_markup(const char *module_name,
+                                        const char *instance_name,
+                                        const gboolean is_hosted);
+
+char *_model_masks_inline_collapse_tooltip(const gboolean is_peeking,
+                                           const gboolean is_mask_active,
+                                           const int panel_pos);
+
 /** group numbering: identity that must survive a group emptying and refilling */
 int _op_index_for_state(const int state);
 int _group_ord_max_for_op(dt_iop_module_t *module, const int opidx);
