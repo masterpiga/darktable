@@ -628,6 +628,8 @@ dialog .sidebar row:selected:hover label,
 {
   padding: 0.45em 0.5em;
   min-height: 2em;
+  margin: 0;
+  border-bottom: none;
 }
 
 /* Embedded, this header sits directly below the module's own header, so the
@@ -1188,11 +1190,24 @@ button.mask-enable-toggle:checked
   padding: 0;
 }
 
+.blend-main-opacity-box
+{
+  margin-top: 2px;
+  margin-bottom: 2px;
+}
+
+.dt_bauhaus.blend-main-opacity-slider
+{
+  margin-top: 0;
+  margin-bottom: 0;
+  padding: 0;
+}
+
 /* interactive text percentage widget in row headers */
 .mask-inline-opacity-value
 {
-  margin: 0 4px;
-  padding: 1px 4px;
+  margin: 0 1px;
+  padding: 1px 3px;
   border-radius: 3px;
   color: alpha(@text_color, 0.85);
 }
@@ -1784,17 +1799,23 @@ notebook tabs,
 }
 
 .dt_plugin_ui #blending-tabs .dt_module_btn,
+.masks-flexi-host-header .dt_module_btn,
+.masks-flexi-host-header button,
 #guides-line .toggle
 {
-  min-height: 1.3em;
+  min-height: 1.35em;
+  min-width: 1.35em;
 }
 
 .dt_plugin_ui #blending-tabs .dt_module_btn,
+.masks-flexi-host-header .dt_module_btn,
+.masks-flexi-host-header button,
 #guides-line .dt_module_btn,
 #modules-tabs .dt_module_btn   /* This is needed separately to set a minimal width if panel is really narrow */
 {
   border-radius: 0;
-  min-width: 1.5em;
+  min-width: 1.35em;
+  min-height: 1.35em;
   margin: 0;
 }
 
@@ -2433,10 +2454,24 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
    than a thin separator line) is what actually sets it apart at a glance */
 #flexi-inline-collapse
 {
-  margin-right: 0.35em;
-  padding: 0.15em 0.3em;
+  margin: 0;
+  padding: 0.15em;
   background-color: alpha(@fg_color, 0.12);
   border-radius: 0.3em;
+  min-width: 1.35em;
+  min-height: 1.35em;
+}
+
+#flexi-inline-collapse.flexi-pin-left
+{
+  margin-right: 0.35em;
+  margin-left: 0;
+}
+
+#flexi-inline-collapse.flexi-pin-right
+{
+  margin-left: 0.35em;
+  margin-right: 0;
 }
 
 #flexi-inline-collapse:hover
@@ -2473,9 +2508,12 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   opacity: 0.65;
   background-color: transparent;
   border: none;
-  border-radius: 0;
+  border-radius: 0.3em;
   box-shadow: none;
   outline: none;
+  min-width: 1.35em;
+  min-height: 1.35em;
+  padding: 0.15em;
 }
 
 /* the halign side (left panel -> left edge, right panel -> right edge, see
@@ -2484,11 +2522,13 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
 #flexi-corner-icon.flexi-corner-icon-left
 {
   margin-left: 0.5em;
+  margin-right: 0;
 }
 
 #flexi-corner-icon.flexi-corner-icon-right
 {
   margin-right: 0.5em;
+  margin-left: 0;
 }
 
 #flexi-corner-icon:hover

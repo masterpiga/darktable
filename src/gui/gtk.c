@@ -136,7 +136,8 @@ typedef struct dt_ui_t
      Moved live between the two sides via gtk_box_reorder_child (see
      dt_ui_flexi_panel_set_side). */
   GtkWidget *flexi_panel_overlay;  // outer overlay (body + resize handle), packed into centerrow
-  GtkWidget *flexi_panel_body;     // vertical box: collapse-row header + flexi_content
+  GtkWidget *flexi_panel_body;     // vertical box: header + scroll (flexi_content)
+  GtkWidget *flexi_header;         // where blend_gui.c reparents flexi masks header into (sticky above scroll)
   GtkWidget *flexi_content;        // where blend_gui.c reparents flexi masks content into
   GtkWidget *flexi_handle;         // resize-handle drawing area, side toggled with the panel
   GtkWidget *flexi_corner_icon;    // lazily created, shown only while collapsed with content to show
@@ -4028,6 +4029,11 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   GtkWidget *widget = ui->flexi_panel_body = dtgtk_side_panel_new();
   gtk_widget_set_name(widget, "flexi");
 
+  ui->flexi_header = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_widget_set_name(ui->flexi_header, "flexi-panel-header-host");
+  gtk_box_pack_start(GTK_BOX(widget), ui->flexi_header, FALSE, FALSE, 0);
+  gtk_widget_show(ui->flexi_header);
+
   // scrolled window: gives vertical overflow scrolling like the LEFT/RIGHT
   // panels, and its scroll-event handler makes plain wheel-scroll respect
   // "darkroom/ui/sidebar_scroll_default" the same way theirs does (see
@@ -4116,9 +4122,14 @@ static void _flexi_ensure_corner_icon_side(dt_ui_t *ui)
   }
 }
 
+GtkWidget *dt_ui_flexi_panel_header(dt_ui_t *ui)
+{
+  return ui ? ui->flexi_header : NULL;
+}
+
 GtkWidget *dt_ui_flexi_panel_content(dt_ui_t *ui)
 {
-  return ui->flexi_content;
+  return ui ? ui->flexi_content : NULL;
 }
 
 void dt_ui_flexi_panel_set_side(dt_ui_t *ui, const gboolean right)
@@ -4148,13 +4159,19 @@ static void _flexi_update_corner_icon_tooltip(dt_ui_t *ui)
 {
   if(!ui->flexi_corner_icon) return;
   dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
-  const char *mod_name = module ? module->name() : _("blend mask");
+  const char *mname = module ? module->name() : _("blend mask");
+  const char *iname = module ? dt_iop_get_instance_name(module) : "";
+  gchar *mod_name = (iname && strlen(iname) > 0)
+    ? g_strdup_printf("%s (%s)", mname, iname)
+    : g_strdup(mname);
+
   gchar *tooltip = ui->flexi_corner_icon_active
     ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand, hover to peek"),
         mod_name, ui->flexi_corner_icon_mask_label ? ui->flexi_corner_icon_mask_label : _("active"))
-    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and expand, hover to peek"),
+    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and pin, hover to peek"),
         mod_name);
   gtk_widget_set_tooltip_text(ui->flexi_corner_icon, tooltip);
+  g_free(mod_name);
   g_free(tooltip);
 }
 

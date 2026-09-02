@@ -462,6 +462,8 @@ GtkWidget *dt_ui_snapshot(const struct dt_ui_t *ui);
 GtkWidget *dt_ui_main_window(const struct dt_ui_t *ui);
 /** \brief get the thumb table */
 struct dt_thumbtable_t *dt_ui_thumbtable(const struct dt_ui_t *ui);
+/** \brief flexi masks panel: header container for sticky header in dedicated panel */
+GtkWidget *dt_ui_flexi_panel_header(struct dt_ui_t *ui);
 /** \brief flexi masks panel: box to reparent flexi masks content into
     (see develop/blend_gui.c, plugins/darkroom/blend/masks_panel_position) */
 GtkWidget *dt_ui_flexi_panel_content(struct dt_ui_t *ui);

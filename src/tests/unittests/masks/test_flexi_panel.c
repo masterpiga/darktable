@@ -353,15 +353,15 @@ static void test_panel_state_expanded_module_respects_pref(void **state)
 }
 
 // when masking is disabled on a focused, expanded module:
-// - the panel defaults to collapsed even if the preference was expanded
-// - the corner icon is visible in its inactive state
+// - the panel respects user preference so blend mode and opacity controls remain accessible
+// - the corner icon is rendered in its inactive state
 static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
 {
   const dt_masks_panel_state_t s =
     _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, FALSE, FALSE);
   assert_true(s.want_hosted);
-  assert_true(s.panel_collapsed);
-  assert_true(s.corner_icon_visible);
+  assert_false(s.panel_collapsed);
+  assert_false(s.corner_icon_visible);
   assert_false(s.corner_icon_active);
 }
 
@@ -389,6 +389,121 @@ static void test_pinning_collapsed_module_expands_iop(void **state)
   assert_true(_model_masks_pin_should_expand_iop(FALSE, TRUE));
   assert_false(_model_masks_pin_should_expand_iop(TRUE, TRUE));
   assert_false(_model_masks_pin_should_expand_iop(FALSE, FALSE));
+}
+
+// overall module blend opacity slider uses 0..100 range and maps to 0..1 fraction
+static void test_main_opacity_badge_threshold(void **state)
+{
+  assert_int_equal(_model_badge_kind(100.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
+  assert_int_equal(_model_badge_kind(74.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
+  assert_int_equal(_model_badge_kind(10.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
+  assert_int_equal(_model_badge_kind(9.9f / 100.0f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
+  assert_int_equal(_model_badge_kind(0.0f / 100.0f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
+}
+
+// in utility position, panel state follows user preference and does not collapse when IOP is collapsed
+static void test_panel_state_utility_position_follows_pref(void **state)
+{
+  // focused & expanded module in utility position: open when pref is open
+  const dt_masks_panel_state_t s_open =
+    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
+  assert_true(s_open.want_hosted);
+  assert_false(s_open.panel_collapsed);
+  assert_false(s_open.corner_icon_visible);
+
+  // focused & collapsed IOP module in utility position: stays open when pref is open
+  const dt_masks_panel_state_t s_iop_col =
+    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, FALSE, TRUE, FALSE);
+  assert_true(s_iop_col.want_hosted);
+  assert_false(s_iop_col.panel_collapsed);
+  assert_false(s_iop_col.corner_icon_visible);
+
+  // user collapsed the utility expander: collapsed
+  const dt_masks_panel_state_t s_user_col =
+    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, TRUE);
+  assert_true(s_user_col.want_hosted);
+  assert_true(s_user_col.panel_collapsed);
+  assert_false(s_user_col.corner_icon_visible);
+}
+
+// separate grid panel corner icon and left/right hosting are never active for utility or embedded
+static void test_panel_state_no_separate_panel_for_utility_or_embedded(void **state)
+{
+  const dt_masks_panel_state_t s_util =
+    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
+  assert_false(s_util.corner_icon_visible);
+
+  const dt_masks_panel_state_t s_emb =
+    _model_masks_panel_state(MASKS_PANEL_POS_EMBEDDED, TRUE, TRUE, TRUE, TRUE, FALSE);
+  assert_false(s_emb.want_hosted);
+  assert_false(s_emb.corner_icon_visible);
+}
+
+// pinning a module with masking off must enable masking
+static void test_pinning_disabled_mask_enables_mask(void **state)
+{
+  assert_true(_model_masks_pin_should_enable_mask(DEVELOP_MASK_DISABLED));
+  assert_false(_model_masks_pin_should_enable_mask(DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI));
+}
+
+// dedicated panel caption reflects module name and instance name with 2-line markup
+static void test_masks_panel_header_markup(void **state)
+{
+  char *m_hosted_no_inst = _model_masks_panel_header_markup("exposure", "", TRUE);
+  assert_non_null(strstr(m_hosted_no_inst, "blend mask"));
+  assert_non_null(strstr(m_hosted_no_inst, "exposure"));
+  assert_non_null(strstr(m_hosted_no_inst, "\n"));
+  assert_null(strstr(m_hosted_no_inst, "•"));
+  free(m_hosted_no_inst);
+
+  char *m_hosted_inst = _model_masks_panel_header_markup("exposure", "foreground", TRUE);
+  assert_non_null(strstr(m_hosted_inst, "blend mask"));
+  assert_non_null(strstr(m_hosted_inst, "exposure"));
+  assert_non_null(strstr(m_hosted_inst, "• foreground"));
+  assert_non_null(strstr(m_hosted_inst, "\n"));
+  free(m_hosted_inst);
+
+  char *m_hosted_no_mod = _model_masks_panel_header_markup(NULL, NULL, TRUE);
+  assert_non_null(strstr(m_hosted_no_mod, "blend mask"));
+  assert_non_null(strstr(m_hosted_no_mod, "no focused module"));
+  assert_non_null(strstr(m_hosted_no_mod, "\n"));
+  free(m_hosted_no_mod);
+
+  char *m_embedded = _model_masks_panel_header_markup("exposure", "foreground", FALSE);
+  assert_string_equal(m_embedded, "blend mask");
+  free(m_embedded);
+}
+
+// corner icon tooltip reflects module name, instance name, and action hints
+static void test_masks_corner_icon_tooltip(void **state)
+{
+  char *tt_off = _model_masks_corner_icon_tooltip("exposure", "foreground", FALSE, NULL);
+  assert_non_null(strstr(tt_off, "exposure (foreground)"));
+  assert_non_null(strstr(tt_off, "mask - off"));
+  assert_non_null(strstr(tt_off, "click to enable mask and pin"));
+  free(tt_off);
+
+  char *tt_on = _model_masks_corner_icon_tooltip("exposure", "", TRUE, "drawn mask");
+  assert_non_null(strstr(tt_on, "exposure"));
+  assert_non_null(strstr(tt_on, "drawn mask"));
+  assert_non_null(strstr(tt_on, "click to expand"));
+  free(tt_on);
+}
+
+// in-header collapse/pin button tooltip reflects peeking/docked state and auto-enable
+static void test_masks_inline_collapse_tooltip(void **state)
+{
+  char *tt_peek_off = _model_masks_inline_collapse_tooltip(TRUE, FALSE, MASKS_PANEL_POS_LEFT);
+  assert_string_equal(tt_peek_off, "pin this panel open and enable mask");
+  free(tt_peek_off);
+
+  char *tt_peek_on = _model_masks_inline_collapse_tooltip(TRUE, TRUE, MASKS_PANEL_POS_LEFT);
+  assert_string_equal(tt_peek_on, "pin this panel open");
+  free(tt_peek_on);
+
+  char *tt_docked = _model_masks_inline_collapse_tooltip(FALSE, TRUE, MASKS_PANEL_POS_LEFT);
+  assert_non_null(strstr(tt_docked, "collapse this panel"));
+  free(tt_docked);
 }
 
 int main(void)
@@ -424,7 +539,14 @@ int main(void)
     cmocka_unit_test_teardown(test_panel_state_expanded_module_respects_pref, _teardown),
     cmocka_unit_test_teardown(test_panel_state_mask_disabled_defaults_to_collapsed, _teardown),
     cmocka_unit_test_teardown(test_panel_state_unsupported_or_unfocused_hides_all, _teardown),
+    cmocka_unit_test_teardown(test_main_opacity_badge_threshold, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_utility_position_follows_pref, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_no_separate_panel_for_utility_or_embedded, _teardown),
     cmocka_unit_test_teardown(test_pinning_collapsed_module_expands_iop, _teardown),
+    cmocka_unit_test_teardown(test_pinning_disabled_mask_enables_mask, _teardown),
+    cmocka_unit_test_teardown(test_masks_panel_header_markup, _teardown),
+    cmocka_unit_test_teardown(test_masks_corner_icon_tooltip, _teardown),
+    cmocka_unit_test_teardown(test_masks_inline_collapse_tooltip, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

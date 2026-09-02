@@ -43,6 +43,7 @@
 #include "control/conf.h"
 #include "control/signal.h"
 #include "develop/blend.h"
+#include "develop/blend_gui_internal.h"
 #include "develop/develop.h"
 #include "dtgtk/expander.h"
 #include "gui/gtk.h"
@@ -67,8 +68,8 @@ const char *name(dt_lib_module_t *self)
 
 const char *description(dt_lib_module_t *self)
 {
-  return _("relocated content of the flexi masks panel\n"
-           "(see the panel's hamburger menu on the module\n"
+  return _("blend mask panel for the focused module\n"
+           "(see the panel options menu on the module\n"
            "whose masking is being edited)");
 }
 
@@ -121,6 +122,12 @@ static void _reconfigure(dt_lib_module_t *self)
 // masks_gui_panel_host.c's business, not this lib's; forward and let it decide.
 void expanded_state(dt_lib_module_t *self, const gboolean expanded)
 {
+  if(!darktable.develop || !darktable.develop->proxy.masks_flexi_host.hosted_module)
+  {
+    if(expanded && self->expander)
+      dt_lib_gui_set_expanded(self, FALSE);
+    return;
+  }
   dt_iop_gui_blend_masks_panel_host_expanded(expanded);
 }
 
@@ -158,6 +165,8 @@ void gui_init(dt_lib_module_t *self)
   gtk_widget_set_name(GTK_WIDGET(d->content_box), "masks-flexi-host-content");
   d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
   d->toggle_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+  gtk_widget_set_valign(GTK_WIDGET(d->actions_box), GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(GTK_WIDGET(d->toggle_box), GTK_ALIGN_CENTER);
   gtk_widget_show(GTK_WIDGET(d->actions_box));
   gtk_widget_show(GTK_WIDGET(d->toggle_box));
   self->widget = GTK_WIDGET(d->content_box);
@@ -191,16 +200,47 @@ void view_enter(dt_lib_module_t *self,
   if(self->expander && d && d->toggle_box && !gtk_widget_get_parent(GTK_WIDGET(d->toggle_box)))
   {
     GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
+    dt_gui_add_class(header, "masks-flexi-host-header");
     gtk_box_pack_end(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
     // visual reading order from left to right: overlay | preferences | toggle
     // For GTK_PACK_END, the earlier child in the list is placed further to the right.
     // child 2 = toggle (rightmost), child 3 = preferences (middle), child 4 = overlay (leftmost)
     gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->toggle_box), 2);
     if(self->presets_button)
+    {
+      gtk_widget_set_valign(self->presets_button, GTK_ALIGN_CENTER);
       gtk_box_reorder_child(GTK_BOX(header), self->presets_button, 3);
+    }
     if(d->actions_box)
       gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->actions_box), 4);
+    if(self->arrow)
+      gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
     gtk_widget_show(GTK_WIDGET(d->toggle_box));
+  }
+
+  if(self->expander)
+  {
+    GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
+    dt_gui_add_class(header, "masks-flexi-host-header");
+    if(self->arrow)
+      gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
+    if(self->presets_button)
+      gtk_widget_set_valign(self->presets_button, GTK_ALIGN_CENTER);
+    GList *children = gtk_container_get_children(GTK_CONTAINER(header));
+    for(GList *c = children; c; c = g_list_next(c))
+    {
+      if(GTK_IS_EVENT_BOX(c->data))
+      {
+        GtkWidget *child = gtk_bin_get_child(GTK_BIN(c->data));
+        if(GTK_IS_LABEL(child))
+        {
+          darktable.develop->proxy.masks_flexi_host.label_evb = GTK_WIDGET(c->data);
+          darktable.develop->proxy.masks_flexi_host.header_label = child;
+          break;
+        }
+      }
+    }
+    g_list_free(children);
   }
 
   if(self->reset_button)
@@ -228,6 +268,37 @@ void view_enter(dt_lib_module_t *self,
     gtk_widget_set_sensitive(self->presets_button, TRUE);
     gtk_widget_set_tooltip_text(self->presets_button, _("masking options"));
   }
+
+  dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
+  if(module)
+  {
+    dt_iop_gui_blend_masks_panel_relocate(module);
+  }
+  else
+  {
+    if(self->expander)
+      dt_lib_gui_set_expanded(self, FALSE);
+
+    GtkWidget *lbl = darktable.develop->proxy.masks_flexi_host.header_label;
+    GtkWidget *levb = darktable.develop->proxy.masks_flexi_host.label_evb;
+    if(lbl && GTK_IS_LABEL(lbl))
+    {
+      gchar *markup = _model_masks_panel_header_markup(NULL, NULL, TRUE);
+      gtk_label_set_markup(GTK_LABEL(lbl), markup);
+      g_free(markup);
+    }
+
+    if(self->arrow)
+    {
+      gtk_widget_set_sensitive(self->arrow, FALSE);
+      gtk_widget_set_tooltip_text(self->arrow, _("disabled because no module is selected"));
+    }
+    if(levb)
+    {
+      gtk_widget_set_sensitive(levb, FALSE);
+      gtk_widget_set_tooltip_text(levb, _("disabled because no module is selected"));
+    }
+  }
 }
 
 void gui_cleanup(dt_lib_module_t *self)
@@ -238,6 +309,8 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.masks_flexi_host.content_box = NULL;
   darktable.develop->proxy.masks_flexi_host.actions_box = NULL;
   darktable.develop->proxy.masks_flexi_host.toggle_box = NULL;
+  darktable.develop->proxy.masks_flexi_host.header_label = NULL;
+  darktable.develop->proxy.masks_flexi_host.label_evb = NULL;
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = NULL;
 

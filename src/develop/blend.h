@@ -414,6 +414,8 @@ typedef struct dt_iop_gui_blend_data_t
   // header (masks_blend_header) since there is only one mask type left to
   // pick, see _blendop_mask_enable_toggled
   GtkWidget *mask_enable_toggle;
+  // label displaying the caption/module name in the blend-mask header
+  GtkWidget *masks_blend_header_label;
   // collapse button prepended to the blend-mask header, shown only while
   // this module's masking content is hosted in the separate flexi masks
   // panel (left/right) -- lets the user collapse it without a dedicated
@@ -451,6 +453,7 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *blend_modes_blend_order;
   GtkWidget *blend_mode_parameter_slider;
   GtkWidget *opacity_slider;
+  GtkWidget *blend_opacity_lowop_badge;
   GtkWidget *masks_feathering_guide_combo;
   GtkWidget *feathering_radius_slider;
   GtkWidget *blur_radius_slider;
@@ -1072,6 +1075,8 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed);
 // utility position's equivalent of the separate panel's collapse button and
 // the embedded position's in-header arrow, so all three fold alike.
 void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded);
+// re-evaluates the mask panel's host placement and updates header labels/tooltips
+void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module);
 // a hover-peek on the separate panel started (TRUE) or ended (FALSE): its
 // in-header arrow pins the panel open while peeking instead of collapsing it,
 // so it is drawn and described as a pin for the duration.
