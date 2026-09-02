@@ -3500,6 +3500,22 @@ static void _popup_show(GtkWidget *widget)
   p->height += pop->padding.top + pop->padding.bottom;
   pop->offcut = 0;
 
+  // a caller that pinned this popup (dt_bauhaus_widget_set_popup_position)
+  // replaces everything worked out above. Its rectangle is in root
+  // coordinates, so convert it into the same space the rest of pop->position
+  // lives in: relative to `top`, the window _window_position anchors against
+  // via gdk_window_move_to_rect below.
+  const GdkRectangle *pinned =
+    g_object_get_data(G_OBJECT(widget), "dt-bauhaus-popup-position");
+  if(pinned && top)
+  {
+    gint top_x = 0, top_y = 0;
+    gdk_window_get_origin(top, &top_x, &top_y);
+    *p = *pinned;
+    p->x -= top_x;
+    p->y -= top_y;
+  }
+
   gtk_tooltip_trigger_tooltip_query(gdk_display_get_default());
   if(top == main_window)
     g_signal_connect(pop->window, "event", G_CALLBACK(dt_shortcut_dispatcher), NULL);
@@ -3532,6 +3548,18 @@ void dt_bauhaus_widget_show_popup(GtkWidget *widget)
   bh->mouse_x = 0;
   bh->mouse_y = 0;
   _popup_show(widget);
+}
+
+void dt_bauhaus_widget_set_popup_position(GtkWidget *widget,
+                                          const GdkRectangle *rect)
+{
+  GdkRectangle *copy = NULL;
+  if(rect)
+  {
+    copy = g_new(GdkRectangle, 1);
+    *copy = *rect;
+  }
+  g_object_set_data_full(G_OBJECT(widget), "dt-bauhaus-popup-position", copy, g_free);
 }
 
 static void _slider_add_step(GtkWidget *widget,
