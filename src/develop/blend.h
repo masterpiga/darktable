@@ -448,6 +448,7 @@ typedef struct dt_iop_gui_blend_data_t
   dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
   GtkWidget *suppress;
+  GtkWidget *soloedit_mode;
   GtkWidget *masks_combine_combo;
   GtkWidget *blend_modes_combo;
   GtkWidget *blend_modes_blend_order;
@@ -466,8 +467,18 @@ typedef struct dt_iop_gui_blend_data_t
   const dt_iop_gui_blendif_channel_t *channel;
   int tab;
   int altmode[8][2];
+  // "preview channel under cursor" state: the parametric range slider or
+  // "add channel" button the pointer is currently over, the channel display
+  // bits it stands for, whether a hover preview is on right now, and what
+  // request_mask_display showed before it started
+  GtkWidget *hovered_channel_widget;
+  dt_dev_pixelpipe_display_mask_t hovered_channel_display;
+  gboolean hover_preview_active;
+  // dwell timer: the pointer has to rest on a channel button before the preview
+  // fires (see _preview_on_hover_enter). Must be dropped on every teardown path
+  // or it fires into freed blend_data.
+  guint preview_dwell_timer;
   dt_dev_pixelpipe_display_mask_t save_for_leave;
-  guint timeout_handle;
   // single-channel parametric editing chrome (flexi): blendif_invert = the
   // "invert all channels" header button (hidden when a single-channel form is
   // bound, where it is meaningless). The in/out toggle itself lives on the
