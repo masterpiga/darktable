@@ -372,7 +372,8 @@ float dt_iop_color_picker_toggle(GtkWidget *target,
                                       self);
 
   const gboolean active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(target));
-  if(!gtk_widget_is_visible(target))
+  if(!gtk_widget_is_visible(target)
+     && !g_object_get_data(G_OBJECT(target), "param-row-formid"))
     dt_action_widget_toast(NULL, target, active ? _("on") : _("off"));
 
   return active;
