@@ -506,6 +506,24 @@ static void test_masks_inline_collapse_tooltip(void **state)
   free(tt_docked);
 }
 
+static void test_param_channel_tooltips(void **state)
+{
+  const int csps[] = { DEVELOP_BLEND_CS_LAB, DEVELOP_BLEND_CS_RGB_DISPLAY, DEVELOP_BLEND_CS_RGB_SCENE };
+  for(size_t i = 0; i < sizeof(csps) / sizeof(csps[0]); i++)
+  {
+    const dt_iop_gui_blendif_channel_t *channels =
+      dt_develop_blendif_channels_for_csp(csps[i]);
+    assert_non_null(channels);
+    for(const dt_iop_gui_blendif_channel_t *ch = channels; ch->label; ch++)
+    {
+      assert_non_null(ch->tooltip);
+      char expected[128];
+      snprintf(expected, sizeof(expected), "add a parametric element of type %s", ch->label);
+      assert_string_equal(ch->tooltip, expected);
+    }
+  }
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -547,6 +565,7 @@ int main(void)
     cmocka_unit_test_teardown(test_masks_panel_header_markup, _teardown),
     cmocka_unit_test_teardown(test_masks_corner_icon_tooltip, _teardown),
     cmocka_unit_test_teardown(test_masks_inline_collapse_tooltip, _teardown),
+    cmocka_unit_test_teardown(test_param_channel_tooltips, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
