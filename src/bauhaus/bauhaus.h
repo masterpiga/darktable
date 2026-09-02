@@ -199,12 +199,14 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 // button press (which a gesture-based widget cannot handle cleanly)
 void dt_bauhaus_widget_show_popup(GtkWidget *widget);
 
-// pin the popup this widget opens to a caller-chosen rectangle instead of
-// letting it place itself around the pointer. `rect` is in root (screen)
+// pin the *next* popup this widget opens to a caller-chosen rectangle instead
+// of letting it place itself around the pointer. `rect` is in root (screen)
 // coordinates and describes the popup window itself, not an anchor to align
 // against: the popup takes that exact position and size, only sliding
-// horizontally if the monitor cannot fit it. Pass NULL to drop the pinning
-// and go back to the default pointer-relative placement.
+// horizontally if the monitor cannot fit it. The pin is consumed by that one
+// opening, so call this immediately before dt_bauhaus_widget_show_popup();
+// every other way of opening the widget's popup is unaffected. Pass NULL to
+// drop a pin that has not been consumed yet.
 //
 // Root coordinates rather than window-relative ones because the caller
 // generally has no way of knowing which GdkWindow the popup will end up

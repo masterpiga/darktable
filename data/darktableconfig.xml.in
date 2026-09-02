@@ -3679,6 +3679,13 @@
     <longdescription>while enabled, only the selected element's nodes and handles are editable on canvas; the other elements still contribute to the mask</longdescription>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/masks/auto_expand_selected</name>
+    <type>bool</type>
+    <default>true</default>
+    <shortdescription>auto-expand the selected shape</shortdescription>
+    <longdescription>while enabled, the selected shape's controls are shown and every other shape's stay collapsed, so selecting a shape both reveals its controls and tidies away the last one's; only affects shapes, not groups</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/opacity</name>
     <type>float</type>
     <default>1.0</default>
