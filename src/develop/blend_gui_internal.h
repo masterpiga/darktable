@@ -287,6 +287,36 @@ char *_model_masks_inline_collapse_tooltip(const gboolean is_peeking,
                                            const gboolean is_mask_active,
                                            const int panel_pos);
 
+/** the shape solo-edit mode should be isolating, given the panel's selection,
+    or INVALID_MASKID if the mode must stand down */
+dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd);
+
+/** geometry for _model_whisker_popup_rect, all in root (screen) coordinates */
+typedef struct dt_masks_whisker_geom_t
+{
+  GdkRectangle anchor;   // the widget the popup belongs to
+  gint center_x;         // where the popup wants to be centred
+  GdkRectangle workarea; // the monitor's usable area
+  gint panel_x;          // horizontal bounds the popup is held within: the
+  gint panel_w;          //   host panel, or the work area outside one
+  gint size;             // the popup is square
+  gint gap;              // clearance kept between the popup and the anchor
+} dt_masks_whisker_geom_t;
+
+/** where a parametric slider's precise-entry popup goes */
+GdkRectangle _model_whisker_popup_rect(const dt_masks_whisker_geom_t *g);
+
+/** a parametric channel's [0,1] slider fraction as the number the user reads
+    and types, and back. Round-tripping has to be exact: it is how a typed
+    value reaches the node, and the hue span it produces has to be exactly 360
+    for bauhaus to treat the popup as an angle (see _is_full_circle). */
+float _param_row_slider_precise_display(const dt_iop_gui_blendif_channel_t *channel,
+                                        const float boost_factor,
+                                        const float frac);
+float _param_row_slider_precise_parse(const dt_iop_gui_blendif_channel_t *channel,
+                                      const float boost_factor,
+                                      const float typed);
+
 /** group numbering: identity that must survive a group emptying and refilling */
 int _op_index_for_state(const int state);
 int _group_ord_max_for_op(dt_iop_module_t *module, const int opidx);

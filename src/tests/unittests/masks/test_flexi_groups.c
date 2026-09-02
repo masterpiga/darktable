@@ -32,6 +32,7 @@
 
 #include "flexi_fixture.h"
 #include "develop/pixelpipe.h"
+#include "control/conf.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -219,6 +220,135 @@ static void test_solo_edit_toggles_off(void **state)
 
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
   assert_int_equal(c, DT_MASKS_SOLO_CANVAS_FULL);
+}
+
+// ---------------------------------------------------------------------------
+// solo-edit as a mode: what the selection alone decides
+// ---------------------------------------------------------------------------
+//
+// Solo-edit is no longer a per-element action but a mode that follows the
+// panel selection, so the question "which shape should be isolated right now"
+// is answered from the selection instead of from a click. That answer is
+// _model_soloedit_target, and it is the one place that can decide to stand
+// down -- everything below is a case where it must.
+
+#define SOLOEDIT_MODE_CONF "plugins/darkroom/masks/solo_edit_mode"
+
+static int _soloedit_teardown(void **state)
+{
+  flexi_conf_cleanup();
+  flexi_teardown();
+  return 0;
+}
+
+static void _soloedit_mode(const gboolean on)
+{
+  flexi_conf_init();
+  dt_conf_set_bool(SOLOEDIT_MODE_CONF, on);
+}
+
+// the mode's whole purpose: click down the list and each shape is isolated for
+// editing in turn, with no separate action per shape
+static void test_soloedit_mode_follows_the_selection(void **state)
+{
+  flexi_build("u:1,2 | i:3");
+  _soloedit_mode(TRUE);
+
+  flexi_bd.panel_selected_formid = 2;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+
+  flexi_bd.panel_selected_formid = 3;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 3);
+}
+
+// with the mode off the selection means nothing: selecting a shape must not
+// quietly narrow what is editable on canvas
+static void test_soloedit_mode_off_isolates_nothing(void **state)
+{
+  flexi_build("u:1,2");
+  _soloedit_mode(FALSE);
+
+  flexi_bd.panel_selected_formid = 1;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+}
+
+// clicking a group header, or clicking empty space, selects no element -- there
+// is nothing to isolate, and the mode must not keep isolating whatever was
+// selected before
+static void test_soloedit_mode_needs_an_element_selection(void **state)
+{
+  flexi_build("u:1,2");
+  _soloedit_mode(TRUE);
+
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+}
+
+// solo and solo-edit are mutually exclusive (see the toggles above), so a mode
+// that fired while something was soloed would cancel that solo behind the
+// user's back on the next click. It stands down instead, and picks up again on
+// the next selection once the solo is off.
+static void test_soloedit_mode_stands_down_while_an_element_is_soloed(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  _soloedit_mode(TRUE);
+  _model_toggle_solo_form(&flexi_module, grp, 2);
+
+  flexi_bd.panel_selected_formid = 1;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+
+  // ...and resumes once the solo is cleared, without needing a new click
+  _model_toggle_solo_form(&flexi_module, grp, 2);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 1);
+}
+
+// same for a soloed group
+static void test_soloedit_mode_stands_down_while_a_group_is_soloed(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _soloedit_mode(TRUE);
+
+  GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
+  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  g_list_free(members);
+
+  flexi_bd.panel_selected_formid = 1;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+}
+
+// parametric and raster elements have nothing to edit on canvas: isolating one
+// would empty the canvas of editable shapes rather than narrow it
+static void test_soloedit_mode_skips_elements_with_no_canvas_geometry(void **state)
+{
+  flexi_build("u:1,2");
+  _soloedit_mode(TRUE);
+
+  dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, 2);
+  assert_non_null(f);
+  const dt_masks_type_t was = f->type;
+
+  f->type = DT_MASKS_PARAMETRIC;
+  flexi_bd.panel_selected_formid = 2;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+
+  f->type = DT_MASKS_RASTER;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+
+  // a drawn shape in the same slot is fine, so the rejection is about the kind
+  // of element and not about the selection machinery
+  f->type = was;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+}
+
+// a selection pointing at a shape that no longer exists (deleted while
+// selected) must not resolve to anything
+static void test_soloedit_mode_ignores_a_stale_selection(void **state)
+{
+  flexi_build("u:1,2");
+  _soloedit_mode(TRUE);
+
+  flexi_bd.panel_selected_formid = 99;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
 static void _assert_one_isolation_mode(const char *after)
@@ -681,6 +811,13 @@ int main(void)
     cmocka_unit_test_teardown(test_solo_cancels_solo_edit, _teardown),
     cmocka_unit_test_teardown(test_group_solo_cancels_solo_edit, _teardown),
     cmocka_unit_test_teardown(test_solo_edit_toggles_off, _teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_follows_the_selection, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_off_isolates_nothing, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_needs_an_element_selection, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_stands_down_while_an_element_is_soloed, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_stands_down_while_a_group_is_soloed, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_skips_elements_with_no_canvas_geometry, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_ignores_a_stale_selection, _soloedit_teardown),
     cmocka_unit_test_teardown(test_at_most_one_isolation_mode_is_ever_active, _teardown),
     cmocka_unit_test_teardown(test_solo_edit_cleared_when_its_element_gets_hidden, _teardown),
     cmocka_unit_test_teardown(test_solo_of_unknown_element_is_rejected, _teardown),

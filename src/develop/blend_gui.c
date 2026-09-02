@@ -961,10 +961,17 @@ typedef struct dt_masks_param_row_editor_t
   GtkWidget *sliders_grid;
   GtkWidget *input_lbl;
   GtkWidget *input_slot;
+  // the bypass "eye" and the fixed-width column it lives in. The two are
+  // separate because they hide on different conditions: the column belongs to
+  // the slider row and goes only when that row does, while the eye inside it
+  // comes and goes with whether the channel has both sub-ranges in play. See
+  // _make_param_bypass_slot for why the column has to stay put.
   GtkWidget *input_bypass_btn;
+  GtkWidget *input_bypass_slot;
   GtkWidget *output_lbl;
   GtkWidget *output_slot;
   GtkWidget *output_bypass_btn;
+  GtkWidget *output_bypass_slot;
   GtkWidget *name_evbox;
 } dt_masks_param_row_editor_t;
 
@@ -2093,11 +2100,12 @@ static void _add_masks_panel_options_menu(GtkMenu *menu, dt_iop_module_t *module
   GtkWidget *ae = gtk_check_menu_item_new_with_label(_("auto-expand selected shape"));
   dt_gui_add_class(ae, "dt_transparent_background");
   gtk_widget_set_tooltip_text(
-    ae, _("when enabled, the selected shape's expanded controls (size, hardness,"
-          " etc.) are always shown, and every other shape's controls stay"
-          " collapsed -- selecting a different shape expands it and collapses"
-          " the previous one. only ever affects shapes, not groups.\n"
-          "disabled by default."));
+    ae, _("when enabled (default), the selected shape's expanded controls (size,"
+          " hardness, etc.) are always shown, and every other shape's controls"
+          " stay collapsed -- selecting a different shape expands it and"
+          " collapses the previous one. only ever affects shapes, not groups.\n"
+          "when disabled, each shape's controls are expanded and collapsed by"
+          " hand."));
   if(dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"))
     gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ae), TRUE);
   g_signal_connect(G_OBJECT(ae), "toggled",
@@ -2405,32 +2413,31 @@ static void _preview_on_hover_apply(dt_iop_module_t *module)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd) return;
 
+  // hovered_channel_display is NONE when the widget's channel could not be
+  // resolved; there is nothing to preview then
+  const gboolean want_preview =
+    _preview_on_hover_is_on()
+    && bd->hovered_channel_widget
+    && bd->hovered_channel_display != DT_DEV_PIXELPIPE_DISPLAY_NONE;
+
   dt_dev_pixelpipe_display_mask_t wanted;
 
   dt_pthread_mutex_lock(&bd->lock);
-  // hovered_channel_display is NONE when the widget's channel could not be
-  // resolved; there is nothing to preview then
-  if(_preview_on_hover_is_on()
-     && bd->hovered_channel_widget
-     && bd->hovered_channel_display != DT_DEV_PIXELPIPE_DISPLAY_NONE)
+  if(want_preview)
   {
-    if(!bd->hover_preview_active)
-    {
-      // first frame of a preview: remember what to come back to
-      bd->save_for_leave = module->request_mask_display;
-      bd->hover_preview_active = TRUE;
-    }
+    // first frame of a preview: remember what to come back to
+    if(!bd->hover_preview_active) bd->save_for_leave = module->request_mask_display;
+    bd->hover_preview_active = TRUE;
     wanted = DT_DEV_PIXELPIPE_DISPLAY_CHANNEL | bd->hovered_channel_display;
   }
   else
   {
-    if(!bd->hover_preview_active)
-    {
-      dt_pthread_mutex_unlock(&bd->lock);
-      return;
-    }
+    // with no preview up there is nothing of ours to take down: leave
+    // request_mask_display to whoever else set it
+    wanted = bd->hover_preview_active
+               ? bd->save_for_leave
+               : module->request_mask_display;
     bd->hover_preview_active = FALSE;
-    wanted = bd->save_for_leave;
   }
   dt_pthread_mutex_unlock(&bd->lock);
 
@@ -4544,12 +4551,47 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
   _update_lowop_badge(bd->blend_opacity_lowop_badge, val / 100.0f, FALSE, FALSE, NULL);
 }
 
-// where the whisker popup of `anchor` should sit: a square directly above or
-// below the anchor (never over it, so the control points it drives stay
-// visible while it is open), horizontally centred on `center_x` and kept
-// inside the host panel.
+// the whisker popup's placement rules, over plain geometry: a square directly
+// above or below the anchor (never over it, so the control points it drives
+// stay visible while it is open), centred on where the caller asked, and held
+// inside both the host panel and the work area. Split out from
+// _bauhaus_whisker_popup_rect below so the rules can be tested without a
+// display -- getting them wrong is invisible on the machine that wrote them
+// and lands the popup somewhere useless on everyone else's.
+GdkRectangle _model_whisker_popup_rect(const dt_masks_whisker_geom_t *g)
+{
+  const gint space_above = g->anchor.y - g->workarea.y;
+  const gint space_below =
+    (g->workarea.y + g->workarea.height) - (g->anchor.y + g->anchor.height);
+
+  // below by preference: either it fits there, or there is at least as much
+  // room below as above
+  gint y = (space_below >= g->size + g->gap || space_below >= space_above)
+             ? g->anchor.y + g->anchor.height + g->gap
+             : g->anchor.y - g->gap - g->size;
+
+  // neither side has the room -- a short screen, or an anchor near an edge.
+  // Overlapping the anchor is bad; hanging off the work area is worse, since
+  // the popup is then squashed to fit (GDK_ANCHOR_RESIZE_Y, see
+  // _window_position in bauhaus.c) and a squashed color wheel stops being a
+  // circle.
+  y = CLAMP(y, g->workarea.y, g->workarea.y + g->workarea.height - g->size);
+
+  // held to the panel rather than the work area: the panel is where the
+  // controls are, and a popup that wandered onto the image would cover the
+  // very thing the user is judging the change against
+  const gint x = CLAMP(g->center_x - g->size / 2, g->panel_x,
+                       g->panel_x + g->panel_w - g->size);
+
+  const GdkRectangle rect = { x, y, g->size, g->size };
+  return rect;
+}
+
+// where the whisker popup of `anchor` should sit, horizontally centred on
+// `center_in_anchor` -- an x offset within the anchor, so callers do not each
+// have to work out its position on screen.
 //
-// Everything here is in root (screen) coordinates, which is also what
+// The result is in root (screen) coordinates, which is what
 // dt_bauhaus_widget_set_popup_position() wants: the popup is pinned *before*
 // it is shown, so bauhaus places it once, itself, in whatever coordinate
 // space it actually anchors against. Moving the popup window by hand after
@@ -4559,7 +4601,7 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
 // display the moment bauhaus repositioned it (see _window_position in
 // bauhaus.c).
 static gboolean _bauhaus_whisker_popup_rect(GtkWidget *anchor,
-                                            const gint center_x,
+                                            const gint center_in_anchor,
                                             GdkRectangle *rect)
 {
   GtkWidget *toplevel = gtk_widget_get_toplevel(anchor);
@@ -4575,54 +4617,42 @@ static gboolean _bauhaus_whisker_popup_rect(GtkWidget *anchor,
   GtkAllocation alloc;
   gtk_widget_get_allocation(anchor, &alloc);
 
-  const gint anchor_y = top_y + ry;
-  const gint pop_size = DT_PIXEL_APPLY_DPI(180);
+  dt_masks_whisker_geom_t g = { .anchor = { top_x + rx, top_y + ry,
+                                            alloc.width, alloc.height },
+                                .center_x = top_x + rx + center_in_anchor,
+                                .size = DT_PIXEL_APPLY_DPI(180),
+                                .gap = DT_PIXEL_APPLY_DPI(6) };
 
-  GdkRectangle workarea = { 0 };
   GdkMonitor *mon =
     gdk_display_get_monitor_at_window(gdk_window_get_display(top_gdk), top_gdk);
-  if(mon) gdk_monitor_get_workarea(mon, &workarea);
+  if(mon) gdk_monitor_get_workarea(mon, &g.workarea);
 
-  const gint gap = DT_PIXEL_APPLY_DPI(6);
-  const gint space_above = anchor_y - workarea.y;
-  const gint space_below = (workarea.y + workarea.height) - (anchor_y + alloc.height);
-
-  const gint pop_y = (space_below >= pop_size + gap || space_below >= space_above)
-                       ? anchor_y + alloc.height + gap
-                       : anchor_y - gap - pop_size;
-
-  gint pop_x = center_x - pop_size / 2;
-  gint panel_x = workarea.x, panel_w = workarea.width;
+  g.panel_x = g.workarea.x;
+  g.panel_w = g.workarea.width;
   if(dt_ui_panel_ancestor(darktable.gui->ui, DT_UI_PANEL_LEFT, anchor))
   {
-    panel_x = top_x;
-    panel_w = dt_ui_panel_get_size(darktable.gui->ui, DT_UI_PANEL_LEFT);
+    g.panel_x = top_x;
+    g.panel_w = dt_ui_panel_get_size(darktable.gui->ui, DT_UI_PANEL_LEFT);
   }
   else if(dt_ui_panel_ancestor(darktable.gui->ui, DT_UI_PANEL_RIGHT, anchor))
   {
-    panel_w = dt_ui_panel_get_size(darktable.gui->ui, DT_UI_PANEL_RIGHT);
-    panel_x = top_x + gtk_widget_get_allocated_width(toplevel) - panel_w;
+    g.panel_w = dt_ui_panel_get_size(darktable.gui->ui, DT_UI_PANEL_RIGHT);
+    g.panel_x = top_x + gtk_widget_get_allocated_width(toplevel) - g.panel_w;
   }
-  pop_x = CLAMP(pop_x, panel_x, panel_x + panel_w - pop_size);
 
-  rect->x = pop_x;
-  rect->y = pop_y;
-  rect->width = pop_size;
-  rect->height = pop_size;
+  *rect = _model_whisker_popup_rect(&g);
   return TRUE;
 }
 
-// pin `slider`'s popup above/below `anchor` and open it there
+// pin `slider`'s popup above/below `anchor`, centred on `center_in_anchor`
+// (an x offset within the anchor), and open it there
 static void _show_bauhaus_whisker_popup(GtkWidget *slider,
                                         GtkWidget *anchor,
-                                        const gint center_x)
+                                        const gint center_in_anchor)
 {
   GdkRectangle rect;
-  // clear the pin rather than leave the previous one in place if the geometry
-  // is not available this time: a stale rect would open the popup wherever
-  // the widget happened to be the last time round.
-  const gboolean placed = _bauhaus_whisker_popup_rect(anchor, center_x, &rect);
-  dt_bauhaus_widget_set_popup_position(slider, placed ? &rect : NULL);
+  if(_bauhaus_whisker_popup_rect(anchor, center_in_anchor, &rect))
+    dt_bauhaus_widget_set_popup_position(slider, &rect);
   dt_bauhaus_widget_show_popup(slider);
 }
 
@@ -4633,17 +4663,9 @@ static gboolean _inline_opacity_popup_idle(gpointer user_data)
   GtkWidget *slider = g_object_get_data(G_OBJECT(evbox), "opacity-slider");
   if(!slider || !GTK_IS_WIDGET(slider)) return G_SOURCE_REMOVE;
 
-  GtkWidget *top = gtk_widget_get_toplevel(evbox);
-  gint sx = 0, sy = 0;
-  gtk_widget_translate_coordinates(evbox, top, 0, 0, &sx, &sy);
-  GdkWindow *top_gdk = gtk_widget_is_toplevel(top) ? gtk_widget_get_window(top) : NULL;
-  gint tx = 0, ty = 0;
-  if(top_gdk) gdk_window_get_origin(top_gdk, &tx, &ty);
   GtkAllocation alloc;
   gtk_widget_get_allocation(evbox, &alloc);
-  const gint center_x = tx + sx + alloc.width / 2;
-
-  _show_bauhaus_whisker_popup(slider, evbox, center_x);
+  _show_bauhaus_whisker_popup(slider, evbox, alloc.width / 2);
   return G_SOURCE_REMOVE;
 }
 
@@ -5896,7 +5918,7 @@ static gboolean _soloedit_mode_is_on(void)
 // canvas geometry of its own to isolate (same carve-out the menu item had), and
 // a group selection means "edit the whole group", which is the mode's own off
 // state anyway.
-static dt_mask_id_t _soloedit_selection_target(dt_iop_gui_blend_data_t *bd)
+dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
 {
   if(!_soloedit_mode_is_on() || !dt_is_valid_maskid(bd->panel_selected_formid))
     return INVALID_MASKID;
@@ -5924,7 +5946,7 @@ static void _soloedit_follow_selection(dt_iop_gui_blend_data_t *bd)
   static gboolean applying = FALSE;
   if(applying) return;
 
-  const dt_mask_id_t want = _soloedit_selection_target(bd);
+  const dt_mask_id_t want = _model_soloedit_target(bd);
   if(bd->soloedit_formid == want) return;
 
   applying = TRUE;
@@ -12269,19 +12291,27 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
   const gboolean show_boost = vis.boost;
   const gboolean show_bypass = vis.bypass;
 
+  // the eye and the column it sits in hide on different conditions: the column
+  // follows its slider row, so an absent row costs no height, while the eye
+  // follows show_bypass. Hiding the column with the eye would let the sliders
+  // reclaim its width and shift sideways (see _make_param_bypass_slot).
   if(ed->input_lbl) gtk_widget_set_visible(ed->input_lbl, show_input);
   if(ed->input_slot) gtk_widget_set_visible(ed->input_slot, show_input);
+  if(ed->input_bypass_slot)
+    gtk_widget_set_visible(ed->input_bypass_slot, show_input);
   if(ed->input_bypass_btn)
   {
-    gtk_widget_set_visible(ed->input_bypass_btn, show_input && show_bypass);
+    gtk_widget_set_visible(ed->input_bypass_btn, show_bypass);
     gtk_widget_set_opacity(ed->input_bypass_btn, 1.0);
     gtk_widget_set_sensitive(ed->input_bypass_btn, show_bypass);
   }
   if(ed->output_lbl) gtk_widget_set_visible(ed->output_lbl, show_output);
   if(ed->output_slot) gtk_widget_set_visible(ed->output_slot, show_output);
+  if(ed->output_bypass_slot)
+    gtk_widget_set_visible(ed->output_bypass_slot, show_output);
   if(ed->output_bypass_btn)
   {
-    gtk_widget_set_visible(ed->output_bypass_btn, show_output && show_bypass);
+    gtk_widget_set_visible(ed->output_bypass_btn, show_bypass);
     gtk_widget_set_opacity(ed->output_bypass_btn, 1.0);
     gtk_widget_set_sensitive(ed->output_bypass_btn, show_bypass);
   }
@@ -12571,8 +12601,9 @@ static void _param_row_slider_reset_callback(GtkDarktableGradientSlider *slider,
 // formula -- so round-tripping a typed value back into [0,1] stays exact
 // rather than needing a generic string-to-value parser for every channel
 // kind that might ever be added.
-static float _param_row_slider_precise_display(
-  const dt_iop_gui_blendif_channel_t *channel, const float boost_factor, const float frac)
+float _param_row_slider_precise_display(const dt_iop_gui_blendif_channel_t *channel,
+                                        const float boost_factor,
+                                        const float frac)
 {
   if(channel->scale_print == _blendif_scale_print_hue) return frac * 360.0f;
   if(channel->scale_print == _blendif_scale_print_ab)
@@ -12580,9 +12611,9 @@ static float _param_row_slider_precise_display(
   return frac * boost_factor * 100.0f; // _blendif_scale_print_default
 }
 
-static float _param_row_slider_precise_parse(const dt_iop_gui_blendif_channel_t *channel,
-                                             const float boost_factor,
-                                             const float typed)
+float _param_row_slider_precise_parse(const dt_iop_gui_blendif_channel_t *channel,
+                                      const float boost_factor,
+                                      const float typed)
 {
   if(channel->scale_print == _blendif_scale_print_hue) return typed / 360.0f;
   if(channel->scale_print == _blendif_scale_print_ab)
@@ -13060,23 +13091,14 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // consulted by _param_row_slider_precise_open_idle to place the real
   // bauhaus popup against the slider's own bounds instead of this anchor's.
   g_object_set_data(G_OBJECT(bauhaus_slider), "precise-anchor-slider", slider);
-  // this node's own on-screen x, for _bauhaus_whisker_popup_rect to
-  // center the real popup on (clamped to the mask panel's own bounds), not
-  // the row -- computed now, from the slider's real (already allocated)
-  // position, rather than recomputed later from the row/marker fraction.
-  {
-    GtkWidget *slider_top = gtk_widget_get_toplevel(slider);
-    gint sx = 0, sy = 0;
-    gtk_widget_translate_coordinates(slider, slider_top, 0, 0, &sx, &sy);
-    GdkWindow *slider_top_gdk =
-      gtk_widget_is_toplevel(slider_top) ? gtk_widget_get_window(slider_top) : NULL;
-    gint tx = 0, ty = 0;
-    if(slider_top_gdk) gdk_window_get_origin(slider_top_gdk, &tx, &ty);
-    const gint marker_x =
-      tx + sx + gslider->margin_left + (gint)(gslider->position[k] * usable);
-    g_object_set_data(G_OBJECT(bauhaus_slider), "precise-anchor-marker-x",
-                      GINT_TO_POINTER(marker_x));
-  }
+  // this node's own x within the slider, for _bauhaus_whisker_popup_rect to
+  // center the real popup on (clamped to the mask panel's own bounds) instead
+  // of centering it on the whole row -- computed now, from the slider's real
+  // (already allocated) position, rather than recomputed later from the
+  // row/marker fraction.
+  g_object_set_data(G_OBJECT(bauhaus_slider), "precise-anchor-marker-x",
+                    GINT_TO_POINTER(gslider->margin_left
+                                    + (gint)(gslider->position[k] * usable)));
 
   g_object_set_data(G_OBJECT(slider), "precise-popover", popover);
   g_object_set_data(G_OBJECT(slider), "precise-marker", GINT_TO_POINTER(k));
@@ -13579,6 +13601,46 @@ static void _build_param_row_filter(dt_iop_gui_blendif_filter_t *sl, const int i
   sl->box = NULL;
 }
 
+// the "temporarily disable this channel" eye that sits at the right end of a
+// parametric row's input/output slider
+static GtkWidget *_make_param_bypass_btn(const char *tooltip,
+                                         dt_masks_param_row_editor_t *ed)
+{
+  GtkWidget *btn = dtgtk_togglebutton_new(dtgtk_cairo_paint_eye_toggle, 0, NULL);
+  // -bypass-btn carries the look (dimmed until hovered or checked),
+  // -param-bypass-btn the geometry: exactly the row header's expander button,
+  // so the two read as one column rather than two similar icons that happen to
+  // be near each other
+  dt_gui_add_class(btn, "mask-refine-bypass-btn");
+  dt_gui_add_class(btn, "mask-param-bypass-btn");
+  gtk_widget_set_valign(btn, GTK_ALIGN_CENTER);
+  gtk_widget_set_tooltip_text(btn, tooltip);
+  g_signal_connect(G_OBJECT(btn), "toggled",
+                   G_CALLBACK(_param_channel_bypass_toggled), ed);
+  return btn;
+}
+
+// the fixed-width column the eye above lives in.
+//
+// The eye comes and goes with whether the channel has both sub-ranges in play
+// (see _update_param_row_visibility), and attaching it to the grid directly
+// meant the grid's third column collapsed with it -- so the sliders grew and
+// shrank by the width of an icon as the user edited, which reads as the whole
+// row jumping sideways. The column holds its width whether or not the eye is
+// in it; only the eye itself is ever hidden.
+//
+// That width is the row header's expander button, and the editor's right edge
+// is flush with the header's (see .mask-param-row-editor in darktable.css), so
+// the eyes stack directly under the expander instead of forming a second,
+// slightly-offset column of their own.
+static GtkWidget *_make_param_bypass_slot(GtkWidget *btn)
+{
+  GtkWidget *slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  dt_gui_add_class(slot, "mask-param-bypass-slot");
+  gtk_box_pack_start(GTK_BOX(slot), btn, TRUE, TRUE, 0);
+  return slot;
+}
+
 // build the always-visible per-row parametric editor for `form` (a single-channel
 // parametric mask). Returns the wrapper widget (sliders + boost factor) to pack
 // under the row; *picker_box_out receives the row's two color-picker buttons as
@@ -13766,14 +13828,9 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   ed->input_slot = input_slot;
 
   GtkWidget *input_bypass_btn =
-    dtgtk_togglebutton_new(dtgtk_cairo_paint_eye_toggle, 0, NULL);
-  dt_gui_add_class(input_bypass_btn, "mask-refine-bypass-btn");
-  gtk_widget_set_valign(input_bypass_btn, GTK_ALIGN_CENTER);
-  gtk_widget_set_tooltip_text(input_bypass_btn,
-                              _("temporarily disable this input channel"));
-  g_signal_connect(G_OBJECT(input_bypass_btn), "toggled",
-                   G_CALLBACK(_param_channel_bypass_toggled), ed);
-  gtk_grid_attach(GTK_GRID(sliders_grid), input_bypass_btn, 2, 0, 1, 1);
+    _make_param_bypass_btn(_("temporarily disable this input channel"), ed);
+  ed->input_bypass_slot = _make_param_bypass_slot(input_bypass_btn);
+  gtk_grid_attach(GTK_GRID(sliders_grid), ed->input_bypass_slot, 2, 0, 1, 1);
   ed->input_bypass_btn = input_bypass_btn;
 
   GtkWidget *output_lbl = _make_icon_widget(_paint_param_output);
@@ -13791,14 +13848,9 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   ed->output_slot = output_slot;
 
   GtkWidget *output_bypass_btn =
-    dtgtk_togglebutton_new(dtgtk_cairo_paint_eye_toggle, 0, NULL);
-  dt_gui_add_class(output_bypass_btn, "mask-refine-bypass-btn");
-  gtk_widget_set_valign(output_bypass_btn, GTK_ALIGN_CENTER);
-  gtk_widget_set_tooltip_text(output_bypass_btn,
-                              _("temporarily disable this output channel"));
-  g_signal_connect(G_OBJECT(output_bypass_btn), "toggled",
-                   G_CALLBACK(_param_channel_bypass_toggled), ed);
-  gtk_grid_attach(GTK_GRID(sliders_grid), output_bypass_btn, 2, 1, 1, 1);
+    _make_param_bypass_btn(_("temporarily disable this output channel"), ed);
+  ed->output_bypass_slot = _make_param_bypass_slot(output_bypass_btn);
+  gtk_grid_attach(GTK_GRID(sliders_grid), ed->output_bypass_slot, 2, 1, 1, 1);
   ed->output_bypass_btn = output_bypass_btn;
 
   ed->sliders_grid = sliders_grid;
@@ -13815,9 +13867,11 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_widget_show_all(wrap);
   gtk_widget_set_no_show_all(ed->input_lbl, TRUE);
   gtk_widget_set_no_show_all(ed->input_slot, TRUE);
+  gtk_widget_set_no_show_all(ed->input_bypass_slot, TRUE);
   gtk_widget_set_no_show_all(ed->input_bypass_btn, TRUE);
   gtk_widget_set_no_show_all(ed->output_lbl, TRUE);
   gtk_widget_set_no_show_all(ed->output_slot, TRUE);
+  gtk_widget_set_no_show_all(ed->output_bypass_slot, TRUE);
   gtk_widget_set_no_show_all(ed->output_bypass_btn, TRUE);
   gtk_widget_set_no_show_all(ed->boost_box, TRUE);
   gtk_widget_set_no_show_all(ed->opacity_box, TRUE);
