@@ -2952,6 +2952,7 @@ static void _gui_set_single_expanded(dt_iop_module_t *module, gboolean expanded)
   {
     /* set this module to receive focus / draw events*/
     dt_iop_request_focus(module);
+    dt_iop_gui_blending_gain_focus(module);
 
     /* focus the current module */
     for(int k = 0; k < DT_UI_CONTAINER_SIZE; k++)
