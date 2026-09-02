@@ -3505,15 +3505,24 @@ static void _popup_show(GtkWidget *widget)
   // coordinates, so convert it into the same space the rest of pop->position
   // lives in: relative to `top`, the window _window_position anchors against
   // via gdk_window_move_to_rect below.
-  const GdkRectangle *pinned =
-    g_object_get_data(G_OBJECT(widget), "dt-bauhaus-popup-position");
-  if(pinned && top)
+  //
+  // Stolen, not read: the pin applies to this one opening only. A pin left
+  // standing would be reused by whatever else opens the same widget's popup
+  // later -- a shortcut bound to the slider, say -- placing it wherever the
+  // widget happened to be the last time a caller positioned it by hand.
+  GdkRectangle *pinned =
+    g_object_steal_data(G_OBJECT(widget), "dt-bauhaus-popup-position");
+  if(pinned)
   {
-    gint top_x = 0, top_y = 0;
-    gdk_window_get_origin(top, &top_x, &top_y);
-    *p = *pinned;
-    p->x -= top_x;
-    p->y -= top_y;
+    if(top)
+    {
+      gint top_x = 0, top_y = 0;
+      gdk_window_get_origin(top, &top_x, &top_y);
+      *p = *pinned;
+      p->x -= top_x;
+      p->y -= top_y;
+    }
+    g_free(pinned);
   }
 
   gtk_tooltip_trigger_tooltip_query(gdk_display_get_default());
