@@ -42,6 +42,12 @@ add_cmocka_test(test_flexi_compose
                 SOURCES test_flexi_compose.c flexi_fixture.c
                 LINK_LIBRARIES lib_darktable cmocka)
 
+# The panel's own controls: precise-entry popup placement and the value
+# conversions its numbers go through.
+add_cmocka_test(test_flexi_controls
+                SOURCES test_flexi_controls.c flexi_fixture.c
+                LINK_LIBRARIES lib_darktable cmocka)
+
 # Is the synthetic probe image actually adequate to replay harvested masks
 # against? Measured per channel, not assumed -- see the file header.
 add_cmocka_test(test_probe_image
@@ -50,7 +56,7 @@ add_cmocka_test(test_probe_image
 
 foreach(_t test_flexi_model test_flexi_cache test_flexi_persistence test_flexi_dnd
            test_flexi_groups test_flexi_panel test_flexi_migrate test_flexi_compose
-           test_probe_image)
+           test_flexi_controls test_probe_image)
   target_include_directories(${_t} PRIVATE
                              ${CMAKE_CURRENT_SOURCE_DIR}
                              ${CMAKE_SOURCE_DIR}/src)

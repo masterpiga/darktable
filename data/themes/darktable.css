@@ -1060,7 +1060,11 @@ dialog .sidebar row:selected:hover label,
   margin-top: 3px;
   margin-bottom: 3px;
   margin-left: 8px;
-  margin-right: 12px;
+  /* no right margin, unlike the left rail: this puts the editor's right edge
+     flush with the row header's above it, which is what lets the per-channel
+     bypass eyes line up under the header's expander button rather than sitting
+     in a column of their own a little to its left */
+  margin-right: 0;
   padding-left: 6px;
 }
 
@@ -1146,6 +1150,26 @@ button.mask-refine-bypass-btn:checked
 {
   opacity: 1.0;
   color: @field_active_fg;
+}
+
+/* the same eye on a parametric row's input/output slider, where it stands
+   directly below the row header's expander button: same size and same side
+   margins as .mask-row-expander, so the two form one column instead of two
+   near-misses. Must stay after the rule above, which it overrides. */
+button.mask-param-bypass-btn
+{
+  min-width: 14px;
+  min-height: 14px;
+  margin: 0 1px 0 2px;
+}
+
+/* the column that eye sits in. It keeps its width whether or not the eye is
+   currently shown, so the sliders beside it never grow and shrink as channels
+   gain and lose their bypass toggle (see _make_param_bypass_slot in
+   blend_gui.c). 17px = the expander's 14px plus its 2px/1px side margins. */
+.mask-param-bypass-slot
+{
+  min-width: 17px;
 }
 
 .mask-refine-header-name
