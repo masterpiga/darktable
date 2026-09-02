@@ -1058,6 +1058,7 @@ dialog .sidebar row:selected:hover label,
   margin-top: 3px;
   margin-bottom: 3px;
   margin-left: 8px;
+  margin-right: 12px;
   padding-left: 6px;
 }
 
@@ -1072,7 +1073,6 @@ dialog .sidebar row:selected:hover label,
 .mask-boost-factor-box
 {
   margin-top: 0.14em;
-  margin-right: 22px;
 }
 
 /* the input/output gradient sliders inside a parametric row's own editor. */
@@ -1114,11 +1114,13 @@ dialog .sidebar row:selected:hover label,
   padding: 2px 4px 4px 4px;
 }
 
-/* channel labels ("input" / "output") in parametric editor rows */
-.mask-param-channel-label
+/* channel icons ("input" / "output") in parametric editor rows */
+.mask-param-channel-icon
 {
-  min-width: 3.2em;
-  padding-right: 4px;
+  min-width: 14px;
+  min-height: 14px;
+  margin: 0;
+  padding: 0;
 }
 
 button.mask-refine-bypass-btn
