@@ -3937,7 +3937,15 @@ static void _flexi_corner_icon_clicked(GtkWidget *w, gpointer user_data)
   // not just re-expand the panel onto an inert "off" editor the user would
   // then have to separately turn on themselves.
   dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
-  if(module) dt_iop_gui_blend_mask_enable(module);
+  if(module)
+  {
+    dt_iop_gui_blend_mask_enable(module);
+    if(!module->expanded)
+    {
+      const gboolean collapse_others = dt_conf_get_bool("darkroom/ui/single_module");
+      dt_iop_gui_set_expanded(module, TRUE, collapse_others);
+    }
+  }
   dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
 }
 
@@ -4139,14 +4147,13 @@ void dt_ui_flexi_panel_set_side(dt_ui_t *ui, const gboolean right)
 static void _flexi_update_corner_icon_tooltip(dt_ui_t *ui)
 {
   if(!ui->flexi_corner_icon) return;
-  // active == mask_mode != DEVELOP_MASK_DISABLED (see the one caller of
-  // dt_ui_flexi_panel_set_icon, blend_gui.c) -- same condition
-  // dt_iop_gui_blend_mask_enable checks, so this matches what clicking the
-  // icon will actually do.
+  dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
+  const char *mod_name = module ? module->name() : _("blend mask");
   gchar *tooltip = ui->flexi_corner_icon_active
-    ? g_strdup_printf(_("blend mask - %s\nclick to expand"),
-        ui->flexi_corner_icon_mask_label ? ui->flexi_corner_icon_mask_label : _("no mask"))
-    : g_strdup(_("blend mask - off\nclick to enable the mask and expand"));
+    ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand, hover to peek"),
+        mod_name, ui->flexi_corner_icon_mask_label ? ui->flexi_corner_icon_mask_label : _("active"))
+    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and expand, hover to peek"),
+        mod_name);
   gtk_widget_set_tooltip_text(ui->flexi_corner_icon, tooltip);
   g_free(tooltip);
 }
