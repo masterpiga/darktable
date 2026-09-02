@@ -866,19 +866,23 @@ static void _masks_apply_layout(dt_iop_gui_blend_data_t *bd, const gboolean flex
   if(flexi)
   {
     _masks_toolbar_place_shapes_box(bd);
-    // "edit on canvas" sits right after the "mask elements" label, with "invert"
-    // right next to it -- both well clear of "reset" (packed separately, at the
-    // header's far right), so a mis-click can't land on "reset" by mistake.
+    // the header's tool run, left to right after the "mask elements" label:
+    // bypass, edit on canvas, solo edit, invert. All well clear of "reset"
+    // (packed separately, at the header's far right), so a mis-click can't
+    // land on "reset" by mistake.
     if(bd->masks_groups_header)
     {
       _reparent_into(bd->suppress, bd->masks_groups_header, FALSE, FALSE);
+      _reparent_into(bd->soloedit_mode, bd->masks_groups_header, FALSE, FALSE);
       _reparent_into(bd->masks_edit, bd->masks_groups_header, FALSE, FALSE);
       _reparent_into(bd->masks_polarity, bd->masks_groups_header, FALSE, FALSE);
       gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->suppress, 1);
       gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->masks_edit, 2);
-      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->masks_polarity, 3);
+      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->soloedit_mode, 3);
+      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->masks_polarity, 4);
     }
     if(bd->suppress) gtk_widget_set_visible(bd->suppress, TRUE);
+    if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, TRUE);
     gtk_widget_set_visible(bd->masks_toolbar, TRUE);
     gtk_widget_set_visible(bd->masks_combo_row, FALSE);
     gtk_widget_set_visible(bd->masks_shapes_row, FALSE);
@@ -892,6 +896,7 @@ static void _masks_apply_layout(dt_iop_gui_blend_data_t *bd, const gboolean flex
     // keep "edit" leftmost, the shapes box right of it
     gtk_box_reorder_child(GTK_BOX(bd->masks_shapes_row), bd->masks_edit, 0);
     if(bd->suppress) gtk_widget_set_visible(bd->suppress, FALSE);
+    if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, FALSE);
     gtk_widget_set_visible(bd->masks_toolbar, FALSE);
     gtk_widget_set_visible(bd->masks_combo_row, TRUE);
     gtk_widget_set_visible(bd->masks_shapes_row, TRUE);
@@ -2025,6 +2030,11 @@ static void _masks_opacity_sticky_toggled(GtkCheckMenuItem *mi, dt_iop_module_t 
   if(not_sticky) dt_conf_set_float("plugins/darkroom/masks/opacity", 1.0f);
 }
 
+// the channel-preview mode, defined further down with the rest of the hover
+// machinery; the panel options menu is built up here
+static gboolean _preview_on_hover_is_on(void);
+static void _preview_on_hover_set(const gboolean on);
+
 static void _masks_auto_expand_selected_toggled(GtkCheckMenuItem *mi,
                                                 dt_iop_module_t *module)
 {
@@ -2047,6 +2057,12 @@ static void _masks_collapse_refinements_default_toggled(GtkCheckMenuItem *mi,
 {
   dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default",
                    gtk_check_menu_item_get_active(mi));
+}
+
+static void _masks_preview_on_hover_toggled(GtkCheckMenuItem *mi,
+                                            dt_iop_module_t *module)
+{
+  _preview_on_hover_set(gtk_check_menu_item_get_active(mi));
 }
 
 // appends an "options" section directly to `menu` -- behavioural toggles
@@ -2087,6 +2103,22 @@ static void _add_masks_panel_options_menu(GtkMenu *menu, dt_iop_module_t *module
   g_signal_connect(G_OBJECT(ae), "toggled",
                     G_CALLBACK(_masks_auto_expand_selected_toggled), module);
   gtk_menu_shell_append(GTK_MENU_SHELL(menu), ae);
+
+  GtkWidget *pc =
+    gtk_check_menu_item_new_with_label(_("preview channel under cursor"));
+  dt_gui_add_class(pc, "dt_transparent_background");
+  gtk_widget_set_tooltip_text(
+    pc, _("when enabled, resting the pointer on one of the add-parametric-element"
+          " buttons displays that channel in the center view, so you can see what"
+          " a channel looks like before adding an element for it.\n"
+          "the preview only starts after a short pause, so passing over the"
+          " buttons on the way elsewhere costs nothing.\n"
+          "disabled by default."));
+  if(_preview_on_hover_is_on())
+    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(pc), TRUE);
+  g_signal_connect(G_OBJECT(pc), "toggled",
+                   G_CALLBACK(_masks_preview_on_hover_toggled), module);
+  gtk_menu_shell_append(GTK_MENU_SHELL(menu), pc);
 
   GtkWidget *cr =
     gtk_check_menu_item_new_with_label(_("collapse refinements by default"));
@@ -2299,58 +2331,20 @@ static gboolean _param_row_editor_channel(GtkWidget *widget,
   return TRUE;
 }
 
-// activate channel/mask view
-static void _blendop_blendif_channel_mask_view(GtkWidget *widget,
-                                               dt_iop_module_t *module,
-                                               const dt_dev_pixelpipe_display_mask_t mode)
-{
-  dt_dev_pixelpipe_display_mask_t new_request_mask_display =
-    module->request_mask_display | mode;
-
-  // in case user requests channel display: get the channel
-  if(new_request_mask_display & DT_DEV_PIXELPIPE_DISPLAY_CHANNEL)
-  {
-    dt_dev_pixelpipe_display_mask_t channel;
-    if(_param_row_editor_channel(widget, &channel))
-    {
-      new_request_mask_display &= ~DT_DEV_PIXELPIPE_DISPLAY_ANY;
-      new_request_mask_display |= channel;
-    }
-    else
-      new_request_mask_display &= ~DT_DEV_PIXELPIPE_DISPLAY_CHANNEL;
-  }
-
-  // only if something has changed: reprocess center view
-  if(new_request_mask_display != module->request_mask_display)
-  {
-    module->request_mask_display = new_request_mask_display;
-    dt_iop_refresh_center(module);
-  }
-}
-
 // toggle channel/mask view
 static void _blendop_blendif_channel_mask_view_toggle
   (GtkWidget *widget,
    dt_iop_module_t *module,
    const dt_dev_pixelpipe_display_mask_t mode)
 {
-  dt_iop_gui_blend_data_t *data = module->blend_data;
-
   dt_dev_pixelpipe_display_mask_t new_request_mask_display =
-    module->request_mask_display & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY;
+    module->request_mask_display;
 
   // toggle mode
   if(module->request_mask_display & mode)
     new_request_mask_display &= ~mode;
   else
     new_request_mask_display |= mode;
-
-  dt_pthread_mutex_lock(&data->lock);
-  if(new_request_mask_display & DT_DEV_PIXELPIPE_DISPLAY_STICKY)
-    data->save_for_leave |= DT_DEV_PIXELPIPE_DISPLAY_STICKY;
-  else
-    data->save_for_leave &= ~DT_DEV_PIXELPIPE_DISPLAY_STICKY;
-  dt_pthread_mutex_unlock(&data->lock);
 
   new_request_mask_display &= ~DT_DEV_PIXELPIPE_DISPLAY_ANY;
 
@@ -2375,116 +2369,182 @@ static void _blendop_blendif_channel_mask_view_toggle
 }
 
 
-// magic mode: if mouse cursor enters a gradient slider with shift
-// and/or control pressed we enter channel display and/or mask display
-// mode
-static void _blendop_blendif_enter_cb(GtkEventControllerMotion *controller,
-                                         double x, double y,
-                                         dt_iop_module_t *module)
+// "preview channel under cursor" is a latched mode rather than a held key:
+// while it is on, hovering an "add channel" button shows that channel on the
+// center view, and leaving restores whatever was displayed before. The state is
+// global (one working mode, not a per-module setting) so it survives moving
+// between modules; it lives in the panel options menu, and
+// _shortcut_toggle_preview_on_hover makes it bindable.
+#define BLEND_PREVIEW_ON_HOVER_CONF "plugins/darkroom/blend/preview_channel_on_hover"
+
+// how long the pointer has to rest on a button before the preview fires. Each
+// preview costs a pipeline reprocess, so sweeping the pointer across the row of
+// channel buttons on the way somewhere else must not queue one per button --
+// only a deliberate pause asks for anything.
+#define BLEND_PREVIEW_ON_HOVER_DWELL_MS 100
+
+static gboolean _preview_on_hover_is_on(void)
 {
-  if(dt_atomic_get_int(&darktable.gui->reset) != 0) return;
-
-  GtkWidget *widget = dt_gui_get_widget(controller);
-  dt_iop_gui_blend_data_t *data = module->blend_data;
-
-  dt_dev_pixelpipe_display_mask_t mode = DT_DEV_PIXELPIPE_DISPLAY_NONE;
-
-  const GdkModifierType state =
-    dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller));
-  {
-    // depending on shift modifiers we activate channel and/or mask display
-    if(dt_modifier_is(state, GDK_SHIFT_MASK | GDK_CONTROL_MASK))
-    {
-      mode = (DT_DEV_PIXELPIPE_DISPLAY_MASK | DT_DEV_PIXELPIPE_DISPLAY_CHANNEL);
-    }
-    else if(dt_modifier_is(state, GDK_SHIFT_MASK))
-    {
-      mode = DT_DEV_PIXELPIPE_DISPLAY_CHANNEL;
-    }
-    else if(dt_modifier_is(state, GDK_CONTROL_MASK))
-    {
-      mode = DT_DEV_PIXELPIPE_DISPLAY_MASK;
-    }
-  }
-
-  dt_pthread_mutex_lock(&data->lock);
-  if(mode && data->timeout_handle)
-  {
-    // purge any remaining timeout handlers
-    g_source_remove(data->timeout_handle);
-    data->timeout_handle = 0;
-  }
-  else if(!data->timeout_handle
-          && !(data->save_for_leave & DT_DEV_PIXELPIPE_DISPLAY_STICKY))
-  {
-    // save request_mask_display to restore later
-    data->save_for_leave =
-      module->request_mask_display & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY;
-  }
-  dt_pthread_mutex_unlock(&data->lock);
-
-  _blendop_blendif_channel_mask_view(widget, module, mode);
-
-  gtk_widget_grab_focus(widget);
+  return dt_conf_get_bool(BLEND_PREVIEW_ON_HOVER_CONF);
 }
 
-
-// handler for delayed mask/channel display mode switch-off
-static gboolean _blendop_blendif_leave_delayed(gpointer data)
+// drop a pending dwell timer, if any. Must be called from every path that
+// tears down or unhovers, or the timer fires into freed blend_data.
+static void _preview_on_hover_cancel_dwell(dt_iop_gui_blend_data_t *bd)
 {
-  dt_iop_module_t *module = (dt_iop_module_t *)data;
+  if(!bd || !bd->preview_dwell_timer) return;
+  g_source_remove(bd->preview_dwell_timer);
+  bd->preview_dwell_timer = 0;
+}
+
+// bring module->request_mask_display in line with the mode and what is hovered:
+// show the hovered channel while both hold, and restore what was displayed
+// before as soon as either stops holding
+static void _preview_on_hover_apply(dt_iop_module_t *module)
+{
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  int reprocess = 0;
+  if(!bd) return;
+
+  dt_dev_pixelpipe_display_mask_t wanted;
 
   dt_pthread_mutex_lock(&bd->lock);
-  // restore saved request_mask_display and reprocess image
-  if(bd->timeout_handle
-     && (module->request_mask_display
-         != (bd->save_for_leave & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY)))
+  // hovered_channel_display is NONE when the widget's channel could not be
+  // resolved; there is nothing to preview then
+  if(_preview_on_hover_is_on()
+     && bd->hovered_channel_widget
+     && bd->hovered_channel_display != DT_DEV_PIXELPIPE_DISPLAY_NONE)
   {
-    module->request_mask_display = bd->save_for_leave & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY;
-    reprocess = 1;
+    if(!bd->hover_preview_active)
+    {
+      // first frame of a preview: remember what to come back to
+      bd->save_for_leave = module->request_mask_display;
+      bd->hover_preview_active = TRUE;
+    }
+    wanted = DT_DEV_PIXELPIPE_DISPLAY_CHANNEL | bd->hovered_channel_display;
   }
-  bd->timeout_handle = 0;
+  else
+  {
+    if(!bd->hover_preview_active)
+    {
+      dt_pthread_mutex_unlock(&bd->lock);
+      return;
+    }
+    bd->hover_preview_active = FALSE;
+    wanted = bd->save_for_leave;
+  }
   dt_pthread_mutex_unlock(&bd->lock);
 
-  if(reprocess)
+  if(module->request_mask_display != wanted)
+  {
+    module->request_mask_display = wanted;
     dt_iop_refresh_center(module);
-  // return FALSE and thereby terminate the handler
-  return FALSE;
+  }
 }
 
-// de-activate magic mode when leaving the gradient slider
-static void _blendop_blendif_leave_cb(GtkEventControllerMotion *controller,
-                                        dt_iop_module_t *module)
+static gboolean _preview_on_hover_dwell_elapsed(gpointer user_data)
 {
-  if(dt_atomic_get_int(&darktable.gui->reset) != 0) return;
+  dt_iop_module_t *module = user_data;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd) return G_SOURCE_REMOVE;
 
-  dt_iop_gui_blend_data_t *data = module->blend_data;
-
-  // do not immediately switch-off mask/channel display in case user
-  // leaves gradient only briefly.  instead we activate a handler
-  // function that gets triggered after some timeout
-  dt_pthread_mutex_lock(&data->lock);
-  if(!(module->request_mask_display & DT_DEV_PIXELPIPE_DISPLAY_STICKY)
-     && !data->timeout_handle
-     && (module->request_mask_display
-         != (data->save_for_leave & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY)))
-      data->timeout_handle = g_timeout_add(1000, _blendop_blendif_leave_delayed, module);
-  dt_pthread_mutex_unlock(&data->lock);
+  bd->preview_dwell_timer = 0;
+  _preview_on_hover_apply(module);
+  return G_SOURCE_REMOVE;
 }
 
+// shared by both hovered widget kinds: the parametric range sliders below and
+// the "add channel" buttons in _rebuild_param_channel_buttons, which resolve
+// their channel differently. Only the buttons carry a channel to preview; the
+// sliders pass NONE and are here purely to register the hover.
+static void _preview_on_hover_enter(dt_iop_module_t *module,
+                                    GtkWidget *widget,
+                                    const dt_dev_pixelpipe_display_mask_t channel)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+
+  bd->hovered_channel_widget = widget;
+  bd->hovered_channel_display = channel;
+  gtk_widget_grab_focus(widget);
+
+  // re-arm on every enter, so sweeping across the button row only ever fires
+  // for the button the pointer actually settles on. Whatever was previewed
+  // before stays up meanwhile, rather than flickering off and on.
+  _preview_on_hover_cancel_dwell(bd);
+  if(_preview_on_hover_is_on() && channel != DT_DEV_PIXELPIPE_DISPLAY_NONE)
+    bd->preview_dwell_timer = g_timeout_add(BLEND_PREVIEW_ON_HOVER_DWELL_MS,
+                                            _preview_on_hover_dwell_elapsed, module);
+  else
+    _preview_on_hover_apply(module);  // nothing to show: take any preview down now
+}
+
+static void _preview_on_hover_leave(dt_iop_module_t *module, GtkWidget *widget)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+
+  // a leave for a widget we are no longer tracking would undo the enter that
+  // has since taken over (adjacent buttons deliver enter before leave)
+  if(bd->hovered_channel_widget != widget) return;
+
+  bd->hovered_channel_widget = NULL;
+  _preview_on_hover_cancel_dwell(bd);
+  _preview_on_hover_apply(module);
+}
+
+// set the mode and let whichever module is hovering an add-channel button
+// right now pick the change up without moving the pointer. Shared by the panel
+// options menu item and the shortcut action (_shortcut_toggle_preview_on_hover).
+static void _preview_on_hover_set(const gboolean on)
+{
+  dt_conf_set_bool(BLEND_PREVIEW_ON_HOVER_CONF, on);
+
+  for(GList *m = darktable.develop ? darktable.develop->iop : NULL;
+      m;
+      m = g_list_next(m))
+  {
+    dt_iop_module_t *mod = m->data;
+    dt_iop_gui_blend_data_t *bd = mod->blend_data;
+    _preview_on_hover_cancel_dwell(bd);
+    _preview_on_hover_apply(mod);
+    // the channel buttons say whether resting on them previews, so their
+    // tooltips have to be rebuilt when that stops being true
+    if(bd && bd->masks_param_channels_inner) _update_add_target_sensitivity(mod);
+  }
+}
+
+static void _blendop_blendif_enter_cb(GtkEventControllerMotion *controller,
+                                      double x, double y,
+                                      dt_iop_module_t *module)
+{
+  DT_GUARD_GUI_UPDATE();
+
+  // the sliders are where the work happens: previewing on the way to grabbing
+  // one costs a pipeline reprocess nobody asked for, so they only register the
+  // hover (the a/m keys need it, see _blendop_blendif_key_press_cb) and leave
+  // the channel unresolved -- _preview_on_hover_apply reads NONE as "nothing to
+  // preview". The add-channel buttons are the ones that preview.
+  _preview_on_hover_enter(module, dt_gui_get_widget(controller),
+                          DT_DEV_PIXELPIPE_DISPLAY_NONE);
+}
+
+static void _blendop_blendif_leave_cb(GtkEventControllerMotion *controller,
+                                      dt_iop_module_t *module)
+{
+  DT_GUARD_GUI_UPDATE();
+
+  _preview_on_hover_leave(module, dt_gui_get_widget(controller));
+}
 
 static gboolean _blendop_blendif_key_press_cb(GtkEventControllerKey *controller,
-                                                  guint keyval,
-                                                  guint keycode,
-                                                  GdkModifierType state,
-                                                  dt_iop_module_t *module)
+                                              guint keyval,
+                                              guint keycode,
+                                              GdkModifierType state,
+                                              dt_iop_module_t *module)
 {
   if(dt_atomic_get_int(&darktable.gui->reset) != 0) return FALSE;
 
   GtkWidget *widget = dt_gui_get_widget(controller);
   dt_iop_gui_blend_data_t *data = module->blend_data;
+  if(data->hovered_channel_widget != widget) return FALSE;
   gboolean handled = FALSE;
 
   switch(keyval)
@@ -2507,23 +2567,13 @@ static gboolean _blendop_blendif_key_press_cb(GtkEventControllerKey *controller,
       handled = TRUE;
       break;
     }
-    case GDK_KEY_c:
-      _blendop_blendif_channel_mask_view_toggle
-        (widget, module, DT_DEV_PIXELPIPE_DISPLAY_CHANNEL);
-      handled = TRUE;
-      break;
-    case GDK_KEY_C:
-      _blendop_blendif_channel_mask_view_toggle
-        (widget, module,
-         DT_DEV_PIXELPIPE_DISPLAY_CHANNEL | DT_DEV_PIXELPIPE_DISPLAY_STICKY);
-      handled = TRUE;
-      break;
     case GDK_KEY_m:
     case GDK_KEY_M:
       _blendop_blendif_channel_mask_view_toggle
         (widget, module,
          DT_DEV_PIXELPIPE_DISPLAY_MASK);
       handled = TRUE;
+      break;
   }
 
   if(handled)
@@ -2537,28 +2587,28 @@ static gboolean _blendop_blendif_key_press_cb(GtkEventControllerKey *controller,
                              gradient
 
 const dt_iop_gui_blendif_channel_t Lab_channels[]
-    = { { N_("L"), N_("sliders for L channel"), 1.0f / 100.0f,
+    = { { N_("L"), N_("add a parametric element of type L"), 1.0f / 100.0f,
             COLORSTOPS(_gradient_L), TRUE, 0.0f,
           { DEVELOP_BLENDIF_L_in, DEVELOP_BLENDIF_L_out }, DT_DEV_PIXELPIPE_DISPLAY_L,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("lightness") },
-        { N_("a"), N_("sliders for a channel"), 1.0f / 256.0f,
+        { N_("a"), N_("add a parametric element of type a"), 1.0f / 256.0f,
           COLORSTOPS(_gradient_a), TRUE, 0.0f,
           { DEVELOP_BLENDIF_A_in, DEVELOP_BLENDIF_A_out }, DT_DEV_PIXELPIPE_DISPLAY_a,
           _blendif_scale_print_ab, _blendop_blendif_disp_alternative_mag,
           N_("green/red") },
-        { N_("b"), N_("sliders for b channel"), 1.0f / 256.0f,
+        { N_("b"), N_("add a parametric element of type b"), 1.0f / 256.0f,
           COLORSTOPS(_gradient_b), TRUE, 0.0f,
           { DEVELOP_BLENDIF_B_in, DEVELOP_BLENDIF_B_out }, DT_DEV_PIXELPIPE_DISPLAY_b,
           _blendif_scale_print_ab, _blendop_blendif_disp_alternative_mag,
           N_("blue/yellow") },
-        { N_("C"), N_("sliders for chroma channel (of LCh)"), 1.0f / 100.0f,
+        { N_("C"), N_("add a parametric element of type C"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           TRUE, 0.0f,
           { DEVELOP_BLENDIF_C_in, DEVELOP_BLENDIF_C_out }, DT_DEV_PIXELPIPE_DISPLAY_LCH_C,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("saturation") },
-        { N_("h"), N_("sliders for hue channel (of LCh)"), 1.0f / 360.0f,
+        { N_("h"), N_("add a parametric element of type h"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_LCh_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_h_in, DEVELOP_BLENDIF_h_out }, DT_DEV_PIXELPIPE_DISPLAY_LCH_h,
@@ -2566,45 +2616,45 @@ const dt_iop_gui_blendif_channel_t Lab_channels[]
         { NULL } };
 
 const dt_iop_gui_blendif_channel_t rgb_channels[]
-    = { { N_("g"), N_("sliders for gray value"), 1.0f / 255.0f,
+    = { { N_("g"), N_("add a parametric element of type g"), 1.0f / 255.0f,
             COLORSTOPS(_gradient_gray), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GRAY_in, DEVELOP_BLENDIF_GRAY_out },
           DT_DEV_PIXELPIPE_DISPLAY_GRAY,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("gray") },
-        { N_("R"), N_("sliders for red channel"), 1.0f / 255.0f,
+        { N_("R"), N_("add a parametric element of type R"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_red), TRUE, 0.0f,
           { DEVELOP_BLENDIF_RED_in, DEVELOP_BLENDIF_RED_out },
           DT_DEV_PIXELPIPE_DISPLAY_R,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("red") },
-        { N_("G"), N_("sliders for green channel"), 1.0f / 255.0f,
+        { N_("G"), N_("add a parametric element of type G"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_green), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GREEN_in, DEVELOP_BLENDIF_GREEN_out },
           DT_DEV_PIXELPIPE_DISPLAY_G,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("green") },
-        { N_("B"), N_("sliders for blue channel"), 1.0f / 255.0f,
+        { N_("B"), N_("add a parametric element of type B"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_blue), TRUE, 0.0f,
           { DEVELOP_BLENDIF_BLUE_in, DEVELOP_BLENDIF_BLUE_out },
           DT_DEV_PIXELPIPE_DISPLAY_B,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("blue") },
-        { N_("H"), N_("sliders for hue channel (of HSL)"), 1.0f / 360.0f,
+        { N_("H"), N_("add a parametric element of type H"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_HSL_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_H_in, DEVELOP_BLENDIF_H_out },
           DT_DEV_PIXELPIPE_DISPLAY_HSL_H,
           _blendif_scale_print_hue, NULL,
           N_("hue") },
-        { N_("S"), N_("sliders for chroma channel (of HSL)"), 1.0f / 100.0f,
+        { N_("S"), N_("add a parametric element of type S"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_S_in, DEVELOP_BLENDIF_S_out },
           DT_DEV_PIXELPIPE_DISPLAY_HSL_S,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("chroma") },
-        { N_("L"), N_("sliders for value channel (of HSL)"), 1.0f / 100.0f,
+        { N_("L"), N_("add a parametric element of type L"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_gray),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_l_in, DEVELOP_BLENDIF_l_out },
@@ -2614,45 +2664,45 @@ const dt_iop_gui_blendif_channel_t rgb_channels[]
         { NULL } };
 
 const dt_iop_gui_blendif_channel_t rgbj_channels[]
-    = { { N_("g"), N_("sliders for gray value"), 1.0f / 255.0f,
+    = { { N_("g"), N_("add a parametric element of type g"), 1.0f / 255.0f,
             COLORSTOPS(_gradient_gray), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GRAY_in, DEVELOP_BLENDIF_GRAY_out },
           DT_DEV_PIXELPIPE_DISPLAY_GRAY,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("gray") },
-        { N_("R"), N_("sliders for red channel"), 1.0f / 255.0f,
+        { N_("R"), N_("add a parametric element of type R"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_red), TRUE, 0.0f,
           { DEVELOP_BLENDIF_RED_in, DEVELOP_BLENDIF_RED_out },
           DT_DEV_PIXELPIPE_DISPLAY_R,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("red") },
-        { N_("G"), N_("sliders for green channel"), 1.0f / 255.0f,
+        { N_("G"), N_("add a parametric element of type G"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_green), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GREEN_in, DEVELOP_BLENDIF_GREEN_out },
           DT_DEV_PIXELPIPE_DISPLAY_G,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("green") },
-        { N_("B"), N_("sliders for blue channel"), 1.0f / 255.0f,
+        { N_("B"), N_("add a parametric element of type B"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_blue), TRUE, 0.0f,
           { DEVELOP_BLENDIF_BLUE_in, DEVELOP_BLENDIF_BLUE_out },
           DT_DEV_PIXELPIPE_DISPLAY_B,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("blue") },
-        { N_("Jz"), N_("sliders for value channel (of JzCzhz)"), 1.0f / 100.0f,
+        { N_("Jz"), N_("add a parametric element of type Jz"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_gray),
           TRUE, -6.64385619f, // cf. _blend_init_blendif_boost_parameters
           { DEVELOP_BLENDIF_Jz_in, DEVELOP_BLENDIF_Jz_out },
           DT_DEV_PIXELPIPE_DISPLAY_JzCzhz_Jz,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("luminance") },
-        { N_("Cz"), N_("sliders for chroma channel (of JzCzhz)"), 1.0f / 100.0f,
+        { N_("Cz"), N_("add a parametric element of type Cz"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           TRUE, -6.64385619f, // cf. _blend_init_blendif_boost_parameters
           { DEVELOP_BLENDIF_Cz_in, DEVELOP_BLENDIF_Cz_out },
           DT_DEV_PIXELPIPE_DISPLAY_JzCzhz_Cz,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("chroma") },
-        { N_("hz"), N_("sliders for hue channel (of JzCzhz)"), 1.0f / 360.0f,
+        { N_("hz"), N_("add a parametric element of type hz"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_JzCzhz_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_hz_in, DEVELOP_BLENDIF_hz_out },
@@ -2685,7 +2735,6 @@ const char *slider_tooltip[] =
        "drag marker to adjust (shift+drag to move range)\n"
        "right-click marker for precise numeric entry\n"
        "double-click to reset\n"
-       "press 'c' to toggle view of channel data\n"
        "press 'm' to toggle mask view\n"
        "press 'a' to toggle display modes"),
     N_("adjustment based on unblended output of this module:\n"
@@ -2695,7 +2744,6 @@ const char *slider_tooltip[] =
        "drag marker to adjust (shift+drag to move range)\n"
        "right-click marker for precise numeric entry\n"
        "double-click to reset\n"
-       "press 'c' to toggle view of channel data\n"
        "press 'm' to toggle mask view\n"
        "press 'a' to toggle display modes") };
 
@@ -3710,12 +3758,10 @@ static void _update_lowop_badge(GtkWidget *badge,
 static void
 _set_badge_active(GtkWidget *badge, gboolean active, const char *tooltip_when_active);
 static const char *_solo_badge_tooltip(void);
-static const char *_soloedit_badge_tooltip(void);
 enum
 {
   MASK_SOLO_BADGE_NONE = 0,
   MASK_SOLO_BADGE_SOLO,
-  MASK_SOLO_BADGE_SOLOEDIT,
   MASK_SOLO_BADGE_DISABLE,
   MASK_SOLO_BADGE_BYPASS = MASK_SOLO_BADGE_DISABLE,
 };
@@ -5262,20 +5308,13 @@ static const char *_solo_badge_tooltip(void)
            "click here to clear solo");
 }
 
-static const char *_soloedit_badge_tooltip(void)
-{
-  return _("solo edited: only this element's nodes/handles are editable on canvas\n"
-           "(other elements still contribute to the visible mask)\n"
-           "click here to clear solo edit");
-}
-
-// solo and solo-edit are mutually exclusive (see the clearing logic in
-// _toggle_solo_form/_toggle_solo_group/_toggle_soloedit), so one row/header
-// can only ever be in one of these states at a time -- they share a single
-// badge slot instead of two, saving a cell in the badge stack (see
-// _make_badge_stack) and, for element rows, the vertical space that cell used
-// to cost every row whether or not solo-edit was ever in play. (MASK_SOLO_BADGE_*
-// forward-declared above, with the other badge helper forward decls.)
+// solo and per-element disable are mutually exclusive, so one row/header can
+// only ever be in one of these states at a time and they share a single badge
+// slot instead of two (see _make_badge_stack). Solo-edit used to have a state
+// here too; it is a mode now (see _soloedit_follow_selection), always applying
+// to the selected row, so the selection highlight and the header toggle already
+// say what it is doing. (MASK_SOLO_BADGE_* forward-declared above, with the
+// other badge helper forward decls.)
 
 static const char *_disable_badge_tooltip(void)
 {
@@ -5295,15 +5334,13 @@ static void _set_solo_status_badge(GtkWidget *badge, const int status)
   if(!badge) return;
   g_object_set_data(G_OBJECT(badge), "badge-status", GINT_TO_POINTER(status));
   gtk_widget_set_tooltip_text(
-    badge, status == MASK_SOLO_BADGE_SOLO       ? _solo_badge_tooltip()
-           : status == MASK_SOLO_BADGE_SOLOEDIT ? _soloedit_badge_tooltip()
-           : status == MASK_SOLO_BADGE_DISABLE  ? _disable_badge_tooltip()
-                                                : NULL);
+    badge, status == MASK_SOLO_BADGE_SOLO      ? _solo_badge_tooltip()
+           : status == MASK_SOLO_BADGE_DISABLE ? _disable_badge_tooltip()
+                                               : NULL);
   gtk_widget_queue_draw(badge);
 }
 
-// a small badge shown next to a soloed, solo-edited or disabled element/group's
-// label, reusing the same light-bg/dark-fg swap (see .mask-power-solo).
+// a small badge shown next to a soloed or disabled element/group's label, reusing the same light-bg/dark-fg swap (see .mask-power-solo).
 static gboolean _solo_status_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
 {
   const int status = _solo_status_badge_get(w);
@@ -5321,9 +5358,6 @@ static gboolean _solo_status_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user
   const gint pad = DT_PIXEL_APPLY_DPI(1);
   if(status == MASK_SOLO_BADGE_SOLO)
     dtgtk_cairo_paint_eye(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad, 0, NULL);
-  else if(status == MASK_SOLO_BADGE_SOLOEDIT)
-    dtgtk_cairo_paint_soloedit(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad, 0,
-                               NULL);
   else if(status == MASK_SOLO_BADGE_DISABLE)
     dtgtk_cairo_paint_eye_toggle(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad,
                                  CPF_ACTIVE, NULL);
@@ -5549,10 +5583,10 @@ static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd,
   const gboolean inverse = pt->state & DT_MASKS_STATE_INVERSE;
   const gboolean solo = bd->solo_formid == pt->formid;
 
-  // a soloed (or solo-edited) element stays highlighted like a hovered row, not
-  // just while the mouse is over it -- a distinct class from the transient hover
-  // wash so it survives hovering elsewhere in the list (see _clear_hover_classes).
-  if(solo || bd->soloedit_formid == pt->formid)
+  // a soloed element stays highlighted like a hovered row, not just while the
+  // mouse is over it -- a distinct class from the transient hover wash so it
+  // survives hovering elsewhere in the list (see _clear_hover_classes).
+  if(solo)
     dt_gui_add_class(row_vbox, "mask-list-row-solo");
   else
     dt_gui_remove_class(row_vbox, "mask-list-row-solo");
@@ -5567,8 +5601,6 @@ static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd,
 
   if(solo_badge)
     _set_solo_status_badge(solo_badge, elem_disabled ? MASK_SOLO_BADGE_DISABLE
-                                       : bd->soloedit_formid == pt->formid
-                                         ? MASK_SOLO_BADGE_SOLOEDIT
                                        : solo ? MASK_SOLO_BADGE_SOLO
                                               : MASK_SOLO_BADGE_NONE);
 
@@ -5824,6 +5856,100 @@ static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
 // (defined lower, after the operator helpers).
 static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd);
 
+// solo-edit is a mode rather than a per-element action: while it is on, canvas
+// editing follows the list selection, so only the selected shape's nodes and
+// handles are grabbable and clicking down the list walks the isolation along
+// with it. The state it drives (bd->soloedit_formid) and the way it is applied
+// are unchanged -- this only replaces the trigger, so it goes through
+// _toggle_soloedit rather than setting the canvas up itself. The header toggle
+// is the whole indication that the mode is on; rows carry no solo-edit badge,
+// since the isolated element is by definition the selected one.
+#define MASKS_SOLOEDIT_MODE_CONF "plugins/darkroom/masks/solo_edit_mode"
+
+static gboolean _soloedit_mode_is_on(void)
+{
+  return dt_conf_get_bool(MASKS_SOLOEDIT_MODE_CONF);
+}
+
+// what the mode would isolate for the current selection: the selected element,
+// as long as it is a drawn shape. A parametric channel or a raster mask has no
+// canvas geometry of its own to isolate (same carve-out the menu item had), and
+// a group selection means "edit the whole group", which is the mode's own off
+// state anyway.
+static dt_mask_id_t _soloedit_selection_target(dt_iop_gui_blend_data_t *bd)
+{
+  if(!_soloedit_mode_is_on() || !dt_is_valid_maskid(bd->panel_selected_formid))
+    return INVALID_MASKID;
+  // solo and solo-edit stay mutually exclusive: while something is soloed the
+  // mode stands down rather than cancelling the solo behind the user's back
+  // (_model_toggle_soloedit would clear it). It re-applies on the next
+  // selection change once the solo is off.
+  if(dt_is_valid_maskid(bd->solo_formid) || bd->solo_group_key != 0)
+    return INVALID_MASKID;
+
+  const dt_masks_form_t *form =
+    dt_masks_get_from_id(darktable.develop, bd->panel_selected_formid);
+  if(!form || (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)))
+    return INVALID_MASKID;
+  return bd->panel_selected_formid;
+}
+
+static void _soloedit_follow_selection(dt_iop_gui_blend_data_t *bd)
+{
+  // narrowing the canvas edit scope tears down and rebuilds form_visible, which
+  // can clear the canvas selection (dt_masks_change_form_gui -> masks.c's
+  // dt_masks_select_form(NULL, NULL)) and land straight back here through
+  // dt_iop_gui_masks_select_form -- with an invalid selection, undoing the
+  // isolation we are in the middle of applying. One gesture, one decision.
+  static gboolean applying = FALSE;
+  if(applying) return;
+
+  const dt_mask_id_t want = _soloedit_selection_target(bd);
+  if(bd->soloedit_formid == want) return;
+
+  applying = TRUE;
+  // _toggle_soloedit is a toggle, so "off" means feeding it back the id that is
+  // currently isolated
+  _toggle_soloedit(bd->module,
+                   dt_is_valid_maskid(want) ? want : bd->soloedit_formid);
+  applying = FALSE;
+}
+
+// the solo-edit mode toggle, and the <blending> action bound to it. Global like
+// the channel-preview mode next to it, so it survives moving between modules;
+// applying it to every module also lets whichever one is showing its panel pick
+// the change up without a further click.
+static void _soloedit_mode_toggled(GtkGestureSingle *gesture,
+                                   gint n_press,
+                                   gdouble x,
+                                   gdouble y,
+                                   dt_iop_module_t *module)
+{
+  DT_GUARD_GUI_UPDATE();
+
+  const gboolean on = !_soloedit_mode_is_on();
+  dt_conf_set_bool(MASKS_SOLOEDIT_MODE_CONF, on);
+
+  DT_ENTER_GUI_UPDATE();
+  for(GList *m = darktable.develop ? darktable.develop->iop : NULL;
+      m;
+      m = g_list_next(m))
+  {
+    dt_iop_gui_blend_data_t *bd = ((dt_iop_module_t *)m->data)->blend_data;
+    if(bd && bd->soloedit_mode)
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->soloedit_mode), on);
+  }
+  DT_LEAVE_GUI_UPDATE();
+
+  for(GList *m = darktable.develop ? darktable.develop->iop : NULL;
+      m;
+      m = g_list_next(m))
+  {
+    dt_iop_gui_blend_data_t *bd = ((dt_iop_module_t *)m->data)->blend_data;
+    if(bd && bd->masks_list_box) _soloedit_follow_selection(bd);
+  }
+}
+
 static void _update_row_selection(dt_iop_gui_blend_data_t *bd)
 {
   if(!bd || !bd->masks_list_box) return;
@@ -5835,6 +5961,7 @@ static void _update_row_selection(dt_iop_gui_blend_data_t *bd)
     darktable.develop->form_gui->panel_selected_formid = bd->panel_selected_formid;
   _flexi_new_op_follow_selection(bd);
   _flexi_refine_follow_selection(bd);
+  _soloedit_follow_selection(bd);
   dt_control_queue_redraw_center();
 }
 
@@ -6229,13 +6356,9 @@ _make_op_combo(GtkWidget **inner, DTGTKCairoPaintIconFunc icon, GCallback press)
 // on canvas to edit -- it does not make sense to solo-edit something that
 // isn't shown, so drop it and restore full-group canvas editability.
 // No refresh of its own: both callers (_toggle_solo_form, _toggle_solo_group)
-// run _refresh_all_shape_rows immediately afterwards, which repaints the
-// cleared row's badge and solo class from bd->soloedit_formid anyway. This
-// used to force a full list rebuild here "because the solo-edit toggle
-// button's checked state is only set at row-construction time" -- there is no
-// such button any more, solo-edit is a check menu item built fresh each time a
-// row's actions menu opens (see _build_shape_actions_menu), so the only thing
-// the state still drives in a row is the badge/class pair above.
+// run _refresh_all_shape_rows immediately afterwards, and solo-edit drives no
+// row visual of its own any more -- the header toggle shows the mode, and the
+// isolated element is always the selected one.
 // state half; TRUE means the caller must restore full-group canvas editing
 static gboolean _model_clear_soloedit_if_hidden(dt_iop_module_t *module,
                                                 dt_masks_form_t *grp)
@@ -6334,8 +6457,6 @@ _solo_badge_form_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
   if(status == MASK_SOLO_BADGE_SOLO)
     _toggle_solo_form(module, id);
-  else if(status == MASK_SOLO_BADGE_SOLOEDIT)
-    _toggle_soloedit(module, id);
   else if(status == MASK_SOLO_BADGE_DISABLE)
     _toggle_element_disable(module, id);
   else
@@ -8426,15 +8547,26 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     gtk_widget_set_sensitive(bd->masks_param_channels_box, has_target);
   // the container above is also disabled, but each channel button is set
   // insensitive individually too (matching masks_shapes/raster/import) so its
-  // own disabled-state tooltip stays reachable
+  // own disabled-state tooltip stays reachable. These also say so when the
+  // channel-preview mode is on, since then resting on one does something
+  // beyond adding an element (see _preview_on_hover_enter).
   if(bd->masks_param_channels_inner)
+  {
+    gchar *ch_hint =
+      _preview_on_hover_is_on()
+        ? g_strconcat(hint,
+                      _("\nrest the pointer here to preview this channel"),
+                      NULL)
+        : g_strdup(hint);
     for(GList *l =
           gtk_container_get_children(GTK_CONTAINER(bd->masks_param_channels_inner));
         l; l = g_list_delete_link(l, l))
     {
       gtk_widget_set_sensitive(GTK_WIDGET(l->data), has_target);
-      _append_tooltip_hint(GTK_WIDGET(l->data), hint);
+      _append_tooltip_hint(GTK_WIDGET(l->data), ch_hint);
     }
+    g_free(ch_hint);
+  }
 
   // raster and import/reuse also add an element to the target group, so they
   // need the same target and the same explanation when there isn't one
@@ -10226,15 +10358,12 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
   else
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
   // solo-edit changes which shape the canvas lets you edit, never the list
-  // structure: the only thing it drives in the list is the solo badge and the
-  // row's solo class on the old and new rows (see _update_shape_row_state),
-  // both of which _refresh_all_shape_rows repaints from bd->soloedit_formid.
-  // This is also why it no longer has to be deferred -- this is reachable
-  // mid-dispatch from the row's own actions menu ("solo edit", see
-  // _shape_menu_toggle_soloedit), and a full rebuild would have destroyed that
-  // menu's own row underneath it; _refresh_all_shape_rows only mutates
-  // existing widgets, so it is safe synchronously (same reasoning as
-  // _toggle_solo_group).
+  // structure. The refresh is for the solo it may have just cleared above
+  // (_model_toggle_soloedit drops any active solo), whose hidden bits every row
+  // paints from. It does not have to be deferred: _refresh_all_shape_rows only
+  // mutates existing widgets, so it is safe synchronously even though the
+  // selection change that drives it (see _soloedit_follow_selection) can arrive
+  // mid-rebuild (same reasoning as _toggle_solo_group).
   _refresh_all_shape_rows(module);
 }
 
@@ -11723,13 +11852,6 @@ static void _shape_menu_toggle_solo(GtkCheckMenuItem *item, dt_iop_module_t *mod
   _close_shape_actions_menu(GTK_WIDGET(item));
 }
 
-static void _shape_menu_toggle_soloedit(GtkCheckMenuItem *item, dt_iop_module_t *module)
-{
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _toggle_soloedit(module, id);
-  _close_shape_actions_menu(GTK_WIDGET(item));
-}
-
 static void _shape_menu_rename(GtkMenuItem *item, dt_iop_module_t *module)
 {
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
@@ -11759,12 +11881,6 @@ static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
   const dt_masks_point_group_t *pt = grp ? _group_point(grp, id) : NULL;
-  // solo edit isolates on-canvas nodes/handles for editing -- meaningless for
-  // a parametric channel or a raster mask, neither of which has any canvas
-  // geometry of its own to isolate (see _toggle_soloedit).
-  dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
-  const gboolean is_drawn_shape =
-    form && !(form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER));
 
   GtkWidget *menu = gtk_menu_new();
 
@@ -11790,17 +11906,6 @@ static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
     g_signal_connect(G_OBJECT(solo_item), "toggled", G_CALLBACK(_shape_menu_toggle_solo),
                      module);
     gtk_menu_shell_append(GTK_MENU_SHELL(menu), solo_item);
-
-    if(is_drawn_shape)
-    {
-      GtkWidget *soloedit_item = gtk_check_menu_item_new_with_label(_("solo edit"));
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(soloedit_item),
-                                     bd->soloedit_formid == id);
-      g_object_set_data(G_OBJECT(soloedit_item), "formid", GINT_TO_POINTER(id));
-      g_signal_connect(G_OBJECT(soloedit_item), "toggled",
-                       G_CALLBACK(_shape_menu_toggle_soloedit), module);
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), soloedit_item);
-    }
 
     // mask operations section
     _add_menu_section_header(menu, _("mask operations"), TRUE);
@@ -11828,6 +11933,7 @@ static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
   // a multi-path AI mask (see _register_vectorized_forms/object.c) offers an
   // escape hatch for users who want full manual control over its individual
   // paths instead of the bundle's coordinated feather/size/rotation.
+  const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(form && (form->type & DT_MASKS_OBJECT) && g_list_length(form->points) > 1)
   {
     GtkWidget *break_item = gtk_menu_item_new_with_label(_("break into components"));
@@ -13475,9 +13581,8 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
                      G_CALLBACK(_param_row_slider_callback), ed);
     g_signal_connect(G_OBJECT(sl->slider), "value-reset",
                      G_CALLBACK(_param_row_slider_reset_callback), ed);
-    // back-reference so _param_row_editor_channel (see
-    // _blendop_blendif_channel_mask_view) can resolve THIS row's own channel from the
-    // slider alone, instead of the removed classic editor's shared
+    // back-reference so _param_row_editor_channel can resolve THIS row's own
+    // channel from the slider alone, instead of the removed classic editor's shared
     // data->channel[data->tab] (permanently NULL now, see dt_iop_gui_blend_data_t in
     // blend.h -- dereferencing it here used to crash on 'c'/'C'/'m'/'M'/'a'/'A' while
     // hovering this slider).
@@ -14002,8 +14107,6 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   const gboolean elem_disabled = (fpt->state & DT_MASKS_STATE_DISABLE) != 0;
   GtkWidget *solo_badge = _make_solo_status_badge();
   _set_solo_status_badge(solo_badge, elem_disabled ? MASK_SOLO_BADGE_DISABLE
-                                     : bd->soloedit_formid == fid
-                                       ? MASK_SOLO_BADGE_SOLOEDIT
                                      : bd->solo_formid == fid ? MASK_SOLO_BADGE_SOLO
                                                               : MASK_SOLO_BADGE_NONE);
   g_object_set_data(G_OBJECT(solo_badge), "formid", GINT_TO_POINTER(fid));
@@ -14117,7 +14220,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
     g_object_set_data(G_OBJECT(row_vbox), "opacity-editor-box", opacity_box);
   if(dt_is_valid_maskid(bd->panel_selected_formid) && fid == bd->panel_selected_formid)
     dt_gui_add_class(row_vbox, "mask-list-row-selected");
-  if(bd->solo_formid == fid || bd->soloedit_formid == fid)
+  if(bd->solo_formid == fid)
     dt_gui_add_class(row_vbox, "mask-list-row-solo");
 
   // every parametric mask row gets its own permanently visible slider editor
@@ -15643,78 +15746,37 @@ static void _param_channel_clicked(GtkButton *button, gpointer user_data)
   _add_parametric_channel(self, ch, 0);
 }
 
-// hovering a channel button alone does not preview anything -- exactly like
-// hovering a legacy blendif slider (see _blendop_blendif_enter/_key_press):
-// hovering only grabs focus and remembers the prior request_mask_display, so
-// that a 'c' key press while hovering can toggle that channel's mask on, and
-// leaving (after a short delay, so moving between adjacent buttons doesn't
-// flicker) restores what was showing before.
-static gboolean _param_channel_button_enter(GtkWidget *widget,
-                                            GdkEventCrossing *event,
-                                            gpointer user_data)
+static void _param_channel_button_enter_cb(GtkEventControllerMotion *controller,
+                                           double x, double y,
+                                           dt_iop_module_t *module)
 {
-  dt_iop_module_t *module = user_data;
+  DT_GUARD_GUI_UPDATE();
+
+  GtkWidget *widget = dt_gui_get_widget(controller);
   dt_iop_gui_blend_data_t *bd = module->blend_data;
 
-  dt_pthread_mutex_lock(&bd->lock);
-  if(bd->timeout_handle)
-  {
-    g_source_remove(bd->timeout_handle);
-    bd->timeout_handle = 0;
-  }
-  else if(!(bd->save_for_leave & DT_DEV_PIXELPIPE_DISPLAY_STICKY))
-  {
-    bd->save_for_leave = module->request_mask_display & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY;
-  }
-  dt_pthread_mutex_unlock(&bd->lock);
-
-  gtk_widget_grab_focus(widget);
-  return FALSE;
-}
-
-// press 'c' while hovering a channel button to toggle a preview of that
-// channel's mask -- same key, same gesture as the legacy blendif sliders
-// (see _blendop_blendif_key_press's GDK_KEY_c case).
-static gboolean
-_param_channel_button_key_press(GtkWidget *widget, GdkEventKey *event, gpointer user_data)
-{
-  if(event->keyval != GDK_KEY_c && event->keyval != GDK_KEY_C) return FALSE;
-
-  dt_iop_module_t *module = user_data;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  // the button stands for one channel of the module's blend colorspace; the
+  // row is rebuilt whenever that colorspace changes, so the index still fits
+  dt_dev_pixelpipe_display_mask_t channel = DT_DEV_PIXELPIPE_DISPLAY_NONE;
   const int ch = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(widget), "param-channel"));
   const dt_iop_gui_blendif_channel_t *channels =
     dt_develop_blendif_channels_for_csp(bd->csp);
-  if(!channels) return FALSE;
-  int nch = 0;
-  while(channels[nch].label) nch++;
-  if(ch < 0 || ch >= nch) return FALSE;
+  if(channels && ch >= 0)
+  {
+    int nch = 0;
+    while(channels[nch].label) nch++;
+    if(ch < nch) channel = channels[ch].display_channel;
+  }
 
-  const dt_dev_pixelpipe_display_mask_t mode =
-    DT_DEV_PIXELPIPE_DISPLAY_CHANNEL | channels[ch].display_channel;
-
-  module->request_mask_display =
-    (module->request_mask_display & ~DT_DEV_PIXELPIPE_DISPLAY_STICKY) == mode
-      ? DT_DEV_PIXELPIPE_DISPLAY_NONE
-      : mode;
-  dt_iop_refresh_center(module);
-  return TRUE;
+  _preview_on_hover_enter(module, widget, channel);
 }
 
-static gboolean _param_channel_button_leave(GtkWidget *widget,
-                                            GdkEventCrossing *event,
-                                            gpointer user_data)
+static void _param_channel_button_leave_cb(GtkEventControllerMotion *controller,
+                                           dt_iop_module_t *module)
 {
-  dt_iop_module_t *module = user_data;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  DT_GUARD_GUI_UPDATE();
 
-  dt_pthread_mutex_lock(&bd->lock);
-  if(!(module->request_mask_display & DT_DEV_PIXELPIPE_DISPLAY_STICKY)
-     && !bd->timeout_handle)
-    bd->timeout_handle = g_timeout_add(1000, _blendop_blendif_leave_delayed, module);
-  dt_pthread_mutex_unlock(&bd->lock);
-
-  return FALSE;
+  _preview_on_hover_leave(module, dt_gui_get_widget(controller));
 }
 
 // (re)build the flexi-only "add parametric" row: one flat, CSS-themeable button
@@ -15745,13 +15807,8 @@ static void _rebuild_param_channel_buttons(dt_iop_module_t *module)
     g_object_set_data(G_OBJECT(btn), "param-channel", GINT_TO_POINTER(idx));
     g_signal_connect(G_OBJECT(btn), "clicked", G_CALLBACK(_param_channel_clicked),
                      module);
-    gtk_widget_add_events(btn, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
-    g_signal_connect(G_OBJECT(btn), "enter-notify-event",
-                     G_CALLBACK(_param_channel_button_enter), module);
-    g_signal_connect(G_OBJECT(btn), "leave-notify-event",
-                     G_CALLBACK(_param_channel_button_leave), module);
-    g_signal_connect(G_OBJECT(btn), "key-press-event",
-                     G_CALLBACK(_param_channel_button_key_press), module);
+    dt_gui_connect_motion(btn, NULL, _param_channel_button_enter_cb,
+                          _param_channel_button_leave_cb, module);
     gtk_widget_show(btn);
     gtk_box_pack_start(GTK_BOX(bd->masks_param_channels_inner), btn, FALSE, FALSE, 0);
     // makes each channel button individually shortcut-assignable, like the
@@ -15942,8 +15999,12 @@ static void _shortcut_toggle_soloedit(dt_action_t *action)
   dt_iop_module_t *module = dt_dev_gui_module();
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!dt_is_valid_maskid(bd->panel_selected_formid)) return;
-  _toggle_soloedit(module, bd->panel_selected_formid);
+  if(!bd->soloedit_mode) return;
+  // drive the header toggle rather than bd->soloedit_formid directly: solo-edit
+  // follows the selection now, so isolating one shape by hand would only last
+  // until the next selection change put it back
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->soloedit_mode),
+                               !_soloedit_mode_is_on());
 }
 
 static void _shortcut_change_group_mode(dt_action_t *action)
@@ -15991,6 +16052,43 @@ static void _shortcut_change_group_within_mode(dt_action_t *action)
   dt_gui_menu_popup(GTK_MENU(menu), NULL, 0, 0);
 }
 
+// the panel options (see _add_masks_panel_options_menu) are check items on a
+// menu that is rebuilt from conf on every popup, so there is no persistent
+// widget for dt_action_define_iop to bind to. These give each option a
+// bindable shortcut anyway, flipping the same conf key the menu item does.
+static void _shortcut_toggle_preview_on_hover(dt_action_t *action)
+{
+  _preview_on_hover_set(!_preview_on_hover_is_on());
+}
+
+static void _shortcut_toggle_sticky_opacity(dt_action_t *action)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_not_sticky",
+                   !dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"));
+}
+
+static void _shortcut_toggle_auto_expand_selected(dt_action_t *action)
+{
+  const gboolean on = !dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected");
+  dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", on);
+  // read at row-build time, not hashed by _masks_list_signature -- same
+  // invalidation the menu item's own callback does
+  dt_iop_module_t *module = dt_dev_gui_module();
+  if(module && module->blend_data)
+  {
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    bd->masks_list_sig = DT_INVALID_HASH;
+    _queue_masks_list_rebuild(module);
+  }
+}
+
+static void _shortcut_toggle_collapse_refinements(dt_action_t *action)
+{
+  dt_conf_set_bool(
+    "plugins/darkroom/masks/collapse_refinements_default",
+    !dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"));
+}
+
 // register every panel-selection shortcut above under module->so (the shared
 // operation-type action tree, not the instance's own), so each shows up ONCE
 // in shortcut preferences regardless of how many instances of this operation
@@ -16017,6 +16115,14 @@ static void _register_masks_action_shortcuts(dt_iop_module_t *module)
   dt_action_register(DT_ACTION(module->so),
                      N_("change within-group mode for current group"),
                      _shortcut_change_group_within_mode, 0, 0);
+  dt_action_register(DT_ACTION(module->so), N_("preview channel under cursor"),
+                     _shortcut_toggle_preview_on_hover, 0, 0);
+  dt_action_register(DT_ACTION(module->so), N_("sticky opacity"),
+                     _shortcut_toggle_sticky_opacity, 0, 0);
+  dt_action_register(DT_ACTION(module->so), N_("auto-expand selected shape"),
+                     _shortcut_toggle_auto_expand_selected, 0, 0);
+  dt_action_register(DT_ACTION(module->so), N_("collapse refinements by default"),
+                     _shortcut_toggle_collapse_refinements, 0, 0);
 }
 
 void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
@@ -16177,6 +16283,23 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
         "replaces the current mask with a uniform mask that uses the same blend mode and opacity\n"
         "only for module in focus"));
     gtk_widget_set_no_show_all(bd->suppress, TRUE);
+
+    // solo edit stays in the header: it is used interactively, and its state
+    // has to be visible while editing. The channel preview is a set-once mode,
+    // so it lives in the panel options menu instead (see
+    // _add_masks_panel_options_menu).
+    bd->soloedit_mode = dt_iop_togglebutton_new(
+      module, "blend`tools", N_("solo edit the selected element"), NULL,
+      G_CALLBACK(_soloedit_mode_toggled), FALSE, 0, 0,
+      dtgtk_cairo_paint_soloedit, NULL);
+    gtk_widget_set_tooltip_text
+      (bd->soloedit_mode,
+       _("solo edit the selected element\n"
+         "while enabled, only the selected element's nodes and handles are\n"
+         "editable on canvas; the other elements still contribute to the mask"));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->soloedit_mode),
+                                 _soloedit_mode_is_on());
+    gtk_widget_set_no_show_all(bd->soloedit_mode, TRUE);
 
     // the right side of the groups header holds the whole-mask reset action.
     gtk_box_pack_end(GTK_BOX(groups_hdr), bd->masks_reset_mask_btn, FALSE, FALSE, 0);
@@ -16376,9 +16499,9 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
       darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   }
 
+  _preview_on_hover_cancel_dwell(bd);
+
   dt_pthread_mutex_lock(&bd->lock);
-  if(bd->timeout_handle)
-    g_source_remove(bd->timeout_handle);
   // a queued masks-list rebuild (_queue_masks_list_rebuild) left pending past
   // this teardown would otherwise fire later on the main loop and dereference
   // the widgets/blend_data freed below -- observed live as a burst of
@@ -16798,14 +16921,13 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
         gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[k]), FALSE);
     }
 
+    // request_mask_display was just cleared above, so a hover preview that was
+    // running has nothing left to restore
+    _preview_on_hover_cancel_dwell(bd);
+    bd->hovered_channel_widget = NULL;
     dt_pthread_mutex_lock(&bd->lock);
+    bd->hover_preview_active = FALSE;
     bd->save_for_leave = DT_DEV_PIXELPIPE_DISPLAY_NONE;
-    if(bd->timeout_handle)
-    {
-      // purge any remaining timeout handlers
-      g_source_remove(bd->timeout_handle);
-      bd->timeout_handle = 0;
-    }
     dt_pthread_mutex_unlock(&bd->lock);
 
     // reprocess main center image if needed
@@ -16851,7 +16973,6 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     dt_pthread_mutex_init(&bd->lock, NULL);
     dt_pthread_mutex_lock(&bd->lock);
-    bd->timeout_handle = 0;
     bd->save_for_leave = 0;
     dt_pthread_mutex_unlock(&bd->lock);
 
@@ -16948,8 +17069,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       (bd->showmask,
        _("display mask and/or color channel.\n"
          "ctrl+click to display mask,\n"
-         "shift+click to display channel.\n"
-         "hover over parametric mask slider to select channel for display"));
+         "shift+click to display channel"));
 
     // right-hand cluster: show_mask_overlay, preferences, on/off toggle
     GtkWidget *right_cluster = bd->masks_right_cluster =

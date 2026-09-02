@@ -3665,6 +3665,20 @@
     <longdescription/>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/blend/preview_channel_on_hover</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>preview the channel under the cursor</shortdescription>
+    <longdescription>while enabled, resting the pointer on one of the add-parametric-element buttons displays that channel in the center view; the preview only starts after a short pause, so passing over the buttons costs nothing</longdescription>
+  </dtconfig>
+  <dtconfig>
+    <name>plugins/darkroom/masks/solo_edit_mode</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>solo edit the selected mask element</shortdescription>
+    <longdescription>while enabled, only the selected element's nodes and handles are editable on canvas; the other elements still contribute to the mask</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/opacity</name>
     <type>float</type>
     <default>1.0</default>
