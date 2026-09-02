@@ -1101,12 +1101,12 @@ dialog .sidebar row:selected:hover label,
 /* refinement section header label styling */
 .dt_section_expander.mask-refine-section-expander
 {
-  padding-left: 0;
+  padding-left: 6px;
 }
 
 .mask-refine-indicator-box
 {
-  min-width: 1.7em;
+  min-width: 16px;
 }
 
 .mask-refine-inner-header
