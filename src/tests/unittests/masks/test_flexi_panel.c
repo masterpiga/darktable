@@ -309,6 +309,88 @@ static void test_panel_position_preference_roundtrips(void **state)
   }
 }
 
+// ---------------------------------------------------------------------------
+// mask panel & corner icon state transitions
+// ---------------------------------------------------------------------------
+
+// when a module is focused and masking-capable, but collapsed:
+// - the panel is collapsed
+// - the corner icon is visible
+// - the corner icon active status reflects whether masking is on or off
+static void test_panel_state_collapsed_module_shows_corner_icon(void **state)
+{
+  const dt_masks_panel_state_t s_on =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, FALSE, TRUE, FALSE);
+  assert_true(s_on.want_hosted);
+  assert_true(s_on.panel_collapsed);
+  assert_true(s_on.corner_icon_visible);
+  assert_true(s_on.corner_icon_active);
+
+  const dt_masks_panel_state_t s_off =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, FALSE, FALSE, FALSE);
+  assert_true(s_off.want_hosted);
+  assert_true(s_off.panel_collapsed);
+  assert_true(s_off.corner_icon_visible);
+  assert_false(s_off.corner_icon_active);
+}
+
+// when an expanded module is focused and masking-capable:
+// - the panel is expanded (unless the user explicitly collapsed it via pref)
+// - if expanded, the corner icon is not visible
+static void test_panel_state_expanded_module_respects_pref(void **state)
+{
+  const dt_masks_panel_state_t s_exp =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, TRUE, FALSE);
+  assert_true(s_exp.want_hosted);
+  assert_false(s_exp.panel_collapsed);
+  assert_false(s_exp.corner_icon_visible);
+
+  const dt_masks_panel_state_t s_col =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, TRUE, TRUE);
+  assert_true(s_col.want_hosted);
+  assert_true(s_col.panel_collapsed);
+  assert_true(s_col.corner_icon_visible);
+}
+
+// when masking is disabled on a focused, expanded module:
+// - the panel defaults to collapsed even if the preference was expanded
+// - the corner icon is visible in its inactive state
+static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
+{
+  const dt_masks_panel_state_t s =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, FALSE, FALSE);
+  assert_true(s.want_hosted);
+  assert_true(s.panel_collapsed);
+  assert_true(s.corner_icon_visible);
+  assert_false(s.corner_icon_active);
+}
+
+// when a module has no masking support (e.g. demosaic, crop) or is unfocused:
+// - the panel is collapsed
+// - the corner icon is NOT visible
+static void test_panel_state_unsupported_or_unfocused_hides_all(void **state)
+{
+  const dt_masks_panel_state_t s_no_mask =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, FALSE, TRUE, FALSE, FALSE);
+  assert_false(s_no_mask.want_hosted);
+  assert_true(s_no_mask.panel_collapsed);
+  assert_false(s_no_mask.corner_icon_visible);
+
+  const dt_masks_panel_state_t s_unfocused =
+    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, FALSE, TRUE, TRUE, TRUE, FALSE);
+  assert_false(s_unfocused.want_hosted);
+  assert_true(s_unfocused.panel_collapsed);
+  assert_false(s_unfocused.corner_icon_visible);
+}
+
+// pinning the mask panel when the module is collapsed must expand the module
+static void test_pinning_collapsed_module_expands_iop(void **state)
+{
+  assert_true(_model_masks_pin_should_expand_iop(FALSE, TRUE));
+  assert_false(_model_masks_pin_should_expand_iop(TRUE, TRUE));
+  assert_false(_model_masks_pin_should_expand_iop(FALSE, FALSE));
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -338,6 +420,11 @@ int main(void)
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_panel_position_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
+    cmocka_unit_test_teardown(test_panel_state_collapsed_module_shows_corner_icon, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_expanded_module_respects_pref, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_mask_disabled_defaults_to_collapsed, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_unsupported_or_unfocused_hides_all, _teardown),
+    cmocka_unit_test_teardown(test_pinning_collapsed_module_expands_iop, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
