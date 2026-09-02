@@ -13072,6 +13072,32 @@ static void _param_row_arm_picker_cst(GtkWidget *button, dt_masks_param_row_edit
   // button's new armed/disarmed state, mirroring the classic shared
   // editor's _update_gradient_slider_pickers, which does both in one call.
   _update_param_row_slider_pickers(ed);
+
+  const gboolean btn_active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(button));
+  const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, ed->formid);
+  const char *element_name = (form && form->name[0]) ? form->name : _("parametric");
+
+  if(button == ed->colorpicker_set_values)
+  {
+    const gboolean is_output =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "pick-output")) != 0;
+    if(btn_active)
+      dt_toast_log(is_output ? _("output picker of %s armed")
+                             : _("input picker of %s armed"),
+                   element_name);
+    else
+      dt_toast_log(is_output ? _("output picker of %s unarmed")
+                             : _("input picker of %s unarmed"),
+                   element_name);
+  }
+  else if(button == ed->colorpicker)
+  {
+    if(btn_active)
+      dt_toast_log(_("color picker of %s armed"), element_name);
+    else
+      dt_toast_log(_("color picker of %s unarmed"), element_name);
+  }
+
   // keep the one visible button's own look in sync with whichever of the two
   // real (hidden) pickers this "toggled" came from -- see
   // _param_row_master_picker_pressed.
@@ -13080,6 +13106,8 @@ static void _param_row_arm_picker_cst(GtkWidget *button, dt_masks_param_row_edit
     const gboolean active =
       gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ed->colorpicker))
       || gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ed->colorpicker_set_values));
+    if(!active && ed->colorpicker_set_values)
+      g_object_set_data(G_OBJECT(ed->colorpicker_set_values), "pick-output", GINT_TO_POINTER(0));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(ed->master_picker), active);
   }
 }
@@ -13116,13 +13144,18 @@ static void _param_row_master_picker_pressed(GtkGesture *gesture,
                                              dt_masks_param_row_editor_t *ed)
 {
   const gboolean ctrl = dt_modifier_is(dt_key_modifier_state(), GDK_CONTROL_MASK);
+  const gboolean shift = dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK);
   const gboolean right =
     gtk_gesture_single_get_current_button(GTK_GESTURE_SINGLE(gesture))
     == GDK_BUTTON_SECONDARY;
   if(ctrl)
     dt_color_picker_click(ed->colorpicker, right);
   else if(!right)
+  {
+    g_object_set_data(G_OBJECT(ed->colorpicker_set_values), "pick-output",
+                      GINT_TO_POINTER(shift));
     dt_color_picker_click(ed->colorpicker_set_values, FALSE);
+  }
 }
 
 // per-row equivalent of _update_gradient_slider_pickers -- the plain "pick
@@ -13230,7 +13263,11 @@ static gboolean _param_row_picker_apply(dt_iop_module_t *module,
     // shift (not ctrl) picks the output range -- ctrl is now the consolidated
     // picker button's own modifier for the OTHER picker (see
     // _param_row_master_picker_pressed)
-    const int in_out = ((dt_key_modifier_state() == GDK_SHIFT_MASK) && p->in_out) ? 1 : 0;
+    const gboolean armed_shift =
+      GPOINTER_TO_INT(g_object_get_data(G_OBJECT(picker), "pick-output"));
+    const gboolean current_shift =
+      dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK);
+    const int in_out = (armed_shift || current_shift) ? 1 : 0;
 
     if(in_out)
     {
