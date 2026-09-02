@@ -948,7 +948,7 @@ typedef struct dt_masks_param_row_editor_t
   GtkWidget *header_slot;
   // the row's own full-width outer box (icon/name/slider/actions), wired up
   // from _make_shape_row exactly like header_slot above -- used only to size
-  // and place the precise-value popup (see _param_row_slider_precise_place)
+  // and place the precise-value popup (see _bauhaus_whisker_popup_rect)
   // against the row's real on-screen width/position, not the header_slot's
   // (which starts only after the name label).
   GtkWidget *row;
@@ -4544,16 +4544,28 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
   _update_lowop_badge(bd->blend_opacity_lowop_badge, val / 100.0f, FALSE, FALSE, NULL);
 }
 
-static void _place_bauhaus_whisker_popup(GtkWidget *anchor, const gint center_x)
+// where the whisker popup of `anchor` should sit: a square directly above or
+// below the anchor (never over it, so the control points it drives stay
+// visible while it is open), horizontally centred on `center_x` and kept
+// inside the host panel.
+//
+// Everything here is in root (screen) coordinates, which is also what
+// dt_bauhaus_widget_set_popup_position() wants: the popup is pinned *before*
+// it is shown, so bauhaus places it once, itself, in whatever coordinate
+// space it actually anchors against. Moving the popup window by hand after
+// the fact instead -- what this used to do -- only ever agreed with bauhaus's
+// own idea of where the popup was on a single monitor with the main window at
+// the screen origin; anywhere else the popup jumped back to the primary
+// display the moment bauhaus repositioned it (see _window_position in
+// bauhaus.c).
+static gboolean _bauhaus_whisker_popup_rect(GtkWidget *anchor,
+                                            const gint center_x,
+                                            GdkRectangle *rect)
 {
-  GtkWidget *popup = darktable.bauhaus->popup.window;
-  if(!popup || !GTK_IS_WIDGET(popup) || !gtk_widget_get_visible(popup)) return;
-
   GtkWidget *toplevel = gtk_widget_get_toplevel(anchor);
   GdkWindow *top_gdk =
     gtk_widget_is_toplevel(toplevel) ? gtk_widget_get_window(toplevel) : NULL;
-  GdkWindow *popup_gdk = gtk_widget_get_window(popup);
-  if(!top_gdk || !popup_gdk) return;
+  if(!top_gdk) return FALSE;
 
   gint top_x, top_y;
   gdk_window_get_origin(top_gdk, &top_x, &top_y);
@@ -4565,7 +4577,6 @@ static void _place_bauhaus_whisker_popup(GtkWidget *anchor, const gint center_x)
 
   const gint anchor_y = top_y + ry;
   const gint pop_size = DT_PIXEL_APPLY_DPI(180);
-  gdk_window_resize(popup_gdk, pop_size, pop_size);
 
   GdkRectangle workarea = { 0 };
   GdkMonitor *mon =
@@ -4594,14 +4605,25 @@ static void _place_bauhaus_whisker_popup(GtkWidget *anchor, const gint center_x)
   }
   pop_x = CLAMP(pop_x, panel_x, panel_x + panel_w - pop_size);
 
-  gdk_window_move(popup_gdk, pop_x, pop_y);
+  rect->x = pop_x;
+  rect->y = pop_y;
+  rect->width = pop_size;
+  rect->height = pop_size;
+  return TRUE;
+}
 
-  darktable.bauhaus->popup.position.x = pop_x;
-  darktable.bauhaus->popup.position.y = pop_y;
-  darktable.bauhaus->popup.position.width = pop_size;
-  darktable.bauhaus->popup.position.height = pop_size;
-  darktable.bauhaus->popup.offset = 0;
-  darktable.bauhaus->popup.offcut = 0;
+// pin `slider`'s popup above/below `anchor` and open it there
+static void _show_bauhaus_whisker_popup(GtkWidget *slider,
+                                        GtkWidget *anchor,
+                                        const gint center_x)
+{
+  GdkRectangle rect;
+  // clear the pin rather than leave the previous one in place if the geometry
+  // is not available this time: a stale rect would open the popup wherever
+  // the widget happened to be the last time round.
+  const gboolean placed = _bauhaus_whisker_popup_rect(anchor, center_x, &rect);
+  dt_bauhaus_widget_set_popup_position(slider, placed ? &rect : NULL);
+  dt_bauhaus_widget_show_popup(slider);
 }
 
 static gboolean _inline_opacity_popup_idle(gpointer user_data)
@@ -4610,8 +4632,6 @@ static gboolean _inline_opacity_popup_idle(gpointer user_data)
   if(!GTK_IS_WIDGET(evbox)) return G_SOURCE_REMOVE;
   GtkWidget *slider = g_object_get_data(G_OBJECT(evbox), "opacity-slider");
   if(!slider || !GTK_IS_WIDGET(slider)) return G_SOURCE_REMOVE;
-
-  dt_bauhaus_widget_show_popup(slider);
 
   GtkWidget *top = gtk_widget_get_toplevel(evbox);
   gint sx = 0, sy = 0;
@@ -4623,7 +4643,7 @@ static gboolean _inline_opacity_popup_idle(gpointer user_data)
   gtk_widget_get_allocation(evbox, &alloc);
   const gint center_x = tx + sx + alloc.width / 2;
 
-  _place_bauhaus_whisker_popup(evbox, center_x);
+  _show_bauhaus_whisker_popup(slider, evbox, center_x);
   return G_SOURCE_REMOVE;
 }
 
@@ -12854,33 +12874,30 @@ static void _param_row_slider_precise_popup_hidden(GtkWidget *bauhaus_popup_wind
   if(GTK_IS_POPOVER(popover)) gtk_popover_popdown(GTK_POPOVER(popover));
 }
 
-// the embedded slider (see _param_row_slider_precise_open) has no valid
-// *allocated* on-screen size yet at the point it is first mapped -- bauhaus's
-// own popup sizes itself off that allocation (see _popup_show in bauhaus.c,
-// specifically its "p->width == 1" fallback for an as-yet-unallocated
-// widget, which falls back to the *whole host panel's* width instead, wildly
-// oversized for a single range-slider node) -- GTK only assigns the real
-// allocation in the size-allocate pass that follows mapping, not atomically
-// with it. Deferred to a plain idle instead of the "map" signal so this runs
-// strictly after that pass has actually happened (GTK services its own
-// pending resizes at a higher priority than G_PRIORITY_DEFAULT_IDLE, so by
-// the time this fires the widget's allocation is the real one).
-// bauhaus's own slider popup (see _popup_show in bauhaus.c) always opens
+// the embedded slider (see _param_row_slider_precise_open) is not realized
+// yet at the point its anchor popover is first mapped, and _popup_show in
+// bauhaus.c reads its GdkWindow to work out which toplevel the popup gets
+// anchored to. Deferred to a plain idle instead of the "map" signal so this
+// runs strictly after the size-allocate/realize pass that follows mapping
+// (GTK services its own pending resizes at a higher priority than
+// G_PRIORITY_DEFAULT_IDLE, so by the time this fires the widget is real).
 static gboolean _param_row_slider_precise_open_idle(gpointer user_data)
 {
   GtkWidget *bauhaus_slider = user_data;
   if(!GTK_IS_WIDGET(bauhaus_slider)) return G_SOURCE_REMOVE;
   GtkWidget *popover =
     g_object_get_data(G_OBJECT(bauhaus_slider), "precise-anchor-popover");
-  dt_bauhaus_widget_show_popup(bauhaus_slider);
-  if(popover)
-    g_signal_connect(G_OBJECT(darktable.bauhaus->popup.window), "hide",
-                     G_CALLBACK(_param_row_slider_precise_popup_hidden), popover);
   GtkWidget *slider =
     g_object_get_data(G_OBJECT(bauhaus_slider), "precise-anchor-slider");
   const gint marker_x = GPOINTER_TO_INT(
     g_object_get_data(G_OBJECT(bauhaus_slider), "precise-anchor-marker-x"));
-  if(slider && GTK_IS_WIDGET(slider)) _place_bauhaus_whisker_popup(slider, marker_x);
+  if(slider && GTK_IS_WIDGET(slider))
+    _show_bauhaus_whisker_popup(bauhaus_slider, slider, marker_x);
+  else
+    dt_bauhaus_widget_show_popup(bauhaus_slider);
+  if(popover)
+    g_signal_connect(G_OBJECT(darktable.bauhaus->popup.window), "hide",
+                     G_CALLBACK(_param_row_slider_precise_popup_hidden), popover);
   return G_SOURCE_REMOVE;
 }
 
@@ -12911,7 +12928,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // keep this node's own marker highlighted for as long as its editor is
   // open, regardless of where the pointer actually is/goes -- the popup now
   // deliberately opens away from the slider (see
-  // _param_row_slider_precise_place), so the normal hover/drag-driven
+  // _bauhaus_whisker_popup_rect), so the normal hover/drag-driven
   // highlight (see gradientslider.c's hovered_marker) would otherwise drop
   // as soon as the pointer leaves the slider. Cleared again in
   // _param_row_slider_precise_closed.
@@ -12940,17 +12957,32 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
 
   GtkWidget *bauhaus_slider =
     dt_bauhaus_slider_new_with_range(ed->module, lo, hi, 0, cur, digits);
-  dt_bauhaus_slider_set_format(bauhaus_slider, is_hue ? _(" °") : is_ab ? "" : "%");
+  // exactly "°", no leading space: that string, together with a 360-wide
+  // range, is what bauhaus matches on to give a slider the color-wheel popup
+  // and the wrap-around past either end that an angle wants (see
+  // _is_full_circle in bauhaus.c) -- the same treatment color balance rgb's
+  // own hue sliders get. It is not a decoration to translate either, for the
+  // same reason.
+  dt_bauhaus_slider_set_format(bauhaus_slider, is_hue ? "°" : is_ab ? "" : "%");
   dt_bauhaus_widget_hide_label(bauhaus_slider);
   dt_bauhaus_widget_set_quad_visibility(bauhaus_slider, FALSE);
   dt_bauhaus_slider_set_val(bauhaus_slider, cur);
+  // carry the channel's own gradient over from the row's range slider, so the
+  // popup is colored like the track it is editing rather than a neutral bar.
+  // The color wheel above needs it too: without stops it falls back to a bare
+  // dial with no hues on it at all (see _draw_color_wheel in bauhaus.c).
+  for(int s = 0; s < channel->numberstops; s++)
+    dt_bauhaus_slider_set_stop(bauhaus_slider, channel->colorstops[s].stoppoint,
+                               channel->colorstops[s].color.red,
+                               channel->colorstops[s].color.green,
+                               channel->colorstops[s].color.blue);
   // fill the popover's own width fully -- a bauhaus widget's halign otherwise
   // defaults to only claiming its own (narrow) natural width even inside an
   // expand+fill box slot.
   gtk_widget_set_hexpand(bauhaus_slider, TRUE);
   gtk_widget_set_halign(bauhaus_slider, GTK_ALIGN_FILL);
   // this popup opens away from the pointer on purpose (see
-  // _param_row_slider_precise_place, positioned against the row's own
+  // _bauhaus_whisker_popup_rect, positioned against the row's own
   // bounds, not the click point) -- tell bauhaus's own popup motion handler
   // not to apply its usual "opened at the pointer" assumptions (hover alone
   // dragging the value, auto-reject once the pointer strays too far from
@@ -13028,7 +13060,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // consulted by _param_row_slider_precise_open_idle to place the real
   // bauhaus popup against the slider's own bounds instead of this anchor's.
   g_object_set_data(G_OBJECT(bauhaus_slider), "precise-anchor-slider", slider);
-  // this node's own on-screen x, for _param_row_slider_precise_place to
+  // this node's own on-screen x, for _bauhaus_whisker_popup_rect to
   // center the real popup on (clamped to the mask panel's own bounds), not
   // the row -- computed now, from the slider's real (already allocated)
   // position, rather than recomputed later from the row/marker fraction.

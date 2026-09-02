@@ -199,6 +199,22 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 // button press (which a gesture-based widget cannot handle cleanly)
 void dt_bauhaus_widget_show_popup(GtkWidget *widget);
 
+// pin the popup this widget opens to a caller-chosen rectangle instead of
+// letting it place itself around the pointer. `rect` is in root (screen)
+// coordinates and describes the popup window itself, not an anchor to align
+// against: the popup takes that exact position and size, only sliding
+// horizontally if the monitor cannot fit it. Pass NULL to drop the pinning
+// and go back to the default pointer-relative placement.
+//
+// Root coordinates rather than window-relative ones because the caller
+// generally has no way of knowing which GdkWindow the popup will end up
+// anchored to -- a widget inside a GtkPopover has that popover, not the main
+// window, as its toplevel. Getting that wrong is invisible on a single
+// monitor with the main window at the screen origin, and lands the popup on
+// the wrong display everywhere else.
+void dt_bauhaus_widget_set_popup_position(GtkWidget *widget,
+                                          const GdkRectangle *rect);
+
 // hover-preview hook for a "dt-bauhaus-static-popup" slider (a popup opened
 // away from the pointer via dt_bauhaus_widget_show_popup(), which therefore
 // opts out of the normal "hover alone drags the value" popup behaviour --
