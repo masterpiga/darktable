@@ -417,6 +417,51 @@ void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
   _masks_flexi_relocate(module);
 }
 
+static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean handoff);
+
+// does any of this module's panel content currently sit in a host? Asked of
+// the widget tree, so it stays true even when hosted_module has lost track.
+static gboolean _widgets_are_hosted(dt_iop_gui_blend_data_t *bd)
+{
+  if(!bd) return FALSE;
+  GtkWidget *hosts[3] = { dt_ui_flexi_panel_header(darktable.gui->ui),
+                          dt_ui_flexi_panel_content(darktable.gui->ui),
+                          GTK_WIDGET(darktable.develop->proxy.masks_flexi_host.content_box) };
+  // the three widgets a host can end up owning: header and body separately
+  // (LEFT/RIGHT), or the whole relocatable box at once (UTILITY)
+  GtkWidget *owned[3] = { bd->masks_blend_header, GTK_WIDGET(bd->masks_panel_body),
+                          GTK_WIDGET(bd->relocatable_box) };
+
+  for(int h = 0; h < 3; h++)
+    for(int w = 0; w < 3; w++)
+      if(hosts[h] && owned[w] && gtk_widget_get_parent(owned[w]) == hosts[h]) return TRUE;
+  return FALSE;
+}
+
+// Hand the panel back unconditionally, whatever this module's focus or
+// position says -- unlike relocate above, which would re-host a module that is
+// still focused. dt_iop_gui_cleanup_module calls this immediately before it
+// destroys the module's widget tree, and the ordering is the whole point: while
+// the panel is hosted, masks_blend_header and masks_panel_body are children of
+// the host, NOT of the module's expander, so destroying the expander leaves
+// them behind. dt_iop_gui_cleanup_blending runs after that destroy and cannot
+// undo it -- by then relocatable_box is freed and the release it would do is
+// skipped. Every darkroom leave then stranded one header/body pair in the
+// panel, with their signal handlers still bound to the module struct that is
+// freed moments later: hovering one of those rows called _row_crossing with a
+// dangling dt_iop_module_t and segfaulted.
+void dt_iop_gui_blend_masks_panel_release(dt_iop_module_t *module)
+{
+  if(!module || !module->blend_data) return;
+  // only when there is something to hand back. This runs for every module on
+  // teardown, most of which never hosted anything, and release touches header
+  // widgets that a module without an inited masks GUI does not have.
+  if(darktable.develop->proxy.masks_flexi_host.hosted_module != module
+     && !_widgets_are_hosted(module->blend_data))
+    return;
+  _masks_flexi_release_full(module, FALSE);
+}
+
 dt_masks_panel_state_t _model_masks_panel_state(const int pos,
                                                 const gboolean is_focused,
                                                 const gboolean has_masking,
@@ -559,7 +604,11 @@ char *_model_masks_inline_collapse_tooltip(const gboolean is_peeking,
   return g_strdup(_("toggle blend mask panel"));
 }
 
-void _masks_flexi_release(dt_iop_module_t *module)
+// `handoff`: whether the module giving the panel up is doing so because
+// another one is taking focus, in which case the panel is passed straight on
+// to whatever dev->gui_module now names. FALSE on teardown, where there is no
+// successor to hand it to (see dt_iop_gui_blend_masks_panel_release).
+static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean handoff)
 {
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -680,7 +729,12 @@ void _masks_flexi_release(dt_iop_module_t *module)
     // sets it before calling lose_focus on the outgoing module
     dt_iop_module_t *next = darktable.develop->gui_module;
     dt_iop_gui_blend_data_t *next_bd = next ? next->blend_data : NULL;
-    const gboolean next_wants_host = next && next_bd && next_bd->masks_support;
+    // no handing over on teardown: gui_module there is not a module taking
+    // focus but one on its way to being freed by the same loop, and re-showing
+    // the panel for it undoes the hide darkroom's leave() already did -- which
+    // left an empty flexi panel holding open a column of the lighttable
+    const gboolean next_wants_host =
+      handoff && next && next_bd && next_bd->masks_support;
     if(next_wants_host)
     {
       const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
@@ -713,6 +767,11 @@ void _masks_flexi_release(dt_iop_module_t *module)
   }
 }
 
+void _masks_flexi_release(dt_iop_module_t *module)
+{
+  _masks_flexi_release_full(module, TRUE);
+}
+
 // (re)decide where this module's masking panel content should live, per
 // the current "plugins/darkroom/blend/masks_panel_position" preference:
 // embedded (default) keeps it inline; utility uses the masks_flexi_host lib
@@ -724,6 +783,37 @@ void _masks_flexi_release(dt_iop_module_t *module)
 // With no mask the panel auto-collapses to just that icon; the collapse is
 // visual only (persist=FALSE) so it doesn't clobber the user's own
 // expand/collapse preference for when a mask *is* active.
+// Guarantee the host shows exactly one module's panel.
+//
+// hosted_module is what normally does this: relocate releases it before
+// installing its own widgets. But it is a single pointer maintained by hand
+// across focus changes, position changes and module teardown, and nothing ever
+// removes a header from a host except the release that pairs with it. So any
+// path that loses track of a module whose header is still parented in a host
+// -- a module destroyed while hosted, a focus change that never reached us --
+// strands that header there permanently, and the user gets two stacked panel
+// headers with a single body under them.
+//
+// This asks the widget tree instead of trusting the pointer: any *live* module
+// still parented in a host, other than the one taking over, is released
+// properly. It logs when it fires, because it firing means one of those paths
+// is still wrong and the log names the module that got left behind.
+static void _release_stray_hosted(dt_iop_module_t *keep)
+{
+  for(GList *m = darktable.develop->iop; m; m = g_list_next(m))
+  {
+    dt_iop_module_t *other = m->data;
+    if(other == keep || !other->blend_data) continue;
+    if(!_widgets_are_hosted(other->blend_data)) continue;
+
+    dt_print(DT_DEBUG_MASKS,
+             "[masks] flexi panel: '%s' was still hosted when '%s' took it over"
+             " -- releasing it (its header would have been stranded)",
+             other->op, keep->op);
+    _masks_flexi_release(other);
+  }
+}
+
 void _masks_flexi_relocate(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
@@ -809,6 +899,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   dt_iop_module_t *prev = darktable.develop->proxy.masks_flexi_host.hosted_module;
   const gboolean focus_changed = (prev != module);
   if(prev && prev != module) _masks_flexi_release(prev);
+  _release_stray_hosted(module);
 
   darktable.develop->proxy.masks_flexi_host.hosted_module = module;
 
@@ -971,8 +1062,25 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   {
     dt_ui_flexi_panel_set_icon(darktable.gui->ui, state.corner_icon_active,
                                _mask_mode_label(mask_mode));
-    // the shared state again -- applying it, not deciding it, so persist=FALSE
-    if(focus_changed)
+    // the shared state again -- applying it, not deciding it, so persist=FALSE.
+    //
+    // Also when the panel simply disagrees with the state, not only on a focus
+    // change: expanding a module that already has focus is a relocate with
+    // focus_changed FALSE, and state.panel_collapsed has just gone from TRUE
+    // (a collapsed module never shows the panel, see _model_masks_panel_state)
+    // to the user's preference. Gated on focus alone, nothing applied that, so
+    // the first module you expanded came up with its panel still hidden and
+    // only a detour through another module brought it back.
+    //
+    // Never on a peek, though: a peek shows the panel without being a state
+    // (dt_ui_flexi_panel_is_collapsed reads the widget, so a peek reads as
+    // expanded and would look like a disagreement), and relocates do happen
+    // mid-peek -- the user changing mask mode from the peeked panel is one.
+    // Folding it away under them is precisely what a peek must not do.
+    const gboolean panel_disagrees =
+      !dt_ui_flexi_panel_is_peeking(darktable.gui->ui)
+      && state.panel_collapsed != dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
+    if(focus_changed || panel_disagrees)
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, state.panel_collapsed,
                                       TRUE, FALSE);
 
