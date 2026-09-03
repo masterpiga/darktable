@@ -16205,47 +16205,45 @@ static void _shortcut_toggle_masks_panel(dt_action_t *action)
   _flexi_inline_collapse_clicked(NULL, module);
 }
 
-// register every panel-selection shortcut above under module->so (the shared
-// operation-type action tree, not the instance's own), so each shows up ONCE
-// in shortcut preferences regardless of how many instances of this operation
-// exist -- exactly like the widget actions dt_action_define_iop registers
-// elsewhere in this file. Called once per instance init; repeated
-// registration under the same "so" section is expected and harmless (see
-// dt_action_section/dt_action_define).
-static void _register_masks_action_shortcuts(dt_iop_module_t *module)
+// register every panel-selection shortcut above under "<blending> / masks", the
+// same shared tree the panel's own widget actions land in (dt_action_define_iop
+// routes a "blend`masks" section to darktable.control->actions_blend). Not under
+// module->so: none of these acts on a particular operation -- each resolves its
+// module through dt_dev_gui_module() -- so an owner per operation only listed
+// the same twelve entries again under every module that supports masking, mixed
+// in among that module's own parameters. Called once per instance init;
+// repeated registration of a path that already exists is expected and harmless
+// (dt_action_register only fills in a node still typed as a section).
+static void _register_masks_action_shortcuts(void)
 {
-  dt_action_register(DT_ACTION(module->so), N_("add group above selected group"),
-                     _shortcut_add_group_above_selected, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("add raster mask to current group"),
-                     _shortcut_add_raster_mask, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("invert selected group visibility"),
-                     _shortcut_invert_selected_group, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("invert selected element visibility"),
-                     _shortcut_invert_selected_element, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("toggle solo-edit for current shape"),
-                     _shortcut_toggle_soloedit, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("change mode for current group"),
-                     _shortcut_change_group_mode, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("bypass/resume current group"),
-                     _shortcut_toggle_group_bypass, 0, 0);
-  dt_action_register(DT_ACTION(module->so),
-                     N_("change within-group mode for current group"),
-                     _shortcut_change_group_within_mode, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("preview channel under cursor"),
-                     _shortcut_toggle_preview_on_hover, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("sticky opacity"),
-                     _shortcut_toggle_sticky_opacity, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("auto-expand selected shape"),
-                     _shortcut_toggle_auto_expand_selected, 0, 0);
-  dt_action_register(DT_ACTION(module->so), N_("collapse refinements by default"),
-                     _shortcut_toggle_collapse_refinements, 0, 0);
+  dt_action_t *masks = dt_action_section(&darktable.control->actions_blend, N_("masks"));
 
-  // the odd one out: owned by the shared blending tree rather than by "so",
-  // because it was defined there while it was a widget action (dt_action_define_iop
-  // routes a "blend`..." section to darktable.control->actions_blend). Keeping
-  // the path is what keeps a shortcut a user already assigned to it working.
-  dt_action_register(dt_action_section(&darktable.control->actions_blend, N_("masks")),
-                     N_("show/hide mask panel"), _shortcut_toggle_masks_panel, 0, 0);
+  dt_action_register(masks, N_("show/hide mask panel"),
+                     _shortcut_toggle_masks_panel, 0, 0);
+  dt_action_register(masks, N_("add group above selected group"),
+                     _shortcut_add_group_above_selected, 0, 0);
+  dt_action_register(masks, N_("add raster mask to current group"),
+                     _shortcut_add_raster_mask, 0, 0);
+  dt_action_register(masks, N_("invert selected group visibility"),
+                     _shortcut_invert_selected_group, 0, 0);
+  dt_action_register(masks, N_("invert selected element visibility"),
+                     _shortcut_invert_selected_element, 0, 0);
+  dt_action_register(masks, N_("toggle solo-edit for current shape"),
+                     _shortcut_toggle_soloedit, 0, 0);
+  dt_action_register(masks, N_("change mode for current group"),
+                     _shortcut_change_group_mode, 0, 0);
+  dt_action_register(masks, N_("bypass/resume current group"),
+                     _shortcut_toggle_group_bypass, 0, 0);
+  dt_action_register(masks, N_("change within-group mode for current group"),
+                     _shortcut_change_group_within_mode, 0, 0);
+  dt_action_register(masks, N_("preview channel under cursor"),
+                     _shortcut_toggle_preview_on_hover, 0, 0);
+  dt_action_register(masks, N_("sticky opacity"),
+                     _shortcut_toggle_sticky_opacity, 0, 0);
+  dt_action_register(masks, N_("auto-expand selected shape"),
+                     _shortcut_toggle_auto_expand_selected, 0, 0);
+  dt_action_register(masks, N_("collapse refinements by default"),
+                     _shortcut_toggle_collapse_refinements, 0, 0);
 }
 
 void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
@@ -16593,7 +16591,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     _add_wrapped_box(blendw, bd->masks_box, "masks_drawn");
 
     bd->masks_inited = TRUE;
-    _register_masks_action_shortcuts(module);
+    _register_masks_action_shortcuts();
   }
 }
 
