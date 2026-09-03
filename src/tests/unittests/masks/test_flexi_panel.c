@@ -302,10 +302,13 @@ static void test_default_operator_preference_roundtrips(void **state)
 // panel switches on must round-trip as integers
 static void test_panel_position_preference_roundtrips(void **state)
 {
-  for(int pos = 0; pos < 4; pos++)
+  const int positions[] = { MASKS_PANEL_POS_EMBEDDED, MASKS_PANEL_POS_UTILITY,
+                            MASKS_PANEL_POS_CANVAS };
+  for(size_t i = 0; i < G_N_ELEMENTS(positions); i++)
   {
-    dt_conf_set_int("plugins/darkroom/blend/masks_panel_position", pos);
-    assert_int_equal(dt_conf_get_int("plugins/darkroom/blend/masks_panel_position"), pos);
+    dt_conf_set_int("plugins/darkroom/blend/masks_panel_position", positions[i]);
+    assert_int_equal(dt_conf_get_int("plugins/darkroom/blend/masks_panel_position"),
+                     positions[i]);
   }
 }
 
@@ -320,14 +323,14 @@ static void test_panel_position_preference_roundtrips(void **state)
 static void test_panel_state_collapsed_module_shows_corner_icon(void **state)
 {
   const dt_masks_panel_state_t s_on =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, FALSE, TRUE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, TRUE, FALSE);
   assert_true(s_on.want_hosted);
   assert_true(s_on.panel_collapsed);
   assert_true(s_on.corner_icon_visible);
   assert_true(s_on.corner_icon_active);
 
   const dt_masks_panel_state_t s_off =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, FALSE, FALSE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, FALSE, FALSE);
   assert_true(s_off.want_hosted);
   assert_true(s_off.panel_collapsed);
   assert_true(s_off.corner_icon_visible);
@@ -340,13 +343,13 @@ static void test_panel_state_collapsed_module_shows_corner_icon(void **state)
 static void test_panel_state_expanded_module_respects_pref(void **state)
 {
   const dt_masks_panel_state_t s_exp =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, TRUE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, FALSE);
   assert_true(s_exp.want_hosted);
   assert_false(s_exp.panel_collapsed);
   assert_false(s_exp.corner_icon_visible);
 
   const dt_masks_panel_state_t s_col =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, TRUE, TRUE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, TRUE);
   assert_true(s_col.want_hosted);
   assert_true(s_col.panel_collapsed);
   assert_true(s_col.corner_icon_visible);
@@ -358,7 +361,7 @@ static void test_panel_state_expanded_module_respects_pref(void **state)
 static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
 {
   const dt_masks_panel_state_t s =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, TRUE, TRUE, FALSE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, FALSE);
   assert_true(s.want_hosted);
   assert_false(s.panel_collapsed);
   assert_false(s.corner_icon_visible);
@@ -371,13 +374,13 @@ static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
 static void test_panel_state_unsupported_or_unfocused_hides_all(void **state)
 {
   const dt_masks_panel_state_t s_no_mask =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, TRUE, FALSE, TRUE, FALSE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, FALSE, TRUE, FALSE, FALSE);
   assert_false(s_no_mask.want_hosted);
   assert_true(s_no_mask.panel_collapsed);
   assert_false(s_no_mask.corner_icon_visible);
 
   const dt_masks_panel_state_t s_unfocused =
-    _model_masks_panel_state(MASKS_PANEL_POS_LEFT, FALSE, TRUE, TRUE, TRUE, FALSE);
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, FALSE, TRUE, TRUE, TRUE, FALSE);
   assert_false(s_unfocused.want_hosted);
   assert_true(s_unfocused.panel_collapsed);
   assert_false(s_unfocused.corner_icon_visible);
@@ -490,22 +493,6 @@ static void test_masks_corner_icon_tooltip(void **state)
   free(tt_on);
 }
 
-// in-header collapse/pin button tooltip reflects peeking/docked state and auto-enable
-static void test_masks_inline_collapse_tooltip(void **state)
-{
-  char *tt_peek_off = _model_masks_inline_collapse_tooltip(TRUE, FALSE, MASKS_PANEL_POS_LEFT);
-  assert_string_equal(tt_peek_off, "pin this panel open and enable mask");
-  free(tt_peek_off);
-
-  char *tt_peek_on = _model_masks_inline_collapse_tooltip(TRUE, TRUE, MASKS_PANEL_POS_LEFT);
-  assert_string_equal(tt_peek_on, "pin this panel open");
-  free(tt_peek_on);
-
-  char *tt_docked = _model_masks_inline_collapse_tooltip(FALSE, TRUE, MASKS_PANEL_POS_LEFT);
-  assert_non_null(strstr(tt_docked, "collapse this panel"));
-  free(tt_docked);
-}
-
 static void test_param_channel_tooltips(void **state)
 {
   const int csps[] = { DEVELOP_BLEND_CS_LAB, DEVELOP_BLEND_CS_RGB_DISPLAY, DEVELOP_BLEND_CS_RGB_SCENE };
@@ -564,7 +551,6 @@ int main(void)
     cmocka_unit_test_teardown(test_pinning_disabled_mask_enables_mask, _teardown),
     cmocka_unit_test_teardown(test_masks_panel_header_markup, _teardown),
     cmocka_unit_test_teardown(test_masks_corner_icon_tooltip, _teardown),
-    cmocka_unit_test_teardown(test_masks_inline_collapse_tooltip, _teardown),
     cmocka_unit_test_teardown(test_param_channel_tooltips, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

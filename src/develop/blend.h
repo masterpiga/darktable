@@ -36,8 +36,15 @@
 // (container()/collapsible setup for the shared host lib).
 #define MASKS_PANEL_POS_EMBEDDED 0
 #define MASKS_PANEL_POS_UTILITY  1
-#define MASKS_PANEL_POS_LEFT     2
-#define MASKS_PANEL_POS_RIGHT    3
+// 2 and 3 were "separate panel, left" and "separate panel, right", one position
+// each. They are now a single one whose side is not part of the choice: the
+// panel comes out on whichever edge the user reaches for and stays there once
+// pinned (see _masks_panel_side_right, and _flexi_sliver_button in gui/gtk.c).
+// Read only by _masks_panel_position, which migrates them and never returns
+// them; nothing else may compare against these.
+#define MASKS_PANEL_POS_LEGACY_LEFT  2
+#define MASKS_PANEL_POS_LEGACY_RIGHT 3
+#define MASKS_PANEL_POS_CANVAS   4
 
 G_BEGIN_DECLS
 
@@ -1095,10 +1102,16 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed);
 void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded);
 // re-evaluates the mask panel's host placement and updates header labels/tooltips
 void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module);
-// a hover-peek on the separate panel started (TRUE) or ended (FALSE): its
-// in-header arrow pins the panel open while peeking instead of collapsing it,
-// so it is drawn and described as a pin for the duration.
-void dt_iop_gui_blend_masks_panel_set_peek(const gboolean peeking);
+// show or hide the mask panel of the darkroom's focused module, whichever
+// position it is in. The single entry point behind every way of asking for
+// that -- the panel's own collapse arrow, the "show/hide mask panel" shortcut,
+// and the darkroom toolbox button -- so all three cannot drift apart.
+// No-op unless a module whose mask panel is built currently has focus.
+void dt_iop_gui_blend_masks_panel_toggle(void);
+// point the darkroom toolbox button at the panel's current state: pressed
+// while the panel is showing, insensitive when the focused module has no mask
+// panel to show at all. Called wherever that state changes.
+void dt_iop_gui_blend_masks_panel_sync_toolbox(void);
 // re-reads the active AI-object creation session's smoothing/cleanup (via
 // dt_masks_object_creation_get_preview_params) and pushes the values into
 // the flexi panel's pending-row sliders (bd->pending_ai_smoothing_slider/
@@ -1107,6 +1120,14 @@ void dt_iop_gui_blend_masks_panel_set_peek(const gboolean peeking);
 // stays in sync without a full masks-list rebuild (which would interrupt an
 // in-progress slider drag).
 void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module);
+
+// shape creation just ended for this module, so the flexi panel's pending-row
+// placeholder no longer has anything behind it. Queues the deferred rebuild
+// that drops it. Called from dt_masks_change_form_gui, which is the one point
+// every cancel path funnels through -- the shape modules' own right-click
+// handlers already refresh the panel themselves, but abandoning creation by
+// clicking outside the canvas reaches none of them.
+void dt_iop_gui_blend_masks_creation_ended(dt_iop_module_t *module);
 
 gboolean blend_color_picker_apply(dt_iop_module_t *module,
                                   GtkWidget *picker,
