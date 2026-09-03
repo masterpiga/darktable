@@ -2388,8 +2388,11 @@ static void _blendop_blendif_channel_mask_view_toggle
 // how long the pointer has to rest on a button before the preview fires. Each
 // preview costs a pipeline reprocess, so sweeping the pointer across the row of
 // channel buttons on the way somewhere else must not queue one per button --
-// only a deliberate pause asks for anything.
-#define BLEND_PREVIEW_ON_HOVER_DWELL_MS 100
+// only a deliberate pause asks for anything. 100ms did that job but was below
+// the threshold where a delay is noticed at all, so the preview read as firing
+// on contact and there was no way to cross the row without triggering the one
+// button the pointer happened to slow down over.
+#define BLEND_PREVIEW_ON_HOVER_DWELL_MS 500
 
 static gboolean _preview_on_hover_is_on(void)
 {
@@ -11757,6 +11760,15 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // tagged so _apply_empty_selection (a lightweight, no-rebuild selection update)
   // can find this row and toggle its highlight in place
   g_object_set_data(G_OBJECT(hdr_evbox), "eg-header", GINT_TO_POINTER(1));
+  // hover wash, exactly like every other row kind. No "hover-formids" to go
+  // with it: that list drives the list -> canvas half of the sync, and an empty
+  // group has no shapes to highlight out there -- _row_crossing handles the
+  // absent list fine and just lights the row. This row was the one kind never
+  // wired up here, which is why hovering a staged group used to do nothing.
+  g_signal_connect(G_OBJECT(hdr_evbox), "enter-notify-event", G_CALLBACK(_row_crossing),
+                   module);
+  g_signal_connect(G_OBJECT(hdr_evbox), "leave-notify-event", G_CALLBACK(_row_crossing),
+                   module);
   // "group-header-widget" (-> hdr, set by the helper) is for solo dimming
   // (_apply_empty_group_dimming); "header-widget" (-> block, set below once it
   // exists) is for selection shading, matching the same two-tag split a real
@@ -16565,18 +16577,18 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
   if(!module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
 
-  // make sure this module's flexi content isn't left owning a shared host's
-  // content box once its widgets (relocatable_box included) are destroyed.
+  // last resort only. The real release happens in dt_iop_gui_cleanup_module,
+  // *before* it destroys the module's widget tree, because by the time we get
+  // here the widgets a release would move may already be freed -- and the
+  // header/body of a hosted panel are children of the host, so the destroy
+  // does not take them with it (see dt_iop_gui_blend_masks_panel_release).
   //
-  // Unlike every other caller, this one can run *after* the widgets are gone:
-  // when the panel is hosted elsewhere (the masks_flexi_host utility lib, or
-  // the separate grid panel), relocatable_box is a child of that owner, not of
-  // this module's iopw -- and at app quit that owner is torn down on its own
-  // schedule, which may be first. _masks_flexi_release would then walk dangling
-  // GtkWidget pointers (bd->* is never nulled when a widget dies), which is
-  // what the burst of GTK_IS_WIDGET criticals on exit is. Reparenting a
-  // destroyed box back into a destroyed iopw achieves nothing anyway; only the
-  // host bookkeeping still matters, so do just that.
+  // What is left for this to handle is the case that release cannot: at app
+  // quit the host itself may be torn down first, so bd->* point at dead
+  // widgets (they are never nulled when a widget dies) and walking them is the
+  // burst of GTK_IS_WIDGET criticals on exit. Reparenting a destroyed box into
+  // a destroyed iopw achieves nothing anyway; only the host bookkeeping still
+  // matters, so do just that.
   if(darktable.develop->proxy.masks_flexi_host.hosted_module == module)
   {
     if(bd->relocatable_box && GTK_IS_WIDGET(bd->relocatable_box))
