@@ -866,17 +866,6 @@ dialog .sidebar row:selected:hover label,
   border-radius: 3px;
 }
 
-/* selection border, grayscale only: a thin light frame around the whole
-   selected element row, in addition to the wash above -- the wash alone reads
-   too subtly once several rows are visible at once. Two classes (0,2,0) beat
-   the plain .mask-panel-row rule above (0,1,0) -- and, since every row kind
-   now has its own id instead of sharing one, this no longer needs an id to
-   also outrank a same-specificity kind-specific rule like .mask-group-header
-   (same pattern as .mask-list-row-hover/-solo/-drop below). */
-.mask-panel-row.mask-list-row-selected
-{
-  border-color: transparent;
-}
 
 /* disposable placeholder row for a shape still being drawn on canvas, not yet
    committed (see _make_pending_shape_row in blend_gui.c) -- dashed instead of
@@ -1008,20 +997,8 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.20);
 }
 
-/* a group's element rows sit under their header with a subtle left rail conveying hierarchy */
-.mask-group-elements
-{
-  border-left: 2px solid rgba(255, 255, 255, 0.22);
-  margin-left: 6px;
-  padding-left: 6px;
-}
-
-.mask-group-block.mask-list-row-selected .mask-group-elements
-{
-  border-left-color: rgba(255, 255, 255, 0.42);
-}
-
-/* an expanded cluster's own member rows nested with a subtle left rail */
+/* a group's element rows and expanded clusters sit under their header with a subtle left rail */
+.mask-group-elements,
 .mask-cluster-elements
 {
   border-left: 2px solid rgba(255, 255, 255, 0.22);
@@ -1029,6 +1006,7 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
+.mask-group-block.mask-list-row-selected .mask-group-elements,
 .mask-group-block.mask-list-row-selected .mask-cluster-elements
 {
   border-left-color: rgba(255, 255, 255, 0.42);
@@ -1076,6 +1054,18 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.20);
 }
 
+/* the solo wash on a soloed group's own header (see _build_masks_list, which
+   adds .mask-list-row-solo to the header row itself). Same collision as the
+   drop wash above: the plain .mask-panel-row.mask-list-row-solo rule shares
+   its two-class specificity with the resting background rule, which is
+   declared later and so swallowed it entirely, leaving a soloed group header
+   indistinguishable from any other. Same fix, and for the same reason: the
+   row's own id, so it does not come down to declaration order. */
+#mask-group-header-row.mask-list-row-solo
+{
+  background-color: rgba(255, 255, 255, 0.14);
+}
+
 /* each parametric mask row's own permanently-visible editor with a subtle left rail */
 .mask-param-row-editor
 {
@@ -1091,10 +1081,6 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
-.mask-list-row-selected .mask-param-row-editor
-{
-  border-left-color: rgba(255, 255, 255, 0.42);
-}
 
 /* boost factor slider: just spacing on the wrapper -- it should blend into the
    surrounding parametric mask controls (input/output rows above it are not
@@ -1122,6 +1108,7 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
+.mask-list-row-selected .mask-param-row-editor,
 .mask-list-row-selected .mask-props-row-editor
 {
   border-left-color: rgba(255, 255, 255, 0.42);
@@ -1301,16 +1288,9 @@ button.mask-row-expander:hover
 /* every bauhaus slider paints its own pill-shaped background from its own CSS
    context (see dt_bauhaus_draw), which #bauhaus-slider fills with the plugin
    background colour -- override it to transparent here so the boost factor
-   slider stops reading as a separate gray box. #bauhaus-slider + class beats
-   the plain #bauhaus-slider rule on specificity. */
-#bauhaus-slider.mask-boost-factor-slider
-{
-  background-color: transparent;
-}
-
-/* same fix, for every per-row "properties" expander slider (opacity, size,
-   hardness, feather, ...) and the parametric row's own opacity slider -- see
-   .mask-boost-factor-slider above for why this is needed. */
+   and properties sliders stop reading as separate gray boxes. #bauhaus-slider
+   + class beats the plain #bauhaus-slider rule on specificity. */
+#bauhaus-slider.mask-boost-factor-slider,
 #bauhaus-slider.mask-props-slider
 {
   background-color: transparent;
@@ -1387,41 +1367,29 @@ button.mask-row-expander:hover
   border-radius: 3px;
 }
 
-/* an inverted shape's own drag handle (element row) swaps to a light
-   background / dark foreground -- a real colour inversion, so it reads
-   distinctly from a plain colour tint. Applied by _drag_handle_draw, which
-   paints its own CSS background since the handle is app-paintable. */
-.mask-list-handle-inverted
-{
-  background-color: #e8e8e8;
-  color: #202020;
-  border-radius: 3px;
-}
-
-/* soloed indicator badge (see _make_solo_badge): same light-background/
-   dark-foreground inversion as .mask-list-handle-inverted, so "soloed" reads
-   as a clear colour swap. Rounded + padded like the other small chips in this
-   panel (.mask-list-handle) -- a bare sharp-edged rectangle looked out of
-   place next to them. */
-.mask-power-solo
-{
-  background-color: #e8e8e8;
-  color: #202020;
-  border-radius: 2px;
-  padding: 0px;
-}
-
-/* the "mask elements" header's whole-mask invert toggle (bd->masks_polarity,
-   see dt_iop_gui_init_masks in blend_gui.c): same light-background/dark-
-   foreground inversion as .mask-list-handle-inverted / .mask-power-solo, so
-   toggling it on reads the same clear colour-swap way a single inverted
-   element/group's own icon does, instead of the generic (and here suppressed
-   via dt_ignore_fg_state) checked-button highlight giving no feedback at all. */
+/* inverted components (shape drag handle, soloed badge, and whole-mask polarity
+   invert toggle) swap to light background / dark foreground for clear feedback
+   at a glance. The invert toggle needs its own :checked selector because
+   dt_ignore_fg_state (see dt_iop_gui_init_masks in blend_gui.c) suppresses the
+   generic checked-button highlight, which would otherwise leave it with no "on"
+   state at all. No padding here: this rule is only a colour swap, and the
+   toggle's checked state must not resize its box (the global button rule gives
+   every button 1px, and dropping it only while checked makes the header jump). */
+.mask-list-handle-inverted,
+.mask-power-solo,
 .mask-invert-toggle:checked:not(:disabled)
 {
   background-color: #e8e8e8;
   color: #202020;
   border-radius: 3px;
+}
+
+/* the solo badge is a chip rather than a plate: tighter than .mask-list-handle's
+   3px, and padding-free so the glyph fills it */
+.mask-power-solo
+{
+  border-radius: 2px;
+  padding: 0px;
 }
 
 /* low-opacity warning badge (see _make_lowop_badge): an element or group whose
@@ -1476,19 +1444,14 @@ button.mask-row-expander:hover
   min-height: 0;
 }
 
+/* the within-group operator chip and a base group/element's lead handle: the
+   same square plate as every other row's icon handle. Both the wrapper and the
+   button inside it, so the button does not add a box of its own around the
+   plate the wrapper already sizes. */
 .mask-within-combo,
 .mask-group-lead-handle,
-.mask-param-picker-box
-{
-  min-width: 18px;
-  min-height: 18px;
-  padding: 0;
-  margin: 0;
-}
-
-.mask-param-picker-box button,
-.mask-group-lead-handle button,
-.mask-within-combo button
+.mask-within-combo button,
+.mask-group-lead-handle button
 {
   min-width: 18px;
   min-height: 18px;
@@ -1497,11 +1460,8 @@ button.mask-row-expander:hover
 }
 
 .mask-lead-static,
-.mask-lead-static:hover,
 .mask-lead-static button,
-.mask-lead-static button:hover,
-button.mask-lead-static,
-button.mask-lead-static:hover
+button.mask-lead-static
 {
   background: transparent;
   border-color: transparent;
@@ -1857,12 +1817,25 @@ notebook tabs,
 .dt_plugin_ui #blending-tabs .dt_module_btn,
 .masks-flexi-host-header .dt_module_btn,
 .masks-flexi-host-header button,
-#guides-line .dt_module_btn,
-#modules-tabs .dt_module_btn   /* This is needed separately to set a minimal width if panel is really narrow */
+#guides-line .dt_module_btn
 {
   border-radius: 0;
   min-width: 1.35em;
   min-height: 1.35em;
+  margin: 0;
+}
+
+/* the module group selector keeps its own, larger metrics: it is a view-level
+   control, not one of the icon rows inside a module, and it must stay separate
+   from the rule above -- sharing it once dropped these buttons to the blending
+   tabs' 1.35em, and the added min-height also outranked "#modules-tabs .toggle"
+   (equal specificity, declared earlier), shrinking them in both directions.
+   min-width is here so the row stays usable when the panel is really narrow;
+   height deliberately stays with the .toggle rule above. */
+#modules-tabs .dt_module_btn
+{
+  border-radius: 0;
+  min-width: 1.5em;
   margin: 0;
 }
 
@@ -2795,28 +2768,6 @@ treeview *:checked:not(check),
   color: @field_selected_fg;
 }
 
-/* the parametric mask's "show output" toggle is an expander, not a mode
-   switch -- its chevron direction (see _paint_param_inout) already carries
-   the state, so suppress the usual checked-button highlight (selector
-   specificity matched to the rule above so it actually overrides it) */
-button.mask-inout-toggle:checked:not(:disabled):not(.dt_transparent_background):not(.dt_ignore_fg_state)
-{
-  background-color: transparent;
-  color: @button_fg;
-}
-
-/* solo-edit toggle (see dtgtk_cairo_paint_soloedit in blend_gui.c): same
-   light-background/dark-foreground inversion as .mask-power-solo when
-   active, so "solo-edit is on" reads as a clear colour swap instead of the
-   subtle default toggle-button highlight. An id selector, so it outranks
-   the generic button:checked rule regardless of source order -- no :not()
-   chain needed. */
-#mask-soloedit-toggle:checked
-{
-  background-color: #e8e8e8;
-  color: #202020;
-  border-radius: 3px;
-}
 
 /* History currently selected button ; they don't need to set background */
 .dt_history_items:active *,
