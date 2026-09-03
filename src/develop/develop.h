@@ -116,6 +116,33 @@ typedef struct dt_dev_viewport_t
   // dimensions of window
   int width, height;
   int32_t border_size;
+  /* Width hidden behind something drawn on top of the canvas, per side -- in
+     practice the flexi masks panel, which is an overlay rather than a column
+     (see gui/gtk.c).
+
+     Deliberately NOT subtracted from `width`: the image stays laid out for the
+     whole canvas, so showing or hiding the overlay never re-fits or moves it.
+     These only widen the pan clamp (_clamp_zoom_to_mask), by exactly the strip
+     each side hides, so anything underneath can be pulled out into the part
+     that can be seen. The trade that buys the stable view is that at fit the
+     covered strip really is covered until you pan it out.
+
+     Both are 0 for every other viewport and whenever nothing overlays the
+     canvas, and then the clamp is exactly what it always was. */
+  int32_t occlusion_left, occlusion_right;
+  /* The allowance actually granted to the clamp, which is >= the occlusion
+     above and never shrinks on its own.
+
+     Dropping the allowance the instant the overlay is hidden would leave the
+     view sitting outside the tighter bound, and the next pan or zoom would find
+     it there and yank it back -- a jump, arriving one gesture after the event
+     that caused it. So the allowance is only ever reduced to what the *current*
+     position still needs: hiding the overlay leaves the view exactly where it
+     is (with empty canvas where the panel was, which is the truth), and the
+     allowance melts away as the view is panned back inside, reaching zero the
+     moment it is no longer holding anything up. The clamp then goes back to
+     stopping motion without ever causing any. */
+  int32_t occlusion_hold_left, occlusion_hold_right;
   double dpi, dpi_factor, ppd;
 
   gboolean color_assessment;
@@ -365,6 +392,12 @@ typedef struct dt_develop_t
     } masks_flexi_host;
   } proxy;
 
+  // the darkroom bottom-toolbar toggle that shows/hides the mask panel, owned
+  // by views/darkroom.c. Kept here so masks_gui_panel_host.c can reflect the
+  // panel's state onto it (dt_iop_gui_blend_masks_panel_sync_toolbox) without
+  // the develop side having to know about the view's widget tree.
+  GtkWidget *masks_panel_button;
+
   dt_dev_chroma_t chroma;
 
   // for exposing and handling the crop
@@ -572,6 +605,14 @@ void dt_dev_get_viewport_params(dt_dev_viewport_t *port,
                                 float *y);
 
 void dt_dev_configure(dt_dev_viewport_t *port);
+
+/** record how much of the canvas is hidden behind an overlay on each side, and
+    re-lay the viewport out for it. No-op when nothing changed, so it is cheap
+    to call on every relevant GUI event. */
+void dt_dev_set_occlusion(dt_dev_viewport_t *port,
+                          const int32_t left,
+                          const int32_t right);
+
 
 /** get exposure level */
 float dt_dev_exposure_get_exposure(dt_develop_t *dev);

@@ -3954,6 +3954,11 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
       // search backward from target for a valid cached raster mask
       GList *start_iter = NULL;
       const float *start_data = NULL;
+      // allocated length of start_data, tracked alongside it so the final copy
+      // can be checked against the buffer it reads from rather than trusting
+      // final_roi. stays 0 while start_data is the source mask, which is never
+      // copied out.
+      size_t start_floats = 0;
 
       // find target position so we can walk backward
       GList *target_iter = NULL;
@@ -3982,6 +3987,7 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
             {
               start_iter = g_list_next(iter);
               start_data = it_piece->raster_mask_cache.data;
+              start_floats = it_piece->raster_mask_cache.size / sizeof(float);
               final_roi = &it_piece->raster_mask_cache.roi;
               dt_print_pipe(DT_DEBUG_MASKS | DT_DEBUG_PIPE | DT_DEBUG_VERBOSE,
                             "raster mask cache hit",
@@ -4002,11 +4008,13 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
       {
         start_iter = g_list_next(source_iter);
         start_data = raster_mask;
+        start_floats = 0;
       }
 
       // walk forward using ping-pong buffers
       int buf_idx = 0;
       const float *inmask = start_data;
+      size_t inmask_floats = start_floats;
 
       for(GList *iter = start_iter; iter; iter = g_list_next(iter))
       {
@@ -4047,6 +4055,7 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
             _update_raster_mask_cache(it_piece, out, roo, source_piece, raster_mask_id);
 
             inmask = out;
+            inmask_floats = piece->pipe->mask_distort_buf_size[buf_idx] / sizeof(float);
             final_roi = roo;
             buf_idx = 1 - buf_idx;
           }
@@ -4065,6 +4074,24 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
       if(inmask != raster_mask)
       {
         const size_t num_floats = (size_t)final_roi->width * final_roi->height;
+
+        /* final_roi and inmask are set together at every assignment above, so
+           this should hold. it has not always: a crash report showed this copy
+           reading past the end of a correctly sized mask buffer. read out of
+           bounds rather than trusting the invariant, and leave a log line
+           naming both sizes if it is ever violated again.
+        */
+        if(num_floats > inmask_floats)
+        {
+          dt_print_pipe(DT_DEBUG_ALWAYS,
+                        "RASTER BUFFER TOO SMALL",
+                        piece->pipe, target_module, DT_DEVICE_NONE, NULL, final_roi,
+                        "from module `%s%s', mask holds %zu floats, roi wants %zu",
+                        raster_mask_source->op, dt_iop_get_instance_id(raster_mask_source),
+                        inmask_floats, num_floats);
+          goto failure;
+        }
+
         float *result = dt_iop_image_alloc(final_roi->width, final_roi->height, 1);
         if(result)
         {

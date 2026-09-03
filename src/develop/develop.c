@@ -1140,7 +1140,11 @@ void dt_dev_configure(dt_dev_viewport_t *port)
   }
 
   port->border_size = tb;
-  // fixed border on every side
+  // fixed border on every side. Deliberately NOT reduced by occlusion_left/right:
+  // the image is laid out for the whole canvas whether or not an overlay covers
+  // part of it, so showing and hiding the overlay never re-fits or moves it.
+  // The occlusion is accounted for in the pan clamp instead (_clamp_zoom_to_mask),
+  // which is what keeps the covered strip reachable.
   const int32_t wd = port->orig_width - 2*tb;
   const int32_t ht = port->orig_height - 2*tb;
   if(port->width != wd || port->height != ht)
@@ -1150,6 +1154,23 @@ void dt_dev_configure(dt_dev_viewport_t *port)
     port->pipe->changed |= DT_DEV_PIPE_ZOOMED;
     dt_dev_zoom_move(port, DT_ZOOM_MOVE, 0.0f, 1, 0.0f, 0.0f, TRUE);
   }
+}
+
+void dt_dev_set_occlusion(dt_dev_viewport_t *port,
+                          const int32_t left,
+                          const int32_t right)
+{
+  if(!port) return;
+
+  port->occlusion_left = left;
+  port->occlusion_right = right;
+  // growing is immediate -- more of the canvas is covered right now, so more of
+  // it has to be reachable right now. Shrinking is not: see occlusion_hold_*,
+  // which the clamp lets down gently instead. Nothing else to do here; the
+  // image is laid out for the whole canvas either way, so neither the viewport
+  // dimensions nor the zoom need recomputing.
+  port->occlusion_hold_left = MAX(port->occlusion_hold_left, left);
+  port->occlusion_hold_right = MAX(port->occlusion_hold_right, right);
 }
 
 // helper used to synch a single history item with db
@@ -3283,9 +3304,16 @@ _dev_mask_overlay_bounds(const dt_develop_t *dev, float *x0, float *y0, float *x
 //   - by any overlay point already outside the image (e.g. a node dragged past
 //     the edge), plus MASK_HANDLE_MARGIN so it isn't flush to the border.
 // boxw/boxh are the viewport extents in image units along each axis.
+// `occl0`/`occl1` are how much of the canvas is hidden behind an overlay on the
+// left and right, in the same normalised image units as boxw -- 0 unless the
+// flexi masks panel is showing (see dt_dev_viewport_t::occlusion_left).
 static void _clamp_zoom_to_mask(const dt_develop_t *dev,
                                 const float boxw,
                                 const float boxh,
+                                const float occl0,
+                                const float occl1,
+                                float *used0,
+                                float *used1,
                                 float *zoom_x,
                                 float *zoom_y,
                                 const gboolean use_mask_overlay)
@@ -3337,12 +3365,26 @@ static void _clamp_zoom_to_mask(const dt_develop_t *dev,
   const float halfw = 0.5f * boxw, halfh = 0.5f * boxh;
   const float homew = boxw >= 1.0f ? 0.0f : 0.5f - halfw;
   const float homeh = boxh >= 1.0f ? 0.0f : 0.5f - halfh;
-  const float cminx = (lox < -0.5f) ? lox : -homew;
-  const float cmaxx = (hix > 0.5f) ? hix : homew;
+  // An overlay covers a strip of the canvas but the image is still laid out for
+  // all of it, so the plain bound stops with that strip's content stranded
+  // underneath. Letting the centre travel one strip further on that side lets
+  // any of it be pulled out into the part that can actually be seen -- the
+  // image never moves when the overlay appears, and nothing becomes
+  // unreachable while it is there. Both are 0 with no overlay, and then these
+  // are exactly the bounds above.
+  const float basex0 = (lox < -0.5f) ? lox : -homew;
+  const float basex1 = (hix > 0.5f) ? hix : homew;
+  const float cminx = basex0 - occl0;
+  const float cmaxx = basex1 + occl1;
   const float cminy = (loy < -0.5f) ? loy : -homeh;
   const float cmaxy = (hiy > 0.5f) ? hiy : homeh;
   *zoom_x = CLAMP(*zoom_x, cminx, cmaxx);
   *zoom_y = CLAMP(*zoom_y, cminy, cmaxy);
+
+  // how much of the allowance the settled position is still leaning on. Never
+  // more than it was, so this only ever gives allowance back.
+  *used0 = fmaxf(0.0f, basex0 - *zoom_x);
+  *used1 = fmaxf(0.0f, *zoom_x - basex1);
 }
 
 static void _dev_zoom_move(dt_dev_viewport_t *port,
@@ -3513,7 +3555,21 @@ static void _dev_zoom_move(dt_dev_viewport_t *port,
 
     // While editing a mask, allow panning beyond the canvas to reach
     // handles that lie outside the image (see helper for the details).
-    _clamp_zoom_to_mask(dev, boxw, boxh, &zoom_x, &zoom_y, use_mask_overlay);
+    // the held allowance, not the raw occlusion: an overlay that has just been
+    // hidden still has its allowance until the view stops needing it
+    const float pw = procw * new_scale;
+    const float occl0 = pw > 0.0f ? port->occlusion_hold_left / pw : 0.0f;
+    const float occl1 = pw > 0.0f ? port->occlusion_hold_right / pw : 0.0f;
+    float used0 = 0.0f, used1 = 0.0f;
+    _clamp_zoom_to_mask(dev, boxw, boxh, occl0, occl1, &used0, &used1,
+                        &zoom_x, &zoom_y, use_mask_overlay);
+
+    // give back whatever the settled position no longer leans on, but never
+    // below what is covered right now
+    port->occlusion_hold_left =
+      MAX(port->occlusion_left, MIN(port->occlusion_hold_left, (int32_t)ceilf(used0 * pw)));
+    port->occlusion_hold_right =
+      MAX(port->occlusion_right, MIN(port->occlusion_hold_right, (int32_t)ceilf(used1 * pw)));
   }
 
   pts[0] = (zoom_x + 0.5f) * procw;

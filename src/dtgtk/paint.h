@@ -324,8 +324,13 @@ void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, gint w, gint
 void dtgtk_cairo_paint_masks_multiply(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a used icon for masks */
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
-/** Paint the flexi masks panel corner icon: two overlapping sheets, the front one
-    filled when CPF_ACTIVE (a mask is actually in use), outline-only otherwise */
+/** Paint the flexi masks panel icon: a domino mask, filled when
+    CPF_SPECIAL_FLAG (the module actually has a mask), outline-only otherwise.
+    NOT CPF_ACTIVE: its only caller is a toggle button, and dtgtk_togglebutton
+    overwrites CPF_ACTIVE with its own checked state -- which here means "the
+    panel is showing", a different question from "there is a mask". The two are
+    independent, so they need separate channels; the panel's state is carried by
+    the button's checked styling instead. */
 void dtgtk_cairo_paint_masks_panel(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a clone tool for retouch */
 void dtgtk_cairo_paint_tool_clone(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
