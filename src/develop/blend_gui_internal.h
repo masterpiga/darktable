@@ -270,7 +270,7 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
                                                 const gboolean panel_pref_collapsed);
 
 gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
-                                            const gboolean is_peeking_or_collapsed);
+                                            const gboolean is_collapsed);
 
 gboolean _model_masks_pin_should_enable_mask(const uint32_t mask_mode);
 
@@ -282,10 +282,6 @@ char *_model_masks_corner_icon_tooltip(const char *module_name,
 char *_model_masks_panel_header_markup(const char *module_name,
                                         const char *instance_name,
                                         const gboolean is_hosted);
-
-char *_model_masks_inline_collapse_tooltip(const gboolean is_peeking,
-                                           const gboolean is_mask_active,
-                                           const int panel_pos);
 
 /** the shape solo-edit mode should be isolating, given the panel's selection,
     or INVALID_MASKID if the mode must stand down */
@@ -354,8 +350,15 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data);
     positions, and only ever *applied* by _masks_flexi_relocate/-release, so a
     caller states the intent and every position carries it out the same way */
 void _masks_panel_set_collapsed_pref(const gboolean collapsed);
+// the position preference, read through here so that the retired
+// "separate panel, left/right" values are migrated in one place
+int _masks_panel_position(void);
+// which edge the canvas-side panel is docked against, and where pinning it
+// records that -- not part of the position choice (see MASKS_PANEL_POS_CANVAS)
+gboolean _masks_panel_side_right(void);
+void _masks_panel_set_side_right(const gboolean right);
 /** append the "blend mask panel position" section to an existing menu */
-void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module);
+void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module);
 
 G_END_DECLS
 
