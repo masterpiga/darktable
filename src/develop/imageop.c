@@ -2561,6 +2561,12 @@ void dt_iop_gui_cleanup_module(dt_iop_module_t *module)
   module->widget_list = NULL;
   DT_CONTROL_SIGNAL_DISCONNECT_ALL(module, module->so->op);
   if(module->gui_cleanup) module->gui_cleanup(module);
+  // before the destroy below, not after: the flexi masks panel's header and
+  // body are parented in whichever host is showing them, not in this module's
+  // expander, so destroying the expander does not take them with it. The
+  // cleanup that follows is too late to help -- it runs once the widgets it
+  // would move are already freed.
+  dt_iop_gui_blend_masks_panel_release(module);
   gtk_widget_destroy(module->expander ? module->expander : module->widget);
   // Do not leave borrowed GTK pointers behind while asynchronous signals can
   // still carry this module until the GUI thread drains their queue.

@@ -1042,6 +1042,13 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module);
 // flexi masks panel content into whichever host the user picked (see
 // _masks_flexi_relocate in blend_gui.c). No-op outside flexi / embedded mode.
 void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module);
+// move the flexi masks panel's content out of whatever host holds it and back
+// into this module's own expander, whether or not the module would still be
+// eligible to host it. Must be called before the module's widget tree is
+// destroyed: while hosted, that content is parented in the host and would
+// otherwise outlive the module it belongs to (see the definition in
+// masks_gui_panel_host.c). No-op if this module is not the one hosted.
+void dt_iop_gui_blend_masks_panel_release(dt_iop_module_t *module);
 void dt_iop_gui_blending_reload_defaults(dt_iop_module_t *module);
 // dev->forms/history was just rewritten wholesale (undo/redo, jump to a
 // history step, style paste, snapshot restore, compress history): drop any
