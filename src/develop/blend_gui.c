@@ -16187,6 +16187,24 @@ static void _shortcut_toggle_collapse_refinements(dt_action_t *action)
     !dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"));
 }
 
+// this one used to be a widget action bound to bd->flexi_inline_collapse_btn,
+// but that button is deliberately hidden in the utility-lib position (the lib's
+// own expander header collapses the panel there, see masks_gui_panel_host.c),
+// and _process_action refuses to run a widget action whose target is invisible
+// (dt_action_widget_invisible in gui/accelerators.c) -- so the shortcut was
+// dead in exactly one of the four positions. A command action carries no
+// widget to be gated on, and the click handler it calls already dispatches on
+// masks_panel_position, utility included.
+static void _shortcut_toggle_masks_panel(dt_action_t *action)
+{
+  dt_iop_module_t *module = dt_dev_gui_module();
+  if(!module || !module->blend_data) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd->masks_support || !bd->masks_inited) return;
+  // the handler ignores its widget argument and reads only the module
+  _flexi_inline_collapse_clicked(NULL, module);
+}
+
 // register every panel-selection shortcut above under module->so (the shared
 // operation-type action tree, not the instance's own), so each shows up ONCE
 // in shortcut preferences regardless of how many instances of this operation
@@ -16221,6 +16239,13 @@ static void _register_masks_action_shortcuts(dt_iop_module_t *module)
                      _shortcut_toggle_auto_expand_selected, 0, 0);
   dt_action_register(DT_ACTION(module->so), N_("collapse refinements by default"),
                      _shortcut_toggle_collapse_refinements, 0, 0);
+
+  // the odd one out: owned by the shared blending tree rather than by "so",
+  // because it was defined there while it was a widget action (dt_action_define_iop
+  // routes a "blend`..." section to darktable.control->actions_blend). Keeping
+  // the path is what keeps a shortcut a user already assigned to it working.
+  dt_action_register(dt_action_section(&darktable.control->actions_blend, N_("masks")),
+                     N_("show/hide mask panel"), _shortcut_toggle_masks_panel, 0, 0);
 }
 
 void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
@@ -17090,8 +17115,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     gtk_widget_set_no_show_all(bd->flexi_inline_collapse_btn, TRUE);
     gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
     gtk_widget_set_valign(bd->flexi_inline_collapse_btn, GTK_ALIGN_CENTER);
-    dt_action_define_iop(module, "blend`masks", N_("show/hide mask panel"),
-                         bd->flexi_inline_collapse_btn, &dt_action_def_button);
+    // no dt_action_define_iop here: the matching shortcut is a command action
+    // instead, so that it still works in the position that hides this button
+    // (see _shortcut_toggle_masks_panel)
 
     // on/off toggle for the whole blend mask (DEVELOP_MASK_DISABLED vs
     // DEVELOP_MASK_ENABLED|DEVELOP_MASK_FLEXI) -- flexi is the only mask
