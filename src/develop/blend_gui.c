@@ -4420,8 +4420,8 @@ static void _group_expand_toggled(GtkToggleButton *btn, gpointer user_data)
 }
 
 // build the toggle button + docked editor pair shared by shape rows, raster
-// rows, and group headers: a chevron styled like the parametric row's
-// existing in/out toggle ("mask-inout-toggle"), remembering its expanded state
+// rows, and group headers: a chevron styled like every other row expander
+// (".mask-row-expander"), remembering its expanded state
 // across rebuilds in bd->masks_props_expanded (keyed by `key` -- a shape's own
 // formid, or a group's head/cid), mirroring bd->masks_cluster_expanded's exact
 // pattern. Returns the toggle button; *editor_box_out receives the editor box
@@ -4468,8 +4468,8 @@ static GtkWidget *_make_props_row_toggle(dt_iop_module_t *module,
 
   GtkWidget *btn = dtgtk_togglebutton_new(_paint_param_inout, 0, NULL);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(btn), expanded);
-  // an expander (chevron), not a mode toggle -- same convention as the
-  // parametric row's chevron (see .mask-inout-toggle in darktable.css)
+  // an expander (chevron), not a mode toggle -- .mask-row-expander in
+  // darktable.css carries the shared chevron styling
   dt_gui_add_class(btn, "mask-row-expander");
   dt_gui_add_class(btn, "dt_transparent_background");
   gtk_widget_set_tooltip_text(btn, tooltip);
