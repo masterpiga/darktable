@@ -899,6 +899,22 @@ dialog .sidebar row:selected:hover label,
   background-image: none;
 }
 
+/* the same hover wash on a group header, which needs its own rule for two
+   reasons. It has to outrank the header's resting background further down
+   (.mask-panel-row.mask-group-header, same two-class specificity as the hover
+   rule below but declared later, so it used to swallow the wash entirely and a
+   hovered header lit up not at all), hence the third class. And the value is
+   the header's resting 0.08 lifted by the same amount 0.06 lifts a plain row,
+   not 0.06 itself, which would darken the header on hover.
+
+   Declared *above* the selected-header rule that follows, deliberately: the two
+   have equal specificity, so this placement is what makes selection win on a
+   header that is both selected and hovered. */
+.mask-panel-row.mask-group-header.mask-list-row-hover
+{
+  background-color: rgba(255, 255, 255, 0.13);
+}
+
 .mask-group-block.mask-list-row-selected .mask-group-header
 {
   background-color: rgba(255, 255, 255, 0.18);
@@ -910,17 +926,24 @@ dialog .sidebar row:selected:hover label,
    to a row/header while the pointer is over the list row itself (_row_crossing)
    or over the docked parametric editor's own controls
    (_parametric_wrap_crossing), so hovering the panel reads exactly like
-   hovering the matching shape on the canvas. */
+   hovering the matching shape on the canvas.
+
+   Deliberately far weaker than the selection wash above: hover follows the
+   pointer and says nothing about state, so it only has to be noticeable, while
+   selection has to be unmistakable. At the 0.14 this used to be it fell right
+   inside the selected row's 0.20 -> 0.10 gradient, and a hovered row was
+   indistinguishable from the selected one. */
 .mask-panel-row.mask-list-row-hover
 {
-  background-color: rgba(255, 255, 255, 0.14);
+  background-color: rgba(255, 255, 255, 0.06);
 }
 
-/* persistent solo / solo-edit wash: same look as the transient hover above, but
-   driven by state (bd->solo_formid / soloedit_formid / solo_cluster_key) rather
-   than the pointer, so it survives hovering elsewhere in the panel or canvas
-   (see _update_shape_row_state / _sync_solo_canvas_highlight). A separate class
-   from mask-list-row-hover so _clear_hover_classes does not wipe it. */
+/* persistent solo / solo-edit wash: driven by state (bd->solo_formid /
+   soloedit_formid / solo_cluster_key) rather than the pointer, so it survives
+   hovering elsewhere in the panel or canvas (see _update_shape_row_state /
+   _sync_solo_canvas_highlight). Being a state, it keeps the stronger fill that
+   hover above gave up. A separate class from mask-list-row-hover so
+   _clear_hover_classes does not wipe it. */
 .mask-panel-row.mask-list-row-solo
 {
   background-color: rgba(255, 255, 255, 0.14);
