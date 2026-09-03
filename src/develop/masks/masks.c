@@ -1650,18 +1650,14 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
 {
   const dt_masks_form_t *old = darktable.develop->form_visible;
 
-  // NB on the flexi panel's pending-row placeholder (see _build_masks_list's
-  // pending-row synthesis in blend_gui.c): every shape type's own right-
-  // click-cancel handler already calls dt_masks_set_edit_mode() followed by
-  // its own explicit dt_masks_iop_update(module) (e.g. circle.c's
-  // GDK_BUTTON_SECONDARY branch) -- that pre-existing call is what makes the
-  // pending row disappear on cancel; nothing extra is needed here. An
-  // earlier version of this function tried to also notify the panel from
-  // here directly, but dt_masks_set_edit_mode() itself calls this function
-  // (via dt_masks_change_form_gui(grp)) before it finishes setting up
-  // edit_mode/selection state, so a synchronous panel rebuild fired from
-  // inside here reentered _build_masks_list on that half-transitioned state
-  // -- observed as a stuck/incorrect shape selection after cancelling.
+  // the module whose flexi-panel pending-row placeholder (see
+  // _build_masks_list's pending-row synthesis in blend_gui.c) is on screen
+  // right now. Captured before dt_masks_clear_form_gui() below wipes both
+  // creation and creation_module.
+  dt_iop_module_t *const was_creating =
+    (darktable.develop->form_gui && darktable.develop->form_gui->creation)
+      ? darktable.develop->form_gui->creation_module
+      : NULL;
 
   dt_masks_clear_form_gui(darktable.develop);
   darktable.develop->form_visible = newform;
@@ -1678,6 +1674,16 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
   DT_ENTER_GUI_UPDATE();
   dt_dev_masks_selection_change(darktable.develop, NULL, 0);
   DT_LEAVE_GUI_UPDATE();
+
+  // creation just ended, or moved to another module: drop the pending row the
+  // old owner is still showing. The shape modules' right-click-cancel handlers
+  // refresh the panel themselves, but abandoning creation any other way (a
+  // click outside the canvas, focusing another module) reaches none of them and
+  // used to leave the placeholder behind with nothing to dismiss it.
+  if(was_creating
+     && (!darktable.develop->form_gui->creation
+         || darktable.develop->form_gui->creation_module != was_creating))
+    dt_iop_gui_blend_masks_creation_ended(was_creating);
 }
 
 void dt_masks_reset_form_gui(void)

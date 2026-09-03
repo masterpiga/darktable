@@ -1582,7 +1582,7 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
   dt_iop_add_remove_mask_indicator(module, TRUE);
   gtk_widget_set_visible(data->showmask, TRUE);
 
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  const int pos = _masks_panel_position();
   if(pos == MASKS_PANEL_POS_UTILITY)
   {
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
@@ -1722,6 +1722,22 @@ static void _blendop_masks_add_shape(GtkGestureSingle *gesture,
 
   _blendop_mask_enable(self);
 
+  // if the clicked shape is already armed, clicking it again disarms it
+  if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget))
+     && darktable.develop->form_gui
+     && darktable.develop->form_gui->creation
+     && darktable.develop->form_gui->creation_module == self)
+  {
+    darktable.develop->form_gui->creation_continuous = FALSE;
+    darktable.develop->form_gui->creation_continuous_module = NULL;
+    for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
+      if(bd->masks_shapes[n])
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[n]), FALSE);
+    dt_masks_change_form_gui(NULL);
+    dt_control_queue_redraw_center();
+    return;
+  }
+
   // set all shape buttons to inactive
   for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[n]), FALSE);
@@ -1730,12 +1746,12 @@ static void _blendop_masks_add_shape(GtkGestureSingle *gesture,
   dt_iop_request_focus(self);
   dt_iop_color_picker_reset(self, FALSE);
   bd->masks_shown = DT_MASKS_EDIT_FULL;
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget), TRUE);
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), FALSE);
   // we create the new form
   dt_masks_form_t *form = dt_masks_create(bd->masks_type[this]);
   dt_masks_change_form_gui(form);
   darktable.develop->form_gui->creation_module = self;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget), TRUE);
   // make the pending-row placeholder appear immediately (see
   // _build_masks_list's pending-row synthesis / _masks_list_signature)
   _queue_masks_list_rebuild(self);
@@ -2015,24 +2031,13 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
   return FALSE;
 }
 
-static void _blendif_select_colorspace(GtkMenuItem *menuitem,
-                                       dt_iop_module_t *module)
-{
-  const dt_develop_blend_colorspace_t cst =
-    GPOINTER_TO_INT(g_object_get_data(G_OBJECT(menuitem), "dt-blend-cst"));
-  if(_blendif_change_blend_colorspace(module, cst))
-  {
-    gtk_widget_queue_draw(module->widget);
-  }
-}
-
-static void _masks_opacity_sticky_toggled(GtkCheckMenuItem *mi, dt_iop_module_t *module)
+static void _masks_opacity_sticky_toggled(GtkToggleButton *mi, dt_iop_module_t *module)
 {
   // the checkbox reads "sticky" (on = remember last opacity for new shapes),
   // the conf key is stored inverted (absent/FALSE = sticky, the default) so
   // it needs no preferences.xml entry -- see _new_shape_default_opacity in
   // masks.c, which is the actual place this is consumed.
-  const gboolean not_sticky = !gtk_check_menu_item_get_active(mi);
+  const gboolean not_sticky = !gtk_toggle_button_get_active(mi);
   dt_conf_set_bool("plugins/darkroom/masks/opacity_not_sticky", not_sticky);
   if(not_sticky) dt_conf_set_float("plugins/darkroom/masks/opacity", 1.0f);
 }
@@ -2042,11 +2047,11 @@ static void _masks_opacity_sticky_toggled(GtkCheckMenuItem *mi, dt_iop_module_t 
 static gboolean _preview_on_hover_is_on(void);
 static void _preview_on_hover_set(const gboolean on);
 
-static void _masks_auto_expand_selected_toggled(GtkCheckMenuItem *mi,
+static void _masks_auto_expand_selected_toggled(GtkToggleButton *mi,
                                                 dt_iop_module_t *module)
 {
   dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected",
-                   gtk_check_menu_item_get_active(mi));
+                   gtk_toggle_button_get_active(mi));
   // this option is read at row-build time from a conf key, not from anything
   // _masks_list_signature hashes (see _make_props_row_toggle) -- without
   // invalidating the cached signature here, toggling it would have no
@@ -2059,213 +2064,195 @@ static void _masks_auto_expand_selected_toggled(GtkCheckMenuItem *mi,
   }
 }
 
-static void _masks_collapse_refinements_default_toggled(GtkCheckMenuItem *mi,
+static void _masks_collapse_refinements_default_toggled(GtkToggleButton *mi,
                                                         dt_iop_module_t *module)
 {
   dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default",
-                   gtk_check_menu_item_get_active(mi));
+                   gtk_toggle_button_get_active(mi));
 }
 
-static void _masks_preview_on_hover_toggled(GtkCheckMenuItem *mi,
+static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
                                             dt_iop_module_t *module)
 {
-  _preview_on_hover_set(gtk_check_menu_item_get_active(mi));
+  _preview_on_hover_set(gtk_toggle_button_get_active(mi));
 }
 
-// appends an "options" section directly to `menu` -- behavioural toggles
-// for the blend mask panel that don't fit the position/colorspace/presets
-// sections above
-static void _add_masks_panel_options_menu(GtkMenu *menu, dt_iop_module_t *module)
+// appends the "options" section to `box` -- behavioural toggles for the blend
+// mask panel that don't fit the position or colorspace sections. Check buttons
+// under a dt_section_label, the way the other toolbar preference popovers are
+// laid out (see global_toolbox.c's overlay settings).
+#define _MASKS_OPT_CHECK(var, label, tip, active, cb)                             \
+  GtkWidget *var = gtk_check_button_new_with_label(label);                        \
+  gtk_widget_set_tooltip_text(var, tip);                                          \
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(var), active);                   \
+  g_signal_connect(G_OBJECT(var), "toggled", G_CALLBACK(cb), module);             \
+  gtk_box_pack_start(GTK_BOX(box), var, FALSE, FALSE, 0);
+
+static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module)
 {
-  GtkWidget *header = gtk_menu_item_new_with_label(_("options"));
-  gtk_widget_set_sensitive(header, FALSE);
+  GtkWidget *header = gtk_label_new(_("options"));
+  gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
+  dt_gui_add_class(header, "dt_section_label");
   gtk_widget_set_tooltip_text(header,
                               _("behavioural options for the blend mask panel."));
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
+  gtk_box_pack_start(GTK_BOX(box), header, FALSE, FALSE, 0);
 
-  GtkWidget *mi = gtk_check_menu_item_new_with_label(_("sticky opacity"));
-  dt_gui_add_class(mi, "dt_transparent_background");
-  gtk_widget_set_tooltip_text(
-    mi, _("when enabled (default), a newly added shape starts at the opacity"
-          " last used by any shape, so adjusting opacity once carries over to"
-          " every shape you add afterwards.\n"
-          "when disabled, every newly added shape starts at 100% opacity,"
-          " regardless of what opacity was last used."));
-  if(!dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"))
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
-  g_signal_connect(G_OBJECT(mi), "toggled", G_CALLBACK(_masks_opacity_sticky_toggled),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
+  // the checkbox reads "sticky" (on = remember last opacity for new shapes),
+  // the conf key is stored inverted (absent/FALSE = sticky, the default) so
+  // it needs no preferences.xml entry -- see _new_shape_default_opacity in
+  // masks.c, which is the actual place this is consumed.
+  _MASKS_OPT_CHECK(
+    sticky, _("sticky opacity"),
+    _("when enabled (default), a newly added shape starts at the opacity"
+      " last used by any shape, so adjusting opacity once carries over to"
+      " every shape you add afterwards.\n"
+      "when disabled, every newly added shape starts at 100% opacity,"
+      " regardless of what opacity was last used."),
+    !dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"),
+    _masks_opacity_sticky_toggled)
 
-  GtkWidget *ae = gtk_check_menu_item_new_with_label(_("auto-expand selected shape"));
-  dt_gui_add_class(ae, "dt_transparent_background");
-  gtk_widget_set_tooltip_text(
-    ae, _("when enabled (default), the selected shape's expanded controls (size,"
-          " hardness, etc.) are always shown, and every other shape's controls"
-          " stay collapsed -- selecting a different shape expands it and"
-          " collapses the previous one. only ever affects shapes, not groups.\n"
-          "when disabled, each shape's controls are expanded and collapsed by"
-          " hand."));
-  if(dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"))
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ae), TRUE);
-  g_signal_connect(G_OBJECT(ae), "toggled",
-                    G_CALLBACK(_masks_auto_expand_selected_toggled), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), ae);
+  _MASKS_OPT_CHECK(
+    autoexpand, _("auto-expand selected shape"),
+    _("when enabled (default), the selected shape's expanded controls (size,"
+      " hardness, etc.) are always shown, and every other shape's controls"
+      " stay collapsed -- selecting a different shape expands it and"
+      " collapses the previous one. only ever affects shapes, not groups.\n"
+      "when disabled, each shape's controls are expanded and collapsed by"
+      " hand."),
+    dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"),
+    _masks_auto_expand_selected_toggled)
 
-  GtkWidget *pc =
-    gtk_check_menu_item_new_with_label(_("preview channel under cursor"));
-  dt_gui_add_class(pc, "dt_transparent_background");
-  gtk_widget_set_tooltip_text(
-    pc, _("when enabled, resting the pointer on one of the add-parametric-element"
-          " buttons displays that channel in the center view, so you can see what"
-          " a channel looks like before adding an element for it.\n"
-          "the preview only starts after a short pause, so passing over the"
-          " buttons on the way elsewhere costs nothing.\n"
-          "disabled by default."));
-  if(_preview_on_hover_is_on())
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(pc), TRUE);
-  g_signal_connect(G_OBJECT(pc), "toggled",
-                   G_CALLBACK(_masks_preview_on_hover_toggled), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), pc);
+  _MASKS_OPT_CHECK(
+    hover, _("preview channel under cursor"),
+    _("when enabled, resting the pointer on one of the add-parametric-element"
+      " buttons displays that channel in the center view, so you can see what"
+      " a channel looks like before adding an element for it.\n"
+      "the preview only starts after a short pause, so passing over the"
+      " buttons on the way elsewhere costs nothing.\n"
+      "disabled by default."),
+    _preview_on_hover_is_on(),
+    _masks_preview_on_hover_toggled)
 
-  GtkWidget *cr =
-    gtk_check_menu_item_new_with_label(_("collapse refinements by default"));
-  dt_gui_add_class(cr, "dt_transparent_background");
-  gtk_widget_set_tooltip_text(
-    cr, _("when enabled, newly selected masks, groups, and elements start with their"
-          " refinements section collapsed by default.\n"
-          "disabled by default."));
-  if(dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"))
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(cr), TRUE);
-  g_signal_connect(G_OBJECT(cr), "toggled",
-                   G_CALLBACK(_masks_collapse_refinements_default_toggled), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), cr);
+  _MASKS_OPT_CHECK(
+    collapse, _("collapse refinements by default"),
+    _("when enabled, newly selected masks, groups, and elements start with their"
+      " refinements section collapsed by default.\n"
+      "disabled by default."),
+    dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"),
+    _masks_collapse_refinements_default_toggled)
+}
+#undef _MASKS_OPT_CHECK
+
+// a radio in `box`, grouped with `group` (NULL starts a new group), carrying
+// `data` under `key` for the toggled handler to read back
+static GtkWidget *_masks_pref_radio(GtkWidget *box,
+                                    GtkWidget *group,
+                                    const gchar *label,
+                                    const gchar *key,
+                                    const int data,
+                                    const gboolean active)
+{
+  GtkWidget *rb = gtk_radio_button_new_with_label_from_widget(
+    group ? GTK_RADIO_BUTTON(group) : NULL, label);
+  g_object_set_data(G_OBJECT(rb), key, GINT_TO_POINTER(data));
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb), active);
+  gtk_box_pack_start(GTK_BOX(box), rb, FALSE, FALSE, 0);
+  return rb;
 }
 
+static GtkWidget *_masks_pref_section(GtkWidget *box, const gchar *title, const gchar *tip)
+{
+  GtkWidget *lb = gtk_label_new(title);
+  gtk_label_set_justify(GTK_LABEL(lb), GTK_JUSTIFY_CENTER);
+  dt_gui_add_class(lb, "dt_section_label");
+  if(tip) gtk_widget_set_tooltip_text(lb, tip);
+  gtk_box_pack_start(GTK_BOX(box), lb, FALSE, FALSE, 0);
+  return lb;
+}
+
+static void _blendif_colorspace_radio_toggled(GtkToggleButton *rb,
+                                              dt_iop_module_t *module)
+{
+  if(darktable.gui->reset || !gtk_toggle_button_get_active(rb)) return;
+  const dt_develop_blend_colorspace_t cst =
+    GPOINTER_TO_INT(g_object_get_data(G_OBJECT(rb), "dt-blend-cst"));
+  if(_blendif_change_blend_colorspace(module, cst))
+    gtk_widget_queue_draw(module->widget);
+}
+
+// The blend mask panel's settings, laid out as a popover of sections the way the
+// darkroom toolbar's other preference popovers are (guides, global toolbox): a
+// dt_section_label per section, radios for the exclusive choices and check
+// buttons for the toggles. This replaced a GtkMenu of check items, which worked
+// but looked nothing like the neighbouring popovers it sits between.
 static void _blendif_options_callback(GtkButton *button,
                                       dt_iop_module_t *module)
 {
   const dt_iop_gui_blend_data_t *bd = module->blend_data;
-
   if(!bd) return;
 
   // the blendif color-space section is only meaningful where blendif is supported;
-  // the menu itself also opens on masks-only modules (for the mode-visibility items)
+  // the popover itself also opens on masks-only modules (for the other sections)
   const gboolean blendif_ok = bd->blendif_support && bd->blendif_inited;
 
-  GtkWidget *mi;
-  GtkMenu *menu = GTK_MENU(gtk_menu_new());
-  // tracks whether anything has been appended yet, so a section separator is
-  // only added between two sections, never as a leading/dangling line
-  gboolean menu_has_items = FALSE;
+  GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
+  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  gtk_container_add(GTK_CONTAINER(pop), box);
 
-  // add a section to switch blending color spaces
+  _masks_pref_section(box, _("blend mask panel settings"), NULL);
+
+  // blend colorspace
   const dt_develop_blend_colorspace_t module_cst =
     dt_develop_blend_default_module_blend_colorspace(module);
-  const dt_develop_blend_colorspace_t module_blend_cst =
-    module->blend_params->blend_cst;
+  const dt_develop_blend_colorspace_t module_blend_cst = module->blend_params->blend_cst;
 
   if(blendif_ok
      && (module_cst == DEVELOP_BLEND_CS_LAB || module_cst == DEVELOP_BLEND_CS_RGB_DISPLAY
          || module_cst == DEVELOP_BLEND_CS_RGB_SCENE))
   {
+    _masks_pref_section(box, _("blend colorspace"), NULL);
+
     // every entry here stays live even when the mask holds parametric elements
     // that cannot survive the switch: _blendif_change_blend_colorspace asks
-    // about those and deletes them on a yes. Disabling the entries instead used
-    // to leave the user with a dead section and nowhere to put the explanation
-    // (GTK delivers no motion, hence no tooltip, to insensitive widgets), which
-    // took a sensitive-but-inert "(locked)" header to work around.
-    mi = gtk_menu_item_new_with_label(_("blend colorspace"));
-    gtk_widget_set_sensitive(mi, FALSE);  // a plain section label
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-
-    mi = gtk_menu_item_new_with_label(_("reset to default blend colorspace"));
-    g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
-                           GINT_TO_POINTER(DEVELOP_BLEND_CS_NONE), NULL);
-    g_signal_connect(G_OBJECT(mi), "activate",
-                     G_CALLBACK(_blendif_select_colorspace), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-
-    // only show Lab blending when the module is a Lab module to avoid
-    // using it at the wrong place (Lab blending should not be
-    // activated for RGB modules before colorin and after colorout)
+    // about those and deletes them on a yes.
+    ++darktable.gui->reset;
+    GtkWidget *g = _masks_pref_radio(box, NULL, _("default"), "dt-blend-cst",
+                                     DEVELOP_BLEND_CS_NONE,
+                                     module_blend_cst == DEVELOP_BLEND_CS_NONE);
+    GtkWidget *radios[4] = { g, NULL, NULL, NULL };
+    int n = 1;
+    // only offer Lab blending on a Lab module, to avoid using it at the wrong
+    // place (it should not be active for RGB modules before colorin/after colorout)
     if(module_cst == DEVELOP_BLEND_CS_LAB)
-    {
-      mi = gtk_check_menu_item_new_with_label(_("Lab"));
-      dt_gui_add_class(mi, "dt_transparent_background");
-      if(module_blend_cst == DEVELOP_BLEND_CS_LAB)
-      {
-        gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
-        dt_gui_add_class(mi, "active_menu_item");
-      }
-      g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
-                             GINT_TO_POINTER(DEVELOP_BLEND_CS_LAB), NULL);
-      g_signal_connect(G_OBJECT(mi), "activate",
-                       G_CALLBACK(_blendif_select_colorspace), module);
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-    }
-
-    mi = gtk_check_menu_item_new_with_label(_("RGB (display)"));
-    dt_gui_add_class(mi, "dt_transparent_background");
-    if(module_blend_cst == DEVELOP_BLEND_CS_RGB_DISPLAY)
-    {
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
-      dt_gui_add_class(mi, "active_menu_item");
-    }
-    g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
-                           GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_DISPLAY), NULL);
-    g_signal_connect(G_OBJECT(mi), "activate",
-                     G_CALLBACK(_blendif_select_colorspace), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-
-    mi = gtk_check_menu_item_new_with_label(_("RGB (scene)"));
-    dt_gui_add_class(mi, "dt_transparent_background");
-    if(module_blend_cst == DEVELOP_BLEND_CS_RGB_SCENE)
-    {
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(mi), TRUE);
-      dt_gui_add_class(mi, "active_menu_item");
-    }
-    g_object_set_data_full(G_OBJECT(mi), "dt-blend-cst",
-                           GINT_TO_POINTER(DEVELOP_BLEND_CS_RGB_SCENE), NULL);
-    g_signal_connect(G_OBJECT(mi), "activate",
-                     G_CALLBACK(_blendif_select_colorspace), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-
-    menu_has_items = TRUE;
+      radios[n++] = _masks_pref_radio(box, g, _("Lab"), "dt-blend-cst",
+                                      DEVELOP_BLEND_CS_LAB,
+                                      module_blend_cst == DEVELOP_BLEND_CS_LAB);
+    radios[n++] = _masks_pref_radio(box, g, _("RGB (display)"), "dt-blend-cst",
+                                    DEVELOP_BLEND_CS_RGB_DISPLAY,
+                                    module_blend_cst == DEVELOP_BLEND_CS_RGB_DISPLAY);
+    radios[n++] = _masks_pref_radio(box, g, _("RGB (scene)"), "dt-blend-cst",
+                                    DEVELOP_BLEND_CS_RGB_SCENE,
+                                    module_blend_cst == DEVELOP_BLEND_CS_RGB_SCENE);
+    --darktable.gui->reset;
+    // connected only after the initial states are set, so building the popover
+    // does not look like the user picking a colorspace
+    for(int i = 0; i < n; i++)
+      g_signal_connect(G_OBJECT(radios[i]), "toggled",
+                       G_CALLBACK(_blendif_colorspace_radio_toggled), module);
   }
 
-  // "group layout presets" section (formerly a separate hamburger on the
-  // "mask elements" header) -- only meaningful once the mask is actually
-  // on, same as that button's old visibility
-  if(bd->masks_support && !(module->blend_params->mask_mode & DEVELOP_MASK_RASTER))
-  {
-    if(menu_has_items)
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-    _add_flexi_presets_menu(menu, module);
-    menu_has_items = TRUE;
-  }
-
-  // "options" section
   if(bd->masks_support)
   {
-    if(menu_has_items)
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-    _add_masks_panel_options_menu(menu, module);
-    menu_has_items = TRUE;
+    _add_masks_panel_position_box(box, module);
+    _add_masks_panel_options_box(box, module);
   }
 
-  // "blend mask panel position" section
-  if(bd->masks_support)
-  {
-    if(menu_has_items)
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-    _add_masks_panel_position_menu(menu, module);
-  }
+  gtk_widget_show_all(box);
+  gtk_popover_popup(GTK_POPOVER(pop));
 
-  dt_gui_menu_popup(menu,
-                    GTK_WIDGET(button), GDK_GRAVITY_SOUTH_EAST, GDK_GRAVITY_NORTH_EAST);
-
-  dtgtk_button_set_active(DTGTK_BUTTON(button), FALSE);
+  // the anchor is not always a DtGtkButton: this also opens from a right-click
+  // on the darkroom toolbar's mask-panel toggle, which is a DtGtkToggleButton
+  if(DTGTK_IS_BUTTON(button)) dtgtk_button_set_active(DTGTK_BUTTON(button), FALSE);
 }
 
 void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
@@ -2278,13 +2265,18 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
   }
   else
   {
-    GtkMenu *menu = GTK_MENU(gtk_menu_new());
-    _add_masks_panel_options_menu(menu, NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-    _add_masks_panel_position_menu(menu, NULL);
-    dt_gui_menu_popup(menu,
-                      GTK_WIDGET(button), GDK_GRAVITY_SOUTH_EAST, GDK_GRAVITY_NORTH_EAST);
-    dtgtk_button_set_active(DTGTK_BUTTON(button), FALSE);
+    // no focused module: the panel-wide settings still apply, so show those
+    // alone. Same popover shape as the full one, minus every section that needs
+    // a module to talk about.
+    GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
+    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    gtk_container_add(GTK_CONTAINER(pop), box);
+    _masks_pref_section(box, _("blend mask panel settings"), NULL);
+    _add_masks_panel_position_box(box, NULL);
+    _add_masks_panel_options_box(box, NULL);
+    gtk_widget_show_all(box);
+    gtk_popover_popup(GTK_POPOVER(pop));
+    if(DTGTK_IS_BUTTON(button)) dtgtk_button_set_active(DTGTK_BUTTON(button), FALSE);
   }
 }
 
@@ -8198,6 +8190,24 @@ static void _empty_groups_clear(dt_iop_gui_blend_data_t *bd)
 // still valid against a wholesale reload, so drop them all -- losing an
 // unfilled placeholder group is a much smaller surprise than a phantom
 // duplicate.
+void dt_iop_gui_blend_masks_creation_ended(dt_iop_module_t *module)
+{
+  if(!module || !module->blend_data) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(bd->masks_support)
+  {
+    for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
+      if(bd->masks_shapes[n])
+        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[n]), FALSE);
+  }
+  // deferred, not direct: dt_masks_change_form_gui is itself called from the
+  // middle of dt_masks_set_edit_mode, before edit_mode and selection state have
+  // finished transitioning, and a synchronous rebuild there reenters
+  // _build_masks_list on that half-set state (see the note in
+  // dt_masks_change_form_gui). The idle fires once the caller has unwound.
+  _queue_masks_list_rebuild(module);
+}
+
 void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module)
 {
   if(!module) return;
@@ -9298,8 +9308,24 @@ static void _new_shape_op_activate(GtkMenuItem *item, gpointer user_data)
 // always contributes exactly its own mask regardless of which one is picked.
 static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u)
 {
-  if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
   GtkWidget *btn = u ? GTK_WIDGET(u) : w;
+
+  // right-click: the group layout presets, which build a whole set of groups at
+  // once. They live here rather than in the panel settings because that is what
+  // they are -- a bulk version of this button, not a preference.
+  if(ev->button == GDK_BUTTON_SECONDARY && ev->type == GDK_BUTTON_PRESS)
+  {
+    dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
+    if(!module || !module->blend_data) return FALSE;
+    if(module->blend_params->mask_mode & DEVELOP_MASK_RASTER) return FALSE;
+    GtkMenu *pmenu = GTK_MENU(gtk_menu_new());
+    _add_flexi_presets_menu(pmenu, module);
+    gtk_widget_show_all(GTK_WIDGET(pmenu));
+    gtk_menu_popup_at_pointer(pmenu, (GdkEvent *)ev);
+    return TRUE;
+  }
+
+  if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
 
   GtkWidget *menu = gtk_menu_new();
   for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
@@ -11220,6 +11246,13 @@ static GtkWidget *_pending_conf_slider_new(dt_iop_module_t *module,
 // shared machinery only ever applies a property to forms already found in
 // grp->points (_props_row_apply's own loop is `for(GList *fpts =
 // grp->points; ...)`), and this form is, by definition, not committed yet.
+static gboolean _pending_shape_click(GtkWidget *w, GdkEventButton *e, gpointer user_data)
+{
+  // absorb clicks on the pending row background so reaching for sliders does
+  // not bubble up to group_block and deselect or disarm the shape
+  return TRUE;
+}
+
 static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form_t *form)
 {
   const guint kind = _form_kind(form);
@@ -11228,6 +11261,10 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   GtkWidget *handle = _make_drag_handle(
     _kind_icon_paint(kind), FALSE,
     _("this shape has not been added yet -- finish drawing it on canvas to add it"));
+  g_signal_connect(G_OBJECT(handle), "button-press-event",
+                   G_CALLBACK(_pending_shape_click), NULL);
+  g_signal_connect(G_OBJECT(handle), "button-release-event",
+                   G_CALLBACK(_pending_shape_click), NULL);
 
   gchar *text = g_strdup_printf(_("new %s"), _kind_name(kind, FALSE));
   GtkWidget *name = gtk_label_new(text);
@@ -11514,8 +11551,16 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
 
   gtk_box_pack_start(GTK_BOX(row_vbox), props_box, FALSE, FALSE, 0);
 
-  gtk_widget_show_all(row_vbox);
-  return row_vbox;
+  GtkWidget *pending_evbox = gtk_event_box_new();
+  gtk_event_box_set_visible_window(GTK_EVENT_BOX(pending_evbox), TRUE);
+  g_signal_connect(G_OBJECT(pending_evbox), "button-press-event",
+                   G_CALLBACK(_pending_shape_click), NULL);
+  g_signal_connect(G_OBJECT(pending_evbox), "button-release-event",
+                   G_CALLBACK(_pending_shape_click), NULL);
+  gtk_container_add(GTK_CONTAINER(pending_evbox), row_vbox);
+
+  gtk_widget_show_all(pending_evbox);
+  return pending_evbox;
 }
 
 // The event box wrapping a group header -- real or staged (empty) -- carrying
@@ -16197,12 +16242,7 @@ static void _shortcut_toggle_collapse_refinements(dt_action_t *action)
 // masks_panel_position, utility included.
 static void _shortcut_toggle_masks_panel(dt_action_t *action)
 {
-  dt_iop_module_t *module = dt_dev_gui_module();
-  if(!module || !module->blend_data) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd->masks_support || !bd->masks_inited) return;
-  // the handler ignores its widget argument and reads only the module
-  _flexi_inline_collapse_clicked(NULL, module);
+  dt_iop_gui_blend_masks_panel_toggle();
 }
 
 // register every panel-selection shortcut above under "<blending> / masks", the
@@ -16365,7 +16405,9 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
                                 _("add a new group above the selected group\n"
                                   "(or above everything, if none is selected)\n"
                                   "ctrl+click to add it below instead\n"
-                                  "click to pick its operator"));
+                                  "click to pick its operator\n"
+                                  "right-click for group layout presets, which"
+                                  " build a whole set of groups at once"));
     gtk_widget_show(bd->masks_new_op_box);
     gtk_box_pack_start(GTK_BOX(toolbar_row1), bd->masks_new_op_box, FALSE, FALSE, 0);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
@@ -16986,7 +17028,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   // modules that can't be toggled on/off in the first place (see
   // module->hide_enable_button) don't get a blend-mask on/off control either
   gtk_widget_set_visible(bd->mask_enable_toggle, !module->hide_enable_button);
-  gtk_widget_set_visible(bd->masks_options_btn, !module->hide_enable_button);
+  gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
   gtk_widget_set_visible(bd->showmask, is_mask_enabled && !module->hide_enable_button);
 
   DT_LEAVE_GUI_UPDATE();

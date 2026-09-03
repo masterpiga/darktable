@@ -109,7 +109,7 @@ static void _reconfigure(dt_lib_module_t *self)
 {
   if(!self->expander) return;
 
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  const int pos = _masks_panel_position();
   gtk_widget_set_visible(self->expander, pos == MASKS_PANEL_POS_UTILITY);
 }
 

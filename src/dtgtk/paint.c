@@ -1149,6 +1149,8 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
   //
   // The two states share one contour; only the eyes differ (punched out when
   // filled, single arcs when stroked -- a stroked outline closes up at 16px).
+  //
+  // Keyed on CPF_SPECIAL_FLAG rather than CPF_ACTIVE: see the note in paint.h.
   cairo_translate(cr, 0.5, 0.5);
   cairo_scale(cr, 1.087, 1.087);   // 1/0.92: the contour's own width
   cairo_translate(cr, -0.5, -0.5);
@@ -1171,7 +1173,7 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
     cairo_close_path(cr);                                                       \
   } while(0)
 
-  if(flags & CPF_ACTIVE)
+  if(flags & CPF_SPECIAL_FLAG)
   {
     cairo_new_path(cr);
     _MASK_DOMINO_CONTOUR(cr);

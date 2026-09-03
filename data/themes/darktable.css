@@ -2442,7 +2442,7 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
 
    That reveal has a precondition: something opaque behind it. True while the
    panel is a column in the grid; false while it floats over the canvas during
-   a hover-peek (see _flexi_panel_set_floating in gui/gtk.c), where the only
+   an overlay on the canvas (see _ui_init_panel_flexi in gui/gtk.c), where the only
    thing behind it is the image -- so the transparency that normally goes
    unnoticed made the whole panel read as semi-transparent. The floating state,
    and only it, therefore paints its own background. The ~6/255 mismatch the
@@ -2499,75 +2499,134 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   background-color: alpha(@fg_color, 0.22);
 }
 
-/* collapsed-panel corner icon overlay: the panel's own header icon, moved to
-   the canvas corner, so it takes the plain .dt_module_btn box the header's
-   buttons use rather than a size of its own -- only margin and border need
-   zeroing here, to sit flush in the canvas's actual corner. It carries no
-   background: a flat-colored patch on photo content reads as a foreign
-   rectangle whatever color it is (matching @darkroom_bg_color only hides it
-   where the canvas happens to be empty), and the glyph alone is enough to
-   find. border/box-shadow/outline are explicitly zeroed rather than left to
-   the generic "button" rule, which is lower-specificity. State rides entirely
-   on the glyph and its opacity: dtgtk_cairo_paint_masks_panel fills its front
-   sheet solid instead of outline-only when a mask is in use (see
-   dt_ui_flexi_panel_set_icon and the "flexi-corner-icon-active" class), so it
-   reads without color too -- for color-blind users, or at a glance.
+/* The way in and out of the flexi masks panel, in two parts (see
+   ui->flexi_sliver / ui->flexi_halo in gui/gtk.c).
 
-   The margins below put it exactly where the panel's own collapse/pin button
-   sits, so expanding does not make it jump: the icon overlays
-   dt_ui_center_base, the same overlay the panel is reparented into while it
-   floats during a peek, and the collapsed panel's edge is where the canvas
-   edge now is -- so the offset to match is simply the panel header's own
-   inset. Both values therefore have to track "#blending-tabs.dt_section_label
-   :not(.blending-tabs-embedded)" above; nothing else between the panel edge
-   and that header adds any padding of its own. */
-#flexi-corner-icon
+   #flexi-sliver is the resting state: a 1px hairline column just outside each
+   end of the canvas, present the whole time a mask panel is available. It is
+   barely there on purpose -- a tinted bar running the full height of the canvas
+   is a permanent distraction next to the picture being judged, whatever the
+   tint. All it has to do is mark the edge as live.
+
+   #flexi-halo is what it grows into. When the pointer comes within a band's
+   width of either edge, that band is revealed over the canvas and is clickable
+   for as long as it shows, so the target is ~26px even though the footprint is
+   1px. It fades towards the middle of the canvas rather than ending in a hard
+   line, which keeps it reading as a glow on the edge instead of a new panel.
+
+   Both are painted by _flexi_sliver_draw's gtk_render_background, since a
+   GtkDrawingArea renders nothing on its own.
+
+   The band's width lives here rather than as a size request in C, so a theme can
+   size it with the gradient it carries: _flexi_halo_width reads it back through
+   the widget's preferred width, and the proximity test that summons the band
+   uses that same number, so the two can never drift apart. Keep min-width
+   comfortably above a fingertip -- it is a hit target, and the arrow drawn in it
+   is scaled from the width it is given. */
+/* The darkroom toolbar's mask-panel button carries two independent answers (see
+   dt_iop_gui_blend_masks_panel_sync_toolbox): the icon says whether the module
+   has a mask, the box around it says whether that mask's panel is on screen.
+
+   Dimmed when there is no mask. Deliberately not .dt_dimmed: that one goes back
+   to full opacity on :checked, which would make "no mask" indistinguishable from
+   "mask" as soon as the panel is out. */
+.flexi-toolbar-masks-off
 {
-  margin: 0;
-  margin-top: 0.45em;
-  opacity: 0.65;
+  opacity: 0.45;
+}
+
+.flexi-toolbar-masks-off:hover
+{
+  opacity: 0.75;
+}
+
+/* panel away: no background and no border, so the button recedes to just its
+   icon. The transparent border is carried in both states so that gaining one
+   does not shift the icon by a pixel. */
+button.flexi-toolbar-panel
+{
   background-color: transparent;
-  border: none;
-  border-radius: 0.3em;
-  box-shadow: none;
-  outline: none;
-  min-width: 1.35em;
-  min-height: 1.35em;
-  padding: 0.15em;
+  background-image: none;
+  border: 1px solid transparent;
 }
 
-/* the halign side (left panel -> left edge, right panel -> right edge, see
-   _flexi_ensure_corner_icon_side) is the one the panel's header inset is
-   measured from */
-#flexi-corner-icon.flexi-corner-icon-left
+/* panel on screen: highlighted, with a border */
+button.flexi-toolbar-panel:checked
 {
-  margin-left: 0.5em;
-  margin-right: 0;
+  background-color: @selected_bg_color;
+  background-image: none;
+  border: 1px solid @border_color;
 }
 
-#flexi-corner-icon.flexi-corner-icon-right
+/* the docked mask panel's resize grip, which is also its fold-away control (a
+   click on it hides the panel) and draws an arrow saying which way that goes.
+   Opaque and in @border_color, like the view's own outer-border expanders: it
+   stands on the image, where anything translucent looks like an artifact of the
+   render rather than a part of the interface. Read by hand in
+   _flexi_css_min_width: a GtkDrawingArea does not apply min-width itself. */
+#panel-handle-flexi
 {
-  margin-right: 0.5em;
-  margin-left: 0;
+  min-width: 8px;
+  background-color: @border_color;
 }
 
-#flexi-corner-icon:hover
+/* it is a control, not just a seam: give it something to light up */
+#panel-handle-flexi:hover
 {
-  opacity: 0.85;
+  background-color: @bg_color;
 }
 
-#flexi-corner-icon.flexi-corner-icon-active
+#flexi-sliver
 {
-  opacity: 1;
+  background-color: alpha(@fg_color, 0.15);
+}
+
+#flexi-sliver:hover
+{
+  background-color: alpha(@fg_color, 0.40);
+}
+
+/* min-width sizes the band; min-height sizes the arrow drawn in it (its width,
+   and half its height), matching the view's own outer-border expanders. Neither
+   is applied by GTK itself -- a GtkDrawingArea has no CSS gadget, so both are
+   read off the style context and used by hand in _flexi_halo_width and
+   _flexi_halo_arrow_size. */
+#flexi-halo
+{
   background-color: transparent;
-  color: @field_active_fg;
+  min-width: 26px;
+  min-height: 10px;
 }
 
-#flexi-corner-icon.flexi-corner-icon-active:hover
+#flexi-halo.flexi-halo-left
 {
-  opacity: 1;
-  background-color: transparent;
-  color: @field_hover_fg;
+  background-image: linear-gradient(to right,
+                                    alpha(@fg_color, 0.30),
+                                    alpha(@fg_color, 0.00));
+}
+
+#flexi-halo.flexi-halo-right
+{
+  background-image: linear-gradient(to left,
+                                    alpha(@fg_color, 0.30),
+                                    alpha(@fg_color, 0.00));
+}
+
+/* the halo only ever appears because the pointer is already at that edge, so
+   "hovered" is very nearly its resting state -- this is the extra step for the
+   pointer actually inside the band rather than merely summoning it */
+#flexi-halo.flexi-halo-left:hover
+{
+  background-image: linear-gradient(to right,
+                                    alpha(@fg_color, 0.45),
+                                    alpha(@fg_color, 0.00));
+}
+
+#flexi-halo.flexi-halo-right:hover
+{
+  background-image: linear-gradient(to left,
+                                    alpha(@fg_color, 0.45),
+                                    alpha(@fg_color, 0.00));
 }
 
 .search label

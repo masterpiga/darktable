@@ -38,8 +38,39 @@
 #include "develop/develop.h"
 #include "dtgtk/button.h"
 #include "dtgtk/expander.h"
+#include "dtgtk/togglebutton.h"
 #include "gui/gtk.h"
 #include "libs/lib.h"
+
+// The one place the position preference is read, so that the two retired
+// "separate panel, left/right" values are migrated in exactly one place rather
+// than understood in fifteen. Their side survives the migration as the panel's
+// current side, which is now a separate setting the panel updates itself
+// whenever the user pins it somewhere (see _masks_panel_set_side_right).
+int _masks_panel_position(void)
+{
+  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  if(pos != MASKS_PANEL_POS_LEGACY_LEFT && pos != MASKS_PANEL_POS_LEGACY_RIGHT)
+    return pos;
+
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right",
+                   pos == MASKS_PANEL_POS_LEGACY_RIGHT);
+  dt_conf_set_int("plugins/darkroom/blend/masks_panel_position",
+                  MASKS_PANEL_POS_CANVAS);
+  return MASKS_PANEL_POS_CANVAS;
+}
+
+// which edge the panel is docked against. Not part of the position choice: a
+// the panel opens on whichever edge was clicked, and stays there.
+gboolean _masks_panel_side_right(void)
+{
+  return dt_conf_get_bool("plugins/darkroom/blend/masks_panel_side_right");
+}
+
+void _masks_panel_set_side_right(const gboolean right)
+{
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", right);
+}
 
 // let the utility-mode host lib re-apply its live visibility (see
 // _reconfigure in masks_flexi_host.c) -- only relevant for
@@ -93,6 +124,74 @@ void _masks_panel_set_collapsed_pref(const gboolean collapsed)
   dt_conf_set_bool("plugins/darkroom/blend/masks_panel_collapsed", collapsed);
 }
 
+void dt_iop_gui_blend_masks_panel_toggle(void)
+{
+  dt_iop_module_t *module = dt_dev_gui_module();
+  if(!module || !module->blend_data) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd->masks_support || !bd->masks_inited) return;
+  // the click handler ignores its widget argument and dispatches on the
+  // position itself, utility included
+  _flexi_inline_collapse_clicked(NULL, module);
+}
+
+void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
+{
+  GtkWidget *btn = darktable.develop ? darktable.develop->masks_panel_button : NULL;
+  if(!btn || !GTK_IS_TOGGLE_BUTTON(btn)) return;
+
+  const dt_iop_module_t *module = dt_dev_gui_module();
+  const dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  const gboolean usable = bd && bd->masks_support && bd->masks_inited;
+
+  gtk_widget_set_sensitive(btn, usable);
+
+  // Four states, on two independent channels, because the button answers two
+  // separate questions and the user needs both at a glance:
+  //
+  //   does the module have a mask?  -> the icon itself: filled and at full
+  //                                    strength when it does, outline-only and
+  //                                    dimmed when it does not. The fill is the
+  //                                    icon's own designed meaning (see
+  //                                    dtgtk_cairo_paint_masks_panel), carried
+  //                                    on CPF_SPECIAL_FLAG because the toggle
+  //                                    overwrites CPF_ACTIVE with its checked
+  //                                    state
+  //   is the panel showing?         -> the button's box: a highlighted
+  //                                    background with a border when it is,
+  //                                    nothing at all when it is not
+  //
+  // so the icon answers "is there a mask" and the box around it answers "is the
+  // panel on screen". The dimming must not be dt_dimmed: that class restores
+  // full opacity on :checked, which would tie the two answers back together
+  // whenever the panel is out.
+  const gboolean mask_active =
+    usable && module->blend_params
+    && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
+  const gboolean showing = usable && !_masks_panel_collapsed_pref();
+
+  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(btn), dtgtk_cairo_paint_masks_panel,
+                               mask_active ? CPF_SPECIAL_FLAG : CPF_NONE, NULL);
+
+  if(mask_active) dt_gui_remove_class(btn, "flexi-toolbar-masks-off");
+  else dt_gui_add_class(btn, "flexi-toolbar-masks-off");
+
+  // the shared fold preference rather than each position's own widget: it is
+  // what all three positions already agree on, so this reads the same however
+  // the panel is hosted.
+  ++darktable.gui->reset;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(btn), showing);
+  --darktable.gui->reset;
+
+  gchar *tt = g_strdup_printf(
+    _("%s the blend mask panel of the focused module\nmask: %s"),
+    showing ? _("hide") : _("show"), mask_active ? _("on") : _("off"));
+  gtk_widget_set_tooltip_text(btn, tt);
+  g_free(tt);
+
+  gtk_widget_queue_draw(btn);
+}
+
 // set while we drive the utility lib's expander ourselves, so the
 // expanded_state callback it fires back is not mistaken for the user folding
 // the panel by hand. The utility position's counterpart of the persist
@@ -129,11 +228,23 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
 
 // The header's reading order is:
 //
-// Standard / Embedded / Separate Left:
-//   expander | caption | <space> | overlay | preferences | toggle
+// Embedded (left):
+//   expander | caption | <space> | overlay | toggle
 //
-// Separate Right:
-//   caption | <space> | overlay | preferences | toggle | expander
+// Embedded (mirrored):
+//   caption | <space> | overlay | toggle | expander
+//
+// Utility and canvas positions:
+//   caption | <space> | overlay | toggle
+//
+// with two controls on the right in every case: the mask overlay, and the mask
+// on/off toggle at the very end. The old preferences button is gone from all of
+// them -- the blending options open on a right-click of the on/off toggle now
+// (see _blendop_mask_enable_right_click), the way guide settings hang off the
+// guides icon. The expander is embedded-only: the utility position already has
+// the lib's own expander to its left, and out on the canvas the panel is opened
+// and closed from the darkroom toolbar button, which is a bigger and more
+// findable target than an icon on a floating panel.
 static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
                                      const gboolean mirrored)
 {
@@ -146,12 +257,13 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
      || !GTK_IS_BOX(bd->masks_blend_header) || !GTK_IS_BOX(bd->masks_right_cluster)) return;
 
   _reparent_into(showmask, bd->masks_right_cluster, FALSE, FALSE);
-  _reparent_into(pref, bd->masks_right_cluster, FALSE, FALSE);
   _reparent_into(toggle, bd->masks_right_cluster, FALSE, FALSE);
 
   gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), showmask, 0);
-  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pref, 1);
-  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, 2);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, 1);
+
+  // the expander belongs to the embedded position alone
+  const gboolean show_pin = _masks_panel_position() == MASKS_PANEL_POS_EMBEDDED;
 
   if(mirrored)
   {
@@ -159,7 +271,7 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
     dt_gui_remove_class(pin, "flexi-pin-left");
     dt_gui_add_class(pin, "flexi-pin-right");
     _reparent_into(pin, bd->masks_right_cluster, FALSE, FALSE);
-    gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pin, 3);
+    gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pin, 2);
   }
   else
   {
@@ -171,9 +283,9 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   }
 
   const gboolean is_mask_enabled = (bd->module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
-  gtk_widget_show(pin);
+  gtk_widget_set_visible(pin, show_pin);
   gtk_widget_set_visible(showmask, is_mask_enabled && !bd->module->hide_enable_button);
-  gtk_widget_show(pref);
+  gtk_widget_hide(pref);
   gtk_widget_show(toggle);
 }
 
@@ -230,32 +342,26 @@ static gboolean _scroll_widget_into_view_idle(gpointer user_data)
 void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)user_data;
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  const int pos = _masks_panel_position();
 
-  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+  if(pos == MASKS_PANEL_POS_CANVAS)
   {
-    // while the panel is only being peeked at there is nothing to collapse:
-    // it is not open, it is being looked at, and it would fold by itself the
-    // moment the pointer left. So the arrow pins it open instead: this is the
-    // one control in reach that can turn a look into a state
-    const gboolean peeking = dt_ui_flexi_panel_is_peeking(darktable.gui->ui);
     const gboolean collapsed = dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
-    if(module)
+    if(module && collapsed)
     {
-      if((peeking || collapsed) && _model_masks_pin_should_enable_mask(module->blend_params->mask_mode))
+      // opening onto an inert "off" editor the user would then have to turn on
+      // separately is not what they asked for
+      if(_model_masks_pin_should_enable_mask(module->blend_params->mask_mode))
         dt_iop_gui_blend_mask_enable(module);
 
-      if(_model_masks_pin_should_expand_iop(module->expanded, peeking || collapsed))
+      if(_model_masks_pin_should_expand_iop(module->expanded, collapsed))
       {
         const gboolean collapse_others = dt_conf_get_bool("darkroom/ui/single_module");
         dt_iop_gui_set_expanded(module, TRUE, collapse_others);
       }
     }
 
-    if(peeking)
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
-    else
-      dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, !collapsed, TRUE, TRUE);
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, !collapsed, TRUE, TRUE);
     return;
   }
 
@@ -285,6 +391,7 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
   _masks_panel_set_collapsed_pref(collapsed);
   _masks_embedded_apply_collapsed(module, collapsed);
   dt_iop_gui_blend_masks_panel_collapsed(collapsed);
+  dt_iop_gui_blend_masks_panel_sync_toolbox();
   if(!collapsed && bd && bd->masks_blend_header)
   {
     g_object_set_data(G_OBJECT(bd->masks_blend_header), "scroll-extra-child",
@@ -293,55 +400,17 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
   }
 }
 
-// While the panel is only being peeked at, its collapse arrow pins it open
-// instead of folding it (see _flexi_inline_collapse_clicked) -- so make it look
-// like what it now does, rather than leaving a collapse arrow that collapses
-// nothing. Called from gtk.c as a peek starts and ends.
-void dt_iop_gui_blend_masks_panel_set_peek(const gboolean peeking)
-{
-  if(!darktable.develop) return;
-  dt_iop_module_t *module = darktable.develop->proxy.masks_flexi_host.hosted_module;
-  if(!module) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd || !bd->flexi_inline_collapse_btn) return;
-
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
-  if(pos != MASKS_PANEL_POS_LEFT && pos != MASKS_PANEL_POS_RIGHT) return;
-
-  if(peeking)
-  {
-    dtgtk_button_set_paint(DTGTK_BUTTON(bd->flexi_inline_collapse_btn),
-                           dtgtk_cairo_paint_pin, 0, NULL);
-    const gboolean mask_active =
-      module->blend_params && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
-    gchar *tt = _model_masks_inline_collapse_tooltip(TRUE, mask_active, pos);
-    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn, tt);
-    g_free(tt);
-  }
-  else
-  {
-    dtgtk_button_set_paint(
-      DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
-      pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
-    gchar *tt = _model_masks_inline_collapse_tooltip(FALSE, TRUE, pos);
-    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn, tt);
-    g_free(tt);
-  }
-}
-
-// the utility lib's expander was toggled -- by the user from its header, or by
-// _masks_utility_apply_collapsed just above. Only the former is a preference:
-// it goes into the shared key, exactly as the separate panel's collapse button
-// and the embedded arrow do for their positions, so the panel folds and
-// unfolds the same way wherever it lives.
+// the utility lib's expander was toggled by the user, which is what its own
+// collapse control means there -- the counterpart of what the canvas position's
+// edge strip and the embedded arrow do for their positions, so the panel folds
+// and unfolds the same way wherever it lives.
 void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded)
 {
-  if(dt_conf_get_int("plugins/darkroom/blend/masks_panel_position")
-     != MASKS_PANEL_POS_UTILITY)
-    return;
+  if(_masks_panel_position() != MASKS_PANEL_POS_UTILITY) return;
 
   if(!_driving_host_expander) _masks_panel_set_collapsed_pref(!expanded);
   dt_iop_gui_blend_masks_panel_collapsed(!expanded);
+  dt_iop_gui_blend_masks_panel_sync_toolbox();
 }
 
 // The masking panel just folded away, or came back -- see the header comment
@@ -470,10 +539,10 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
                                                 const gboolean panel_pref_collapsed)
 {
   dt_masks_panel_state_t s;
-  s.want_hosted = (pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT
+  s.want_hosted = (pos == MASKS_PANEL_POS_CANVAS
                    || pos == MASKS_PANEL_POS_UTILITY) && is_focused && has_masking;
 
-  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+  if(pos == MASKS_PANEL_POS_CANVAS)
   {
     if(!is_focused || !has_masking)
     {
@@ -485,7 +554,7 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
     {
       // module is collapsed: hide the separate panel so its controls aren't
       // stranded alone on screen, but keep the corner icon visible so the user
-      // can still see mask status and hover-peek or click-expand it
+      // can still see mask status and click the canvas edge to show it
       s.panel_collapsed = TRUE;
       s.corner_icon_visible = TRUE;
       s.corner_icon_active = mask_active;
@@ -520,9 +589,9 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
 }
 
 gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
-                                            const gboolean is_peeking_or_collapsed)
+                                            const gboolean is_collapsed)
 {
-  return !is_expanded && is_peeking_or_collapsed;
+  return !is_expanded && is_collapsed;
 }
 
 gboolean _model_masks_pin_should_enable_mask(const uint32_t mask_mode)
@@ -541,9 +610,9 @@ char *_model_masks_corner_icon_tooltip(const char *module_name,
     : g_strdup(mname);
 
   gchar *tooltip = is_active
-    ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand, hover to peek"),
+    ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand"),
         mod_name, mask_label ? mask_label : _("active"))
-    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and pin, hover to peek"),
+    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and pin"),
         mod_name);
   g_free(mod_name);
   return tooltip;
@@ -584,24 +653,6 @@ char *_model_masks_panel_header_markup(const char *module_name,
   g_free(esc_mname);
   g_free(esc_iname);
   return markup;
-}
-
-char *_model_masks_inline_collapse_tooltip(const gboolean is_peeking,
-                                           const gboolean is_mask_active,
-                                           const int panel_pos)
-{
-  if(is_peeking)
-  {
-    return is_mask_active
-      ? g_strdup(_("pin this panel open"))
-      : g_strdup(_("pin this panel open and enable mask"));
-  }
-  if(panel_pos == MASKS_PANEL_POS_LEFT || panel_pos == MASKS_PANEL_POS_RIGHT)
-  {
-    return g_strdup(_("collapse this panel; click the icon it leaves behind\n"
-                      "on the canvas to bring it back"));
-  }
-  return g_strdup(_("toggle blend mask panel"));
 }
 
 // `handoff`: whether the module giving the panel up is doing so because
@@ -653,13 +704,13 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
   // body away in place; when the box only landed here because this module lost
   // focus, its real home is a host and the arrow has nothing to act on.
   const gboolean embedded =
-    dt_conf_get_int("plugins/darkroom/blend/masks_panel_position") == MASKS_PANEL_POS_EMBEDDED;
+    _masks_panel_position() == MASKS_PANEL_POS_EMBEDDED;
   gtk_widget_set_visible(bd->flexi_inline_collapse_btn, embedded);
   // the right-dock mirroring is that dock's alone -- back home, the header
   // reads left-to-right like every other module's
   _masks_header_apply_side(bd, FALSE);
   _masks_embedded_apply_collapsed(module, embedded && (!module->expanded || _masks_panel_collapsed_pref()));
-  gtk_widget_set_visible(bd->masks_options_btn, TRUE);
+  gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
   // back in the module's own content -- restore the embedded inset (see
   // darktable.css's "#blending-tabs.blending-tabs-embedded")
   dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
@@ -737,8 +788,8 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
       handoff && next && next_bd && next_bd->masks_support;
     if(next_wants_host)
     {
-      const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
-      if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+      const int pos = _masks_panel_position();
+      if(pos == MASKS_PANEL_POS_CANVAS)
       {
         const gboolean next_mask_active =
           next->blend_params && next->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
@@ -820,7 +871,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd->relocatable_box) return;
 
-  const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  const int pos = _masks_panel_position();
   const uint32_t mask_mode = module->blend_params->mask_mode;
   const gboolean is_focused = darktable.develop->gui_module == module;
   const gboolean has_masking = bd->masks_support;
@@ -839,7 +890,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   else if(state.want_hosted) // LEFT / RIGHT
   {
     target = dt_ui_flexi_panel_content(darktable.gui->ui);
-    dt_ui_flexi_panel_set_side(darktable.gui->ui, pos == MASKS_PANEL_POS_RIGHT);
+    dt_ui_flexi_panel_set_side(darktable.gui->ui, _masks_panel_side_right());
   }
 
   if(!target)
@@ -882,7 +933,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       _masks_header_apply_side(bd, FALSE);
       if(focus_changed)
         _masks_embedded_apply_collapsed(module, _masks_panel_collapsed_pref());
-      gtk_widget_set_visible(bd->masks_options_btn, TRUE);
+      gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
       dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
       if(bd->masks_blend_header_label && GTK_IS_LABEL(bd->masks_blend_header_label))
         gtk_label_set_text(GTK_LABEL(bd->masks_blend_header_label), _("blend mask"));
@@ -903,7 +954,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   darktable.develop->proxy.masks_flexi_host.hosted_module = module;
 
-  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+  if(pos == MASKS_PANEL_POS_CANVAS)
   {
     GtkWidget *hdr_target = dt_ui_flexi_panel_header(darktable.gui->ui);
     GtkWidget *cnt_target = dt_ui_flexi_panel_content(darktable.gui->ui);
@@ -1041,7 +1092,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   if(bd->masks_blend_header_label && GTK_IS_LABEL(bd->masks_blend_header_label))
   {
-    const gboolean is_hosted = (pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT);
+    const gboolean is_hosted = (pos == MASKS_PANEL_POS_CANVAS);
     gchar *markup = _model_masks_panel_header_markup(module ? module->name() : NULL,
                                                      module ? dt_iop_get_instance_name(module) : NULL,
                                                      is_hosted);
@@ -1056,9 +1107,9 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   // this same options menu (see masks_flexi_host.c's view_enter and
   // dt_iop_gui_blend_masks_options_popup) -- don't show a second, redundant
   // one in the mode-select row too
-  gtk_widget_set_visible(bd->masks_options_btn, pos != MASKS_PANEL_POS_UTILITY);
+  gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
 
-  if(pos == MASKS_PANEL_POS_LEFT || pos == MASKS_PANEL_POS_RIGHT)
+  if(pos == MASKS_PANEL_POS_CANVAS)
   {
     dt_ui_flexi_panel_set_icon(darktable.gui->ui, state.corner_icon_active,
                                _mask_mode_label(mask_mode));
@@ -1072,27 +1123,20 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     // the first module you expanded came up with its panel still hidden and
     // only a detour through another module brought it back.
     //
-    // Never on a peek, though: a peek shows the panel without being a state
-    // (dt_ui_flexi_panel_is_collapsed reads the widget, so a peek reads as
-    // expanded and would look like a disagreement), and relocates do happen
-    // mid-peek -- the user changing mask mode from the peeked panel is one.
-    // Folding it away under them is precisely what a peek must not do.
     const gboolean panel_disagrees =
-      !dt_ui_flexi_panel_is_peeking(darktable.gui->ui)
-      && state.panel_collapsed != dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
+      state.panel_collapsed != dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
     if(focus_changed || panel_disagrees)
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, state.panel_collapsed,
                                       TRUE, FALSE);
 
-    // arrow points the direction the panel collapses toward (its docked side)
-    dtgtk_button_set_paint(
-      DTGTK_BUTTON(bd->flexi_inline_collapse_btn), dtgtk_cairo_paint_solid_arrow,
-      pos == MASKS_PANEL_POS_RIGHT ? CPF_DIRECTION_RIGHT : CPF_DIRECTION_LEFT, NULL);
-    gchar *collapse_tt = _model_masks_inline_collapse_tooltip(FALSE, TRUE, pos);
-    gtk_widget_set_tooltip_text(bd->flexi_inline_collapse_btn, collapse_tt);
-    g_free(collapse_tt);
-    gtk_widget_set_visible(bd->flexi_inline_collapse_btn, TRUE);
-    _masks_header_apply_side(bd, pos == MASKS_PANEL_POS_RIGHT);
+    // no in-header collapse arrow out on the canvas: a small button on a
+    // floating panel is a poor target for the one thing you always want to be
+    // able to do to it, and the darkroom toolbar's mask-panel button (which
+    // shows whether the panel is out) does the same job at a fixed, learnable
+    // position. It stays for the embedded position, where the header is the only
+    // control there is.
+    gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
+    _masks_header_apply_side(bd, dt_ui_flexi_panel_is_right(darktable.gui->ui));
   }
   else
   {
@@ -1109,26 +1153,22 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
     }
   }
+
+  // focus moved, or the hosted module's masking changed: the toolbox button
+  // reports both ("is there a panel to show" and "is it showing")
+  dt_iop_gui_blend_masks_panel_sync_toolbox();
 }
 
 // ---- position preference ---------------------------------------------------
 
-static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t *module)
+static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t *module)
 {
-  // these are plain check items (not radio items) also fire "toggled" for
-  // the item being deactivated -- only act on the one becoming active.
-  // Plain gtk_check_menu_item, not gtk_radio_menu_item: this theme has no
-  // visible styling for GTK's "radio" indicator CSS node (only "check" is
-  // styled, see darktable.css), so a radio group's active item silently
-  // showed no checkmark at all. Mutual exclusion is enforced manually below.
-  if(!gtk_check_menu_item_get_active(mi)) return;
-
-  GtkWidget *submenu = gtk_widget_get_parent(GTK_WIDGET(mi));
-  GList *siblings = gtk_container_get_children(GTK_CONTAINER(submenu));
-  for(GList *l = siblings; l; l = g_list_next(l))
-    if(l->data != mi && GTK_IS_CHECK_MENU_ITEM(l->data))
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(l->data), FALSE);
-  g_list_free(siblings);
+  // a real GtkRadioButton group, which fires "toggled" on both the item losing
+  // the selection and the one gaining it -- only act on the latter. (The menu
+  // this replaced had to use plain check *menu items* and enforce exclusion by
+  // hand, because the theme styles no "radio" node for menu items; radio
+  // buttons in a popover are styled and used elsewhere, see global_toolbox.c.)
+  if(darktable.gui->reset || !gtk_toggle_button_get_active(mi)) return;
 
   const int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "dt-panel-pos"));
   dt_conf_set_int("plugins/darkroom/blend/masks_panel_position", pos);
@@ -1140,7 +1180,7 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
   // fully hidden (not just emptied) rather than leaving an empty panel
   // visible -- _masks_flexi_relocate()'s own release path only re-applies
   // whatever visibility it already had, which isn't enough here
-  if(pos != MASKS_PANEL_POS_LEFT && pos != MASKS_PANEL_POS_RIGHT)
+  if(pos != MASKS_PANEL_POS_CANVAS)
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
 
   // repositioning is a deliberate user action -- make sure the result is
@@ -1157,8 +1197,7 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
 
     switch(pos)
     {
-    case MASKS_PANEL_POS_LEFT:
-    case MASKS_PANEL_POS_RIGHT:
+    case MASKS_PANEL_POS_CANVAS:
       // relocate folds the panel away when there is no mask; force it open
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, FALSE, TRUE, TRUE);
       break;
@@ -1184,18 +1223,19 @@ static void _masks_panel_position_activate(GtkCheckMenuItem *mi, dt_iop_module_t
   }
 }
 
-// appends a "blend mask panel position" section directly to `menu` -- inline check
-// items, not a submenu, so the choice is visible at a glance
-void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
+// appends a "blend mask panel position" section to `box` -- radios under a
+// section label, so the current choice is visible at a glance
+void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
 {
-  GtkWidget *header = gtk_menu_item_new_with_label(_("blend mask panel position"));
-  gtk_widget_set_sensitive(header, FALSE);
+  GtkWidget *header = gtk_label_new(_("blend mask panel position"));
+  gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
+  dt_gui_add_class(header, "dt_section_label");
   gtk_widget_set_tooltip_text(
     header, _("where the blend mask panel (groups, elements, refinements)"
               " is shown.\n"
               "moving to/from the utility module or a separate panel takes effect"
               " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
+  gtk_box_pack_start(GTK_BOX(box), header, FALSE, FALSE, 0);
 
   static const struct
   {
@@ -1204,22 +1244,32 @@ void _add_masks_panel_position_menu(GtkMenu *menu, dt_iop_module_t *module)
   } items[] = {
     { MASKS_PANEL_POS_EMBEDDED, N_("embedded within each module (default)") },
     { MASKS_PANEL_POS_UTILITY, N_("utility module, left panel") },
-    { MASKS_PANEL_POS_LEFT, N_("separate panel, left") },
-    { MASKS_PANEL_POS_RIGHT, N_("separate panel, right") },
+    // one entry, not one per side: which edge it opens on is no longer part of
+    // the choice, it is whichever edge the user last opened it on
+    { MASKS_PANEL_POS_CANVAS, N_("separate panel, beside the canvas") },
   };
 
-  const int cur_pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
+  const int cur_pos = _masks_panel_position();
+  GtkWidget *group = NULL;
+  GtkWidget *radios[G_N_ELEMENTS(items)];
+
+  // states first, handlers after: setting the active radio while building would
+  // otherwise read as the user choosing a position and relocate the panel
+  ++darktable.gui->reset;
   for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
   {
-    GtkWidget *ci = gtk_check_menu_item_new_with_label(_(items[i].label));
-    dt_gui_add_class(ci, "dt_transparent_background");
-    if(items[i].pos == cur_pos)
-      gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(ci), TRUE);
-    g_object_set_data(G_OBJECT(ci), "dt-panel-pos", GINT_TO_POINTER(items[i].pos));
-    g_signal_connect(G_OBJECT(ci), "toggled", G_CALLBACK(_masks_panel_position_activate),
-                     module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), ci);
+    radios[i] = gtk_radio_button_new_with_label_from_widget(
+      group ? GTK_RADIO_BUTTON(group) : NULL, _(items[i].label));
+    if(!group) group = radios[i];
+    g_object_set_data(G_OBJECT(radios[i]), "dt-panel-pos", GINT_TO_POINTER(items[i].pos));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(radios[i]), items[i].pos == cur_pos);
+    gtk_box_pack_start(GTK_BOX(box), radios[i], FALSE, FALSE, 0);
   }
+  --darktable.gui->reset;
+
+  for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
+    g_signal_connect(G_OBJECT(radios[i]), "toggled",
+                     G_CALLBACK(_masks_panel_position_activate), module);
 }
 
 // clang-format off

@@ -484,13 +484,13 @@ void dt_ui_flexi_panel_set_collapsed(struct dt_ui_t *ui,
                                      const gboolean has_content,
                                      const gboolean persist);
 gboolean dt_ui_flexi_panel_is_collapsed(struct dt_ui_t *ui);
-/** \brief is the panel only being hovered open (a peek from the corner icon)
-    rather than really expanded? A peek floats over the canvas, is not stored,
-    and folds back when the pointer leaves -- so the panel's own collapse arrow
-    pins it open instead of collapsing it. */
-gboolean dt_ui_flexi_panel_is_peeking(struct dt_ui_t *ui);
-/** \brief drive the collapsed panel's corner bubble's highlighted (mask
-    active) vs dimmed (no mask) visual state, and its tooltip's mask-type
+/** \brief which edge the panel is currently on. This is the live side, which a
+    peek can differ from the stored one (a peek opens on whichever sliver was
+    hovered) -- anything mirroring the panel's own chrome has to follow this,
+    not the preference. */
+gboolean dt_ui_flexi_panel_is_right(struct dt_ui_t *ui);
+/** \brief drive the collapsed panel's edge sliver's highlighted (mask
+    active) vs dimmed (no mask) visual state, and its hint's mask-type
     label (may be NULL) */
 void dt_ui_flexi_panel_set_icon(struct dt_ui_t *ui, const gboolean active,
                                 const char *mask_type_label);
