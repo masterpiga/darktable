@@ -2346,11 +2346,7 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   dt_bauhaus_t *bh = darktable.bauhaus;
 
   const float border_width = bh->border_width;
-  // checker_gradient sliders' marker reads as noticeably larger than every
-  // other slider's at the same nominal size, since its higher-contrast
-  // fill/outline (see below) gives it more visual weight -- scale it down a
-  // touch so it matches the others' footprint instead of dominating the row.
-  const float size = w->slider.checker_gradient ? bh->marker_size * 0.8f : bh->marker_size;
+  const float size = bh->marker_size;
   const float htM = bh->baseline_size - border_width;
   // a labelled slider always reserves a text line above the baseline; one
   // with its label suppressed (content_height > 0, see the flexi group
@@ -2368,23 +2364,38 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   cairo_scale(cr, 1.0f, -1.0f);
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
 
-  // checker_gradient sliders' own track runs from a dark checkerboard to a
-  // near-white fade (see _draw_baseline), so the theme's usual fg/border
-  // pairing -- close in value to each other, meant for a plain flat baseline
-  // -- reads as low-contrast at either end. Use a light outline / dark fill
-  // instead: the light stroke stays visible over the dark checker half, the
-  // dark fill stays visible over the pale half, regardless of theme. Kept
-  // moderate (not pure white/black) so it still reads as the same kind of
-  // marker as every other slider's, just with a bit more separation.
-  const GdkRGBA indicator_border = w->slider.checker_gradient
-    ? (GdkRGBA){0.8, 0.8, 0.8, 1.0} : border_color;
-  const GdkRGBA indicator_fill = w->slider.checker_gradient
-    ? (GdkRGBA){0.25, 0.25, 0.25, 1.0} : fg_color;
+  if(w->slider.checker_gradient)
+  {
+    // a checker-gradient track runs from a dark checkerboard to a near-white
+    // fade (see _draw_baseline), so the theme's usual fg/border pairing --
+    // two values close to each other, meant for one flat baseline colour --
+    // leaves the marker invisible at one end or the other. Give it a light
+    // outline around a dark body instead: the outline holds up over the dark
+    // half, the body over the pale half, in any theme. Moderate greys rather
+    // than pure white/black, so it still reads as the same kind of marker as
+    // every other slider's.
+    //
+    // the outline is drawn inside the silhouette, not around it, so this
+    // marker takes up exactly as much room as a plain one: fill the shape a
+    // regular marker's stroke would reach to, then stroke that same outline
+    // at twice the border width clipped to it, which leaves a band of border
+    // width lying wholly within the edge, for every marker shape alike.
+    const float outer = size + border_width * 0.5f;
+    _draw_indicator_shape(cr, outer);
+    set_color(cr, (GdkRGBA){0.25, 0.25, 0.25, 1.0});
+    cairo_fill_preserve(cr);
+    cairo_clip_preserve(cr);
+    cairo_set_line_width(cr, border_width * 2.0f);
+    set_color(cr, (GdkRGBA){0.8, 0.8, 0.8, 1.0});
+    cairo_stroke(cr);
+    cairo_restore(cr);
+    return;
+  }
 
   // draw the outer marker
   _draw_indicator_shape(cr, size);
   cairo_set_line_width(cr, border_width);
-  set_color(cr, indicator_border);
+  set_color(cr, border_color);
   cairo_stroke(cr);
 
   _draw_indicator_shape(cr, size - border_width);
@@ -2392,16 +2403,10 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
 
   // draw the inner marker
   _draw_indicator_shape(cr, size - border_width);
-  set_color(cr, indicator_fill);
+  set_color(cr, fg_color);
   cairo_set_line_width(cr, border_width);
 
-  // checker_gradient sliders (see dt_bauhaus_slider_set_checker_gradient) want
-  // a solid indicator regardless of fill_feedback -- they turn fill_feedback
-  // off for a different reason (the track already fades to white on its own,
-  // see _style_opacity_gradient in blend_gui.c), but a hollow indicator meant
-  // to show a colour through it (grad_col sliders) reads as barely-there
-  // against their own white-fading track, especially near the high end.
-  if(w->slider.fill_feedback || w->slider.checker_gradient || !wd)
+  if(w->slider.fill_feedback || !wd)
     cairo_fill(cr); // Plain indicator (regular sliders)
   else
     cairo_stroke(cr);  // Hollow indicator to see a color through it (gradient sliders)
