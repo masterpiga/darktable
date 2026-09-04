@@ -119,7 +119,7 @@
  * Idempotent: re-marking a member that already starts a run changes nothing,
  * which is what lets this run on every load and also on a group that has since
  * been written back to the database in split form. */
-static void _split_nonunion_runs(dt_develop_t *dev,
+static void _split_nonunion_runs(GList *forms,
                                  dt_masks_form_t *grp,
                                  const int depth)
 {
@@ -145,9 +145,9 @@ static void _split_nonunion_runs(dt_develop_t *dev,
     // now flexi, so the nested group is folded by the run algebra too and needs
     // the same treatment. Missing this left 4 of the 27 corpus divergences
     // unfixed when the split was applied only to the top-level group.
-    dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
+    dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
     if(child && (child->type & DT_MASKS_GROUP))
-      _split_nonunion_runs(dev, child, depth + 1);
+      _split_nonunion_runs(forms, child, depth + 1);
   }
 }
 
@@ -196,7 +196,7 @@ static void _split_nonunion_runs(dt_develop_t *dev,
  * beside -- see dt_masks_normalize_flexi_groups(). Idempotent: once the earlier
  * members are disabled they stop counting as live, so a second pass finds the
  * group already well-formed and changes nothing. */
-static void _repair_base_case_overwrite(dt_develop_t *dev,
+static void _repair_base_case_overwrite(GList *forms,
                                         dt_masks_form_t *grp,
                                         const int depth)
 {
@@ -235,7 +235,8 @@ static void _repair_base_case_overwrite(dt_develop_t *dev,
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
-    _repair_base_case_overwrite(dev, dt_masks_get_from_id(dev, pt->formid), depth + 1);
+    _repair_base_case_overwrite(forms, dt_masks_get_from_id_ext(forms, pt->formid),
+                                depth + 1);
   }
 }
 
@@ -263,8 +264,8 @@ static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
 
   dt_masks_form_t *grp = dt_masks_get_from_id(module->dev, mask_id);
-  _repair_base_case_overwrite(module->dev, grp, 0);
-  _split_nonunion_runs(module->dev, grp, 0);
+  _repair_base_case_overwrite(module->dev->forms, grp, 0);
+  _split_nonunion_runs(module->dev->forms, grp, 0);
 
   const gpointer key = GINT_TO_POINTER(mask_id);
   if(!g_list_find(module->dev->pending_flexi_group_splits, key))
@@ -1253,15 +1254,99 @@ void dt_masks_finish_flexi_migrations(dt_develop_t *dev)
    that already exist in the database, so anything it does before the read is
    discarded by it.
 
-   Deliberately writes nothing back. The stored group keeps the classic shape
-   list exactly as authored -- which keeps the conversion reversible, matters
-   for the classic-restore path, and means a migration never rewrites a user's
-   form data. The markers only reach the database if the user edits the image,
-   at which point dt_dev_write_history_ext() rewrites masks_history from
-   dev->forms wholesale and picks them up. Re-deriving them on every load until
-   then costs one pass over the point list, and _split_nonunion_runs() is
-   idempotent, so a group that HAS been written back is simply re-marked to the
-   same value. */
+   The markers are written back, onto the history item holding the current
+   forms snapshot, so that the caller's own _dev_write_history() persists them
+   (see _sync_forms_to_history below).
+
+   This used to write nothing back, on the grounds that the stored group should
+   keep the classic shape list exactly as authored: reversible, and a migration
+   that never rewrites a user's form data. That reasoning assumed the markers
+   could always be re-derived on the next load. They cannot. Migration runs only
+   while the stored blendop_version is old, and dt_dev_read_history_ext() writes
+   the upgraded blend_params back unconditionally -- so merely opening or
+   exporting an image persists mask_mode = FLEXI, and from the load after that
+   there is no migration, no queue, and no normalization ever again. The mask
+   then renders as if every marker were absent: consecutive same-operator
+   members that classic combined one at a time fold into a single run. #21905.
+
+   So the two halves have to move together. Persisting mask_mode without
+   persisting the normalization is the one state that is definitely wrong, and
+   it was the one we had. */
+/* Copy the normalized forms onto the history item that owns the current
+   snapshot, so the write at the end of dt_dev_read_history_ext() persists them.
+
+   dt_masks_read_masks_history() attaches each stored form to its history item
+   and then hands dev->forms a *deep copy* of the newest such set
+   (dt_masks_replace_current_forms). Everything above operates on that copy, so
+   without this step the markers exist only in memory while the writer, which
+   walks each item's own list, stores the group exactly as it found it.
+
+   Only the item the snapshot came from is touched: the earlier ones hold older
+   states, which this load never normalized either, so rewriting them would be
+   inventing data rather than persisting it. (Those older states are as
+   unnormalized as they have always been -- undoing back into one is no worse
+   than before this change, and no better.) */
+static void _sync_forms_to_history(dt_develop_t *dev)
+{
+  // the newest item at or below the current end that carries a snapshot: the
+  // same one dt_masks_read_masks_history() copied dev->forms from
+  dt_dev_history_item_t *owner = NULL;
+  for(GList *l = dev->history; l; l = g_list_next(l))
+  {
+    dt_dev_history_item_t *h = l->data;
+    if(h->forms && h->num < dev->history_end
+       && (!owner || h->num >= owner->num))
+      owner = h;
+  }
+  // no item claims the snapshot: nothing to persist it under, and fabricating
+  // an owner would put the masks on the wrong history position
+  if(!owner) return;
+
+  g_list_free_full(owner->forms, (void (*)(void *))dt_masks_free_form);
+  owner->forms = dt_masks_dup_forms_deep(dev->forms, NULL);
+}
+
+/* Normalize the group a stored history item renders through, inside that
+   item's own forms snapshot.
+
+   Every history item is a full cumulative copy of dev->forms as it stood at
+   that step, so an item that carries masks carries its own tree, and the group
+   its blend_params names is in it.
+
+   This has to happen because the *other* half of the migration already did.
+   dt_dev_read_history_ext() runs dt_develop_blend_legacy_params_ext() inside
+   its per-row loop (develop.c), so EVERY item whose stored blendop_version was
+   old comes back with mask_mode = FLEXI, and the write at the end stores all
+   of them that way. Normalizing only the newest left every earlier item as
+   flexi params over an unnormalized tree -- which is exactly the state #21905
+   describes, preserved at that history position.
+
+   And it is reachable without any editing: dt_dev_pop_history_items_ext()
+   takes the last forms snapshot at or below the position being restored
+   (develop.c) and installs it with dt_masks_replace_current_forms(), so
+   dragging the history slider back past the newest mask edit renders the older
+   tree. Two thirds of harvested edits carry a marker of some kind, so this is
+   not a corner.
+
+   Rewriting an older snapshot is not inventing data: the algorithm is the one
+   migration would have applied to that state had it been the current one, and
+   its params have already been rewritten to say FLEXI. Leaving it is the
+   half-migrated state we know to be wrong. */
+static void _normalize_history_item(dt_dev_history_item_t *h)
+{
+  if(!h->forms || !h->blend_params) return;
+  if(!(h->blend_params->mask_mode & DEVELOP_MASK_FLEXI)) return;
+  if(!dt_is_valid_maskid(h->blend_params->mask_id)) return;
+
+  dt_masks_form_t *grp = dt_masks_get_from_id_ext(h->forms, h->blend_params->mask_id);
+  if(!grp) return;
+
+  // same order as the live tree below: the repair decides which members are
+  // live, the run-boundary split then marks boundaries among exactly those
+  _repair_base_case_overwrite(h->forms, grp, 0);
+  _split_nonunion_runs(h->forms, grp, 0);
+}
+
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 {
   if(!dev->pending_flexi_group_splits) return;
@@ -1271,10 +1356,24 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
     dt_masks_form_t *grp = dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data));
     // order matters: the repair decides which members are live, and the
     // run-boundary split then marks boundaries among exactly those
-    _repair_base_case_overwrite(dev, grp, 0);
-    _split_nonunion_runs(dev, grp, 0);
+    _repair_base_case_overwrite(dev->forms, grp, 0);
+    _split_nonunion_runs(dev->forms, grp, 0);
   }
 
+  // The live tree onto the item that owns it, so the current state is stored
+  // exactly as rendered, and then every other stored snapshot in its own
+  // right. Both normalizers are idempotent -- the repair skips members it has
+  // already disabled, so it finds no overwriter on a second pass, and the
+  // split only ever sets a bit that is already set -- so the owner being
+  // covered twice costs nothing.
+  _sync_forms_to_history(dev);
+  for(GList *l = dev->history; l; l = g_list_next(l))
+    _normalize_history_item(l->data);
+
+  // only on a load that actually migrated -- the queue is populated by
+  // migration alone. An already-flexi edit reaches here with nothing queued and
+  // returns above, so this costs a rewrite exactly once, on the first open,
+  // rather than churning every image's masks on every load.
   g_list_free(dev->pending_flexi_group_splits);
   dev->pending_flexi_group_splits = NULL;
 }

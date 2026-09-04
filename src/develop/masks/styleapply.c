@@ -198,6 +198,7 @@ static void _open_scratch_dev(dt_develop_t *dev)
   // no_image = TRUE: there is no raw file behind the scratch row, and the
   // default-module machinery that flag skips would add auto-applied modules
   // that have nothing to do with what is being measured
+  dt_masks_scratch_claim_image(dev, STYLEAPPLY_IMGID);
   dt_dev_read_history_ext(dev, STYLEAPPLY_IMGID, TRUE);
 }
 
