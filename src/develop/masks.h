@@ -198,6 +198,28 @@ _Static_assert((DT_MASKS_STATE_GROUP_BREAK
                "the historic GROUP_BREAK bit has been reused by a live flag;"
                " pre-v10 edits would be misread by the v9->v10 migration");
 
+// A group member's effective between-group operator. A member carrying no
+// combine bit at all is what classic's dt_masks_group_add_form() gives a
+// group's *first* shape, so every group inherited from a classic edit has one
+// at the bottom; in that position it means "union onto what is not there yet".
+//
+// The fold and the panel must resolve it the same way. They partition the same
+// point list into the same runs -- the panel to draw a group's rows and its
+// controls, the fold to render it -- and a member whose operator one of them
+// reads as union while the other reads as "no operator" lands in a different
+// run on each side. The panel then shows one group whose within-group mode,
+// group opacity, refinement and invert-output all read from a head the fold
+// never treats as one, and every one of those controls silently does nothing.
+// See _group_get_mask_roi_flexi() in masks/group.c and _starts_group() in
+// blend_gui.c.
+static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
+{
+  // cast: masks.h is included from C++ too (common/exif.cc), where the masked
+  // int does not convert back to the enum on its own
+  const dt_masks_state_t op = (dt_masks_state_t)(state & DT_MASKS_STATE_OP);
+  return op ? op : DT_MASKS_STATE_UNION;
+}
+
 typedef enum dt_masks_property_t
 {
   DT_MASKS_PROPERTY_OPACITY,
@@ -407,6 +429,19 @@ typedef struct dt_masks_point_group_t
   // to carry forward the 1s that already existed in the old bit.
   int group_start;
 } dt_masks_point_group_t;
+
+// Does `pt` end the run whose head's effective operator is `run_op`, and start
+// the next one? The single place a group boundary is decided: the fold
+// (_group_get_mask_roi_flexi() in masks/group.c) and the panel (_starts_group()
+// in blend_gui.c) both go through it, so they cannot partition the same point
+// list differently. They once could, and a group inherited from a classic edit
+// -- whose bottom member carries no combine bit -- landed on the wrong side of
+// exactly that disagreement (#21905).
+static inline gboolean dt_masks_point_breaks_run(const dt_masks_point_group_t *pt,
+                                                 const dt_masks_state_t run_op)
+{
+  return pt->group_start || dt_masks_eff_group_op(pt->state) != run_op;
+}
 
 /** structure used to store pointers to the functions implementing operations on a mask shape */
 /** plus a few per-class descriptive data items */

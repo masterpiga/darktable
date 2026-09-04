@@ -3054,11 +3054,12 @@ static dt_masks_point_group_t *_refine_first_drawn_point(dt_masks_form_t *grp)
 }
 
 // a group point's effective operator for grouping: a missing operator (the base)
-// reads as union, matching how the list folds runs.
+// reads as union, matching how the list folds runs. Shared with the renderer,
+// which has to partition the list into exactly the same runs -- see
+// dt_masks_eff_group_op() in masks.h for what goes wrong when it does not.
 dt_masks_state_t _eff_group_op(const int state)
 {
-  const dt_masks_state_t op = state & DT_MASKS_STATE_OP;
-  return op ? op : DT_MASKS_STATE_UNION;
+  return dt_masks_eff_group_op(state);
 }
 
 // first-class groups (see dt_masks_point_group_t.group_start). True if the point at
@@ -3072,8 +3073,7 @@ gboolean _starts_group(GList *l)
   if(!l || !l->prev) return TRUE;
   const dt_masks_point_group_t *cur = l->data;
   const dt_masks_point_group_t *below = l->prev->data;
-  if(cur->group_start) return TRUE;
-  return _eff_group_op(cur->state) != _eff_group_op(below->state);
+  return dt_masks_point_breaks_run(cur, _eff_group_op(below->state));
 }
 
 // is `fid` the only member of its run (maximal same-operator group)? Used when
