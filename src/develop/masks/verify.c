@@ -23,6 +23,7 @@
 #include "develop/imageop.h"
 #include "develop/masks.h"
 #include "develop/masks/harvest_read.h"
+#include "develop/masks/verify_internal.h"
 #include "develop/masks/probe_image.h"
 #include "common/iop_profile.h"
 #include "develop/pixelpipe.h"
@@ -68,7 +69,6 @@
 // rasterisation for no extra discrimination -- a difference in mask geometry
 // shows up at any resolution. The harvested aspect ratio is preserved, since
 // masks are stored normalised and a wrong aspect would distort every shape.
-#define VERIFY_MAX_EDGE 512
 
 typedef enum
 {
@@ -92,6 +92,13 @@ typedef struct
   // be read as a magnitude and not just as "something differs somewhere"
   double worst_mean_diff;
   int worst_differing_pixels;
+
+  /* the classic fold over the marked tree (see edit_report_t.restore_*) */
+  int restore_compared;          // edits where the classic re-render succeeded
+  int restore_marked;            // ... of those, edits migration actually marked
+  int restore_different;         // ... of those, edits where classic changed
+  double worst_restore_diff;
+  int worst_restore_index;
 
   int gpu_compared;              // edits where both GPU renders succeeded
   double worst_gpu_diff;         // GPU: worst classic-vs-migrated
@@ -404,34 +411,6 @@ void dt_masks_harvest_read_blend_params(JsonObject *b, dt_develop_blend_params_t
 // the replay harness
 // ---------------------------------------------------------------------------
 
-typedef struct
-{
-  dt_develop_t dev;
-  dt_iop_module_t module;
-  dt_dev_pixelpipe_t pipe;
-  dt_dev_pixelpipe_iop_t piece;
-  gboolean module_loaded;
-  gboolean dev_mutex_ready;
-  dt_iop_roi_t roi;
-  float *probe;
-  // What the module under test "produced": the probe with a synthetic effect
-  // applied (see _make_module_output). The blend mixes this with `probe`
-  // according to the mask, so it is both what makes the rendered image respond
-  // to the mask at all and what gives the blendif `_out` channels something of
-  // their own to select on.
-  float *modout;
-  float *out;
-
-  // the upstream module a raster edit reads its mask from, present only for
-  // raster edits (see _attach_raster_source)
-  dt_iop_module_t source_module;
-  dt_dev_pixelpipe_iop_t source_piece;
-  gboolean source_loaded;
-
-  // OpenCL device to replay the GPU blend on, or -1 when this build/run has
-  // no usable device (the CPU comparison still stands on its own)
-  int devid;
-} replay_t;
 
 /** The OpenCL device the GPU replays run on, locked once for the whole run
     rather than per edit -- locking and releasing 2466 times would dominate the
@@ -482,7 +461,7 @@ static const float *_published_mask(replay_t *r)
 
 /** Render the mask for the current blend_params/forms, into a caller-owned
     copy. Returns NULL if the blend published nothing. */
-static float *_render_mask(replay_t *r, float **image)
+float *_render_mask(replay_t *r, float **image)
 {
   const size_t npix = (size_t)r->roi.width * r->roi.height;
   if(image) *image = NULL;
@@ -670,7 +649,7 @@ static _diff_stats_t _diff_stats_rgb(const float *a, const float *b, const size_
 }
 
 /** worst absolute deviation between two masks */
-static double _max_abs_diff(const float *a, const float *b, const size_t n)
+double _max_abs_diff(const float *a, const float *b, const size_t n)
 {
   return _diff_stats(a, b, n).max;
 }
@@ -678,7 +657,7 @@ static double _max_abs_diff(const float *a, const float *b, const size_t n)
 /** is this mask the same value everywhere? A uniform mask makes the comparison
     vacuous -- it would match another uniform mask regardless of what migration
     did to the configuration that produced it. */
-static gboolean _is_uniform(const float *m, const size_t n)
+gboolean _is_uniform(const float *m, const size_t n)
 {
   if(n == 0) return TRUE;
   for(size_t i = 1; i < n; i++)
@@ -698,8 +677,9 @@ static dt_iop_module_so_t *_find_so(const char *op)
   return NULL;
 }
 
-static void _replay_cleanup(replay_t *r)
+void _replay_cleanup(replay_t *r)
 {
+  darktable.develop = r->saved_develop;
   if(r->module_loaded) dt_iop_cleanup_module(&r->module);
   if(r->source_loaded) dt_iop_cleanup_module(&r->source_module);
   if(r->dev_mutex_ready) dt_pthread_mutex_destroy(&r->dev.history_mutex);
@@ -835,7 +815,7 @@ static const char *_attach_raster_source(replay_t *r,
     the edit actually names is also what makes the replay faithful: an edit on
     a Lab module and one on a scene-referred RGB module take different paths
     through the blendif code. */
-static const char *_replay_init(replay_t *r,
+const char *_replay_init(replay_t *r,
                              const char *operation,
                              const dt_develop_blend_params_t *bp,
                              GList *forms,
@@ -852,6 +832,51 @@ static const char *_replay_init(replay_t *r,
   if(!so) return "module not in this build";
 
   r->dev.forms = forms;
+
+  /* darktable.develop has to be this dev while the replay renders.
+
+     Not a convenience: dt_masks_group_hash() (masks.c) resolves each member's
+     child form with dt_masks_get_from_id(darktable.develop, ...), and hashes
+     the member's state, opacity, group opacity and refinement only if it finds
+     one. In a headless run darktable.develop is NULL, so it finds nothing --
+     the hash then covers the group's type, formid, version and source and
+     NOTHING ELSE, and blend.c keys its drawn-mask cache on it (piece->
+     drawn_mask_cache, blend.c:955). Every render after the first therefore
+     hits the cache and returns the first render's mask, whatever the group has
+     been changed to since.
+
+     That is silent and it passes: two renders of a stale buffer compare equal,
+     so a check that changes a control between renders reports "no difference"
+     for the best possible reason and the worst possible one at once. It cost
+     --postedit-masks most of its coverage before it was found. Pointing the
+     global at this dev is what a live darktable has, so the hash covers what
+     it is supposed to cover and the cache behaves as it does in production.
+     Restored on cleanup rather than left set. */
+  r->saved_develop = darktable.develop;
+  darktable.develop = &r->dev;
+
+  /* ... and it needs a form_gui, for a narrower but equally fatal reason.
+
+     A shape's modify_property() -- the entry point behind every geometry
+     slider, and what --postedit-masks and --persist-masks drive to move a
+     shape -- reads the canvas editing state. brush.c dereferences
+     `darktable.develop->form_gui` unguarded, so a NULL one segfaults on the
+     first brush a corpus contains; path.c and object.c read it too, guarded.
+
+     Zeroed, with point_selected = -1. That is not a placeholder, it is the
+     state the panel is in when a slider is dragged with the shape merely
+     selected: `creation` false, so the sliders edit the existing points rather
+     than the defaults for the next shape, and no node singled out, so the
+     change applies to the whole shape. Any other setting would make these
+     checks sweep an editing mode the panel is not in. */
+  memset(&r->form_gui, 0, sizeof(r->form_gui));
+  r->form_gui.point_selected = -1;
+  r->form_gui.point_edited = -1;
+  r->form_gui.feather_selected = -1;
+  r->form_gui.seg_selected = -1;
+  r->form_gui.group_selected = -1;
+  r->dev.form_gui = &r->form_gui;
+
   // The mask dispatchers in masks.c take dev->history_mutex when they mutate
   // dev->forms (they race the pixelpipe's deep-copy read otherwise), and
   // migration goes through them. A zeroed dt_develop_t has an uninitialised
@@ -877,6 +902,7 @@ static const char *_replay_init(replay_t *r,
   if(!r->module.blend_params)
   {
     dt_iop_cleanup_module(&r->module);
+    darktable.develop = r->saved_develop;
     memset(r, 0, sizeof(*r));
     return "module has no blend_params";
   }
@@ -1051,7 +1077,61 @@ typedef struct
      it; if it collapses to nothing, the post-processing does. */
   gboolean nopost_ran;
   double dev_diff_after_nopost;
+
+  /* Does the classic renderer still make the same mask of the form tree after
+     migration has written its markers into it?
+
+     Migration mutates the *shared* form tree in place: _repair_base_case_
+     overwrite() sets DT_MASKS_STATE_DISABLE on members a non-bottom
+     operator-less member would overwrite, and _split_nonunion_runs() sets
+     group_start on run heads (both in migrate_legacy.c, applied by
+     _queue_group_split before anything can fail). Since those markers are now
+     persisted, whoever reads that tree back through the *classic* fold has to
+     make the same mask of it as before -- and there are two such readers:
+
+       - a migration that fails closed. _queue_group_split() runs early and
+         unconditionally, but a later allocation failure leaves blend_params on
+         its original classic mask_mode (see the fail-closed rule at the top of
+         migrate_legacy.c), so the module keeps rendering the marked tree
+         through the classic path
+       - an older darktable, or this one with the edit rolled back, reading the
+         same masks_history rows
+
+     group_start is inert for classic -- it does not read the field. The
+     DISABLE bits are not: the classic fold skips a disabled member outright
+     (group.c:1414). The claim they are safe is that classic discarded exactly
+     those members anyway, by overwriting the accumulator when it reached the
+     operator-less member below them; disabling them only skips work whose
+     result was about to be thrown away. `restore_marked` says whether
+     migration actually wrote a marker on this edit, i.e. whether the number
+     below is evidence or a tautology. */
+  gboolean restore_ran;
+  gboolean restore_marked;
+  double restore_max_diff;
 } edit_report_t;
+
+/** Every group member's classic-visible marker state, as a comparable string.
+
+    Only the two fields migration writes into the shared form tree: the state
+    bits (of which DISABLE is the one the classic fold reads) and group_start.
+    Used to tell an edit where migration marked something from one where it did
+    not, so that "the classic render is unchanged" is reported as evidence only
+    where there was something to change. */
+static gchar *_marker_digest(dt_develop_t *dev)
+{
+  GString *g = g_string_new(NULL);
+  for(GList *f = dev->forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *form = f->data;
+    if(!(form->type & DT_MASKS_GROUP)) continue;
+    for(GList *p = form->points; p; p = g_list_next(p))
+    {
+      const dt_masks_point_group_t *pt = p->data;
+      g_string_append_printf(g, "%d:%d:%d;", pt->formid, pt->state, pt->group_start);
+    }
+  }
+  return g_string_free(g, FALSE);
+}
 
 static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 {
@@ -1128,10 +1208,12 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   float *before_cl = _render_mask_cl(&r, &before_cl_img);
 
   // --- migrate ----------------------------------------------------------
+  gchar *markers_before = _marker_digest(&r.dev);
   if(!dt_masks_migrate_classic_to_flexi(&r.module, r.module.blend_params, -1))
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "migration declined";
+    g_free(markers_before);
     dt_free_align(before);
     dt_free_align(before_cl);
     dt_free_align(before_img);
@@ -1146,6 +1228,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "flexi render produced no mask";
+    g_free(markers_before);
     dt_free_align(before);
     dt_free_align(before_cl);
     dt_free_align(before_img);
@@ -1155,6 +1238,30 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   }
 
   float *after_cl = _render_mask_cl(&r, &after_cl_img);
+
+  /* --- the classic fold, over the tree migration has now marked -----------
+     The forms are the migrated ones; only blend_params goes back to what it
+     was, which is exactly the state a fail-closed migration leaves behind and
+     the state an older darktable reads. Rendered last, and the flexi params
+     put straight back, so nothing above or below sees this. */
+  {
+    gchar *markers_after = _marker_digest(&r.dev);
+    rep->restore_marked = strcmp(markers_before, markers_after) != 0;
+    g_free(markers_after);
+
+    const dt_develop_blend_params_t flexi = *r.module.blend_params;
+    memcpy(r.module.blend_params, &bp, sizeof(dt_develop_blend_params_t));
+    float *restored = _render_mask(&r, NULL);
+    memcpy(r.module.blend_params, &flexi, sizeof(dt_develop_blend_params_t));
+
+    if(restored)
+    {
+      rep->restore_ran = TRUE;
+      rep->restore_max_diff = _max_abs_diff(before, restored, npix);
+      dt_free_align(restored);
+    }
+  }
+  g_free(markers_before);
 
   // Only meaningful when *both* GPU renders succeeded. If one side rendered
   // and the other did not, that asymmetry is itself worth reporting rather
@@ -1514,6 +1621,20 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
           st.worst_gpu_image_index = (int)i;
         }
       }
+      if(rep.restore_ran)
+      {
+        st.restore_compared++;
+        if(rep.restore_marked) st.restore_marked++;
+        if(rep.restore_max_diff > VERIFY_EPS_IDENTICAL)
+        {
+          st.restore_different++;
+          if(rep.restore_max_diff > st.worst_restore_diff)
+          {
+            st.worst_restore_diff = rep.restore_max_diff;
+            st.worst_restore_index = (int)i;
+          }
+        }
+      }
       if(rep.gpu_ran)
       {
         st.gpu_compared++;
@@ -1583,7 +1704,12 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
 
   g_object_unref(parser);
 
-  const gboolean passed = st.different == 0 && st.error == 0;
+  /* A classic render that changed is a failure of the run, not a footnote: the
+     markers are persisted now, so a fail-closed migration or a rollback reads
+     them, and if the classic fold makes a different mask of them the user's
+     image silently changed. */
+  const gboolean passed = st.different == 0 && st.error == 0
+                          && st.restore_different == 0;
 
   // Every number the summary below prints also goes into the report, so the
   // file is self-contained: reading a run must not require having kept the
@@ -1604,6 +1730,10 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"live_identical\": %d,\n", st.live_identical);
     fprintf(rf, "    \"live_equivalent\": %d,\n", st.live_equivalent);
     fprintf(rf, "    \"live_different\": %d,\n", st.live_different);
+    fprintf(rf, "    \"classic_restore_compared\": %d,\n", st.restore_compared);
+    fprintf(rf, "    \"classic_restore_marked\": %d,\n", st.restore_marked);
+    fprintf(rf, "    \"classic_restore_different\": %d,\n", st.restore_different);
+    fprintf(rf, "    \"classic_restore_worst_diff\": %.9g,\n", st.worst_restore_diff);
     fprintf(rf, "    \"inert\": %d,\n", st.inert_before);
     fprintf(rf, "    \"worst_cpu_diff\": %.9g,\n", st.worst_max_diff);
     fprintf(rf, "    \"worst_cpu_diff_index\": %d,\n", st.worst_index);
@@ -1665,6 +1795,17 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
            " (mean %.9g over %d differing pixels)\n",
            st.worst_image_diff, st.worst_image_index,
            st.worst_image_mean_diff, st.worst_image_differing_pixels);
+
+  printf("[verify]\n");
+  printf("[verify] the classic fold, re-run over the tree migration marked"
+         " (fail-closed and rollback readers):\n");
+  printf("[verify]   re-rendered      : %d\n", st.restore_compared);
+  printf("[verify]   of those, migration actually marked something : %d"
+         "  (the rest prove nothing)\n", st.restore_marked);
+  printf("[verify]   CLASSIC CHANGED  : %d", st.restore_different);
+  if(st.restore_different)
+    printf("   worst %.9g at edit %d", st.worst_restore_diff, st.worst_restore_index);
+  printf("\n");
 
   if(st.gpu_compared)
   {

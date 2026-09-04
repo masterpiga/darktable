@@ -191,6 +191,7 @@ static gchar *_load_and_snapshot(const gboolean write_back, gchar **violation)
   // no_image = TRUE: there is no raw file behind the scratch row, and the
   // default-module machinery that flag skips would add auto-applied modules
   // that have nothing to do with what is being measured
+  dt_masks_scratch_claim_image(&dev, ROUNDTRIP_IMGID);
   dt_dev_read_history_ext(&dev, ROUNDTRIP_IMGID, TRUE);
 
   gchar *snap = _snapshot(&dev);

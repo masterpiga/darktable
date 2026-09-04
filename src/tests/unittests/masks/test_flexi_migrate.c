@@ -223,8 +223,122 @@ static void test_classic_head_without_an_operator_keeps_its_group(void **state)
   assert_false(_starts_group(grp->points->next));
 }
 
+// ... and it still has to read as union once the group is bypassed or its
+// output inverted. Those are modifiers layered on an operator, not operators
+// themselves, so an operator-less head carrying one is still missing its
+// combine bit -- resolving the whole of DT_MASKS_STATE_OP instead would make
+// the head look like it had an operator after all, and split the group again
+// the moment the user touched either control (found by --postedit-masks).
+static void test_a_modifier_is_not_an_operator(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+  dt_masks_point_group_t *head = grp->points->data;
+  dt_masks_point_group_t *above = grp->points->next->data;
+  head->state &= ~(int)DT_MASKS_STATE_OP;
+
+  assert_true(_migrate());
+
+  const int modifiers[] = { DT_MASKS_STATE_OP_DISABLE, DT_MASKS_STATE_OP_INVERT };
+  for(int m = 0; m < 2; m++)
+  {
+    // the panel broadcasts a modifier across every member of the run, so both
+    // ends carry it -- which is exactly when the two readings can disagree
+    head->state |= modifiers[m];
+    above->state |= modifiers[m];
+    assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
+    assert_false(_starts_group(grp->points->next));
+    head->state &= ~modifiers[m];
+    above->state &= ~modifiers[m];
+  }
+}
+
 // defensive: a mask_id that resolves to nothing must still migrate cleanly --
 // flexi's "no form" fallback matches classic's, so nothing is fabricated
+
+/* Every stored history snapshot gets normalized, not only the newest.
+
+   dt_dev_read_history_ext() upgrades EVERY history item's blend_params to
+   FLEXI (the legacy conversion runs inside its per-row loop) and stores them
+   all. If normalization only reached the newest, every earlier item was left
+   as flexi params over an unnormalized tree -- #21905, preserved at that
+   history position -- and dt_dev_pop_history_items_ext() renders exactly that
+   tree when the history slider goes back past the newest mask edit.
+
+   Two items here, each with its own deep copy of the forms, the older one NOT
+   the snapshot owner. Both must come out with the run boundary marked. */
+static void test_every_history_snapshot_is_normalized(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+
+  // a member carrying a non-union operator: the split has to give it its own
+  // run, and the classic tree does not say so
+  dt_masks_point_group_t *above = grp->points->next->data;
+  above->state = (above->state & ~(int)DT_MASKS_STATE_OP_COMBINE)
+                 | (int)DT_MASKS_STATE_DIFFERENCE;
+  above->group_start = 0;
+
+  assert_true(_migrate());
+
+  /* The fixture hand-builds its group, so it has no ->functions; a real one
+     gets dt_masks_functions_group from dt_masks_create(). That matters here
+     and nowhere else in this file: dt_masks_dup_masks_form() copies a form's
+     points only when functions->point_struct_size is set, so without it every
+     snapshot below would be a group with no members and the test would be
+     asserting on nothing. */
+  for(GList *f = flexi_dev.forms; f; f = g_list_next(f))
+  {
+    dt_masks_form_t *form = f->data;
+    if(form->type & DT_MASKS_GROUP) form->functions = &dt_masks_functions_group;
+  }
+
+  // two items, older first, each with its own copy of the tree -- as
+  // dt_dev_add_masks_history_item_ext() would have left them
+  dt_dev_history_item_t older = { 0 }, newer = { 0 };
+  older.num = 0;
+  newer.num = 1;
+  older.forms = dt_masks_dup_forms_deep(flexi_dev.forms, NULL);
+  newer.forms = dt_masks_dup_forms_deep(flexi_dev.forms, NULL);
+  older.blend_params = &flexi_bp;
+  newer.blend_params = &flexi_bp;
+  flexi_dev.history = g_list_append(NULL, &older);
+  flexi_dev.history = g_list_append(flexi_dev.history, &newer);
+  flexi_dev.history_end = 2;
+
+  // clear the markers the inline pass already wrote, so the assertions below
+  // can only pass if this call put them back on BOTH snapshots
+  for(GList *h = flexi_dev.history; h; h = g_list_next(h))
+  {
+    const dt_dev_history_item_t *it = h->data;
+    dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
+    assert_non_null(g);
+    for(GList *p = g->points; p; p = g_list_next(p))
+      ((dt_masks_point_group_t *)p->data)->group_start = 0;
+  }
+
+  flexi_dev.pending_flexi_group_splits =
+    g_list_append(NULL, GINT_TO_POINTER(flexi_bp.mask_id));
+  dt_masks_normalize_flexi_groups(&flexi_dev);
+
+  for(GList *h = flexi_dev.history; h; h = g_list_next(h))
+  {
+    const dt_dev_history_item_t *it = h->data;
+    dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
+    assert_non_null(g);
+    assert_true((g->type & DT_MASKS_GROUP) != 0);
+    assert_int_equal(2, g_list_length(g->points));
+    const dt_masks_point_group_t *m = g->points->next->data;
+    assert_int_equal(1, m->group_start);
+  }
+
+  g_list_free_full(older.forms, (void (*)(void *))dt_masks_free_form);
+  g_list_free_full(newer.forms, (void (*)(void *))dt_masks_free_form);
+  g_list_free(flexi_dev.history);
+  flexi_dev.history = NULL;
+  flexi_dev.history_end = 0;
+}
+
 static void test_drawn_with_dangling_mask_id(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
@@ -983,6 +1097,8 @@ int main(void)
     cmocka_unit_test_teardown(test_drawn_only_reuses_the_group, _teardown),
     cmocka_unit_test_teardown(test_classic_head_without_an_operator_keeps_its_group,
                               _teardown),
+    cmocka_unit_test_teardown(test_a_modifier_is_not_an_operator, _teardown),
+    cmocka_unit_test_teardown(test_every_history_snapshot_is_normalized, _teardown),
     cmocka_unit_test_teardown(test_drawn_with_dangling_mask_id, _teardown),
     cmocka_unit_test_teardown(test_parametric_only_synthesizes_a_parametric_form, _teardown),
     cmocka_unit_test_teardown(test_drawn_and_parametric_stacks_a_parametric_element, _teardown),
