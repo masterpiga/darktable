@@ -217,7 +217,16 @@ static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
   // cast: masks.h is included from C++ too (common/exif.cc), where the masked
   // int does not convert back to the enum on its own
   const dt_masks_state_t op = (dt_masks_state_t)(state & DT_MASKS_STATE_OP);
-  return op ? op : DT_MASKS_STATE_UNION;
+  // what is missing is a *combining* operator, so that is what decides. Bypass
+  // and invert-output are modifiers layered on one, never a substitute for it
+  // (the same reading _normalize_group_operators() in blend_gui.c applies when
+  // it writes the default out): testing the whole of DT_MASKS_STATE_OP instead
+  // would let an operator-less head that carries one of them keep reading as
+  // "no union needed", and the two partitions would part company again the
+  // moment the user bypassed or inverted such a group.
+  return (op & DT_MASKS_STATE_OP_COMBINE)
+             ? op
+             : (dt_masks_state_t)(op | DT_MASKS_STATE_UNION);
 }
 
 typedef enum dt_masks_property_t

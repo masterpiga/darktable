@@ -454,6 +454,22 @@ void dt_dev_pixelpipe_synch_top(dt_dev_pixelpipe_t *pipe, struct dt_develop_t *d
 // force a rebuild of the pipe, needed when a module order is changed for example
 void dt_dev_pixelpipe_rebuild(struct dt_develop_t *dev);
 
+/* Drop phantom entries -- deleted, disabled or de-synced consumers -- from
+   `module`'s raster mask user table, judging every consumer from its node in
+   THIS pipe.
+
+   Called by synch_all and synch_top, which is where it belongs; declared here
+   only so it can be tested directly. It has to answer for two consumer shapes
+   that look nothing alike (the exclusive raster sink, and a DT_MASKS_RASTER
+   form element inside a mask group) and for a pipe whose module state is stale
+   by design (the export pipe, where piece->enabled is authoritative and
+   module->enabled is not). Getting one cell of that matrix wrong drops a live
+   consumer's mask, silently and only on export -- which is what regression
+   0167-raster-mask was. Reaching it through synch_all would mean standing up a
+   history stack to test a decision that reads none of it. */
+void dt_dev_pixelpipe_prune_stale_raster_users(dt_dev_pixelpipe_t *pipe,
+                                               struct dt_iop_module_t *module);
+
 // process region of interest of pixels. returns TRUE if pipe was altered during processing.
 gboolean dt_dev_pixelpipe_process(dt_dev_pixelpipe_t *pipe,
                              struct dt_develop_t *dev,

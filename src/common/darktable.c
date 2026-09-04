@@ -29,9 +29,12 @@
 #include "common/colorspaces.h"
 #include "common/darktable.h"
 #include "develop/masks/check.h"
+#include "develop/masks/persist.h"
+#include "develop/masks/postedit.h"
 #include "develop/masks/harvest.h"
 #include "develop/masks/roundtrip.h"
 #include "develop/masks/styleapply.h"
+#include "develop/masks/undo.h"
 #include "develop/masks/verify.h"
 #include "common/datetime.h"
 #include "common/exif.h"
@@ -243,6 +246,44 @@ static int usage(const char *argv0)
          "    --verify-masks and --styleapply-masks below -- which is useful when\n"
          "    investigating one of them, but --check-masks is what a contributed\n"
          "    harvest should be run through.\n"
+         "\n"
+         "--postedit-masks FILE\n"
+         "    Replay the mask configurations in a --harvest-masks FILE, migrate\n"
+         "    each one, then sweep every control the masks panel offers over\n"
+         "    every group and check that each behaves as it does on the\n"
+         "    equivalent group built from scratch. Writes FILE.postedit.json.\n"
+         "\n"
+         "    This is the only check that looks at what happens *after*\n"
+         "    migration: the other three judge a migrated edit as authored, and\n"
+         "    a control that silently does nothing renders identically to one\n"
+         "    that was never touched.\n"
+         "\n"
+         "--persist-masks FILE\n"
+         "    Replay the mask configurations in a --harvest-masks FILE, migrate\n"
+         "    each one, then apply short sequences of panel edits to it twice:\n"
+         "    once wholly in memory, once saving and reopening the image between\n"
+         "    every edit. The two must render the same mask. Writes\n"
+         "    FILE.persist.json.\n"
+         "\n"
+         "    Needs `--library :memory:`: it writes to the database.\n"
+         "\n"
+         "    Catches state that a save does not carry. Migration was once\n"
+         "    persisted by halves this way -- the upgraded blend_params reached\n"
+         "    the database and the run-boundary markers did not -- and the mask\n"
+         "    then rendered wrong from the second load on, with no edit involved.\n"
+         "\n"
+         "--undo-masks FILE\n"
+         "    Replay the mask configurations in a --harvest-masks FILE, migrate\n"
+         "    each one, then for every action the masks panel offers: make the\n"
+         "    change, undo it, and redo it. Undoing must give back the mask that\n"
+         "    was there before, and redoing the one that was there after. Writes\n"
+         "    FILE.undo.json.\n"
+         "\n"
+         "    Needs `--library :memory:`: it writes to the database.\n"
+         "\n"
+         "    Undo is the one operation that has to RECOVER a mask rather than\n"
+         "    build one, and it recovers it from a copy taken before the edit.\n"
+         "    Nothing else here exercises that copy.\n"
          "\n"
          "--verify-masks FILE\n"
          "    Replay the mask configurations in a --harvest-masks FILE, rendering\n"
@@ -1182,6 +1223,9 @@ int dt_init(int argc,
   char *verify_masks_input = NULL;
   char *roundtrip_masks_input = NULL;
   char *styleapply_masks_input = NULL;
+  char *persist_masks_input = NULL;
+  char *undo_masks_input = NULL;
+  char *postedit_masks_input = NULL;
   char *check_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
@@ -1318,6 +1362,39 @@ int dt_init(int argc,
           return usage(argv[0]);
         }
         verify_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--postedit-masks"))
+      {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
+        postedit_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--persist-masks"))
+      {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
+        persist_masks_input = argv[++k];
+        argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--undo-masks"))
+      {
+        if(argc <= k + 1 || argv[k + 1][0] == '-')
+        {
+          g_strfreev(myoptions);
+          return usage(argv[0]);
+        }
+        undo_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -2495,6 +2572,44 @@ int dt_init(int argc,
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(styleapply_masks_input, ".styleapply.json");
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(postedit_masks_input)
+  {
+    // Same placement rationale as --verify-masks above: it renders through the
+    // real blend, so it needs the colour profiles and the iop registry, and it
+    // needs no GUI. No database either -- everything it does happens in memory
+    // on the replayed edit.
+    dt_splash_screen_destroy();
+    gchar *report = _masks_report_path(postedit_masks_input, ".postedit.json");
+    const gboolean ok = dt_masks_postedit_harvest(postedit_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(persist_masks_input)
+  {
+    // Renders through the real blend like --verify-masks, AND drives the real
+    // history reader and writer like --roundtrip-masks, so it needs both what
+    // those need: the colour profiles and the iop registry, and a scratch
+    // database. `--library :memory:`, never a real catalogue.
+    dt_splash_screen_destroy();
+    gchar *report = _masks_report_path(persist_masks_input, ".persist.json");
+    const gboolean ok = dt_masks_persist_harvest(persist_masks_input, report);
+    g_free(report);
+    exit(ok ? 0 : 1);
+  }
+
+  if(undo_masks_input)
+  {
+    // Same needs as --persist-masks: it renders through the real blend and
+    // drives the real history reader and writer against a scratch image, so it
+    // wants `--library :memory:` and never a real catalogue.
+    dt_splash_screen_destroy();
+    gchar *report = _masks_report_path(undo_masks_input, ".undo.json");
+    const gboolean ok = dt_masks_undo_harvest(undo_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
   }

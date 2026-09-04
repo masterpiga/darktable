@@ -2655,6 +2655,14 @@ dt_hash_t dt_masks_group_hash(dt_hash_t hash, dt_masks_form_t *form)
         // by the group renderer, so it must feed the pixelpipe cache hash too;
         // zero-filled for legacy blobs, so this is neutral for old edits.
         hash = dt_hash(hash, &grpt->refinement, sizeof(dt_masks_refinement_t));
+        // the first-class group boundary (masks v10) decides how the fold
+        // partitions this point list into runs, so two trees that differ only
+        // in it render differently -- the same argument as group_opacity and
+        // refinement above, and the same symptom when it is left out: setting
+        // or clearing a group break changed nothing on screen until an
+        // unrelated edit forced a reprocess. Zero-filled on pre-v10 blobs, so
+        // neutral for old edits.
+        hash = dt_hash(hash, &grpt->group_start, sizeof(int));
         hash = dt_masks_group_hash(hash, f);
       }
     }
