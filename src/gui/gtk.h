@@ -489,6 +489,10 @@ gboolean dt_ui_flexi_panel_is_collapsed(struct dt_ui_t *ui);
     hovered) -- anything mirroring the panel's own chrome has to follow this,
     not the preference. */
 gboolean dt_ui_flexi_panel_is_right(struct dt_ui_t *ui);
+/** \brief re-read "plugins/darkroom/masks/show_panel_handle" and resize/repaint
+    the panel's resize-and-collapse handle to match, so the option applies
+    without a view reopen */
+void dt_ui_flexi_panel_update_handle(struct dt_ui_t *ui);
 /** \brief drive the collapsed panel's edge sliver's highlighted (mask
     active) vs dimmed (no mask) visual state, and its hint's mask-type
     label (may be NULL) */

@@ -144,7 +144,15 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   const dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   const gboolean usable = bd && bd->masks_support && bd->masks_inited;
 
-  gtk_widget_set_sensitive(btn, usable);
+  // deliberately not gtk_widget_set_sensitive: an insensitive widget receives no
+  // motion events, so its tooltip never shows -- and "why can I not use this?"
+  // is exactly what has to be explained here. The button is left sensitive and
+  // inert instead: dt_iop_gui_blend_masks_panel_toggle refuses without a masking
+  // module, and _masks_panel_quickbutton_clicked re-syncs from the panel's real
+  // state afterwards, so a click on it cannot leave the toggle showing a change
+  // that did not happen. The unavailable look is carried by the same dimming the
+  // "no mask" state uses, since both are reached with mask_active FALSE.
+  gtk_widget_set_sensitive(btn, TRUE);
 
   // Four states, on two independent channels, because the button answers two
   // separate questions and the user needs both at a glance:
@@ -183,11 +191,25 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(btn), showing);
   --darktable.gui->reset;
 
-  gchar *tt = g_strdup_printf(
-    _("%s the blend mask panel of the focused module\nmask: %s"),
-    showing ? _("hide") : _("show"), mask_active ? _("on") : _("off"));
-  gtk_widget_set_tooltip_text(btn, tt);
-  g_free(tt);
+  // the panel always belongs to one module, so with no module focused there is
+  // nothing for it to show: say that, rather than leaving a button that looks
+  // unavailable for no stated reason
+  if(!usable)
+    gtk_widget_set_tooltip_text(
+      btn,
+      module
+        ? _("unavailable: the focused module does not support masks")
+        : _("unavailable: the blend mask panel shows the mask of the focused"
+            " module, and no module is focused.\n"
+            "click a module's header to focus it."));
+  else
+  {
+    gchar *tt = g_strdup_printf(
+      _("%s the blend mask panel of the focused module\nmask: %s"),
+      showing ? _("hide") : _("show"), mask_active ? _("on") : _("off"));
+    gtk_widget_set_tooltip_text(btn, tt);
+    g_free(tt);
+  }
 
   gtk_widget_queue_draw(btn);
 }

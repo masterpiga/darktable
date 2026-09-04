@@ -1794,9 +1794,23 @@ notebook tabs,
   background-color: @field_active_bg;
 }
 
-#blending-tabs.mask-enabled
+/* The blend mask header says nothing about the mask's state: that is the on/off
+   toggle's job alone, the way a module header leaves "is this module on" to its
+   power button. The .mask-enabled class blend_gui.c puts on this header is left
+   for a theme that wants to say it twice.
+
+   The docked panel's header does need its own background, though. It cannot rely
+   on what is behind it the way an embedded one can: it floats on the photo, and
+   at the notebook-tab background above it sat close enough to the image to read
+   as part of it rather than as panel chrome. Give it what a module header shows
+   instead -- @plugin_bg_color, the expander's own fill.
+
+   chunk-rounded-header.css overrides it for the same reason it overrides module
+   headers; imported after this file (see dt_gui_load_theme), which is what lets
+   it win at equal specificity. */
+#flexi #blending-tabs
 {
-  background-color: shade(@field_active_bg, 1.35);
+  background-color: @plugin_bg_color;
 }
 
 /* set sizes of "buttons" in modules and blending tabs ; and guides lines too */
@@ -2574,6 +2588,65 @@ button.flexi-toolbar-panel:checked
 #panel-handle-flexi:hover
 {
   background-color: @bg_color;
+}
+
+/* handle and content padding, which have to be read together.
+
+   The docked panel's rows get the same small inset on both sides, 2px, and the
+   resize handle simply sits outside it on the canvas side: the panel is narrow
+   and the chrome-facing margin is not worth widening only to balance the handle
+   across from it.
+
+   That leaves the header, which spans the panel's full width, handle column
+   included. For its caption and its icons to sit on the same two edges as the
+   rows below, it carries the handle's width on top of the 2px on the canvas
+   side: 8 + 2 == 10px while the handle is shown, 2 + 2 == 4px once
+   .flexi-handle-thin narrows it (applied by dt_ui_flexi_panel_update_handle in
+   gui/gtk.c, which reads these min-widths back).
+
+   Which side faces the canvas comes from the panel's dock, hence the
+   flexi-dock-left/right classes. Every number is here rather than in the C:
+   change one and the rest of this block is what has to follow it. Only the
+   horizontal padding is set; the vertical stays with each element's own rule. */
+#panel-handle-flexi.flexi-handle-thin
+{
+  min-width: 2px;
+}
+
+#flexi #blending-box
+{
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+/* two ids and a class, to outrank the docked header's own padding rule further
+   up ("#blending-tabs.dt_section_label:not(.blending-tabs-embedded)", one id and
+   two classes) without touching the embedded position, which is inset by its
+   module's metrics instead and must keep them */
+#flexi #blending-tabs.dt_section_label
+{
+  padding-left: 2px;
+  padding-right: 2px;
+}
+
+#flexi.flexi-dock-left #blending-tabs.dt_section_label
+{
+  padding-right: 10px;
+}
+
+#flexi.flexi-dock-right #blending-tabs.dt_section_label
+{
+  padding-left: 10px;
+}
+
+#flexi.flexi-dock-left.flexi-handle-hidden #blending-tabs.dt_section_label
+{
+  padding-right: 4px;
+}
+
+#flexi.flexi-dock-right.flexi-handle-hidden #blending-tabs.dt_section_label
+{
+  padding-left: 4px;
 }
 
 #flexi-sliver
