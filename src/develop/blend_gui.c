@@ -2088,6 +2088,15 @@ static void _masks_collapse_refinements_default_toggled(GtkToggleButton *mi,
                    gtk_toggle_button_get_active(mi));
 }
 
+static void _masks_show_panel_handle_toggled(GtkToggleButton *mi,
+                                             dt_iop_module_t *module)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/show_panel_handle",
+                   gtk_toggle_button_get_active(mi));
+  // the handle is built once, at view init, so it has to be told
+  dt_ui_flexi_panel_update_handle(darktable.gui->ui);
+}
+
 static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
                                             dt_iop_module_t *module)
 {
@@ -2149,6 +2158,16 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
       "disabled by default."),
     _preview_on_hover_is_on(),
     _masks_preview_on_hover_toggled)
+
+  _MASKS_OPT_CHECK(
+    showhandle, _("show the mask panel's resize handle"),
+    _("when enabled (default), the edge of the mask panel floating over the"
+      " canvas carries a visible handle with an arrow showing which way the"
+      " panel folds away.\n"
+      "when disabled, the handle is invisible, like the main panels', and still"
+      " resizes the panel by dragging and hides it on a click."),
+    dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle"),
+    _masks_show_panel_handle_toggled)
 
   _MASKS_OPT_CHECK(
     collapse, _("collapse refinements by default"),
