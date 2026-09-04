@@ -765,11 +765,6 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
         gtk_widget_set_sensitive(levb, FALSE);
         gtk_widget_set_tooltip_text(levb, _("disabled because no module is selected"));
       }
-      if(util_host->presets_button)
-      {
-        gtk_widget_set_sensitive(util_host->presets_button, TRUE);
-        gtk_widget_set_tooltip_text(util_host->presets_button, _("masking options"));
-      }
     }
     if(util_host && util_host->preset_label && GTK_IS_LABEL(util_host->preset_label))
       gtk_label_set_text(GTK_LABEL(util_host->preset_label), "");
@@ -1058,11 +1053,6 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       {
         gtk_widget_set_sensitive(levb, TRUE);
         gtk_widget_set_tooltip_text(levb, _("blend mask"));
-      }
-      if(host->presets_button)
-      {
-        gtk_widget_set_sensitive(host->presets_button, TRUE);
-        gtk_widget_set_tooltip_text(host->presets_button, _("masking options"));
       }
     }
     if(host && host->preset_label)
