@@ -1032,6 +1032,7 @@ static void _paint_param_inout(cairo_t *cr,
 // nested history/GUI update and its "group just emptied" destruction cascade
 static void _detach_group_members(dt_masks_form_t *grp, GList *fids);
 static void _recompute_insert_hint(dt_iop_module_t *module);
+static void _blendif_options_callback(GtkButton *button, dt_iop_module_t *module);
 static const char *_op_name_for_state(const int state);
 static gboolean _op_is_bypassed(const int state);
 static GtkWidget *_find_row_by_formid(GtkWidget *w, const dt_mask_id_t formid);
@@ -1560,8 +1561,13 @@ static void _blendop_blendif_showmask_clicked(
 static void _update_mask_enable_toggle_tooltip(GtkWidget *toggle, const gboolean enabled)
 {
   if(!toggle) return;
-  gtk_widget_set_tooltip_text(toggle, enabled ? _("mask enabled\nclick to disable")
-                                              : _("mask disabled\nclick to enable"));
+  // the right-click half is the only advertisement the blending options get:
+  // no panel position shows a preferences icon for them any more (see
+  // _blendop_mask_enable_toggled)
+  gtk_widget_set_tooltip_text(toggle,
+                              enabled
+                              ? _("mask enabled\nclick to disable\nright-click for blending options")
+                              : _("mask disabled\nclick to enable\nright-click for blending options"));
 }
 
 // force the blend mask on (flexi), no-op if it already has some mask
@@ -1643,9 +1649,20 @@ static void _blendop_mask_enable_toggled(
   GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, dt_iop_module_t *module)
 {
   DT_GUARD_GUI_UPDATE();
-  if(dt_gui_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
-
+  const guint pressed = dt_gui_current_button(gesture);
   GtkWidget *button = dt_gui_get_widget(gesture);
+
+  // no panel position shows a preferences icon of its own any more (see
+  // _masks_header_apply_side), so the blending options hang off a right-click
+  // here, the way the guide settings hang off the guides icon in the toolbar
+  if(pressed == GDK_BUTTON_SECONDARY)
+  {
+    dt_iop_request_focus(module);
+    _blendif_options_callback(GTK_BUTTON(button), module);
+    return;
+  }
+  if(pressed != GDK_BUTTON_PRIMARY) return;
+
   dt_iop_gui_blend_data_t *data = module->blend_data;
 
   dt_iop_request_focus(module);
