@@ -2872,3 +2872,959 @@ designed to avoid, caught.
 
 Remaining before testers: the 2 undiagnosed colorequal raster edits, and GUI
 testing (selection/solo/DnD).
+
+## §43 — The check that looks past migration: `--postedit-masks`
+
+Issue #21905 (TurboGit): open a dt 5.6 edit under flexi and a group's operator
+or within-group mode "does nothing and keeps the union".
+
+The cause was a partition disagreement. The panel resolved a member carrying no
+`DT_MASKS_STATE_OP_COMBINE` bit as union (`_eff_group_op`); the fold read
+`head->state & DT_MASKS_STATE_OP` raw and saw 0. `dt_masks_group_add_form()`
+gives a classic group's *first* shape exactly that state, so on every migrated
+edit the panel showed one group while the fold rendered two runs. Everything a
+run reads from its head -- within-group mode, group opacity, group refinement,
+invert-output -- was applied to a group the renderer did not have.
+
+Fixed by sharing the reading: `dt_masks_eff_group_op()` and
+`dt_masks_point_breaks_run()` in masks.h, used by both sides.
+
+### Why nothing here caught it
+
+Not bad luck -- a shape in the checks. §37-§42 all judge a migrated edit *as
+authored*, and stop the moment migration finishes. This bug preserves that
+exactly: the split runs recombine to the same mask, so `--verify-masks` passed
+it, and would have on any number of edits. Measured, not assumed -- the
+migrated group and the repaired one render pixel-identically.
+
+The unit suite could not represent it either. `flexi_fixture.c` builds every
+member as `op | DT_MASKS_STATE_USE` from a layout letter, and there is no
+letter for "no operator"; it then serialises back through `_eff_group_op`, the
+side of the disagreement that was right.
+
+### The check
+
+`--postedit-masks FILE`, and a fourth section in `--check-masks`. Per edit:
+migrate, then for every group (nested included) assert
+
+    render(P(G)) == render(P(canon(G)))
+
+where `canon` is the panel's own `_normalize_group_operators()`, i.e. the group
+a user would have built from scratch for the same shapes, and P ranges over
+three phases:
+
+- **A**, one control at a time: seven between-group operators, four
+  within-group modes, bypass, invert-output, group opacity, group refinement
+  per run; disable, hide, invert, opacity, refinement, group break per element.
+- **B**, the run controls again on a run that only exists after a break. Phase
+  A addresses runs from the un-poked partition, so a run a break created is
+  never the target of a run-level control there -- the exact shape of the bug
+  above. Only the two runs the break made are swept: it splits one run in two
+  and leaves every other run's head untouched, so the rest would repeat A.
+  Without that bound the phase is quadratic in the group size, and a
+  thirty-shape group costs more than the rest of the harvest.
+- **C**, the run-level modifiers in every combination: all fifteen non-empty
+  subsets of {bypass, invert-output, group opacity, group refinement} crossed
+  with the four within-group modes. Those four are what make one run of two
+  members behave differently from two runs of one, so they are where a
+  disagreement surviving every single control would show. The bug found below
+  needed a modifier set to be visible at all.
+
+Both sides get identical configurations at identical member indices, and every
+partition comes from `_starts_group()`, which agrees between them by
+construction. An edit whose `canon(G)` is byte-identical to `G` is skipped: the
+two sides would be the same data. That is exact, not sampling.
+
+Nothing beyond those three is swept, and the reason is an argument rather than
+a budget. G and canon(G) differ in exactly one thing, the missing combine bit.
+A control either overwrites it -- the seven operators, after which both sides
+are byte-identical data and anything composed on top stays identical -- or
+leaves it alone, in which case the delta is unchanged. Composing controls
+cannot make the data differ in a new way; it can only reach a fold path neither
+reaches alone, and B and C are those paths.
+
+### What it found immediately
+
+A second bug, in the fix itself. `dt_masks_eff_group_op()` tested
+`DT_MASKS_STATE_OP`, which includes the bypass and invert-output *modifiers*,
+while `_normalize_group_operators()` tests `DT_MASKS_STATE_OP_COMBINE`. Set
+invert on an operator-less head and the two partitions parted company again --
+4 disagreements, worst 0.99. Corrected to test the combining bits and keep the
+modifiers.
+
+Mutation-checked: with the original fold read restored, the sweep fails on
+exactly the controls the issue named -- `within:intersect` 4,
+`within:multiply` 4, `within:screen` 2, `group:invert` 4, `group:refine` 4,
+`op:union` 1.
+
+### Standing
+
+- `--postedit-masks migration_failures.json.gz`: 26 edits, 2154 control changes
+  compared, **0 disagreements** (129 changed the mask; the rest are legitimately
+  inert on their edit).
+- `--postedit-masks classic_opencl_outliers.json.gz`: 35 edits, 4314 compared,
+  **0 disagreements** (384 live).
+- `--check-masks`: round-trip, verify, style-apply and post-edit all pass.
+- Cost: roughly 4s per swept edit, two renders per control per group. Last in
+  `--check-masks` for that reason.
+
+CPU only, deliberately: group folding happens on the CPU for the GPU path too,
+so a second replay would exercise the same fold twice.
+
+Not closed by this: the sweep changes one control at a time from the migrated
+state. Combinations of controls, and edits made on top of edits, are still
+outside every check we have.
+
+## §44 — Half a migration: the state an ordinary open leaves behind
+
+Asked whether the post-edit sweep should also cover edits made on top of edits,
+tracing the write path turned up a live bug rather than a test gap.
+
+`dt_masks_normalize_flexi_groups()` derives the run-boundary markers and the
+base-case repair on `dev->forms`. But `dt_masks_read_masks_history()` attaches
+the stored forms to their history item and gives `dev->forms` a **deep copy**
+(`dt_masks_replace_current_forms`), and the unconditional `_dev_write_history()`
+at the end of `dt_dev_read_history_ext()` (develop.c:2897) writes each item's
+own list. So the markers never reached the database -- while the upgraded
+`blend_params`, carrying `mask_mode = FLEXI`, were written on every open.
+
+Migration runs only while the stored `blendop_version` is old. So the second
+load saw a current-version flexi edit: no migration, no queue, no normalization,
+ever again. The group folded as if every marker were absent.
+
+No user edit was needed. Opening the image, or exporting it, was enough --
+the reproducer is a plain `darktable-cli` export.
+
+Measured on a two-shape difference group (both members DIFFERENCE, which is
+what the markers exist to keep apart):
+
+- fresh migration: `82cde782` -- classic's per-element difference, correct
+- after the flexi mask_mode was persisted: `d88903a5` -- plain union, wrong
+
+Scope: the ~27 corpus edits that need run-boundary markers and the ~52 that
+need `_repair_base_case_overwrite`, roughly 3% of real edits, wrong permanently
+from the second load.
+
+### The fix
+
+The two halves have to move together. Three states were possible -- persist
+blend_params only (what we had, definitely wrong), persist both, or persist
+neither and re-migrate on every load. Persisting both was chosen: it is what
+darktable already does for every other legacy params upgrade, so it surprises
+nobody, where suppressing the version write-back for masked modules alone means
+fighting machinery whose whole purpose is persisting upgrades.
+
+`_sync_forms_to_history()` in migrate_legacy.c copies the normalized forms onto
+the history item the snapshot came from, so the caller's own write persists
+them. Gated on the migration queue, so it costs one rewrite on first open and
+nothing thereafter. Only the owning item is touched; earlier snapshots are as
+unnormalized as they have always been, which this neither improves nor worsens.
+
+The "deliberately writes nothing back" contract in that file is gone, and its
+comment now says why.
+
+### Standing
+
+- reproducer: second load renders `82cde782`, matching the first open.
+- `--check-masks`: round-trip 26 unchanged, verify 26 identical, style-apply
+  passed, post-edit 9024 configurations / 0 disagreed. Overall PASSED.
+- unit suite: 13/14 (test_filmicrgb does not link, and does not on a clean tree
+  either).
+
+### Not done
+
+Whether persisting `_repair_base_case_overwrite`'s DISABLE bits still leaves
+the classic-restore path viable. `group_start` is additive and classic ignores
+it, but the DISABLE bits change what a classic render would do -- the claim is
+that classic discarded those members anyway, and that claim should be tested
+rather than trusted.
+
+And with the markers now read from storage rather than re-derived,
+`_split_nonunion_runs()`'s idempotency stops being exercised on every load and
+starts being assumed. That is exactly what a persistence-transparency check
+would cover: render(edits with a write/read interleaved) == render(the same
+edits in memory). Not built.
+
+## 45. `--persist-masks`: is a save between two edits transparent?
+
+Built the check §44 said was not built, and it found a second problem on the
+way in -- one that had been quietly hollowing out `--postedit-masks`.
+
+### The property
+
+    for every sequence of panel edits e1..en applied to a migrated mask,
+        render(en(...e1(G))) == render(en(...(save/reload)...e1(G)))
+
+Two arms over a scratch image. Arm A is the session that never closes: seed the
+classic edit, open it once, then only mutate in memory. Arm B is the same edits
+with the image closed and reopened between every one of them. No notion of what
+the mask ought to be is needed, which is the point -- the other checks all need
+one, and the half-persisted migration of §44 was invisible to every one of them
+because both the classic and the migrated reading of a lost marker are
+self-consistent.
+
+`src/develop/masks/persist.{c,h}`, wired in as `--persist-masks FILE` and as a
+fifth section of `--check-masks`. It writes to the database, so `--library
+:memory:`. 24 sequences, listed in `_sequences[]` with the seam each one
+covers: single controls as a floor, an operator-implied boundary read back
+through a run-level control, an explicit group break read back the same way,
+migration's own markers built on, run-level modifiers across a save, and three
+chains of three.
+
+Both arms resolve a step's scope (a run, the first element, the last) against
+their **own** current state rather than a partition computed once. That is the
+sensitive choice, not the sloppy one: if the save lost a boundary, the reloaded
+arm's next edit lands on different members, which is exactly what the user
+experiences when their next click goes somewhere else.
+
+### The mistake worth recording
+
+The first version had arm A read its starting state back from the database
+after the first open. It passed with the §44 fix reverted -- both arms were
+then sitting on the far side of the loss, agreeing with each other about the
+wrong mask. Arm A has to take the migrated state from the dev that migration
+ran in, never from a re-read. `_reset_to_migrated()` now hands it out.
+
+### The bigger find: every replayed render after the first was stale
+
+The sweep's first run reported **0 live out of 528** -- not one poke changed
+the rendered mask. The cause is not in this file:
+
+`dt_masks_group_hash()` (masks.c:2641) resolves each member's child form with
+`dt_masks_get_from_id(darktable.develop, ...)`, and hashes the member's state,
+opacity, group opacity and refinement **only if it finds one**. In a headless
+run `darktable.develop` is NULL, so it finds nothing, and the hash collapses to
+the group's type, formid, version and source -- constant under every edit a
+check can make. blend.c:955 keys `piece->drawn_mask_cache` on that hash. So
+every render after the first returned the first render's mask.
+
+It is silent and it passes: two renders of a stale buffer compare equal, so a
+check that changes a control between renders reports "no difference" for the
+best and the worst reason at once.
+
+Fixed in `_replay_init()`, which now points `darktable.develop` at its own dev
+for the life of the replay -- what a live darktable has -- and restores it on
+cleanup. `--verify-masks` was mostly spared by luck: its two renders differ in
+`mask_mode`, which *is* hashed into the cache key.
+
+**`--postedit-masks`' standing numbers in §43 were taken under this and are
+withdrawn.** Its re-run figures are below.
+
+### Standing
+
+Mutation test, reverting §44's `_sync_forms_to_history()`: 9 of 22 swept edits
+DIFFERENT, 169 of 528 sequences disagree, 21 of the 24 sequences fire on at
+least one edit. The three that never fire are the three built on a bypass, and
+that is a fact about the control rather than a gap -- a bypassed group
+contributes nothing whichever way its members were partitioned.
+
+With the fix in place: 22 identical, 0 different, 349 of 528 sequences live,
+0 swept nothing. ~6s for 26 edits.
+
+### `--check-masks` after both changes
+
+    round-trip  : 26 unchanged, 0 different
+    verify      : 25 identical + 1 equivalent (below 1/255), 0 different
+    style-apply : passed
+    post-edit   : 26 identical, 9024 configurations, 0 disagreed
+    persistence : 22 identical, 528 sequences, 0 disagreed, 0 swept nothing
+    overall     : PASSED                                   (2m09s for 26 edits)
+
+Post-edit's verdict is unchanged but its evidence is not: its live count went
+from 737 configurations to **3894**, because before the `darktable.develop` fix
+most of its renders were the same cached buffer. The re-run is what §43's
+withdrawn numbers are replaced by.
+
+Unit suite: 13/14, `test_filmicrgb` still does not link and does not on a clean
+tree either.
+
+## 46. §44's open question, answered: the markers are safe for the classic fold
+
+§44 left this untested: migration mutates the *shared* form tree in place, and
+since the markers are now persisted, whoever reads that tree back through the
+**classic** fold has to make the same mask of it as before.
+
+### Who reads it that way
+
+Two readers, and the first is sharper than §44 framed it. `_queue_group_split()`
+applies `_repair_base_case_overwrite()` and `_split_nonunion_runs()`
+**immediately and unconditionally**, before anything downstream can fail. A
+later allocation failure then leaves blend_params on its original classic
+mask_mode (the fail-closed rule at the top of migrate_legacy.c), so the module
+goes on rendering the *marked* tree through the *classic* path. The second
+reader is an older darktable, or this one after a rollback, reading the same
+masks_history rows.
+
+`group_start` is inert for classic -- it does not read the field. The DISABLE
+bits are not: the classic fold skips a disabled member outright (group.c:1414).
+
+### The argument
+
+Classic's fold is positional. A member with no combine operator falls into the
+final `else` branch and *overwrites* the accumulator wholesale; everything
+composited above it is discarded on the spot. `_repair_base_case_overwrite()`
+disables exactly those discarded members, so the overwriter becomes the first
+live one and takes the `nb_ok == 0` branch instead -- a union onto an empty
+buffer, which is the same thing the overwrite branch computes. Disabling them
+only skips work whose result was about to be thrown away.
+
+### Measured, not asserted
+
+Added to `--verify-masks`: after the migrated renders, put the *classic*
+blend_params back over the now-marked forms and render a third time, then
+compare against the classic render taken before migration. That is exactly the
+state a fail-closed migration leaves behind. `restore_marked` records whether
+migration wrote a marker on that edit at all, so a pass is only reported as
+evidence where there was something to change. A classic render that changed
+fails the run, it is not a footnote.
+
+    re-rendered      : 26
+    of those, migration actually marked something : 16
+    CLASSIC CHANGED  : 0
+
+Mutation test, an off-by-one that also disables the members *below* the
+overwriter (which classic does not discard): **CLASSIC CHANGED : 3, worst 1.0
+at edit 8**. Only 3 of the 16 marked edits have anything below their
+overwriter, which bounds how much this corpus can say -- it detects the fault,
+on the edits that carry the shape.
+
+### Still not covered
+
+The classic re-render uses the forms as migration left them in memory. It does
+not go through the database, so it does not also prove the markers survive the
+write in a form classic can read -- `--roundtrip-masks` covers the storage
+round trip, and the two together are what the claim rests on.
+
+## 47. The database half of §46, and a missing `omp_set_num_threads(1)`
+
+§46 proved the markers are render-neutral for the classic fold, but only over
+the forms as migration left them **in memory**. The other half -- do they
+survive the write in a shape a classic reader can still make sense of -- is now
+covered too, in `--persist-masks`, which is the only check holding both the
+scratch database and the renderer.
+
+Per edit, before the sequence sweep: render the edit exactly as authored
+(classic blend_params, classic forms, nothing migrated), then render the forms
+the *database* handed back after migration marked them, still through the
+classic blend_params. `db_marked` records whether the round trip actually
+brought markers back, so a pass is evidence only where there was something to
+carry. A changed render fails the run.
+
+    re-rendered     : 23
+    of those, the round trip brought markers back : 12
+    CLASSIC CHANGED : 0
+
+Two mutants:
+
+- **over-disable** (also disabling the members *below* the overwriter, which
+  classic does not discard): CLASSIC CHANGED 3, worst 1.0 at edit 8 -- the same
+  three edits, the same worst value, that §46's in-memory version reports. The
+  two passes agree on what a broken marker looks like.
+- **no persistence** (`_sync_forms_to_history()` skipped): markers back drops
+  from 12 to **0**, so the vacuity guard says plainly that nothing was proved,
+  rather than the run passing quietly on an empty comparison.
+
+### The threading bug this turned up
+
+persist.c had no `omp_set_num_threads(1)`. verify.c and postedit.c both set it,
+and inside `--check-masks` they run first, so persist inherited one thread and
+its figures were stable -- the omission was invisible there. Run on its own the
+live count wandered: **353, 360, 370** over three runs of identical input.
+
+The verdict was never affected (the two arms run the same code over the same
+data and stay bit-identical, so `disagreed` held at 0 throughout), but liveness
+is the number that says the sweep was not vacuous, and an unstable one makes
+the pass unreadable. Fixed; three consecutive runs now give 349. **The 355
+recorded in §45 was a multithreaded figure and is corrected to 349.**
+
+## 48. The scratch harness was losing masks before any check could look
+
+Running the checks over the twelve contributed corpora turned up a defect in
+the harness itself, and it had been quietly hollowing out three of them.
+
+### What happened
+
+`--persist-masks` reported 219 of zisoft's 229 distinct edits as "no group to
+edit", against a corpus where 81% of edits carry a drawn group. Following it
+down: the scratch image came back from the database with
+`mask_mode = 1, mask_id = 0` -- no mask at all -- for every edit whose
+parametric side was inert.
+
+All three scratch-DB harnesses call
+`dt_dev_read_history_ext(..., no_image = TRUE)`, which skips the block that
+loads the image, so `dev->image_storage` keeps what `dt_dev_init()` left there:
+an invalid id. Migration's `_mask_id_has_content()` decides whether a classic
+drawn group has content, and when it has a real history num it answers with
+
+    SELECT points_count FROM main.masks_history
+     WHERE imgid = module->dev->image_storage.id AND formid = ?
+
+An unset id finds nothing, so migration concluded the group was empty and took
+the no-content branch: `mask_mode` down to `DEVELOP_MASK_ENABLED`, `mask_id` to
+`NO_MASKID`.
+
+This is a harness bug, not a user-facing one -- real darktable passes
+`no_image = FALSE` and the id is valid. But it is the worst shape a test defect
+can take: **a lost mask still round-trips, still renders, and still compares
+equal to itself**, so every check passed on it and reported a number that meant
+nothing.
+
+### The fix
+
+`dt_masks_scratch_claim_image()` in `scratch_image.{c,h}`, called after
+`dt_dev_init()` and before the read, at all five sites (persist x3, roundtrip,
+styleapply). It sets the id and fills the dimensions from `main.images`.
+
+### What it was costing, on zisoft alone
+
+                                    before   after
+    persist: edits swept                11     250
+    persist: skipped                   270      31
+    persist: markers back from storage   0      49
+    persist: sequences compared        264   6,000
+
+The two independent counts now agree exactly: verify's in-memory pass and
+persist's from-storage pass both report **49** marked edits, and persist's 31
+skips are exactly the 31 edits verify independently classes as inert. That
+agreement is the strongest evidence the fix is right; before it, the two
+disagreed 49 to 0 and nothing noticed.
+
+Full zisoft re-run, all five sections passed: postedit 36,102 configurations /
+22,074 live / 0 disagreed; persist 6,000 sequences / 4,546 live / 0 disagreed;
+both classic-fold passes 49 marked / 0 changed.
+
+### Also fixed
+
+`--persist-masks` printed `11 (229 distinct, -218 reused as repeats)`. It was
+subtracting a count of *swept* edits from a count of *replayed* ones, which
+goes negative as soon as a corpus skips more than it sweeps. The two are now
+tracked separately and both are reported.
+
+## 49. The full campaign: all twelve corpora, every check
+
+With §48 fixed, the checks were run over every contributed corpus rather than
+the 26-edit `migration_failures` set the previous sections were measured on.
+
+### How it was run
+
+Per-corpus was hopelessly tail-bound -- `thad` alone (27,693 edits) would hold
+one core for hours while thirteen sat idle -- so the work is sharded per 100
+edits and drained by a twelve-worker pool. The queue is a directory of one file
+per job, claimed by an atomic `mv`; macOS has no `flock(1)`, and a shared-file
+queue without one hands the same line to two workers and drops others.
+
+Two tiers, because the sections differ in cost by more than an order of
+magnitude:
+
+- **deep** -- full `--check-masks` on a shape-stratified sample, up to 4 edits
+  per (corpus, shape). A shape is the unit the confidence ledger already
+  counts: operation, mask_mode, mask_combine, multi-instance, and the set of
+  form types. 57,144 edits carry 2,640 distinct shapes, so this is 9,033 edits
+  -- comprehensive where the code paths actually differ, ~9x cheaper.
+- **wide** -- round-trip and verify, which are cheap, on every edit.
+
+1,252 jobs, every one exit 0.
+
+### Results
+
+    roundtrip   65,944 round-tripped   0 different   0 errors
+    verify      66,177 replayed        0 different   351 equivalent (invisible)
+                57,716 live
+    styleapply   5,362 ok              0 style masks lost
+    postedit     8,481 identical       0 different
+                                       (per-shard configuration sweeps)
+    persist      7,983 swept           0 different
+                191,592 sequences      0 disagreed   140,381 live
+
+    classic fold, in memory (verify)   : 65,844 re-rendered, 42,888 marked, 0 changed
+    classic fold, from storage (persist):  8,161 re-rendered,  4,198 marked, 0 changed
+
+### The cross-check, now asserted
+
+verify marks the tree migration produced **in memory**; persist marks what came
+back **out of the database**. Different routes to the same quantity, so they
+must count the same edits. Over the deep tier they agree exactly at 4,198.
+
+That is not a decoration. Before §48's fix those two numbers read 49 and 0 on
+zisoft and nothing noticed, because a mask that has been silently dropped still
+round-trips, still renders and still compares equal to itself. The aggregator
+now fails the rollup when they diverge.
+
+### What this settles
+
+The blind spot named at the end of §47 -- that every figure came from 26 edits,
+with 16 marked and only 3 carrying the shape the classic-fold mutant needs --
+is closed. The classic-fold claim now rests on 42,888 marked edits rather than
+16, and the persistence property on 191,592 sequences rather than 528.
+
+## 50. Closing the last two gaps
+
+### Gap 1: every stored history snapshot is normalized, not only the newest
+
+`dt_dev_read_history_ext()` runs the legacy blend conversion inside its
+**per-row loop** (develop.c:2760), so every history item whose stored
+`blendop_version` was old comes back with `mask_mode = FLEXI`, and the write at
+the end stores all of them that way. `_sync_forms_to_history()` normalized
+exactly one item, so every earlier one was left as flexi params over an
+unnormalized tree -- #21905, preserved at that history position.
+
+Reachable with no editing at all: `dt_dev_pop_history_items_ext()` takes the
+last forms snapshot at or below the position being restored (develop.c:1786)
+and installs it via `dt_masks_replace_current_forms()`, so dragging the history
+slider back past the newest mask edit renders the older tree. The full campaign
+measured markers on **42,888 of 65,844 edits**, so the surface is about two
+thirds, not the ~3% quoted in §44 from the 26-edit set.
+
+`_split_nonunion_runs()` and `_repair_base_case_overwrite()` now take a forms
+*list* rather than a `dt_develop_t`, resolving children with
+`dt_masks_get_from_id_ext()`, which is what lets them run on a stored snapshot.
+`_normalize_history_item()` applies them to each item's own tree, keyed on that
+item's own `blend_params->mask_id`. Both are idempotent -- the repair skips
+members it has already disabled and so finds no overwriter on a second pass,
+the split only ever re-sets a bit -- so the snapshot owner being covered twice
+(once by `_sync_forms_to_history`, once by the loop) costs nothing.
+
+Rewriting an older snapshot is not inventing data: the algorithm is the one
+migration would have applied to that state had it been current, and its params
+have already been rewritten to say FLEXI. Leaving it is the half-migrated state
+we know to be wrong.
+
+Covered by `test_every_history_snapshot_is_normalized`: two items, each with
+its own deep copy, the older one deliberately not the snapshot owner, markers
+cleared before the call so they can only be present if the call put them there.
+Reverting to owner-only fails it (`1 != 0`).
+
+One trap worth recording: the fixture hand-builds its group so it has no
+`->functions`, and `dt_masks_dup_masks_form()` copies a form's points only when
+`functions->point_struct_size` is set. Without setting it the test's snapshots
+were groups with **no members** and every assertion passed vacuously. A real
+group gets `dt_masks_functions_group` from `dt_masks_create()`.
+
+### Gap 3: --persist-masks sweeps nested groups
+
+It swept only the module's top-level group. The stated reason -- masks_history
+is flat, so a nested group traverses the same storage code -- is true of the
+storage half and wrong about the rest: a sequence pokes a control and then
+reads the *partition* back, and a nested group is where the partition is
+easiest to get wrong, because the fold recurses into the child while taking run
+state from the parent's head. **5.7% of harvested edits carry one** (19% in
+christian_pfister and finestructure, 0% in macchiato17).
+
+`_all_groups()` walks the tree breadth-first over member formids in list order,
+depth-bounded and deduplicated; `_group_at()` resolves an index. Both arms
+resolve the same index against their own current state, so neither is handed a
+partition the other did not compute -- the same principle the scope resolution
+already used. `_read_poke_write()` takes the group index too.
+
+Reported as `groups swept` and `edits with a nested group`, so a run says how
+much of the nested surface it actually reached. On migration_failures: 44
+groups over 22 edits, 18 of which have a nested group -- previously 22.
+
+### Validation (targeted, not another full campaign)
+
+- unit suite 13/14 (`test_filmicrgb` link failure, pre-existing), including the
+  new test and its mutant
+- `--check-masks migration_failures.json.gz`: all five sections passed. verify
+  and persist now agree at 16/16 on markers, where persist previously reached
+  only 12 of them
+- `--persist-masks` on finestructure, the corpus with the most nesting (19%):
+  739 edits swept, 0 different, 0 swept nothing; **591 groups swept over 446
+  distinct edits, 106 of which have a nested group** -- roughly 145 groups that
+  the old top-level-only sweep never reached; 22,704 sequences, 0 disagreed,
+  17,004 live; 468 markers recovered from storage, 0 classic-fold changes
+
+## 51. UI coverage as containment, not as a GUI test
+
+The remaining gap was "nothing drives the panel". The useful form of that is
+not a GUI test -- whether a widget is wired up is not what these checks are
+for -- but a **containment**: is every mask state the panel can reach also one
+the checks sweep? If the panel can put a member into a state no poke produces,
+every check is silent about it, and silent for the worst reason.
+
+    { member states reachable from the panel }  is a subset of
+    { states some poke produces }  union  { render-irrelevant }
+
+The exemption half is checkable rather than asserted: a bit is
+render-irrelevant when neither `masks/group.c` nor `blend.c` reads it, which is
+a grep anyone can repeat and which is recorded per entry.
+
+### Two axes, and they needed different answers
+
+**Per-member fields** -- an operator, an opacity, a refinement, a break. That
+is what the poke vocabulary is. `test_flexi_ui_coverage.c` enumerates every
+state bit a panel control writes, with the blend_gui.c line that writes it,
+and asserts each is either produced by some poke or declared exempt. Three are
+exempt and all three are verifiable: `SHOW` is canvas visibility (the fold's
+skip test is HIDDEN|DISABLE and SHOW is in neither), `USE` is set once at
+creation and never cleared, `GROUP_BREAK` is the legacy bit `group_start`
+replaced. A second test asserts the exempt ones are *not* quietly swept, so an
+exemption that stops being true fails rather than rots.
+
+The tripwire is `test_the_struct_has_not_grown()`, which pins
+`sizeof(dt_masks_point_group_t)`. A new panel control arrives as a new field,
+and a field no poke touches is invisible to every check; pinning the size
+forces whoever adds one to classify it. Mutation-checked: dropping HIDDEN from
+`_apply_poke` fails with "panel can set state bit 0x100 (blend_gui.c:4988
+(hide)) but no poke produces it".
+
+**The member list** -- deleting a shape, reordering rows. A run is a maximal
+stretch of the list, so both move boundaries, and neither is expressible as a
+field change, so no poke could ever produce them. **This was a whole axis of
+panel behaviour that nothing swept.** Closed with two step kinds in persist.c,
+`STEP_REMOVE` and `STEP_MOVE_UP`, and six sequences that pair them with a
+control that reads a boundary back:
+
+    structural:remove then within        44 compared  0 disagreed  18 live
+    structural:remove then opacity       44           0           30
+    structural:reorder then operator     44           0            1
+    structural:reorder then within       44           0           13
+    structural:operator then remove      44           0           18
+    structural:break then reorder        44           0            1
+
+Two of them are barely live on this corpus -- reordering swaps the last two
+members, which is inert when they already agree -- and that is reported rather
+than smoothed over.
+
+The list axis has no static tripwire, and cannot have one: adding a list
+operation changes no struct a test could pin. That is stated in the test header
+rather than left implicit.
+
+### Validation
+
+- unit suite 14/15 (`test_filmicrgb` link failure, pre-existing), including the
+  four new tests and the HIDDEN mutant
+- `--check-masks migration_failures.json.gz`: all five sections passed, 44
+  groups swept over 18 nested edits, 1,770 sequences, 0 disagreed
+
+---
+
+## §52 -- the three axes nothing was testing: shapes, undo, and cross-module raster
+
+§51 closed the containment argument for *what the panel writes into a group*.
+Three things sat outside it, and this section closes all three. Two are new
+coverage; one is a bug the work turned up on the way.
+
+### 52.1 Shape geometry
+
+Every check so far changed how members are *combined*; none changed what they
+*are*. The harvested geometry was a fixed input, and it is not a neutral one:
+whether two shapes overlap is what decides whether an intersection or a
+difference computes anything, so on a corpus whose shapes happen not to meet,
+those operators were swept over and over while computing the same empty answer.
+
+`_apply_geom()` (postedit.c, declared in postedit_internal.h) is the panel's
+shape controls as something a check can apply: translate and node-drag by
+moving points, and size / feather / hardness / rotation / curvature /
+compression through `functions->modify_property()` -- the same entry point the
+panel's sliders use. Two conventions live behind that call (`new/old` for the
+scaling properties, `new - old` for rotation and curvature) and the shapes
+disagree about which they follow, so each property is driven with the pair its
+implementations actually read.
+
+Liveness is measured from the point data, not from `modify_property`'s
+`count`. `count` reports that a shape *implements* a property, not that the
+value moved, and every implementation clamps -- a circle already at maximum
+size accepts the call and stays put. Counting those as coverage would overstate
+the sweep.
+
+Swept in two places, because the two ask different questions:
+
+- **postedit, phase D**: geometry applied to the form both arms share, then the
+  migrated and from-scratch partitions compared -- once plain, once crossed
+  with an intersection over the first run, which is the operator that only
+  becomes live when shapes meet.
+- **persist, eight new sequences**: geometry is the one part of a mask with a
+  per-type serialised representation (a blob of `dt_masks_point_<type>_t` in
+  `masks_history`), written by code the harvested forms never exercise, since
+  they arrive already-serialised and go back out unchanged. `geom:size then
+  size` is the sharp one: path.c's resize keeps a cached baseline beside the
+  points, so the second resize starts from a reloaded shape and has to land
+  where an in-memory second resize would.
+
+### 52.2 Undo and redo -- `--undo-masks`
+
+Undo is the only operation that has to RECOVER a mask rather than build one,
+and it recovers it from a copy taken before the edit. Nothing else here
+exercised that copy. The copy is `dt_history_duplicate()`, and the line that
+matters for masks is one:
+
+    if(old->forms) new->forms = dt_masks_dup_forms_deep(old->forms, NULL);
+
+Every history item carries its own forms snapshot, and that per-item snapshot
+is what `_dev_write_history_item()` writes back to `masks_history`. So an undo
+is: swap a duplicated stack into the dev, write it, reload. A duplicate that
+lost a form -- or kept a shallow pointer into a tree the edit then mutated --
+puts the *edited* mask back under the *pre-edit* history, and the undo silently
+does nothing to the mask while appearing to work on everything else.
+
+The property, both directions:
+
+    render(edit, then undo)  == render(before the edit)
+    render(edit, undo, redo) == render(after the edit)
+
+Two directions rather than one, because an undo that restores by throwing the
+mask away would pass the first on its own for a whole class of edit, and
+because redo re-applies from a snapshot taken *after* the edit -- a different
+copy with a different way to be wrong.
+
+**What is not tested, stated plainly:** the undo *stack*. `dt_undo_record()` is
+called from `libs/history.c` behind a GTK widget and a
+`DT_SIGNAL_DEVELOP_HISTORY_WILL_CHANGE` signal, neither of which exists
+headless. What is driven, in `_pop_undo()`'s own order, is everything that
+stack moves around. This cannot tell you ctrl-z is wired to the right callback;
+it can tell you that when it fires, the mask comes back.
+
+Twenty cases, one step each -- the panel vocabulary taken whole rather than
+sampled, plus the two list operations and five shape controls. `remove` is the
+one case that asks the snapshot to put a member *back*; every other case
+restores a field of a member that never went away.
+
+### 52.3 Cross-module raster -- a unit test, not a harvest check
+
+`--check-masks` is single-module by construction. The one mask decision made
+*across* modules is `_iop_prune_stale_raster_users()`, and it is also the only
+one whose inputs differ between the darkroom and export pipes. It has been
+wrong twice: judging consumers from `module->enabled` (stale by design in the
+export pipe -- regression 0167-raster-mask), and knowing only the exclusive
+raster sink while a flexi `DT_MASKS_RASTER` form element is a group *member*
+with no `DEVELOP_MASK_RASTER` bit and no `sink.source`.
+
+Two consumer shapes times several ways to be stale is a matrix, and the cells
+are only interesting together: fixing one by breaking another is exactly how
+both regressions happened. `test_flexi_raster_prune.c` sweeps it as a matrix --
+eight tests, no corpus, 0.09s, runs in CI.
+
+The function was `static`; it is now
+`dt_dev_pixelpipe_prune_stale_raster_users()`, declared in `pixelpipe_hb.h`
+with the reasoning above. Reaching it through `synch_all()` would mean standing
+up a history stack to test a decision that reads none of it.
+
+The bench starts from the darkroom's own arrangement -- module and piece agree
+-- so only the export case, which desyncs them deliberately, tells the two
+apart. A bench that started desynced would fail half the suite for the export
+bug and point at it from none of them.
+
+Mutation-verified against all three historical shapes:
+
+| mutant | caught by |
+| --- | --- |
+| flexi raster-form consumers invisible (the pre-flexi prune) | `a_live_consumer_survives`, `module_state_does_not_override_the_piece`, `flexi_element_naming_another_instance` |
+| judge the consumer from the module, not the piece (0167) | `a_disabled_piece_is_dropped`, `module_state_does_not_override_the_piece` |
+| match the raster source by op only, ignoring the instance | `flexi_element_naming_another_instance_is_dropped` |
+
+### 52.4 A bug found on the way: `group_start` was not in the mask hash
+
+`dt_masks_group_hash()` folds a member's `state`, `opacity`, `group_opacity`
+and `refinement`, and recurses into child groups. It did not fold
+`group_start` -- the first-class group boundary added in masks v10.
+
+The fold partitions the point list into runs with that field, so two trees
+differing only in a break render differently. Setting or clearing a group break
+therefore did not move the hash `blend.c:960` keys the drawn-mask cache on, and
+the edit stayed invisible until an unrelated edit forced a reprocess.
+
+This is the same defect `group_opacity` and `refinement` each had before it --
+both are documented in that function with the symptom they produced. Third
+time. Fixed, and `test_flexi_cache.c` now pins both directions
+(`test_setting_a_group_break_invalidates`,
+`test_clearing_a_group_break_invalidates`); removing the fix fails both with
+the message naming the symptom.
+
+### Shared step vocabulary
+
+`scope_t`, `step_kind_t`, `step_t`, `_resolve_scope()` and `_apply_step()` moved
+out of persist.c into postedit_internal.h / postedit.c, because undo.c is the
+second caller and a third is likely. Two files each keeping their own idea of
+what "delete the last member" means would drift, and the weaker one would then
+be reporting on a panel that no longer exists -- the same argument the poke
+vocabulary was already shared for.
+
+### 52.5 A harness gap the geometry sweep walked straight into
+
+The first `--persist-masks` run with geometry steps segfaulted, and the exit
+code said 0.
+
+Two separate things, both worth writing down:
+
+**The crash.** `_brush_modify_property()` dereferences
+`darktable.develop->form_gui` without a guard (path.c and object.c read it too,
+guarded). The replay claims `darktable.develop` but left `form_gui` NULL, which
+was harmless as long as nothing drove a shape control -- and fatal on the first
+brush in the corpus the moment something did. Fixed in `_replay_init`: the
+replay now owns a zeroed `dt_masks_form_gui_t` with `point_selected = -1`.
+That is not a placeholder. It is the state the panel is in when a slider is
+dragged with the shape merely selected -- `creation` false, so the sliders edit
+the existing points rather than the defaults for the next shape, and no node
+singled out, so the change applies to the whole shape. Any other setting would
+have these checks sweeping an editing mode the panel is not in.
+
+**Why the exit code lied.** The run was `darktable ... 2>&1 | grep '^\[persist\]'`,
+and `$?` of a pipeline is the *last* command's status. grep matched the header
+line and returned 0, so a SIGSEGV read as a clean pass with a suspiciously
+short report. The check was not at fault and neither was the pipeline -- what
+was at fault was reading the exit code of the wrong process.
+
+The pool worker (`worker.sh`) already gets this right: it redirects to a file
+and records the binary's own `$?`, so the 1,252-job campaign would have caught
+this. It was the one-off command that lied. Run the binary with a redirect and
+grep the file afterwards. Same family as every other entry in this log: a check
+that measures nothing agrees with itself perfectly.
+
+### 52.6 Results, and the mutants that make them mean something
+
+`--check-masks`-scale runs against `migration_failures.json.gz` (26 edits, 44
+groups, 18 of them nested):
+
+    persist   2242 sequences        0 disagreed   1116 live  (1770 before geometry)
+    undo      1239 cycles           0 disagreed    518 live
+    postedit  9706 configurations   0 disagreed   4152 live
+
+All eight geometry sequences in persist are live on this corpus (14-36 of 44
+each), `geom:size then size` among them at 22 -- so path.c's resize baseline is
+genuinely being crossed by a save, not skipped.
+
+**Mutants.** Every one of the three new pieces was checked against a
+deliberately broken build, because a check that measures nothing agrees with
+itself perfectly and this log has three previous entries where exactly that
+happened.
+
+| mutant | result |
+| --- | --- |
+| `dt_history_duplicate` keeps a shallow alias instead of deep-copying `forms` | SIGSEGV -- caught, but as a crash, so not the proof wanted |
+| `dt_history_duplicate` silently drops `forms` from the snapshot | **26/26 edits DIFFERENT, every cycle in every edit, exit 1** |
+| `group_start` removed from `dt_masks_group_hash` | both new cache tests fail, naming the symptom |
+| the three raster-prune mutants (§52.3) | each caught by a precisely named test |
+
+The second row is the one that matters: it is the silent form of the bug the
+check exists for -- the mask quietly not coming back while everything else
+undoes correctly -- and it fails loudly.
+
+With the corrected baseline the plain geometry rows read as they should:
+
+    geom:translate    86 compared  0 disagreed  59 live
+    geom:size         83   0  59        geom:node        59   0  33
+    geom:feather      72   0  50        geom:rotation    27   0  24
+    geom:hardness     11   0   9        geom:compression  3   0   0
+
+`geom:compression` is 3 comparisons and 0 live: this corpus has three gradients
+and the compression change did not move their rendered mask at the replay's
+512px scale. Reported rather than padded -- a control with three data points
+should look like one.
+
+The crossed rows are low-live by construction (6, 6, 6, 0, 6, 0, 0): an
+intersection over a whole group is inert when the group is a single run, which
+most of these are, so what those rows cover is the handful where it is not.
+
+**A liveness column that could only ever read zero.** The first postedit run
+reported `geom:translate 86 compared 0 live`, and 0 for every other plain
+geometry control. That was not the corpus; it was structural. Liveness was
+being measured against a render taken at the *same* geometry, so with no poke
+applied "did this configuration differ from the un-poked canon render" was the
+same question as "did the two arms disagree" -- which is the thing being
+asserted to be zero. The plain rows now measure against the harvested-geometry
+render ("did the shape edit change the mask") and only the crossed rows measure
+against the same-geometry one ("did the operator change the mask, under this
+geometry"). A column that can only ever read 0 is worse than no column.
+
+---
+
+## §53 -- the harvest corpus as one committable file
+
+Twelve contributed libraries are 24.6 MB compressed and 343 MB expanded, and
+none of it was in the repository: `data/harvested_masks/` sits in
+`.git/info/exclude`, so the corpus every confidence figure in this document
+rests on existed only on one laptop. `tools/masks_corpus.py` packs it into
+`data/masks_corpus.db`, 18.1 MB on disk and **6.26 MB as git stores it**.
+
+### Why it compresses
+
+Almost all of it is repetition. An edit records the module's whole `dev->forms`
+snapshot, so the same drawn group is written again for every module that masks
+with it and every image the preset was applied to:
+
+    57144 edits          ->  22469 distinct   (39%)
+    135540 form records  ->  33838 distinct   (25%)
+    57144 blend records  ->  14043 distinct   (25%)
+
+Content-addressing what repeats, plus packing the numbers as the C floats they
+already are.
+
+### What did NOT work, measured
+
+SQLite is not automatically smaller, and the first cut was **worse** than the
+alternative: 9.06 MB gzipped against 8.09 MB for the same data as normalised
+JSON. Binary float32 is dense but incompressible; repeated float *text* gzips
+beautifully. Byte-shuffle and delta filters over the point blobs made it worse
+still (4.43 MB and 5.15 MB against 4.47 MB plain).
+
+What actually paid, in order:
+
+- dropping the content-address columns. 16 random bytes per row plus a unique
+  index holding them again is ~3 MB of pure entropy that no compressor can
+  touch. Dedup needs them only at insert time, so the indexes are created for a
+  build or an append and dropped before the file is written
+- packing the blend params, which were 8 MB of JSON text (and 0.24 MB zlibbed
+  -- the text was almost entirely redundant)
+- keying the point schema on `(type, version)`
+
+### float32 is lossless, and proving it needed care
+
+Every number in a harvest came out of a C float printed with `%.9g`, so float32
+storage loses nothing the file ever held. Checked rather than assumed: over all
+twelve libraries, of 1,917,843 float leaves the number for which
+`'%.9g' % float32(x) != text` is **zero**.
+
+The first verifier did not show this. It compared doubles, and `0.858859181`
+parses to a double that differs from the float32 in the low bits while denoting
+the same float32 -- so it reported 56,912 of 57,144 edits unreconstructable.
+The storage was right and the check was wrong, which took a while to believe.
+
+### Three fields found only because verification failed
+
+`dimensions_known` on the image, and `points_error` / `points_blob_bytes` on
+forms **the harvester itself could not decode** (659 of them, "blob size does
+not match stride * count"). That last one matters: "this library contains masks
+darktable cannot read" is a finding, and silently turning those into ordinary
+forms would erase it.
+
+A fourth would not have been noticed. So the packer now **hard-fails on any
+member it does not know**, rather than dropping it -- `KNOWN_EDIT`,
+`KNOWN_IMAGE`, `KNOWN_FORM`. Without that, the corpus would be a lossy copy
+that still round-trips, still renders, and still compares equal to itself: the
+exact failure mode §45-§52 hit three times.
+
+`points_count` looks derived and is not. For a form that decoded it is
+`len(points)`; for one that did not it is the count the stored header *claimed*,
+and the disagreement is the whole content of the record. Treating it as derived
+rewrote 83 of them to 0.
+
+### Order is kept
+
+Storing occurrence counts would have been smaller and would have preserved
+every verdict, since the checks collapse exact repeats anyway. It would also
+permute the exported file -- moving which instance is the "first" and which the
+"repeat", and making every report that names an edit by index name a different
+one. `edit_instance` keeps one row per occurrence in the library's own order
+for about 0.2 MB.
+
+### What is proven
+
+- `verify`: all 57,144 edits of all 12 libraries rebuilt from the corpus and
+  compared against the source **field for field, in order, including the
+  derived name strings and positional indices** -- 0 differing
+- five mutants on the stored file (nudge a point float, corrupt a blend byte,
+  drop a `points_error`, forget a `dimensions_known`, reorder two instances):
+  all five fail `verify`
+- `add` of a 12th library onto an 11-library corpus produces byte-identical
+  table counts to a full rebuild, and verifies
+- end-to-end: `--verify-masks` over an exported library produces a report whose
+  summary AND all 281 per-edit verdicts are identical to the one from the
+  original harvest
+
+### Still to do
+
+The checks read JSON, so `export` materialises harvest files for them. Teaching
+`dt_masks_harvest_load()` to sniff a SQLite file (it already sniffs gzip by
+magic number) would let all five read the corpus directly, but it wants a
+library selector first: building one in-memory JSON tree for all twelve
+libraries at once is far more than any single check needs.

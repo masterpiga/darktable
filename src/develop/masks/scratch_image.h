@@ -20,6 +20,7 @@
 
 #include "common/image.h"
 #include "develop/blend.h"
+#include "develop/develop.h"
 
 #include <glib.h>
 
@@ -31,6 +32,31 @@
  * writes to the database, so they are only ever safe against a scratch library
  * (`--library :memory:`), never a real catalogue.
  */
+
+/** Give `dev` the scratch image's identity, before reading its history.
+
+    dt_dev_read_history_ext(..., no_image = TRUE) skips the block that loads
+    the image, so dev->image_storage keeps whatever dt_dev_init() left there:
+    an invalid id. That is not cosmetic. Migration's _mask_id_has_content()
+    (migrate_legacy.c) decides whether a classic drawn group has any content,
+    and whenever it is given a real history num it answers by querying
+
+        SELECT points_count FROM main.masks_history
+         WHERE imgid = module->dev->image_storage.id AND formid = ?
+
+    An unset id makes that find nothing, so migration concludes the group is
+    empty and takes the no-content branch: mask_mode drops to
+    DEVELOP_MASK_ENABLED and mask_id to NO_MASKID. Every drawn+parametric edit
+    whose parametric side is inert therefore arrives with **no mask at all**,
+    and a check built on this scratch image measures that instead of what it
+    meant to measure -- silently, because a lost mask still round-trips, still
+    renders, and still compares equal to itself.
+
+    It cost --persist-masks 219 of zisoft's 229 distinct edits (reported as
+    "no group to edit") and made the flexi half of --roundtrip-masks' run
+    invariant unreachable on the same edits. Call this after dt_dev_init() and
+    before dt_dev_read_history_ext(). */
+void dt_masks_scratch_claim_image(dt_develop_t *dev, const dt_imgid_t imgid);
 
 /** Wipe history, masks_history and module_order for `imgid`. */
 void dt_masks_scratch_wipe_history(const dt_imgid_t imgid);
