@@ -26,3 +26,30 @@
 {
    background-color: @header_color_bg;
 }
+
+/* the docked mask panel's header is a module header in every way that matters,
+   so it takes this variant's header color too (see the "#flexi #blending-tabs"
+   rules in darktable.css, which this outranks by being imported after it) */
+#flexi #blending-tabs
+{
+  background-color: @header_color;
+}
+
+/* the docked mask panel gets the same treatment on the corner that faces the
+   canvas -- the side it is read from, and the only one of its corners that has
+   an edge to be rounded against. Which side that is follows the panel's dock
+   (flexi-dock-left/right, applied by _flexi_apply_side_classes in gui/gtk.c),
+   not the theme. The panel's own background is what carries the radius; the
+   header sitting on it is transparent, but it is rounded too so that a theme
+   giving it a background of its own does not square the corner off again. */
+#flexi.flexi-dock-left,
+#flexi.flexi-dock-left #blending-tabs
+{
+  border-top-right-radius: 15px;
+}
+
+#flexi.flexi-dock-right,
+#flexi.flexi-dock-right #blending-tabs
+{
+  border-top-left-radius: 15px;
+}

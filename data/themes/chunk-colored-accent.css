@@ -17,3 +17,13 @@
  border-radius: 0px;
  margin-right: 0.9em;
 }
+
+/* the blend mask header's on/off toggle is the mask's power button, so the
+   accent marks it exactly as it marks a module's above -- and nothing else says
+   the state. Not scoped to a panel: the header is the same widget wherever it is
+   hosted (embedded in the module, in a utility panel, or docked over the
+   canvas), and the mask is equally on in all of them. */
+#blending-tabs .mask-enable-toggle:checked
+{
+  color: @active_module_icon_fg;
+}
