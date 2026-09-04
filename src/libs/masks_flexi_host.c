@@ -202,17 +202,12 @@ void view_enter(dt_lib_module_t *self,
     GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
     dt_gui_add_class(header, "masks-flexi-host-header");
     gtk_box_pack_end(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
-    // visual reading order from left to right: overlay | preferences | toggle
+    // visual reading order from left to right: overlay | toggle
     // For GTK_PACK_END, the earlier child in the list is placed further to the right.
-    // child 2 = toggle (rightmost), child 3 = preferences (middle), child 4 = overlay (leftmost)
+    // child 2 = toggle (rightmost), child 3 = overlay
     gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->toggle_box), 2);
-    if(self->presets_button)
-    {
-      gtk_widget_set_valign(self->presets_button, GTK_ALIGN_CENTER);
-      gtk_box_reorder_child(GTK_BOX(header), self->presets_button, 3);
-    }
     if(d->actions_box)
-      gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->actions_box), 4);
+      gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->actions_box), 3);
     if(self->arrow)
       gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
     gtk_widget_show(GTK_WIDGET(d->toggle_box));
@@ -246,27 +241,17 @@ void view_enter(dt_lib_module_t *self,
   if(self->reset_button)
     gtk_widget_set_visible(self->reset_button, FALSE);
 
-  // this lib has no presets/preferences of its own, so lib.c's default
-  // header hamburger would otherwise sit there permanently disabled and
-  // useless -- repurpose it instead to the same "masking options" menu the
-  // mode-select row's own preferences gear opens elsewhere (see
-  // dt_iop_gui_blend_masks_options_popup and bd->masks_options_btn, which
-  // is hidden in this position so there's only ever one such button)
+  // this lib has no presets or preferences of its own, so lib.c's default
+  // header hamburger has nothing to open. It used to be repurposed to the
+  // masking options menu, but no other panel position shows an icon for those
+  // any more -- they open on a right-click of the mask on/off toggle, which is
+  // in this header too (see _blendop_mask_enable_toggled). Hide it rather than
+  // leave one position with a control the others dropped. no_show_all because
+  // the expander header is shown with gtk_widget_show_all on every view enter.
   if(self->presets_button)
   {
-    dtgtk_button_set_paint(DTGTK_BUTTON(self->presets_button),
-                           dtgtk_cairo_paint_preferences, 0, NULL);
-    // view_enter can run more than once (leaving/re-entering darkroom) --
-    // both disconnects are no-ops on repeat calls, so this stays idempotent
-    // rather than stacking duplicate "clicked" handlers
-    g_signal_handlers_disconnect_matched(self->presets_button, G_SIGNAL_MATCH_DATA,
-                                         0, 0, NULL, NULL, self);
-    g_signal_handlers_disconnect_by_func(self->presets_button,
-                                         G_CALLBACK(dt_iop_gui_blend_masks_options_popup), NULL);
-    g_signal_connect(G_OBJECT(self->presets_button), "clicked",
-                     G_CALLBACK(dt_iop_gui_blend_masks_options_popup), NULL);
-    gtk_widget_set_sensitive(self->presets_button, TRUE);
-    gtk_widget_set_tooltip_text(self->presets_button, _("masking options"));
+    gtk_widget_set_no_show_all(self->presets_button, TRUE);
+    gtk_widget_hide(self->presets_button);
   }
 
   dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
