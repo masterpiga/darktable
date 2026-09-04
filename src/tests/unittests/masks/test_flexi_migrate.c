@@ -198,6 +198,31 @@ static void test_drawn_only_reuses_the_group(void **state)
   assert_int_equal((int)g_list_length(flexi_dev.forms), forms_before);
 }
 
+// A group inherited from a classic edit has no combine operator on its bottom
+// member: that is what dt_masks_group_add_form() gives a group's first shape,
+// and the migration reuses the point list verbatim. Both partitioners have to
+// read it as union, or they disagree about where the group ends -- the panel
+// showing one group whose within-group mode, opacity, refinement and
+// invert-output all read from a head the fold has split off into a run of its
+// own, so every one of those controls silently does nothing (#21905).
+static void test_classic_head_without_an_operator_keeps_its_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+
+  // as classic left it: USE|SHOW on the bottom member, no operator at all
+  dt_masks_point_group_t *head = grp->points->data;
+  head->state &= ~(int)DT_MASKS_STATE_OP;
+
+  assert_true(_migrate());
+
+  // the fold's boundary test (dt_masks_point_breaks_run, masks.h) and the
+  // panel's (_starts_group, blend_gui.c) both keep the member above in the run
+  const dt_masks_point_group_t *above = grp->points->next->data;
+  assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
+  assert_false(_starts_group(grp->points->next));
+}
+
 // defensive: a mask_id that resolves to nothing must still migrate cleanly --
 // flexi's "no form" fallback matches classic's, so nothing is fabricated
 static void test_drawn_with_dangling_mask_id(void **state)
@@ -956,6 +981,8 @@ int main(void)
     cmocka_unit_test_teardown(test_disabled_stays_disabled, _teardown),
     cmocka_unit_test_teardown(test_uniform_enabled_becomes_flexi, _teardown),
     cmocka_unit_test_teardown(test_drawn_only_reuses_the_group, _teardown),
+    cmocka_unit_test_teardown(test_classic_head_without_an_operator_keeps_its_group,
+                              _teardown),
     cmocka_unit_test_teardown(test_drawn_with_dangling_mask_id, _teardown),
     cmocka_unit_test_teardown(test_parametric_only_synthesizes_a_parametric_form, _teardown),
     cmocka_unit_test_teardown(test_drawn_and_parametric_stacks_a_parametric_element, _teardown),

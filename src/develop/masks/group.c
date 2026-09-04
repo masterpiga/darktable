@@ -1186,7 +1186,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       continue;
     }
 
-    const guint group_op = head->state & DT_MASKS_STATE_OP;
+    const guint group_op = dt_masks_eff_group_op(head->state);
     // a bypassed group is skipped whole: its members are still walked (so the
     // run boundary is found and the next group starts in the right place) but
     // none of their masks are rendered and nothing is composited, exactly as
@@ -1236,7 +1236,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       // run-boundary test counts every member seen, not just the ones that
       // rendered: a bypassed group renders none of them, and even in a live
       // group an unrenderable head must not let the next group's head slip in.
-      if(nb_seen > 0 && (((m->state & DT_MASKS_STATE_OP) != group_op) || m->group_start))
+      if(nb_seen > 0 && dt_masks_point_breaks_run(m, group_op))
         break;
       nb_seen++;
       if(bypassed || (m->state & DT_MASKS_STATE_DISABLE)) // nothing to render, just walk
