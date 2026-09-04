@@ -48,6 +48,19 @@ add_cmocka_test(test_flexi_controls
                 SOURCES test_flexi_controls.c flexi_fixture.c
                 LINK_LIBRARIES lib_darktable cmocka)
 
+# Containment, not behaviour: is every mask state the panel can reach also one
+# the harvest checks sweep? See the file header for why this is not a GUI test.
+add_cmocka_test(test_flexi_ui_coverage
+                SOURCES test_flexi_ui_coverage.c flexi_fixture.c
+                LINK_LIBRARIES lib_darktable cmocka)
+
+# Which raster-mask consumers the pipe considers live: the one mask decision
+# made across modules, and the only one whose inputs differ between the
+# darkroom and export pipes. See the file header for both regressions.
+add_cmocka_test(test_flexi_raster_prune
+                SOURCES test_flexi_raster_prune.c flexi_fixture.c
+                LINK_LIBRARIES lib_darktable cmocka)
+
 # Is the synthetic probe image actually adequate to replay harvested masks
 # against? Measured per channel, not assumed -- see the file header.
 add_cmocka_test(test_probe_image
@@ -56,7 +69,8 @@ add_cmocka_test(test_probe_image
 
 foreach(_t test_flexi_model test_flexi_cache test_flexi_persistence test_flexi_dnd
            test_flexi_groups test_flexi_panel test_flexi_migrate test_flexi_compose
-           test_flexi_controls test_probe_image)
+           test_flexi_controls test_flexi_ui_coverage test_flexi_raster_prune
+           test_probe_image)
   target_include_directories(${_t} PRIVATE
                              ${CMAKE_CURRENT_SOURCE_DIR}
                              ${CMAKE_SOURCE_DIR}/src)

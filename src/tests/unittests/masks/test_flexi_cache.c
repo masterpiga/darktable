@@ -263,6 +263,39 @@ static void test_group_opacity_invalidates(void **state)
 }
 
 // ---------------------------------------------------------------------------
+// the group boundary
+// ---------------------------------------------------------------------------
+
+/* group_start is the first-class group boundary (masks v10), and the fold
+   partitions the point list into runs with it -- so two trees differing only
+   in a break render differently, and setting one has to move the hash.
+
+   It did not. The field was added without being folded in, which made setting
+   or clearing a group break invisible on canvas until an unrelated edit forced
+   a reprocess. Exactly the symptom group_opacity and refinement each had
+   before them; this is the third time, which is why the pair below pins both
+   directions rather than just the one that was broken.
+
+   Poked directly rather than through the panel: what is under test is the hash
+   over the stored field, and going through a panel gesture would also move the
+   operator bits, which invalidate on their own. */
+static void test_setting_a_group_break_invalidates(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2,3");
+  assert_invalidates("marking an element as starting a new group",
+                     _group_point(grp, 2)->group_start = 1);
+}
+
+static void test_clearing_a_group_break_invalidates(void **state)
+{
+  // two runs with the SAME operator, so the break is the only thing that
+  // separates them and clearing it genuinely merges them
+  dt_masks_form_t *grp = flexi_build("u:1,2 | u:3");
+  assert_invalidates("clearing a group break",
+                     _group_point(grp, 3)->group_start = 0);
+}
+
+// ---------------------------------------------------------------------------
 // cosmetic changes must NOT invalidate
 // ---------------------------------------------------------------------------
 
@@ -388,6 +421,8 @@ int main(void)
     cmocka_unit_test_teardown(test_group_refinement_invalidates, _teardown),
     cmocka_unit_test_teardown(test_refinement_disable_invalidates, _teardown),
     cmocka_unit_test_teardown(test_group_opacity_invalidates, _teardown),
+    cmocka_unit_test_teardown(test_setting_a_group_break_invalidates, _teardown),
+    cmocka_unit_test_teardown(test_clearing_a_group_break_invalidates, _teardown),
     cmocka_unit_test_teardown(test_renaming_a_group_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_solo_edit_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_selection_does_not_invalidate, _teardown),

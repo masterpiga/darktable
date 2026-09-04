@@ -49,6 +49,27 @@ void dt_masks_scratch_seed_image(const dt_imgid_t imgid,
   sqlite3_finalize(stmt);
 }
 
+void dt_masks_scratch_claim_image(dt_develop_t *dev, const dt_imgid_t imgid)
+{
+  // id is what migration's content probe binds; the dimensions come along
+  // because the same struct is what anything else asking "how big is this
+  // image" would read, and leaving them zero invites a divide-by-zero
+  // somewhere far from here
+  dev->image_storage.id = imgid;
+
+  sqlite3_stmt *stmt;
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT width, height FROM main.images WHERE id = ?1",
+                              -1, &stmt, NULL);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  if(sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    dev->image_storage.width = sqlite3_column_int(stmt, 0);
+    dev->image_storage.height = sqlite3_column_int(stmt, 1);
+  }
+  sqlite3_finalize(stmt);
+}
+
 void dt_masks_scratch_wipe_history(const dt_imgid_t imgid)
 {
   const char *const stmts[] = {
