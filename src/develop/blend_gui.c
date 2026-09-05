@@ -618,21 +618,26 @@ void _build_masks_list(dt_iop_module_t *module);
 // masks_combo: dt_bauhaus_combobox_set fires "value-changed" exactly as a
 // real click on the combo's own popup would, so dt_masks_iop_value_changed_callback
 // (connected once, in dt_iop_gui_init_masks) handles it completely unchanged.
-static void _masks_import_pick(GtkMenuItem *item, gpointer user_data)
+static void _masks_import_pick_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-  dt_iop_gui_blend_data_t *bd = (dt_iop_gui_blend_data_t *)user_data;
-  const int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "idx"));
-  dt_bauhaus_combobox_set(bd->masks_combo, idx);
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(bd)
+  {
+    const int idx = g_variant_get_int32(parameter);
+    dt_bauhaus_combobox_set(bd->masks_combo, idx);
+  }
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
 }
 
 // build a single "idx"-carrying, _masks_import_pick-wired menu item
-static GtkWidget *
-_masks_import_menu_item(const char *label, const int idx, dt_iop_gui_blend_data_t *bd)
+static void _masks_import_append_item(GMenu *menu, const char *label, const int idx)
 {
-  GtkWidget *it = gtk_menu_item_new_with_label(label ? label : "");
-  g_object_set_data(G_OBJECT(it), "idx", GINT_TO_POINTER(idx));
-  g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_masks_import_pick), bd);
-  return it;
+  GMenuItem *it = g_menu_item_new(label ? label : "", NULL);
+  g_menu_item_set_action_and_target_value(it, "masks_import.pick", g_variant_new_int32(idx));
+  g_menu_append_item(menu, it);
+  g_object_unref(it);
 }
 
 // marks a form-kind bucket holding whole other-module mask groups (imported
@@ -641,22 +646,21 @@ _masks_import_menu_item(const char *label, const int idx, dt_iop_gui_blend_data_
 #define _IMPORT_MAX_KIND_BUCKETS 16
 
 // find (or create, appending to menu) the submenu for a given shape kind
-static GtkWidget *_masks_import_kind_bucket(
-  GtkWidget *menu, guint *kinds, GtkWidget **submenus, int *n_buckets, const guint kind)
+static GMenu *_masks_import_kind_bucket(
+  GMenu *menu, guint *kinds, GMenu **submenus, int *n_buckets, const guint kind)
 {
   for(int k = 0; k < *n_buckets; k++)
     if(kinds[k] == kind) return submenus[k];
   if(*n_buckets >= _IMPORT_MAX_KIND_BUCKETS) return NULL;
 
-  GtkWidget *sub = gtk_menu_new();
+  GMenu *sub = g_menu_new();
   kinds[*n_buckets] = kind;
   submenus[*n_buckets] = sub;
   (*n_buckets)++;
 
-  GtkWidget *it = gtk_menu_item_new_with_label(
-    kind == _IMPORT_KIND_GROUP ? _("groups") : _kind_name(kind, TRUE));
-  gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+  const char *name =
+    kind == _IMPORT_KIND_GROUP ? _("groups") : _kind_name(kind, TRUE);
+  g_menu_append_submenu(menu, name, G_MENU_MODEL(sub));
   return sub;
 }
 
@@ -682,27 +686,25 @@ static dt_iop_module_t *_masks_import_form_owner(const dt_mask_id_t formid)
 
 // find (or create, appending to menu) the submenu for a given owning module
 // (NULL = not currently used by any module, but still importable)
-static GtkWidget *_masks_import_module_bucket(GtkWidget *menu,
-                                              dt_iop_module_t **owners,
-                                              GtkWidget **submenus,
-                                              int *n_buckets,
-                                              dt_iop_module_t *owner)
+static GMenu *_masks_import_module_bucket(GMenu *menu,
+                                          dt_iop_module_t **owners,
+                                          GMenu **submenus,
+                                          int *n_buckets,
+                                          dt_iop_module_t *owner)
 {
   for(int k = 0; k < *n_buckets; k++)
     if(owners[k] == owner) return submenus[k];
   if(*n_buckets >= _IMPORT_MAX_MODULE_BUCKETS) return NULL;
 
-  GtkWidget *sub = gtk_menu_new();
+  GMenu *sub = g_menu_new();
   owners[*n_buckets] = owner;
   submenus[*n_buckets] = sub;
   (*n_buckets)++;
 
   gchar *label =
     owner ? dt_history_item_get_name(owner) : g_strdup(_("not currently used"));
-  GtkWidget *it = gtk_menu_item_new_with_label(label);
+  g_menu_append_submenu(menu, label, G_MENU_MODEL(sub));
   g_free(label);
-  gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), sub);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
   return sub;
 }
 
@@ -714,12 +716,14 @@ static GtkWidget *_masks_import_module_bucket(GtkWidget *menu,
 // offers the same action from the flexi import menu, since that is where a
 // user is now more likely to notice the clutter (it is exactly what ends up
 // in the "not currently used" bucket of "by source module").
-static void _masks_import_cleanup_unused(GtkMenuItem *item, gpointer user_data)
+static void _masks_import_cleanup_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)user_data;
   dt_masks_cleanup_unused(darktable.develop);
   dt_control_log(_("unused shapes removed"));
   _build_masks_list(module);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
 }
 
 // flexi's "import shape" trigger: like the add-group button, a single click
@@ -748,15 +752,29 @@ _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *mod
 
   dt_masks_iop_combo_populate(bd->masks_combo, &module);
 
+  GActionGroup *action_group = gtk_widget_get_action_group(btn, "masks_import");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "pick",    _masks_import_pick_action,    "i",  NULL },
+      { "cleanup", _masks_import_cleanup_action, NULL, NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), module);
+    gtk_widget_insert_action_group(btn, "masks_import", action_group);
+  }
+
   const int n = dt_bauhaus_combobox_length(bd->masks_combo);
-  GtkWidget *by_type_menu = gtk_menu_new();
-  GtkWidget *by_module_menu = gtk_menu_new();
-  GtkWidget *reuse_menu = gtk_menu_new();
+  GMenu *by_type_menu = g_menu_new();
+  GMenu *by_module_menu = g_menu_new();
+  GMenu *reuse_menu = g_menu_new();
   guint kinds[_IMPORT_MAX_KIND_BUCKETS];
-  GtkWidget *kind_submenus[_IMPORT_MAX_KIND_BUCKETS];
+  GMenu *kind_submenus[_IMPORT_MAX_KIND_BUCKETS];
   int n_kinds = 0;
   dt_iop_module_t *owners[_IMPORT_MAX_MODULE_BUCKETS];
-  GtkWidget *owner_submenus[_IMPORT_MAX_MODULE_BUCKETS];
+  GMenu *owner_submenus[_IMPORT_MAX_MODULE_BUCKETS];
   int n_owners = 0;
   int n_existing = 0, n_reuse = 0;
 
@@ -779,74 +797,59 @@ _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *mod
 
       const guint kind =
         (form && (form->type & DT_MASKS_GROUP)) ? _IMPORT_KIND_GROUP : _form_kind(form);
-      GtkWidget *type_bucket =
+      GMenu *type_bucket =
         _masks_import_kind_bucket(by_type_menu, kinds, kind_submenus, &n_kinds, kind);
       if(type_bucket)
-        gtk_menu_shell_append(GTK_MENU_SHELL(type_bucket),
-                              _masks_import_menu_item(label, i, bd));
+        _masks_import_append_item(type_bucket, label, i);
 
       dt_iop_module_t *owner = _masks_import_form_owner(id);
-      GtkWidget *module_bucket = _masks_import_module_bucket(
+      GMenu *module_bucket = _masks_import_module_bucket(
         by_module_menu, owners, owner_submenus, &n_owners, owner);
       if(module_bucket)
-        gtk_menu_shell_append(GTK_MENU_SHELL(module_bucket),
-                              _masks_import_menu_item(label, i, bd));
+        _masks_import_append_item(module_bucket, label, i);
 
       n_existing++;
     }
     else
     {
-      gtk_menu_shell_append(GTK_MENU_SHELL(reuse_menu),
-                            _masks_import_menu_item(label, i, bd));
+      _masks_import_append_item(reuse_menu, label, i);
       n_reuse++;
     }
   }
 
-  GtkWidget *menu = gtk_menu_new();
+  GMenu *menu = g_menu_new();
   if(n_existing > 0)
   {
-    GtkWidget *it_module =
-      gtk_menu_item_new_with_label(_("add existing shape by source module"));
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(it_module), by_module_menu);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it_module);
-
-    GtkWidget *it_type = gtk_menu_item_new_with_label(_("add existing shape by type"));
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(it_type), by_type_menu);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it_type);
+    g_menu_append_submenu(menu, _("add existing shape by source module"), G_MENU_MODEL(by_module_menu));
+    g_menu_append_submenu(menu, _("add existing shape by type"), G_MENU_MODEL(by_type_menu));
   }
-  else
-  {
-    gtk_widget_destroy(by_module_menu);
-    gtk_widget_destroy(by_type_menu);
-  }
+  g_object_unref(by_module_menu);
+  g_object_unref(by_type_menu);
 
   if(n_reuse > 0)
   {
-    GtkWidget *it = gtk_menu_item_new_with_label(_("use same shapes as"));
-    gtk_menu_item_set_submenu(GTK_MENU_ITEM(it), reuse_menu);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+    g_menu_append_submenu(menu, _("use same shapes as"), G_MENU_MODEL(reuse_menu));
   }
-  else
-    gtk_widget_destroy(reuse_menu);
+  g_object_unref(reuse_menu);
 
   if(n_existing == 0 && n_reuse == 0)
   {
-    GtkWidget *it = gtk_menu_item_new_with_label(_("nothing to import"));
-    gtk_widget_set_sensitive(it, FALSE);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+    GMenuItem *none_it = g_menu_item_new(_("nothing to import"), NULL);
+    g_menu_append_item(menu, none_it);
+    g_object_unref(none_it);
   }
 
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *cleanup_it = gtk_menu_item_new_with_label(_("clean up unused shapes"));
-  gtk_widget_set_tooltip_text(cleanup_it,
-                              _("remove every shape that no module currently uses\n"
-                                "(the \"not currently used\" entries above)"));
-  g_signal_connect(G_OBJECT(cleanup_it), "activate",
-                   G_CALLBACK(_masks_import_cleanup_unused), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), cleanup_it);
+  GMenu *cleanup_sec = g_menu_new();
+  g_menu_append(cleanup_sec, _("clean up unused shapes"), "masks_import.cleanup");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(cleanup_sec));
+  g_object_unref(cleanup_sec);
 
-  gtk_widget_show_all(menu);
-  gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)ev);
+  for(int k = 0; k < n_kinds; k++) g_object_unref(kind_submenus[k]);
+  for(int k = 0; k < n_owners; k++) g_object_unref(owner_submenus[k]);
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
   return TRUE;
 }
 
@@ -6289,21 +6292,29 @@ static const struct
   dt_masks_state_t state;
   DTGTKCairoPaintIconFunc paint;
   const char *name;
+  const char *tooltip;
 } _masks_ops[] = {
-  { DT_MASKS_STATE_UNION, dtgtk_cairo_paint_masks_union, N_("union") },
+  { DT_MASKS_STATE_UNION, dtgtk_cairo_paint_masks_union, N_("union"),
+    N_("adds group to stack: highest opacity takes precedence") },
   { DT_MASKS_STATE_INTERSECTION, dtgtk_cairo_paint_masks_intersection,
-    N_("intersection") },
-  { DT_MASKS_STATE_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference") },
-  { DT_MASKS_STATE_SUM, dtgtk_cairo_paint_masks_sum, N_("sum") },
-  { DT_MASKS_STATE_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion") },
-  { DT_MASKS_STATE_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply") },
-  { DT_MASKS_STATE_OP_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen") },
+    N_("intersection"),
+    N_("restricts accumulated mask strictly to this group's area") },
+  { DT_MASKS_STATE_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"),
+    N_("subtracts group from accumulated mask, cutting holes where it overlaps") },
+  { DT_MASKS_STATE_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
+    N_("adds opacities together, building up density toward solid coverage") },
+  { DT_MASKS_STATE_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion"),
+    N_("keeps areas covered by either stack or group alone, clearing overlaps") },
+  { DT_MASKS_STATE_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
+    N_("scales down accumulated stack opacity by group opacity") },
+  { DT_MASKS_STATE_OP_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
+    N_("blends group smoothly onto stack without forming harsh boundary seams") },
   // bypass is last so the loops below (which return the first bit they find)
   // keep reporting the group's real combining operator; it is a modifier on
   // top of one of the operators above, not one of them, and every menu that
   // offers "which operator does this group use" skips it -- only the
   // between-group chooser for an existing group offers it, as a toggle.
-  { DT_MASKS_STATE_OP_BYPASS, _paint_masks_bypass, N_("disable") }
+  { DT_MASKS_STATE_OP_BYPASS, _paint_masks_bypass, N_("disable"), NULL }
 };
 
 // is this group's between-group operator currently bypassed (group disabled)?
@@ -6381,14 +6392,23 @@ static void _stage_new_group(dt_iop_module_t *module,
                              const int op_state,
                              const gboolean below_target);
 
-// build a labelled "icon + name" menu item for an operator chooser
-static GtkWidget *_op_menu_item(DTGTKCairoPaintIconFunc paint, const char *name)
+// build a labelled "icon + name" menu item with an action target for an operator chooser
+static GMenuItem *_op_gmenu_item_target(DTGTKCairoPaintIconFunc paint,
+                                        const char *name,
+                                        const char *tooltip,
+                                        const char *action,
+                                        const int target)
 {
-  GtkWidget *it = gtk_menu_item_new();
-  GtkWidget *hb = dt_gui_hbox();
-  gtk_box_set_spacing(GTK_BOX(hb), DT_PIXEL_APPLY_DPI(6));
-  dt_gui_box_add(hb, gtk_image_new_from_pixbuf(_op_pixbuf(paint)), gtk_label_new(_(name)));
-  gtk_container_add(GTK_CONTAINER(it), hb);
+  GMenuItem *it = g_menu_item_new(_(name), NULL);
+  g_menu_item_set_action_and_target_value(it, action, g_variant_new_int32(target));
+  if(tooltip)
+    g_menu_item_set_attribute(it, "tooltip", "s", _(tooltip));
+  GdkPixbuf *pb = _op_pixbuf(paint);
+  if(pb)
+  {
+    g_menu_item_set_icon(it, G_ICON(pb));
+    g_object_unref(pb);
+  }
   return it;
 }
 
@@ -7799,20 +7819,16 @@ static void _break_apart_ai_bundle(dt_iop_module_t *module, const dt_mask_id_t i
   _refresh_canvas_edit(module);
 }
 
-static void _shape_menu_break_apart(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _break_apart_ai_bundle(module, id);
-}
 #endif // HAVE_AI
 
 // forward declared here (defined much further down, near _build_shape_actions_menu's
 // other caller) so _row_click_press's own right-click can open the same menu
 // without reordering half the file.
-static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
-                                            const dt_mask_id_t id,
-                                            GtkWidget *handle,
-                                            GtkWidget *evbox);
+static void _build_shape_actions_menu(GtkWidget *anchor,
+                                      dt_iop_module_t *module,
+                                      const dt_mask_id_t id,
+                                      GtkWidget *handle,
+                                      GtkWidget *evbox);
 
 // unified press/release handlers for a row's three "non-specific" click
 // surfaces: the lead icon (handle), the name, and the row's own background
@@ -7848,10 +7864,11 @@ static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
 // click-away, Escape) alike, unlike "deactivate" (fires before an item's own
 // "activate" completes) or a per-item callback (would have to be repeated
 // on every menu entry, including future ones).
-static void _shape_menu_closed(GtkWidget *menu, dt_iop_module_t *module)
+static void _shape_popover_closed(GtkPopover *popover, gpointer user_data)
 {
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(menu), "formid"));
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(popover), "formid"));
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(bd && bd->panel_selected_formid == id) _auto_expand_selected_row(module, id);
 }
 
@@ -7888,10 +7905,12 @@ _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
     if(bd->panel_selected_formid != id) _set_form_target_ext(module, id, FALSE);
     GtkWidget *handle = g_object_get_data(G_OBJECT(w), "handle-widget");
     GtkWidget *evbox = g_object_get_data(G_OBJECT(w), "name-evbox");
-    GtkWidget *menu = _build_shape_actions_menu(module, id, handle, evbox);
-    g_object_set_data(G_OBJECT(menu), "formid", GINT_TO_POINTER(id));
-    g_signal_connect(G_OBJECT(menu), "hide", G_CALLBACK(_shape_menu_closed), module);
-    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)ev);
+    _build_shape_actions_menu(w, module, id, handle, evbox);
+    g_object_set_data(G_OBJECT(darktable.gui->active_popover_menu), "formid", GINT_TO_POINTER(id));
+    g_signal_connect(G_OBJECT(darktable.gui->active_popover_menu), "closed", G_CALLBACK(_shape_popover_closed), module);
+    GdkRectangle rect = { (int)ev->x, (int)ev->y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(darktable.gui->active_popover_menu), &rect);
+    gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
     return TRUE;
   }
   // a plain primary press must return FALSE so this widget's own drag source
@@ -9329,15 +9348,17 @@ static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd)
 // above everything vs. at the very bottom -- see _stage_new_group). "activate"
 // carries no event of its own, so the modifier state is read off whichever
 // event is currently being processed (the button-release on this very item).
-static void _new_shape_op_activate(GtkMenuItem *item, gpointer user_data)
+static void _new_shape_op_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-  GtkWidget *btn = g_object_get_data(G_OBJECT(item), "opbtn");
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
-  const int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "opidx"));
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  const int idx = g_variant_get_int32(parameter);
   GdkModifierType state = 0;
   gtk_get_current_event_state(&state);
   const gboolean below = dt_modifier_is(state, GDK_CONTROL_MASK);
-  if(module) _stage_new_group(module, _masks_ops[idx].state, below);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && idx >= 0 && idx < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])))
+    _stage_new_group(module, _masks_ops[idx].state, below);
 }
 
 // the add-group operator chooser. With first-class groups two same-operator groups
@@ -9357,33 +9378,45 @@ static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u
     dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
     if(!module || !module->blend_data) return FALSE;
     if(module->blend_params->mask_mode & DEVELOP_MASK_RASTER) return FALSE;
-    GtkMenu *pmenu = GTK_MENU(gtk_menu_new());
-    _add_flexi_presets_menu(pmenu, module);
-    gtk_widget_show_all(GTK_WIDGET(pmenu));
-    gtk_menu_popup_at_pointer(pmenu, (GdkEvent *)ev);
+    GMenu *pmenu = g_menu_new();
+    _add_flexi_presets_menu(pmenu, btn, module);
+    darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, pmenu);
+    gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+    g_object_unref(pmenu);
     return TRUE;
   }
 
   if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
 
-  GtkWidget *menu = gtk_menu_new();
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
+  GActionGroup *action_group = gtk_widget_get_action_group(btn, "masks_new_op");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "add", _new_shape_op_action, "i", NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), module);
+    gtk_widget_insert_action_group(btn, "masks_new_op", action_group);
+  }
+
+  GMenu *menu = g_menu_new();
   for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
   {
     // bypass is not an operator a group can be created with -- it only
     // disables an existing one (see _build_group_op_menu)
     if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
-    GtkWidget *it = _op_menu_item(_masks_ops[i].paint, _masks_ops[i].name);
-    gtk_widget_set_tooltip_text(it, _("click to add above the current target\n"
-                                      "(or above everything, if none is selected)\n"
-                                      "ctrl+click to add below it instead\n"
-                                      "(or at the very bottom, if none is selected)"));
-    g_object_set_data(G_OBJECT(it), "opbtn", btn);
-    g_object_set_data(G_OBJECT(it), "opidx", GINT_TO_POINTER(i));
-    g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_new_shape_op_activate), NULL);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+    GMenuItem *it =
+      _op_gmenu_item_target(_masks_ops[i].paint, _masks_ops[i].name,
+                            _masks_ops[i].tooltip, "masks_new_op.add", i);
+    g_menu_append_item(menu, it);
+    g_object_unref(it);
   }
-  gtk_widget_show_all(menu);
-  gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)ev);
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
   return TRUE;
 }
 
@@ -9542,16 +9575,17 @@ static void _group_reset_members(dt_iop_module_t *module, GList *fids, const int
   _refresh_canvas_edit(module);
 }
 
-static void _close_shape_actions_menu(GtkWidget *item);
 static void
 _group_op_apply(dt_iop_module_t *module, GList *formids, const dt_masks_state_t op);
-static GtkWidget *_build_group_between_op_menu(dt_iop_module_t *module,
-                                               GList *formids,
-                                               const gboolean is_base);
-static GtkWidget *_build_group_actions_menu(dt_iop_module_t *module,
-                                            GList *formids,
-                                            const gboolean is_base,
-                                            GtkWidget *lbl_box);
+static void _build_group_between_op_menu(GtkWidget *anchor,
+                                         dt_iop_module_t *module,
+                                         GList *formids,
+                                         const gboolean is_base);
+static void _build_group_actions_menu(GtkWidget *anchor,
+                                      dt_iop_module_t *module,
+                                      GList *formids,
+                                      const gboolean is_base,
+                                      GtkWidget *lbl_box);
 
 // start inline rename on a group's title: swap `lbl_box`'s label child for an
 // entry, same gesture as renaming an element (ctrl+click, see
@@ -9662,8 +9696,10 @@ _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
     const gboolean is_base = g_object_get_data(G_OBJECT(w), "is-base-group") != NULL;
     GList *formids = g_object_get_data(G_OBJECT(w), "group-formids");
     GtkWidget *lbl_box = g_object_get_data(G_OBJECT(w), "title-label-box");
-    GtkWidget *menu = _build_group_actions_menu(module, formids, is_base, lbl_box);
-    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)e);
+    _build_group_actions_menu(w, module, formids, is_base, lbl_box);
+    GdkRectangle rect = { (int)e->x, (int)e->y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(darktable.gui->active_popover_menu), &rect);
+    gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
     return TRUE;
   }
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -9832,11 +9868,16 @@ static const struct
   dt_masks_state_t bit; // 0 = union (no within bit)
   DTGTKCairoPaintIconFunc paint;
   const char *name;
+  const char *tooltip;
 } _within_modes[] = {
-  { 0, dtgtk_cairo_paint_masks_union, N_("union") },
-  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen") },
-  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect") },
-  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply") },
+  { 0, dtgtk_cairo_paint_masks_union, N_("union"),
+    N_("standard combination: highest opacity wins") },
+  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
+    N_("soft blend: feathered edges merge smoothly without harsh seams") },
+  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect"),
+    N_("keeps only mutual overlap where all shapes coincide") },
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
+    N_("scales shape opacities against each other") },
 };
 
 static DTGTKCairoPaintIconFunc _within_paint(const dt_masks_state_t within)
@@ -9873,31 +9914,53 @@ _within_mode_apply(dt_iop_module_t *module, GList *formids, const dt_masks_state
   _build_masks_list(module);
 }
 
-static void _within_menu_activate(GtkMenuItem *item, dt_iop_module_t *module)
+static void _within_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  const dt_masks_state_t within =
-    GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "within"));
-  _within_mode_apply(module, formids, within);
+  GtkWidget *anchor = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "within_formids");
+  const dt_masks_state_t within = (dt_masks_state_t)g_variant_get_int32(parameter);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids) _within_mode_apply(module, formids, within);
 }
 
-// build (but do not show) the within-group combine chooser (union / screen /
+// build and show the within-group combine chooser (union / screen /
 // intersect) for a group. Shared by a direct click on the chooser button and
 // the "change within-group mode" shortcut.
-static GtkWidget *_build_within_menu(dt_iop_module_t *module, GList *formids)
+static void _build_within_menu(GtkWidget *anchor, dt_iop_module_t *module, GList *formids)
 {
-  GtkWidget *menu = gtk_menu_new();
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data_full(G_OBJECT(anchor), "within_formids", g_list_copy(formids),
+                         (GDestroyNotify)g_list_free);
+
+  GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_within");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "set", _within_action, "i", NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), anchor);
+    gtk_widget_insert_action_group(anchor, "masks_within", action_group);
+  }
+
+  GMenu *menu = g_menu_new();
   for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
   {
-    GtkWidget *it = _op_menu_item(_within_modes[i].paint, _within_modes[i].name);
-    g_object_set_data(G_OBJECT(it), "within", GINT_TO_POINTER(_within_modes[i].bit));
-    g_object_set_data_full(G_OBJECT(it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_within_menu_activate), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+    GMenuItem *it =
+      _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
+                            _within_modes[i].tooltip, "masks_within.set",
+                            _within_modes[i].bit);
+    g_menu_append_item(menu, it);
+    g_object_unref(it);
   }
-  gtk_widget_show_all(menu);
-  return menu;
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
 }
 
 static gboolean
@@ -9909,8 +9972,7 @@ _group_within_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_data)
   GList *formids = g_object_get_data(G_OBJECT(btn), "formids");
   if(!module) return TRUE;
 
-  GtkWidget *menu = _build_within_menu(module, formids);
-  dt_gui_menu_popup(GTK_MENU(menu), btn, GDK_GRAVITY_SOUTH_WEST, GDK_GRAVITY_NORTH_WEST);
+  _build_within_menu(btn, module, formids);
   return TRUE;
 }
 
@@ -10058,22 +10120,6 @@ static void _merge_group_down(dt_iop_module_t *module, GList *formids)
   _queue_masks_list_rebuild(module);
 }
 
-static void _group_op_menu_activate(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  const dt_masks_state_t op = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "op"));
-  _group_op_apply(module, formids, op);
-}
-
-// "merge into group below" menu item activate: shares the same action that
-// used to live behind the handle's own shift+click, before that gesture was
-// dropped entirely (see _group_op_press)
-static void _group_merge_down_menu_activate(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  _merge_group_down(module, formids);
-}
-
 // the group header's drag handle doubles as its operator chip: shift+click
 // merges the group down into the group below it (first-class groups). A
 // plain click is left alone here (returns FALSE) so the handle's own drag
@@ -10199,41 +10245,15 @@ static void _group_opacity_changed(GtkWidget *w, dt_iop_module_t *module)
   _refresh_lowop_badges(module);
 }
 
-static void _group_invert_elements_menu_activate(GtkMenuItem *item,
-                                                 dt_iop_module_t *module)
+static void _group_op_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  _invert_group_members(module, formids);
-}
-
-static void _group_invert_output_menu_toggled(GtkCheckMenuItem *item,
-                                              dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  _close_shape_actions_menu(GTK_WIDGET(item));
-  _group_toggle_output_invert(module, formids);
-}
-
-static void _group_menu_delete(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  _group_delete_shapes(module, formids);
-}
-
-static void _group_menu_empty(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  const int opstate = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "op"));
-  _group_reset_members(module, formids, opstate);
-}
-
-// mirrors _shape_menu_toggle_solo, but for a whole group.
-static void _group_menu_toggle_solo(GtkCheckMenuItem *item, dt_iop_module_t *module)
-{
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  const guint key = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(item), "group-key"));
-  _close_shape_actions_menu(GTK_WIDGET(item));
-  _toggle_solo_group(module, key, formids);
+  GtkWidget *anchor = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_op_formids");
+  const dt_masks_state_t op = (dt_masks_state_t)g_variant_get_int32(parameter);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids) _group_op_apply(module, formids, op);
 }
 
 static gboolean
@@ -10246,62 +10266,146 @@ _group_between_op_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_dat
   const gboolean is_base = g_object_get_data(G_OBJECT(btn), "is-base-group") != NULL;
   if(!module) return TRUE;
 
-  GtkWidget *menu = _build_group_between_op_menu(module, formids, is_base);
-  dt_gui_menu_popup(GTK_MENU(menu), btn, GDK_GRAVITY_SOUTH_WEST, GDK_GRAVITY_NORTH_WEST);
+  _build_group_between_op_menu(btn, module, formids, is_base);
   return TRUE;
 }
 
-static GtkWidget *_build_group_between_op_menu(dt_iop_module_t *module,
-                                               GList *formids,
-                                               const gboolean is_base)
+static void _build_group_between_op_menu(GtkWidget *anchor,
+                                         dt_iop_module_t *module,
+                                         GList *formids,
+                                         const gboolean is_base)
 {
-  GtkWidget *menu = gtk_menu_new();
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data_full(G_OBJECT(anchor), "group_op_formids", g_list_copy(formids),
+                         (GDestroyNotify)g_list_free);
+
+  GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_group_op");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "set", _group_op_action, "i", NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), anchor);
+    gtk_widget_insert_action_group(anchor, "masks_group_op", action_group);
+  }
+
+  GMenu *menu = g_menu_new();
   for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
   {
     if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
     if(is_base) continue; // the base group's operator is a no-op
-    GtkWidget *it = _op_menu_item(_masks_ops[i].paint, _masks_ops[i].name);
-    g_object_set_data_full(G_OBJECT(it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_object_set_data(G_OBJECT(it), "op", GINT_TO_POINTER(_masks_ops[i].state));
-    g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_group_op_menu_activate),
-                     module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+    GMenuItem *it =
+      _op_gmenu_item_target(_masks_ops[i].paint, _masks_ops[i].name,
+                            _masks_ops[i].tooltip, "masks_group_op.set",
+                            _masks_ops[i].state);
+    g_menu_append_item(menu, it);
+    g_object_unref(it);
   }
-  gtk_widget_show_all(menu);
-  return menu;
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
 }
 
-static void _group_menu_toggle_bypass(GtkCheckMenuItem *item, dt_iop_module_t *module)
+static void _group_act_disable(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  GList *formids = g_object_get_data(G_OBJECT(item), "formids");
-  _close_shape_actions_menu(GTK_WIDGET(item));
-  _group_op_apply(module, formids, DT_MASKS_STATE_OP_BYPASS);
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _group_op_apply(module, formids, DT_MASKS_STATE_OP_BYPASS);
 }
 
-static void _group_menu_rename(GtkMenuItem *item, dt_iop_module_t *module)
+static void _group_act_solo(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  GtkWidget *lbl_box = g_object_get_data(G_OBJECT(item), "title-label-box");
-  const dt_mask_id_t cid =
-    (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(item), "group-key"));
-  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(item), "eg");
-  if(lbl_box) _start_group_rename(lbl_box, module, cid, eg);
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  const guint cid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(anchor), "group_act_cid"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _toggle_solo_group(module, cid, formids);
 }
 
-static void
-_add_menu_section_header(GtkWidget *menu, const char *title, const gboolean add_separator)
+static void _group_act_invert_output(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  if(add_separator)
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *header = gtk_menu_item_new_with_label(title);
-  gtk_widget_set_sensitive(header, FALSE);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _group_toggle_output_invert(module, formids);
 }
 
-static GtkWidget *_build_group_actions_menu(dt_iop_module_t *module,
-                                            GList *formids,
-                                            const gboolean is_base,
-                                            GtkWidget *lbl_box)
+static void _group_act_invert_elems(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _invert_group_members(module, formids);
+}
+
+static void _group_act_rename(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GtkWidget *lbl_box = g_object_get_data(G_OBJECT(anchor), "group_act_lbl_box");
+  const guint cid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(anchor), "group_act_cid"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && lbl_box)
+    _start_group_rename(lbl_box, module, (dt_mask_id_t)cid, NULL);
+}
+
+static void _group_act_merge_down(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _merge_group_down(module, formids);
+}
+
+static void _group_act_empty(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  const int opstate = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "group_act_opstate"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _group_reset_members(module, formids, opstate);
+}
+
+static void _group_act_delete(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  GList *formids = g_object_get_data(G_OBJECT(anchor), "group_act_formids");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && formids)
+    _group_delete_shapes(module, formids);
+}
+
+static void _build_group_actions_menu(GtkWidget *anchor,
+                                      dt_iop_module_t *module,
+                                      GList *formids,
+                                      const gboolean is_base,
+                                      GtkWidget *lbl_box)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -10309,113 +10413,80 @@ static GtkWidget *_build_group_actions_menu(dt_iop_module_t *module,
   const dt_masks_point_group_t *any =
     (grp && formids) ? _group_point(grp, (dt_mask_id_t)cid) : NULL;
   const gboolean bypassed = any && _op_is_bypassed(any->state);
+  const gboolean output_inverted = any && (any->state & DT_MASKS_STATE_OP_INVERT);
 
-  GtkWidget *menu = gtk_menu_new();
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data_full(G_OBJECT(anchor), "group_act_formids", g_list_copy(formids),
+                         (GDestroyNotify)g_list_free);
+  g_object_set_data(G_OBJECT(anchor), "group_act_cid", GUINT_TO_POINTER(cid));
+  g_object_set_data(G_OBJECT(anchor), "group_act_lbl_box", lbl_box);
+  g_object_set_data(G_OBJECT(anchor), "group_act_opstate", any ? GINT_TO_POINTER(any->state) : NULL);
+
+  GSimpleActionGroup *sag = g_simple_action_group_new();
+  GActionMap *map = G_ACTION_MAP(sag);
+
+  GSimpleAction *act_dis = g_simple_action_new_stateful("disable", NULL, g_variant_new_boolean(bypassed));
+  g_signal_connect(act_dis, "activate", G_CALLBACK(_group_act_disable), anchor);
+  g_action_map_add_action(map, G_ACTION(act_dis));
+
+  GSimpleAction *act_solo = g_simple_action_new_stateful("solo", NULL, g_variant_new_boolean(bd->solo_group_key == cid));
+  g_signal_connect(act_solo, "activate", G_CALLBACK(_group_act_solo), anchor);
+  g_action_map_add_action(map, G_ACTION(act_solo));
+
+  GSimpleAction *act_inv_out = g_simple_action_new_stateful("invert_output", NULL, g_variant_new_boolean(output_inverted));
+  g_signal_connect(act_inv_out, "activate", G_CALLBACK(_group_act_invert_output), anchor);
+  g_action_map_add_action(map, G_ACTION(act_inv_out));
+
+  GActionEntry action_entries[] =
+  {
+    { "invert_elems", _group_act_invert_elems, NULL, NULL },
+    { "rename",       _group_act_rename,       NULL, NULL },
+    { "merge_down",   _group_act_merge_down,   NULL, NULL },
+    { "empty",        _group_act_empty,        NULL, NULL },
+    { "delete",       _group_act_delete,       NULL, NULL },
+  };
+  g_action_map_add_action_entries(map, action_entries, G_N_ELEMENTS(action_entries), anchor);
+
+  if(_group_count(module) <= 1)
+  {
+    GAction *del_act = g_action_map_lookup_action(map, "delete");
+    if(del_act) g_simple_action_set_enabled(G_SIMPLE_ACTION(del_act), FALSE);
+  }
+
+  gtk_widget_insert_action_group(anchor, "masks_group_act", G_ACTION_GROUP(sag));
+
+  GMenu *menu = g_menu_new();
 
   // visibility
-  _add_menu_section_header(menu, _("visibility"), FALSE);
-
-  // disable toggle
-  GtkWidget *bypass_it = gtk_check_menu_item_new_with_label(_("disable"));
-  gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(bypass_it), bypassed);
-  gtk_widget_set_tooltip_text(
-    bypass_it, _("temporarily disable this group: it keeps its shapes, its operator "
-                 "and its place in the stack, but contributes nothing to the mask"));
-  g_object_set_data_full(G_OBJECT(bypass_it), "formids", g_list_copy(formids),
-                         (GDestroyNotify)g_list_free);
-  g_signal_connect(G_OBJECT(bypass_it), "toggled", G_CALLBACK(_group_menu_toggle_bypass),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), bypass_it);
+  GMenu *sec_vis = g_menu_new();
+  g_menu_append(sec_vis, _("disable"), "masks_group_act.disable");
+  if(!bypassed)
+    g_menu_append(sec_vis, _("solo"), "masks_group_act.solo");
+  g_menu_append_section(menu, _("visibility"), G_MENU_MODEL(sec_vis));
+  g_object_unref(sec_vis);
 
   if(!bypassed)
   {
-    // solo the whole group (see _toggle_solo_group)
-    GtkWidget *solo_it = gtk_check_menu_item_new_with_label(_("solo"));
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(solo_it),
-                                   bd->solo_group_key == cid);
-    g_object_set_data_full(G_OBJECT(solo_it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_object_set_data(G_OBJECT(solo_it), "group-key", GUINT_TO_POINTER(cid));
-    g_signal_connect(G_OBJECT(solo_it), "toggled", G_CALLBACK(_group_menu_toggle_solo),
-                     module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), solo_it);
-
     // mask operations
-    _add_menu_section_header(menu, _("mask operations"), TRUE);
-
-    const gboolean output_inverted = any && (any->state & DT_MASKS_STATE_OP_INVERT);
-    GtkWidget *invert_output_it = gtk_check_menu_item_new_with_label(_("invert output"));
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(invert_output_it),
-                                   output_inverted);
-    gtk_widget_set_tooltip_text(
-      invert_output_it,
-      _("invert this group's own finished mask before it combines with the "
-        "stack below it -- a persistent state, shown on the group's own "
-        "handle; the elements inside keep their own independent state"));
-    g_object_set_data_full(G_OBJECT(invert_output_it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_signal_connect(G_OBJECT(invert_output_it), "toggled",
-                     G_CALLBACK(_group_invert_output_menu_toggled), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), invert_output_it);
-
-    GtkWidget *invert_elems_it = gtk_menu_item_new_with_label(_("invert all elements"));
-    gtk_widget_set_tooltip_text(
-      invert_elems_it, _("flip every element's own inversion bit independently\n"
-                         "a one-shot action, not a persistent state -- not the same as "
-                         "\"invert output\" except for a single-element group"));
-    g_object_set_data_full(G_OBJECT(invert_elems_it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_signal_connect(G_OBJECT(invert_elems_it), "activate",
-                     G_CALLBACK(_group_invert_elements_menu_activate), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), invert_elems_it);
+    GMenu *sec_ops = g_menu_new();
+    g_menu_append(sec_ops, _("invert output"), "masks_group_act.invert_output");
+    g_menu_append(sec_ops, _("invert all elements"), "masks_group_act.invert_elems");
+    g_menu_append_section(menu, _("mask operations"), G_MENU_MODEL(sec_ops));
+    g_object_unref(sec_ops);
   }
 
   // edit
-  _add_menu_section_header(menu, _("edit"), TRUE);
-
-  // rename
-  GtkWidget *rename_it = gtk_menu_item_new_with_label(_("rename"));
-  g_object_set_data(G_OBJECT(rename_it), "title-label-box", lbl_box);
-  g_object_set_data(G_OBJECT(rename_it), "group-key", GUINT_TO_POINTER(cid));
-  g_signal_connect(G_OBJECT(rename_it), "activate", G_CALLBACK(_group_menu_rename),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), rename_it);
-
-  // merge elements into group below
+  GMenu *sec_edit = g_menu_new();
+  g_menu_append(sec_edit, _("rename"), "masks_group_act.rename");
   if(!is_base && !bypassed)
-  {
-    GtkWidget *merge_it =
-      gtk_menu_item_new_with_label(_("merge elements into group below"));
-    g_object_set_data_full(G_OBJECT(merge_it), "formids", g_list_copy(formids),
-                           (GDestroyNotify)g_list_free);
-    g_signal_connect(G_OBJECT(merge_it), "activate",
-                     G_CALLBACK(_group_merge_down_menu_activate), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), merge_it);
-  }
+    g_menu_append(sec_edit, _("merge elements into group below"), "masks_group_act.merge_down");
+  g_menu_append(sec_edit, _("empty group"), "masks_group_act.empty");
+  g_menu_append(sec_edit, _("delete group"), "masks_group_act.delete");
+  g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
+  g_object_unref(sec_edit);
 
-  // empty group
-  GtkWidget *empty_it = gtk_menu_item_new_with_label(_("empty group"));
-  gtk_widget_set_tooltip_text(
-    empty_it, _("remove every element from this group, keeping the (now empty) "
-                "group itself in place as a drop target"));
-  g_object_set_data_full(G_OBJECT(empty_it), "formids", g_list_copy(formids),
-                         (GDestroyNotify)g_list_free);
-  g_object_set_data(G_OBJECT(empty_it), "op", any ? GINT_TO_POINTER(any->state) : NULL);
-  g_signal_connect(G_OBJECT(empty_it), "activate", G_CALLBACK(_group_menu_empty), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), empty_it);
-
-  // delete group
-  GtkWidget *delete_it = gtk_menu_item_new_with_label(_("delete group"));
-  gtk_widget_set_tooltip_text(delete_it, _("delete this group and every element in it"));
-  if(_group_count(module) <= 1) gtk_widget_set_sensitive(delete_it, FALSE);
-  g_object_set_data_full(G_OBJECT(delete_it), "formids", g_list_copy(formids),
-                         (GDestroyNotify)g_list_free);
-  g_signal_connect(G_OBJECT(delete_it), "activate", G_CALLBACK(_group_menu_delete),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), delete_it);
-
-  gtk_widget_show_all(menu);
-  return menu;
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  g_object_unref(menu);
 }
 
 // solo-edit a single shape: only its outline/handles are editable on the
@@ -10477,58 +10548,63 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
   _refresh_all_shape_rows(module);
 }
 
-// change an empty group's operator from its header op chip
-static void _empty_op_activate(GtkMenuItem *item, gpointer user_data)
+static void _empty_op_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(item), "module");
-  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(item), "eg");
-  const int idx = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "opidx"));
+  GtkWidget *anchor = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(anchor), "empty_eg");
+  const int idx = g_variant_get_int32(parameter);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(!module || !eg) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!g_list_find(bd->empty_groups, eg)) return; // stale
-  eg->op = _masks_ops[idx].state;
-  bd->selected_empty = eg; // keep it selected
-  // note: changing an empty group's operator does NOT repaint the add-group icon
-  // (that only follows the add-group menu, see _new_shape_op_update)
-  _build_masks_list(module);
+  if(!bd || !g_list_find(bd->empty_groups, eg)) return;
+  if(idx >= 0 && idx < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])))
+  {
+    eg->op = _masks_ops[idx].state;
+    bd->selected_empty = eg;
+    _build_masks_list(module);
+  }
 }
 
-// "delete group" menu item's own handler (see _build_empty_group_menu) --
-// pulled out of what used to be _empty_header_press's own right-click branch
-// directly, now that right-click opens a menu instead of acting immediately.
-static void _empty_menu_delete(GtkMenuItem *item, gpointer user_data)
+static void _build_empty_group_between_op_menu(GtkWidget *anchor,
+                                               dt_iop_module_t *module,
+                                               dt_masks_empty_group_t *eg,
+                                               const gboolean is_base)
 {
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(item), "module");
-  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(item), "eg");
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!eg || !g_list_find(bd->empty_groups, eg)) return; // stale
-  if(bd->selected_empty == eg) bd->selected_empty = NULL;
-  bd->empty_groups = g_list_remove(bd->empty_groups, eg);
-  _empty_group_free(eg);
-  // deferred: this menu item is still mid-dispatch -- see _group_delete_shapes
-  // above for why this must not be synchronous
-  _queue_masks_list_rebuild(module);
-}
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data(G_OBJECT(anchor), "empty_eg", eg);
 
-static GtkWidget *_build_empty_group_between_op_menu(dt_iop_module_t *module,
-                                                     dt_masks_empty_group_t *eg,
-                                                     const gboolean is_base)
-{
-  GtkWidget *menu = gtk_menu_new();
+  GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_empty_op");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "set", _empty_op_action, "i", NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), anchor);
+    gtk_widget_insert_action_group(anchor, "masks_empty_op", action_group);
+  }
+
+  GMenu *menu = g_menu_new();
   if(!is_base)
   {
     for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
     {
       if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
-      GtkWidget *it = _op_menu_item(_masks_ops[i].paint, _masks_ops[i].name);
-      g_object_set_data(G_OBJECT(it), "module", module);
-      g_object_set_data(G_OBJECT(it), "eg", eg);
-      g_object_set_data(G_OBJECT(it), "opidx", GINT_TO_POINTER(i));
-      g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_empty_op_activate), NULL);
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
+      GMenuItem *it =
+        _op_gmenu_item_target(_masks_ops[i].paint, _masks_ops[i].name,
+                              _masks_ops[i].tooltip, "masks_empty_op.set", i);
+      g_menu_append_item(menu, it);
+      g_object_unref(it);
     }
   }
-  gtk_widget_show_all(menu);
-  return menu;
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
 }
 
 static gboolean
@@ -10541,34 +10617,73 @@ _empty_between_op_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_dat
   const gboolean is_base = g_object_get_data(G_OBJECT(btn), "is-base-group") != NULL;
   if(!module || !eg) return TRUE;
 
-  GtkWidget *menu = _build_empty_group_between_op_menu(module, eg, is_base);
-  dt_gui_menu_popup(GTK_MENU(menu), btn, GDK_GRAVITY_SOUTH_WEST, GDK_GRAVITY_NORTH_WEST);
+  _build_empty_group_between_op_menu(btn, module, eg, is_base);
   return TRUE;
 }
 
-static GtkWidget *_build_empty_group_actions_menu(dt_iop_module_t *module,
-                                                  dt_masks_empty_group_t *eg,
-                                                  GtkWidget *lbl_box)
+static void _empty_act_rename(GSimpleAction *action, GVariant *param, gpointer user_data)
 {
-  GtkWidget *menu = gtk_menu_new();
-  _add_menu_section_header(menu, _("edit"), FALSE);
+  GtkWidget *anchor = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(anchor), "empty_act_eg");
+  GtkWidget *lbl_box = g_object_get_data(G_OBJECT(anchor), "empty_act_lbl_box");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(lbl_box && module)
+    _start_group_rename(lbl_box, module, INVALID_MASKID, eg);
+}
 
-  GtkWidget *rename_it = gtk_menu_item_new_with_label(_("rename"));
-  g_object_set_data(G_OBJECT(rename_it), "title-label-box", lbl_box);
-  g_object_set_data(G_OBJECT(rename_it), "eg", eg);
-  g_object_set_data(G_OBJECT(rename_it), "group-key", GUINT_TO_POINTER(INVALID_MASKID));
-  g_signal_connect(G_OBJECT(rename_it), "activate", G_CALLBACK(_group_menu_rename),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), rename_it);
+static void _empty_act_delete(GSimpleAction *action, GVariant *param, gpointer user_data)
+{
+  GtkWidget *anchor = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(anchor), "empty_act_eg");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(!module || !eg) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !g_list_find(bd->empty_groups, eg)) return;
+  if(bd->selected_empty == eg) bd->selected_empty = NULL;
+  bd->empty_groups = g_list_remove(bd->empty_groups, eg);
+  _empty_group_free(eg);
+  _queue_masks_list_rebuild(module);
+}
 
-  GtkWidget *it = gtk_menu_item_new_with_label(_("delete group"));
-  if(_group_count(module) <= 1) gtk_widget_set_sensitive(it, FALSE);
-  g_object_set_data(G_OBJECT(it), "module", module);
-  g_object_set_data(G_OBJECT(it), "eg", eg);
-  g_signal_connect(G_OBJECT(it), "activate", G_CALLBACK(_empty_menu_delete), NULL);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), it);
-  gtk_widget_show_all(menu);
-  return menu;
+static void _build_empty_group_actions_menu(GtkWidget *anchor,
+                                            dt_iop_module_t *module,
+                                            dt_masks_empty_group_t *eg,
+                                            GtkWidget *lbl_box)
+{
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data(G_OBJECT(anchor), "empty_act_eg", eg);
+  g_object_set_data(G_OBJECT(anchor), "empty_act_lbl_box", lbl_box);
+
+  GSimpleActionGroup *sag = g_simple_action_group_new();
+  GActionMap *map = G_ACTION_MAP(sag);
+  GActionEntry action_entries[] =
+  {
+    { "rename", _empty_act_rename, NULL, NULL },
+    { "delete", _empty_act_delete, NULL, NULL },
+  };
+  g_action_map_add_action_entries(map, action_entries, G_N_ELEMENTS(action_entries), anchor);
+
+  if(_group_count(module) <= 1)
+  {
+    GAction *del_act = g_action_map_lookup_action(map, "delete");
+    if(del_act) g_simple_action_set_enabled(G_SIMPLE_ACTION(del_act), FALSE);
+  }
+
+  gtk_widget_insert_action_group(anchor, "masks_empty_act", G_ACTION_GROUP(sag));
+
+  GMenu *menu = g_menu_new();
+  GMenu *sec_edit = g_menu_new();
+  g_menu_append(sec_edit, _("rename"), "masks_empty_act.rename");
+  g_menu_append(sec_edit, _("delete group"), "masks_empty_act.delete");
+  g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
+  g_object_unref(sec_edit);
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  g_object_unref(menu);
 }
 
 // a plain primary press just clears any stale skip-select flag and returns
@@ -10592,8 +10707,10 @@ _empty_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   if(e->button == GDK_BUTTON_SECONDARY)
   {
     GtkWidget *lbl_box = g_object_get_data(G_OBJECT(w), "title-label-box");
-    GtkWidget *menu = _build_empty_group_actions_menu(module, eg, lbl_box);
-    gtk_menu_popup_at_pointer(GTK_MENU(menu), (GdkEvent *)e);
+    _build_empty_group_actions_menu(w, module, eg, lbl_box);
+    GdkRectangle rect = { (int)e->x, (int)e->y, 1, 1 };
+    gtk_popover_set_pointing_to(GTK_POPOVER(darktable.gui->active_popover_menu), &rect);
+    gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
     return TRUE;
   }
   if(e->button != GDK_BUTTON_PRIMARY) return FALSE;
@@ -11962,136 +12079,149 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
 // open until a later, unrelated click dismissed it -- which is why deferred
 // auto-expand-on-close only ever appeared to work for whichever item
 // happened to be clicked last before that unrelated dismissal.
-static void _close_shape_actions_menu(GtkWidget *item)
+static void _shape_act_disable(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  GtkWidget *menu = gtk_widget_get_ancestor(item, GTK_TYPE_MENU);
-  if(menu) gtk_menu_popdown(GTK_MENU(menu));
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _toggle_element_disable(module, id);
 }
 
-static void _shape_menu_toggle_disable(GtkCheckMenuItem *item, dt_iop_module_t *module)
+static void _shape_act_solo(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _close_shape_actions_menu(GTK_WIDGET(item));
-  _toggle_element_disable(module, id);
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _toggle_solo_form(module, id);
 }
 
-static void _shape_menu_toggle_invert(GtkCheckMenuItem *item, dt_iop_module_t *module)
+static void _shape_act_invert(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _invert_element(module, id);
-  _close_shape_actions_menu(GTK_WIDGET(item));
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _invert_element(module, id);
 }
 
-static void _shape_menu_toggle_solo(GtkCheckMenuItem *item, dt_iop_module_t *module)
+static void _shape_act_rename(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _toggle_solo_form(module, id);
-  _close_shape_actions_menu(GTK_WIDGET(item));
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  GtkWidget *evbox = g_object_get_data(G_OBJECT(anchor), "shape_act_evbox");
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(evbox && module) _start_rename_element(evbox, module, id);
 }
 
-static void _shape_menu_rename(GtkMenuItem *item, dt_iop_module_t *module)
+#ifdef HAVE_AI
+static void _shape_act_break_apart(GSimpleAction *action, GVariant *param, gpointer u)
 {
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  GtkWidget *evbox = g_object_get_data(G_OBJECT(item), "evbox");
-  if(evbox) _start_rename_element(evbox, module, id);
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _break_apart_ai_bundle(module, id);
+}
+#endif
+
+static void _shape_act_delete(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _delete_single_shape(module, id);
 }
 
-static void _shape_menu_delete(GtkMenuItem *item, dt_iop_module_t *module)
-{
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "formid"));
-  _delete_single_shape(module, id);
-}
-
-// build (but do not show) a shape row's actions menu: consolidates the row's
-// various actions -- what used to be a separate solo-edit icon, plus invert,
-// solo, shift+click properties, right-click delete and ctrl+click rename --
-// into one discoverable menu, opened by a plain click on the row's own lead
-// handle (mirrors a group's operator chip opening its own menu on click, see
-// _build_group_op_menu). The individual gestures besides solo/solo-edit still
-// work too; this is an additional, more discoverable way to reach the same
-// actions, not a replacement for them.
-static GtkWidget *_build_shape_actions_menu(dt_iop_module_t *module,
-                                            const dt_mask_id_t id,
-                                            GtkWidget *handle,
-                                            GtkWidget *evbox)
+static void _build_shape_actions_menu(GtkWidget *anchor,
+                                      dt_iop_module_t *module,
+                                      const dt_mask_id_t id,
+                                      GtkWidget *handle,
+                                      GtkWidget *evbox)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
   const dt_masks_point_group_t *pt = grp ? _group_point(grp, id) : NULL;
 
-  GtkWidget *menu = gtk_menu_new();
-
-  // visibility section
-  _add_menu_section_header(menu, _("visibility"), FALSE);
-
   const gboolean elem_disabled = pt && (pt->state & DT_MASKS_STATE_DISABLE);
-  GtkWidget *disable_item = gtk_check_menu_item_new_with_label(_("disable"));
-  gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(disable_item), elem_disabled);
-  gtk_widget_set_tooltip_text(
-    disable_item, _("temporarily disable this element: it keeps its properties and its "
-                    "place in the group, but contributes nothing to the mask"));
-  g_object_set_data(G_OBJECT(disable_item), "formid", GINT_TO_POINTER(id));
-  g_signal_connect(G_OBJECT(disable_item), "toggled",
-                   G_CALLBACK(_shape_menu_toggle_disable), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), disable_item);
+  const gboolean elem_inverted = pt && (pt->state & DT_MASKS_STATE_INVERSE);
+
+  g_object_set_data(G_OBJECT(anchor), "module", module);
+  g_object_set_data(G_OBJECT(anchor), "shape_act_id", GINT_TO_POINTER(id));
+  g_object_set_data(G_OBJECT(anchor), "shape_act_evbox", evbox);
+
+  GSimpleActionGroup *sag = g_simple_action_group_new();
+  GActionMap *map = G_ACTION_MAP(sag);
+
+  GSimpleAction *act_dis = g_simple_action_new_stateful("disable", NULL, g_variant_new_boolean(elem_disabled));
+  g_signal_connect(act_dis, "activate", G_CALLBACK(_shape_act_disable), anchor);
+  g_action_map_add_action(map, G_ACTION(act_dis));
+
+  GSimpleAction *act_solo = g_simple_action_new_stateful("solo", NULL, g_variant_new_boolean(bd->solo_formid == id));
+  g_signal_connect(act_solo, "activate", G_CALLBACK(_shape_act_solo), anchor);
+  g_action_map_add_action(map, G_ACTION(act_solo));
+
+  GSimpleAction *act_inv = g_simple_action_new_stateful("invert", NULL, g_variant_new_boolean(elem_inverted));
+  g_signal_connect(act_inv, "activate", G_CALLBACK(_shape_act_invert), anchor);
+  g_action_map_add_action(map, G_ACTION(act_inv));
+
+  GActionEntry action_entries[] =
+  {
+    { "rename",      _shape_act_rename,      NULL, NULL },
+#ifdef HAVE_AI
+    { "break_apart", _shape_act_break_apart, NULL, NULL },
+#endif
+    { "delete",      _shape_act_delete,      NULL, NULL },
+  };
+  g_action_map_add_action_entries(map, action_entries, G_N_ELEMENTS(action_entries), anchor);
+
+  gtk_widget_insert_action_group(anchor, "masks_shape_act", G_ACTION_GROUP(sag));
+
+  GMenu *menu = g_menu_new();
+
+  GMenu *sec_vis = g_menu_new();
+  g_menu_append(sec_vis, _("disable"), "masks_shape_act.disable");
+  if(!elem_disabled)
+    g_menu_append(sec_vis, _("solo"), "masks_shape_act.solo");
+  g_menu_append_section(menu, _("visibility"), G_MENU_MODEL(sec_vis));
+  g_object_unref(sec_vis);
 
   if(!elem_disabled)
   {
-    GtkWidget *solo_item = gtk_check_menu_item_new_with_label(_("solo"));
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(solo_item), bd->solo_formid == id);
-    g_object_set_data(G_OBJECT(solo_item), "formid", GINT_TO_POINTER(id));
-    g_signal_connect(G_OBJECT(solo_item), "toggled", G_CALLBACK(_shape_menu_toggle_solo),
-                     module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), solo_item);
-
-    // mask operations section
-    _add_menu_section_header(menu, _("mask operations"), TRUE);
-
-    GtkWidget *invert_item = gtk_check_menu_item_new_with_label(_("invert"));
-    gtk_check_menu_item_set_active(GTK_CHECK_MENU_ITEM(invert_item),
-                                   pt && (pt->state & DT_MASKS_STATE_INVERSE));
-    g_object_set_data(G_OBJECT(invert_item), "formid", GINT_TO_POINTER(id));
-    g_signal_connect(G_OBJECT(invert_item), "toggled",
-                     G_CALLBACK(_shape_menu_toggle_invert), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), invert_item);
+    GMenu *sec_ops = g_menu_new();
+    g_menu_append(sec_ops, _("invert"), "masks_shape_act.invert");
+    g_menu_append_section(menu, _("mask operations"), G_MENU_MODEL(sec_ops));
+    g_object_unref(sec_ops);
   }
 
-  // edit section
-  _add_menu_section_header(menu, _("edit"), TRUE);
-
-  GtkWidget *rename_item = gtk_menu_item_new_with_label(_("rename"));
-  g_object_set_data(G_OBJECT(rename_item), "formid", GINT_TO_POINTER(id));
-  g_object_set_data(G_OBJECT(rename_item), "evbox", evbox);
-  g_signal_connect(G_OBJECT(rename_item), "activate", G_CALLBACK(_shape_menu_rename),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), rename_item);
-
+  GMenu *sec_edit = g_menu_new();
+  g_menu_append(sec_edit, _("rename"), "masks_shape_act.rename");
 #ifdef HAVE_AI
-  // a multi-path AI mask (see _register_vectorized_forms/object.c) offers an
-  // escape hatch for users who want full manual control over its individual
-  // paths instead of the bundle's coordinated feather/size/rotation.
   const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(form && (form->type & DT_MASKS_OBJECT) && g_list_length(form->points) > 1)
   {
-    GtkWidget *break_item = gtk_menu_item_new_with_label(_("break into components"));
-    gtk_widget_set_tooltip_text(
-      break_item, _("convert this AI mask's paths into ordinary, independently "
-                    "editable shapes in this group"));
-    g_object_set_data(G_OBJECT(break_item), "formid", GINT_TO_POINTER(id));
-    g_signal_connect(G_OBJECT(break_item), "activate",
-                     G_CALLBACK(_shape_menu_break_apart), module);
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), break_item);
+    GMenuItem *it = g_menu_item_new(_("break into components"), "masks_shape_act.break_apart");
+    g_menu_item_set_attribute(it, "tooltip", "s",
+      _("convert this AI mask's paths into ordinary, independently editable shapes in this group"));
+    g_menu_append_item(sec_edit, it);
+    g_object_unref(it);
   }
 #endif
+  g_menu_append(sec_edit, _("delete"), "masks_shape_act.delete");
+  g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
+  g_object_unref(sec_edit);
 
-  GtkWidget *delete_item = gtk_menu_item_new_with_label(_("delete"));
-  g_object_set_data(G_OBJECT(delete_item), "formid", GINT_TO_POINTER(id));
-  g_signal_connect(G_OBJECT(delete_item), "activate", G_CALLBACK(_shape_menu_delete),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), delete_item);
-
-  gtk_widget_show_all(menu);
-  return menu;
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
+  g_object_unref(menu);
 }
 
 // human-readable name for a shape kind (the _form_kind bit), singular or plural.
@@ -16051,13 +16181,36 @@ static void _add_raster_mask(dt_iop_module_t *self,
   if(reprocess) dt_dev_reprocess_all(self->dev);
 }
 
-static void _raster_menu_activate(GtkMenuItem *item, gpointer user_data)
+typedef struct _masks_raster_source_entry_t
 {
-  dt_iop_module_t *self = user_data;
-  dt_iop_module_t *src = g_object_get_data(G_OBJECT(item), "raster-src");
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "raster-id"));
-  const char *srcname = g_object_get_data(G_OBJECT(item), "raster-name");
-  _add_raster_mask(self, src, id, srcname);
+  dt_iop_module_t *src;
+  dt_mask_id_t id;
+  char *name;
+} _masks_raster_source_entry_t;
+
+static void _raster_source_entry_free(gpointer data)
+{
+  _masks_raster_source_entry_t *entry = data;
+  if(entry)
+  {
+    g_free(entry->name);
+    g_free(entry);
+  }
+}
+
+static void _raster_add_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  GtkWidget *button = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(button), "module");
+  GPtrArray *sources = g_object_get_data(G_OBJECT(button), "raster_sources");
+  const int idx = g_variant_get_int32(parameter);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module && sources && idx >= 0 && idx < (int)sources->len)
+  {
+    _masks_raster_source_entry_t *entry = g_ptr_array_index(sources, idx);
+    _add_raster_mask(module, entry->src, entry->id, entry->name);
+  }
 }
 
 // pop up a menu of every upstream module that offers a raster mask, mirroring
@@ -16068,8 +16221,9 @@ _masks_raster_add_press(GtkWidget *button, GdkEventButton *event, dt_iop_module_
 {
   if(DT_IN_GUI_UPDATE()) return TRUE;
 
-  GtkWidget *menu = gtk_menu_new();
-  int count = 0;
+  GPtrArray *sources = g_ptr_array_new_with_free_func(_raster_source_entry_free);
+  GMenu *menu = g_menu_new();
+
   for(GList *iter = darktable.develop->iop; iter; iter = g_list_next(iter))
   {
     dt_iop_module_t *iop = iter->data;
@@ -16085,28 +16239,49 @@ _masks_raster_add_press(GtkWidget *button, GdkEventButton *event, dt_iop_module_
       // name/path for an external source): the same string the classic raster
       // picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask)
       const char *name = value ? (const char *)value : iop->name();
-      GtkWidget *mi = gtk_menu_item_new_with_label(name);
-      g_object_set_data(G_OBJECT(mi), "raster-src", iop);
-      g_object_set_data(G_OBJECT(mi), "raster-id", GINT_TO_POINTER(id));
-      g_object_set_data_full(G_OBJECT(mi), "raster-name", g_strdup(name), g_free);
-      g_signal_connect(G_OBJECT(mi), "activate", G_CALLBACK(_raster_menu_activate),
-                       module);
-      gtk_menu_shell_append(GTK_MENU_SHELL(menu), mi);
-      count++;
+      _masks_raster_source_entry_t *entry = g_new0(_masks_raster_source_entry_t, 1);
+      entry->src = iop;
+      entry->id = id;
+      entry->name = g_strdup(name);
+      const int idx = (int)sources->len;
+      g_ptr_array_add(sources, entry);
+
+      GMenuItem *mi = g_menu_item_new(name, NULL);
+      g_menu_item_set_action_and_target_value(mi, "masks_raster.add", g_variant_new_int32(idx));
+      g_menu_append_item(menu, mi);
+      g_object_unref(mi);
     }
   }
 
-  if(count == 0)
+  if(sources->len == 0)
   {
-    gtk_widget_destroy(menu);
+    g_ptr_array_unref(sources);
+    g_object_unref(menu);
     dt_control_log(_("no raster mask is available from an earlier module.\n"
                      "enable a mask on a module above this one first."));
     return TRUE;
   }
 
-  gtk_widget_show_all(menu);
-  dt_gui_menu_popup(GTK_MENU(menu), button, GDK_GRAVITY_SOUTH_WEST,
-                    GDK_GRAVITY_NORTH_WEST);
+  g_object_set_data(G_OBJECT(button), "module", module);
+  g_object_set_data_full(G_OBJECT(button), "raster_sources", sources,
+                         (GDestroyNotify)g_ptr_array_unref);
+
+  GActionGroup *action_group = gtk_widget_get_action_group(button, "masks_raster");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "add", _raster_add_action, "i", NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), button);
+    gtk_widget_insert_action_group(button, "masks_raster", action_group);
+  }
+
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(button, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
   return TRUE;
 }
 
@@ -16190,12 +16365,10 @@ static void _shortcut_change_group_mode(dt_action_t *action)
   dt_masks_form_t *grp = _module_mask_group(module);
   if(!grp || !dt_is_valid_maskid(bd->panel_selected_group_cid)) return;
   GList *members = _group_run_members(grp, bd->panel_selected_group_cid);
-  GtkWidget *menu = _build_group_between_op_menu(
-    module, members, _group_is_base(grp, bd->panel_selected_group_cid));
+  GtkWidget *anchor = bd->masks_list_box ? GTK_WIDGET(bd->masks_list_box) : module->widget;
+  _build_group_between_op_menu(
+    anchor, module, members, _group_is_base(grp, bd->panel_selected_group_cid));
   g_list_free(members);
-  // no click event to anchor to -- pop up at the pointer, same fallback
-  // dt_gui_menu_popup uses for any other keyboard-triggered menu
-  dt_gui_menu_popup(GTK_MENU(menu), NULL, 0, 0);
 }
 
 // toggle "bypass" on the selected group: the keyboard counterpart of the bypass
@@ -16222,9 +16395,9 @@ static void _shortcut_change_group_within_mode(dt_action_t *action)
   dt_masks_form_t *grp = _module_mask_group(module);
   if(!grp || !dt_is_valid_maskid(bd->panel_selected_group_cid)) return;
   GList *members = _group_run_members(grp, bd->panel_selected_group_cid);
-  GtkWidget *menu = _build_within_menu(module, members);
+  GtkWidget *anchor = bd->masks_list_box ? GTK_WIDGET(bd->masks_list_box) : module->widget;
+  _build_within_menu(anchor, module, members);
   g_list_free(members);
-  dt_gui_menu_popup(GTK_MENU(menu), NULL, 0, 0);
 }
 
 // the panel options (see _add_masks_panel_options_menu) are check items on a
