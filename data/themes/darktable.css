@@ -1776,6 +1776,52 @@ combobox separator
   min-height: 0.07em;
 }
 
+/*------------------------------------------------
+  - Popup menu                                   -
+  ----------------------------------------------*/
+popover.menu {
+  padding: 0;
+}
+
+popover.menu modelbutton {
+  min-width: 14em;
+  margin: 0 -0.8em;
+  padding: 0.1em 1.5em;
+  border-radius: 0;
+}
+
+popover.menu modelbutton:hover,
+popover.menu modelbutton:hover * {
+  background-color: @selected_bg_color;
+}
+
+popover.menu separator {
+  margin: 0.6em 0.8em;
+}
+
+popover.menu box.horizontal > separator {
+  margin: 0.6em 0;
+  padding-bottom: 0.07em;
+  background-color: @selected_bg_color;
+}
+
+popover.menu box.horizontal > separator:first-child {
+  margin-left: 0.8em;
+  margin-right: 0.4em;
+}
+
+popover.menu box.horizontal > separator:last-child {
+  margin-left: 0.4em;
+  margin-right: 0.8em;
+}
+
+popover.menu label.separator {
+  font-size: 0.85em;
+  color: @section_label;
+  padding: 0 0.2em;
+}
+
+
 /*----------------------
   - GTK Notebooks tabs -
   ----------------------*/
