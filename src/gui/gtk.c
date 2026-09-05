@@ -7790,12 +7790,119 @@ static void _popover_menu_make_scrollable(GtkWidget *popover_menu,
     g_object_unref(page);
 
     gtk_stack_add_named(GTK_STACK(stack), sw, name);
+
     gtk_container_child_set(GTK_CONTAINER(stack), sw, "position", position, NULL);
     gtk_widget_show_all(sw);
 
     g_free(name);
   }
   g_list_free(pages);
+}
+
+// in GTK 3 GtkModelButton hides its image child when iconic is FALSE (the
+// default for menus), so items with both an icon and text only show text.
+// walk the popover and make any non-empty image widget visible so icons appear
+// next to their labels
+static void _popover_menu_reveal_icons(GtkWidget *widget)
+{
+  if(GTK_IS_MODEL_BUTTON(widget))
+  {
+    GList *bc = gtk_container_get_children(GTK_CONTAINER(widget));
+    if(bc && GTK_IS_BOX(bc->data))
+    {
+      GList *boxc = gtk_container_get_children(GTK_CONTAINER(bc->data));
+      if(boxc && GTK_IS_IMAGE(boxc->data))
+      {
+        GtkImage *img = GTK_IMAGE(boxc->data);
+        if(gtk_image_get_storage_type(img) != GTK_IMAGE_EMPTY)
+          gtk_widget_set_visible(GTK_WIDGET(img), TRUE);
+      }
+      g_list_free(boxc);
+    }
+    g_list_free(bc);
+  }
+  else if(GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for(GList *l = children; l; l = l->next)
+      _popover_menu_reveal_icons(GTK_WIDGET(l->data));
+    g_list_free(children);
+  }
+}
+
+// walk GMenuModel and apply "tooltip" attributes to corresponding GtkModelButton widgets
+static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
+{
+  if(!model || !box) return;
+  GtkWidget *target_box = box;
+  if(g_strcmp0(G_OBJECT_TYPE_NAME(box), "GtkMenuSectionBox") == 0)
+  {
+    GList *c = gtk_container_get_children(GTK_CONTAINER(box));
+    if(c)
+    {
+      target_box = GTK_WIDGET(c->data);
+      g_list_free(c);
+    }
+  }
+
+  GList *children = gtk_container_get_children(GTK_CONTAINER(target_box));
+  GList *child_iter = children;
+  const int n_items = g_menu_model_get_n_items(model);
+
+  for(int i = 0; i < n_items && child_iter; i++)
+  {
+    GMenuModel *section = g_menu_model_get_item_link(model, i, G_MENU_LINK_SECTION);
+    GMenuModel *submenu = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
+
+    if(section)
+    {
+      while(child_iter && g_strcmp0(G_OBJECT_TYPE_NAME(child_iter->data), "GtkMenuSectionBox") != 0)
+        child_iter = child_iter->next;
+      if(child_iter)
+      {
+        _popover_menu_apply_tooltips(section, GTK_WIDGET(child_iter->data));
+        child_iter = child_iter->next;
+      }
+      g_object_unref(section);
+    }
+    else if(submenu)
+    {
+      while(child_iter && !GTK_IS_MODEL_BUTTON(child_iter->data))
+        child_iter = child_iter->next;
+      if(child_iter)
+        child_iter = child_iter->next;
+      g_object_unref(submenu);
+    }
+    else
+    {
+      while(child_iter && !GTK_IS_MODEL_BUTTON(child_iter->data))
+        child_iter = child_iter->next;
+      if(child_iter)
+      {
+        GtkWidget *item_widget = GTK_WIDGET(child_iter->data);
+        char *tip = NULL;
+        if(g_menu_model_get_item_attribute(model, i, "tooltip", "s", &tip))
+        {
+          gtk_widget_set_tooltip_text(item_widget, tip);
+          g_free(tip);
+        }
+        child_iter = child_iter->next;
+      }
+    }
+  }
+  g_list_free(children);
+}
+
+static void _popover_menu_set_tooltips(GtkWidget *popover, GMenuModel *model)
+{
+  GtkWidget *stack = gtk_bin_get_child(GTK_BIN(popover));
+  if(!stack || !GTK_IS_STACK(stack)) return;
+  GList *pages = gtk_container_get_children(GTK_CONTAINER(stack));
+  if(pages)
+  {
+    _popover_menu_apply_tooltips(model, GTK_WIDGET(pages->data));
+    g_list_free(pages);
+  }
 }
 #endif
 
@@ -7805,6 +7912,8 @@ GtkWidget *dt_gui_popover_menu_from_model(GtkWidget *parent, GMenu *menu)
 
 #if !GTK_CHECK_VERSION(4, 0, 0)
   popover_menu = gtk_popover_new_from_model(parent, G_MENU_MODEL(menu));
+  _popover_menu_reveal_icons(popover_menu);
+  _popover_menu_set_tooltips(popover_menu, G_MENU_MODEL(menu));
   _popover_menu_make_scrollable(popover_menu, parent);
 #else
   popover_menu = gtk_popover_menu_new_from_model_full(G_MENU_MODEL(menu),

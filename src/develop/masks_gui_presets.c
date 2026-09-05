@@ -167,7 +167,7 @@ static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int 
 // replaces the module's whole mask -- shapes AND empty-group skeleton alike --
 // with a fresh skeleton of empty groups matching `entries` (same bottom-to-top
 // encoding as capture). Never asks for confirmation itself; callers that might
-// be discarding real shapes confirm first (see _flexi_preset_item_activate).
+// be discarding real shapes confirm first (see _flexi_preset_apply_confirmed).
 static void
 _flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
 {
@@ -342,26 +342,6 @@ static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
   _flexi_layout_apply(module, entries, n);
 }
 
-static void _flexi_preset_item_activate(GtkWidget *item, dt_iop_module_t *module)
-{
-  const _flexi_group_entry_t *entries = g_object_get_data(G_OBJECT(item), "entries");
-  const int n = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(item), "n"));
-  if(entries && n > 0) _flexi_preset_apply_confirmed(module, entries, n);
-}
-
-static gboolean
-_flexi_preset_item_press(GtkWidget *item, GdkEventButton *ev, dt_iop_module_t *module)
-{
-  if(ev->button != GDK_BUTTON_SECONDARY) return FALSE;
-  const gchar *name = g_object_get_data(G_OBJECT(item), "preset-name");
-  if(!name) return FALSE;
-  if(dt_gui_show_yes_no_dialog(_("delete preset?"), "",
-                               _("do you really want to delete the mask layout "
-                                 "preset `%s'?"),
-                               name))
-    _flexi_preset_delete_from_db(name);
-  return TRUE;
-}
 
 // ---- built-in layouts ------------------------------------------------------
 // Listed above the user's own presets, and their names are reserved so a user
@@ -435,23 +415,7 @@ static _flexi_group_entry_t *_flexi_builtin_entries(const _flexi_builtin_t *b)
   return entries;
 }
 
-// appends one applicable preset row. Takes ownership of `entries`.
-static GtkWidget *_flexi_preset_menu_item(GtkMenu *menu,
-                                          dt_iop_module_t *module,
-                                          const gchar *label,
-                                          _flexi_group_entry_t *entries,
-                                          const int n)
-{
-  GtkWidget *item = gtk_menu_item_new_with_label(label);
-  g_object_set_data_full(G_OBJECT(item), "entries", entries, free);
-  g_object_set_data(G_OBJECT(item), "n", GINT_TO_POINTER(n));
-  g_signal_connect(G_OBJECT(item), "activate", G_CALLBACK(_flexi_preset_item_activate),
-                   module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), item);
-  return item;
-}
-
-static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
+static void _flexi_preset_save_clicked(dt_iop_module_t *module)
 {
   if(!_flexi_layout_has_content(module))
   {
@@ -481,46 +445,136 @@ static void _flexi_preset_save_clicked(GtkWidget *item, dt_iop_module_t *module)
   g_free(name);
 }
 
+static void _flexi_preset_builtin_action(GSimpleAction *action,
+                                         GVariant *parameter,
+                                         gpointer user_data)
+{
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  const int idx = g_variant_get_int32(parameter);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(idx >= 0 && idx < (int)G_N_ELEMENTS(_flexi_builtins))
+  {
+    const _flexi_builtin_t *b = &_flexi_builtins[idx];
+    _flexi_group_entry_t *entries = _flexi_builtin_entries(b);
+    _flexi_preset_apply_confirmed(module, entries, b->n);
+    free(entries);
+  }
+}
+
+static void _flexi_preset_user_action(GSimpleAction *action,
+                                      GVariant *parameter,
+                                      gpointer user_data)
+{
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  const gchar *name = g_variant_get_string(parameter, NULL);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(name)
+  {
+    GList *user_presets = _flexi_preset_list_load();
+    for(GList *p = user_presets; p; p = g_list_next(p))
+    {
+      _flexi_preset_t *preset = p->data;
+      if(!g_strcmp0(preset->name, name))
+      {
+        _flexi_preset_apply_confirmed(module, preset->entries, preset->n);
+        break;
+      }
+    }
+    _flexi_preset_list_free(user_presets);
+  }
+}
+
+static void _flexi_preset_delete_action(GSimpleAction *action,
+                                        GVariant *parameter,
+                                        gpointer user_data)
+{
+  const gchar *name = g_variant_get_string(parameter, NULL);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(name && dt_gui_show_yes_no_dialog(_("delete preset?"), "",
+                                       _("do you really want to delete the mask layout "
+                                         "preset `%s'?"),
+                                       name))
+  {
+    _flexi_preset_delete_from_db(name);
+  }
+}
+
+static void _flexi_preset_save_action(GSimpleAction *action,
+                                      GVariant *parameter,
+                                      gpointer user_data)
+{
+  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  _flexi_preset_save_clicked(module);
+}
+
 // appends a "presets" section (group-layout presets) directly to `menu` --
 // used by _blendif_options_callback, the "blend mask" header's hamburger
 // (formerly its own separate hamburger on the "mask elements" header)
-void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module)
+void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
 {
-  GtkWidget *header = gtk_menu_item_new_with_label(_("group layout presets"));
-  gtk_widget_set_sensitive(header, FALSE);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), header);
+  GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_presets");
+  if(action_group == NULL)
+  {
+    GActionEntry action_entries[] =
+    {
+      { "builtin", _flexi_preset_builtin_action, "i", NULL },
+      { "user",    _flexi_preset_user_action,    "s", NULL },
+      { "delete",  _flexi_preset_delete_action,  "s", NULL },
+      { "save",    _flexi_preset_save_action,    NULL, NULL },
+    };
+    action_group = G_ACTION_GROUP(g_simple_action_group_new());
+    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
+                                    G_N_ELEMENTS(action_entries), module);
+    gtk_widget_insert_action_group(anchor, "masks_presets", action_group);
+  }
 
+  GMenu *sec_builtins = g_menu_new();
   for(size_t i = 0; i < G_N_ELEMENTS(_flexi_builtins); i++)
   {
     const _flexi_builtin_t *b = &_flexi_builtins[i];
-    GtkWidget *item = _flexi_preset_menu_item(menu, module, _(b->name),
-                                              _flexi_builtin_entries(b), b->n);
-    if(b->tooltip) gtk_widget_set_tooltip_text(item, _(b->tooltip));
+    GMenuItem *item = g_menu_item_new(_(b->name), NULL);
+    g_menu_item_set_action_and_target_value(item, "masks_presets.builtin", g_variant_new_int32(i));
+    g_menu_append_item(sec_builtins, item);
+    g_object_unref(item);
   }
+  g_menu_append_section(menu, _("group layout presets"), G_MENU_MODEL(sec_builtins));
+  g_object_unref(sec_builtins);
 
   GList *user_presets = _flexi_preset_list_load();
   if(user_presets)
-    gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  for(GList *p = user_presets; p; p = g_list_next(p))
   {
-    _flexi_preset_t *preset = p->data;
-    _flexi_group_entry_t *entries_copy = malloc(preset->n * sizeof(_flexi_group_entry_t));
-    memcpy(entries_copy, preset->entries, preset->n * sizeof(_flexi_group_entry_t));
-    GtkWidget *item =
-      _flexi_preset_menu_item(menu, module, preset->name, entries_copy, preset->n);
-    gtk_widget_set_tooltip_text(item, _("click to apply, right-click to delete"));
-    g_object_set_data_full(G_OBJECT(item), "preset-name", g_strdup(preset->name), g_free);
-    g_signal_connect(G_OBJECT(item), "button-press-event",
-                     G_CALLBACK(_flexi_preset_item_press), module);
-  }
-  _flexi_preset_list_free(user_presets);
+    GMenu *sec_user = g_menu_new();
+    GMenu *sub_delete = g_menu_new();
+    for(GList *p = user_presets; p; p = g_list_next(p))
+    {
+      _flexi_preset_t *preset = p->data;
+      GMenuItem *item = g_menu_item_new(preset->name, NULL);
+      g_menu_item_set_action_and_target_value(item, "masks_presets.user", g_variant_new_string(preset->name));
+      g_menu_append_item(sec_user, item);
+      g_object_unref(item);
 
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), gtk_separator_menu_item_new());
-  GtkWidget *save_item =
-    gtk_menu_item_new_with_label(_("save current layout as preset..."));
-  g_signal_connect(G_OBJECT(save_item), "activate",
-                   G_CALLBACK(_flexi_preset_save_clicked), module);
-  gtk_menu_shell_append(GTK_MENU_SHELL(menu), save_item);
+      GMenuItem *del = g_menu_item_new(preset->name, NULL);
+      g_menu_item_set_action_and_target_value(del, "masks_presets.delete", g_variant_new_string(preset->name));
+      g_menu_append_item(sub_delete, del);
+      g_object_unref(del);
+    }
+    g_menu_append_submenu(sec_user, _("delete preset"), G_MENU_MODEL(sub_delete));
+    g_object_unref(sub_delete);
+
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(sec_user));
+    g_object_unref(sec_user);
+    _flexi_preset_list_free(user_presets);
+  }
+
+  GMenu *sec_save = g_menu_new();
+  g_menu_append(sec_save, _("save current layout as preset..."), "masks_presets.save");
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(sec_save));
+  g_object_unref(sec_save);
 }
 
 // modelines: These editor modelines have been set for all relevant files
