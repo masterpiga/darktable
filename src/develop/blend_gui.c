@@ -5720,6 +5720,14 @@ static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd,
   // and selectable.
   GtkWidget *param_box = g_object_get_data(G_OBJECT(row_vbox), "param-editor-box");
   if(param_box) gtk_widget_set_sensitive(param_box, !hidden);
+  // a parametric row draws its polarity from this same INVERSE bit, but in its
+  // own sliders' markers rather than the handle icon (see
+  // _update_param_row_display / _param_row_inverted): refresh it here so every
+  // caller flipping the bit stays consistent, whether it came through one row
+  // (_invert_element) or all of them at once (_invert_group_members).
+  dt_masks_param_row_editor_t *param_ed =
+    param_box ? g_object_get_data(G_OBJECT(param_box), "param-editor") : NULL;
+  if(param_ed) _update_param_row_display(param_ed);
   GtkWidget *props_box = g_object_get_data(G_OBJECT(row_vbox), "props-editor-box");
   if(props_box) gtk_widget_set_sensitive(props_box, !hidden);
   if(opacity_box) gtk_widget_set_sensitive(opacity_box, !hidden);
@@ -8046,6 +8054,17 @@ static gboolean _row_crossing(GtkWidget *w, GdkEventCrossing *ev, dt_iop_module_
   dt_masks_form_gui_t *gui = darktable.develop->form_gui;
   if(!gui) return FALSE;
   const gboolean entering = ev->type == GDK_ENTER_NOTIFY;
+  // interacting with one of this row's controls must keep the shape highlighted
+  // for as long as the interaction lasts, not just while the pointer happens to
+  // sit inside the row: dragging a slider (or opening a bauhaus popup, which
+  // takes a gtk grab) delivers a leave the moment the grab starts, and the drag
+  // itself routinely carries the pointer well outside the row. Both are ignored
+  // here -- the matching ungrab crossing, or the next real pointer crossing,
+  // settles the hover once the interaction is over.
+  if(!entering
+     && (ev->mode == GDK_CROSSING_GRAB || ev->mode == GDK_CROSSING_GTK_GRAB
+         || (ev->state & (GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK))))
+    return FALSE;
   g_list_free(gui->panel_hover_formids);
   gui->panel_hover_formids = NULL;
   if(entering)
@@ -12059,13 +12078,9 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
   // is open), which visibly flashes the panel for what is just one bit.
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   GtkWidget *row_vbox = _masks_row_widget(bd, id);
+  // this also flips a parametric row's own slider markers, which carry the
+  // polarity a shape row shows on its handle icon (see _update_shape_row_state)
   _update_shape_row_state(bd, row_vbox, pt);
-  // if this is a parametric form, flip its own editor's slider markers to match
-  GtkWidget *editor_box =
-    row_vbox ? g_object_get_data(G_OBJECT(row_vbox), "param-editor-box") : NULL;
-  dt_masks_param_row_editor_t *ed =
-    editor_box ? g_object_get_data(G_OBJECT(editor_box), "param-editor") : NULL;
-  if(ed) _update_param_row_display(ed);
 }
 
 // GtkCheckMenuItem does not auto-close its parent popup on toggle the way a
