@@ -3645,8 +3645,7 @@ static void _ui_init_panel_left(dt_ui_t *ui,
   gtk_widget_set_halign(handle, GTK_ALIGN_END);
   gtk_widget_set_valign(handle, GTK_ALIGN_FILL);
   gtk_widget_set_size_request(handle, DT_RESIZE_HANDLE_SIZE, -1);
-  // left-side default: the handle closes the row, on the panel's right edge
-  gtk_box_pack_start(GTK_BOX(over), handle, FALSE, FALSE, 0);
+  gtk_overlay_add_overlay(GTK_OVERLAY(over), handle);
   gtk_widget_set_name(GTK_WIDGET(handle), "panel-handle-left");
 
   dt_gui_connect_click(handle, _panel_handle_button_pressed, _panel_handle_button_released, widget);
@@ -4223,15 +4222,15 @@ static void _flexi_sliver_hint(dt_ui_t *ui, const gboolean right)
     !dt_ui_flexi_panel_is_collapsed(ui) && ui->flexi_panel_right == right;
   if(!dt_ui_flexi_panel_is_collapsed(ui) && !this_side_docked)
     // the panel is out on the other edge, and this click brings it across
-    hint = g_strdup_printf(_("%s: blend mask panel - click to move it here"), mod_name);
+    hint = g_markup_printf_escaped(_("%s: blend mask panel - click to move it here"), mod_name);
   else if(this_side_docked)
-    hint = g_strdup_printf(_("%s: blend mask panel - click to hide"), mod_name);
+    hint = g_markup_printf_escaped(_("%s: blend mask panel - click to hide"), mod_name);
   else if(ui->flexi_mask_active)
-    hint = g_strdup_printf(_("%s: blend mask - %s, click to show the panel here"),
+    hint = g_markup_printf_escaped(_("%s: blend mask - %s, click to show the panel here"),
                            mod_name,
                            ui->flexi_mask_label ? ui->flexi_mask_label : _("active"));
   else
-    hint = g_strdup_printf(
+    hint = g_markup_printf_escaped(
       _("%s: blend mask - off, click to enable it and show the panel here"), mod_name);
   dt_control_hinter_message(hint);
   g_free(mod_name);
