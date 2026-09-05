@@ -7660,6 +7660,215 @@ PangoFontDescription *dt_gui_get_font(void)
   return pango_font_description_copy_static(darktable.bauhaus->pango_font_desc);
 }
 
+#if !GTK_CHECK_VERSION(4, 0, 0)
+// the menu a GtkPopoverMenu builds from a model is a GtkStack of GtkBoxes of
+// GtkModelButtons, with no scrolling of its own, so a model with more items
+// than fit on the monitor is simply cut off. wrap each stack page in a
+// scrolled window bounded by the monitor's work area to keep it reachable.
+//
+// the stack has to stay the popover's direct child: gtk_popover_menu_open_submenu(),
+// which every submenu button triggers, casts that child to GTK_STACK and would
+// warn on anything else
+static void _popover_menu_make_scrollable(GtkWidget *popover_menu,
+                                          GtkWidget *parent)
+{
+  GtkWidget *stack = gtk_bin_get_child(GTK_BIN(popover_menu));
+  if(!GTK_IS_STACK(stack)) return;
+
+  // the stack sizes itself to the widest page, so a menu with one long submenu
+  // entry pads every short page out to that width. let each page keep its own
+  gtk_stack_set_hhomogeneous(GTK_STACK(stack), FALSE);
+  gtk_stack_set_vhomogeneous(GTK_STACK(stack), FALSE);
+
+  GdkWindow *window = gtk_widget_get_window(gtk_widget_get_toplevel(parent));
+  if(!window) return;
+
+  GdkRectangle workarea;
+  gdk_monitor_get_workarea(gdk_display_get_monitor_at_window(gdk_window_get_display(window),
+                                                             window),
+                           &workarea);
+
+  // GtkPopover defaults to GTK_POPOVER_CONSTRAINT_WINDOW, so a menu taller
+  // than the main window gets clipped flush against its edges. bound the menu
+  // by the window as well to keep that margin visible when not maximized
+  gint available = workarea.height;
+  const gint window_height = gdk_window_get_height(window);
+  if(window_height > 0)
+    available = MIN(available, window_height);
+
+  // leave room for the popover's own arrow, padding and shadow
+  const gint max_height = available * 0.8;
+
+  GList *pages = gtk_container_get_children(GTK_CONTAINER(stack));
+  for(GList *p = pages; p; p = g_list_next(p))
+  {
+    GtkWidget *page = GTK_WIDGET(p->data);
+
+    // a page already wrapped on an earlier popup must not be nested again
+    if(GTK_IS_SCROLLED_WINDOW(page)) continue;
+
+    // the stack addresses its pages by name, and the submenu buttons refer to
+    // them by that name, so it has to move to the scrolled window with the page
+    gchar *name = NULL;
+    gint position = 0;
+    gtk_container_child_get(GTK_CONTAINER(stack),
+                            page,
+                            "name", &name,
+                            "position", &position,
+                            NULL);
+
+    g_object_ref(page);
+    gtk_container_remove(GTK_CONTAINER(stack), page);
+
+    GtkWidget *sw = gtk_scrolled_window_new(NULL, NULL);
+    gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(sw),
+                                   GTK_POLICY_NEVER,
+                                   GTK_POLICY_AUTOMATIC);
+    // without this the scrolled window claims a minimal height instead of the
+    // page's own, and every menu would come up as a thin scrolling strip
+    gtk_scrolled_window_set_propagate_natural_height(GTK_SCROLLED_WINDOW(sw), TRUE);
+    gtk_scrolled_window_set_propagate_natural_width(GTK_SCROLLED_WINDOW(sw), TRUE);
+    gtk_scrolled_window_set_max_content_height(GTK_SCROLLED_WINDOW(sw), max_height);
+
+    gtk_container_add(GTK_CONTAINER(sw), page);
+    g_object_unref(page);
+
+    gtk_stack_add_named(GTK_STACK(stack), sw, name);
+
+    gtk_container_child_set(GTK_CONTAINER(stack), sw, "position", position, NULL);
+    gtk_widget_show_all(sw);
+
+    g_free(name);
+  }
+  g_list_free(pages);
+}
+
+// in GTK 3 GtkModelButton hides its image child when iconic is FALSE (the
+// default for menus), so items with both an icon and text only show text.
+// walk the popover and make any non-empty image widget visible so icons appear
+// next to their labels
+static void _popover_menu_reveal_icons(GtkWidget *widget)
+{
+  if(GTK_IS_MODEL_BUTTON(widget))
+  {
+    GList *bc = gtk_container_get_children(GTK_CONTAINER(widget));
+    if(bc && GTK_IS_BOX(bc->data))
+    {
+      GList *boxc = gtk_container_get_children(GTK_CONTAINER(bc->data));
+      if(boxc && GTK_IS_IMAGE(boxc->data))
+      {
+        GtkImage *img = GTK_IMAGE(boxc->data);
+        if(gtk_image_get_storage_type(img) != GTK_IMAGE_EMPTY)
+          gtk_widget_set_visible(GTK_WIDGET(img), TRUE);
+      }
+      g_list_free(boxc);
+    }
+    g_list_free(bc);
+  }
+  else if(GTK_IS_CONTAINER(widget))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(widget));
+    for(GList *l = children; l; l = l->next)
+      _popover_menu_reveal_icons(GTK_WIDGET(l->data));
+    g_list_free(children);
+  }
+}
+
+// walk GMenuModel and apply "tooltip" attributes to corresponding GtkModelButton widgets
+static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
+{
+  if(!model || !box) return;
+  GtkWidget *target_box = box;
+  if(g_strcmp0(G_OBJECT_TYPE_NAME(box), "GtkMenuSectionBox") == 0)
+  {
+    GList *c = gtk_container_get_children(GTK_CONTAINER(box));
+    if(c)
+    {
+      target_box = GTK_WIDGET(c->data);
+      g_list_free(c);
+    }
+  }
+
+  GList *children = gtk_container_get_children(GTK_CONTAINER(target_box));
+  GList *child_iter = children;
+  const int n_items = g_menu_model_get_n_items(model);
+
+  for(int i = 0; i < n_items && child_iter; i++)
+  {
+    GMenuModel *section = g_menu_model_get_item_link(model, i, G_MENU_LINK_SECTION);
+    GMenuModel *submenu = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
+
+    if(section)
+    {
+      while(child_iter && g_strcmp0(G_OBJECT_TYPE_NAME(child_iter->data), "GtkMenuSectionBox") != 0)
+        child_iter = child_iter->next;
+      if(child_iter)
+      {
+        _popover_menu_apply_tooltips(section, GTK_WIDGET(child_iter->data));
+        child_iter = child_iter->next;
+      }
+      g_object_unref(section);
+    }
+    else if(submenu)
+    {
+      while(child_iter && !GTK_IS_MODEL_BUTTON(child_iter->data))
+        child_iter = child_iter->next;
+      if(child_iter)
+        child_iter = child_iter->next;
+      g_object_unref(submenu);
+    }
+    else
+    {
+      while(child_iter && !GTK_IS_MODEL_BUTTON(child_iter->data))
+        child_iter = child_iter->next;
+      if(child_iter)
+      {
+        GtkWidget *item_widget = GTK_WIDGET(child_iter->data);
+        char *tip = NULL;
+        if(g_menu_model_get_item_attribute(model, i, "tooltip", "s", &tip))
+        {
+          gtk_widget_set_tooltip_text(item_widget, tip);
+          g_free(tip);
+        }
+        child_iter = child_iter->next;
+      }
+    }
+  }
+  g_list_free(children);
+}
+
+static void _popover_menu_set_tooltips(GtkWidget *popover, GMenuModel *model)
+{
+  GtkWidget *stack = gtk_bin_get_child(GTK_BIN(popover));
+  if(!stack || !GTK_IS_STACK(stack)) return;
+  GList *pages = gtk_container_get_children(GTK_CONTAINER(stack));
+  if(pages)
+  {
+    _popover_menu_apply_tooltips(model, GTK_WIDGET(pages->data));
+    g_list_free(pages);
+  }
+}
+#endif
+
+GtkWidget *dt_gui_popover_menu_from_model(GtkWidget *parent, GMenu *menu)
+{
+  GtkWidget *popover_menu;
+
+#if !GTK_CHECK_VERSION(4, 0, 0)
+  popover_menu = gtk_popover_new_from_model(parent, G_MENU_MODEL(menu));
+  _popover_menu_reveal_icons(popover_menu);
+  _popover_menu_set_tooltips(popover_menu, G_MENU_MODEL(menu));
+  _popover_menu_make_scrollable(popover_menu, parent);
+#else
+  popover_menu = gtk_popover_menu_new_from_model_full(G_MENU_MODEL(menu),
+                                                      GTK_POPOVER_MENU_NESTED);
+  gtk_widget_set_parent(popover_menu, parent);
+#endif
+
+  return popover_menu;
+}
+
+
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent

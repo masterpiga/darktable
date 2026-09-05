@@ -325,7 +325,7 @@ void _prune_stale_solo(dt_iop_module_t *module);
 // ---------------------------------------------------------------------------
 
 /** append the "group layout presets" section to an existing menu */
-void _add_flexi_presets_menu(GtkMenu *menu, dt_iop_module_t *module);
+void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module);
 
 // ---------------------------------------------------------------------------
 // blend_gui.c -> masks_gui_panel_host.c
