@@ -53,7 +53,7 @@ expected_classification()
         C4_union_1channel_group_invert| \
         F1_content_incl_allchannels_noinv|F2_content_incl_allchannels_inv| \
         H1_drawn_opacity_refinement|H2_combined_opacity_refinement| \
-        I1_two_adjacent_intersect_groups)
+        I1_intersection_chain|I2_sum_chain)
             echo PARTIAL ;;
         # J: refinement at each scope. Refinement reshapes an already-shaped
         # mask, so every one of these must stay spatially varying -- a J case
@@ -63,7 +63,19 @@ expected_classification()
         J4_refine_element_both|J5_refine_group|J6_refine_group_and_global|\
         J7_refine_group_of_two|J8_refine_global_of_two)
             echo PARTIAL ;;
+        # K: raster masks. Classified against their own baselines (see
+        # baseline_pair below), since here exposure is only the mask's
+        # producer and the masked module under test is monochrome.
+        K1_raster_from_drawn|K1C_drawn_control|K2_raster_inverted| \
+        K2C_drawn_inverted_control|K3_raster_from_parametric)
+            echo PARTIAL ;;
         D1_maskspos_no_drawn_content|E2_pure_incl_and_inv)
+            echo CONSTANT_ZERO ;;
+        # a raster element whose producer is not in the pipeline renders as an
+        # all-zero mask (_raster_unresolved in masks/raster.c), so the consumer
+        # does nothing at all -- deliberately not "opaque", which would apply an
+        # unasked-for effect to the whole frame.
+        K4_raster_source_missing)
             echo CONSTANT_ZERO ;;
         D2_parametric_incl|E1_pure_incl_only|E3_content_incl_only| \
         E4_content_incl_maskspos|E5_nocontent_maskspos_and_incl| \
@@ -71,6 +83,21 @@ expected_classification()
             echo CONSTANT_FULL ;;
         *)
             echo "" ;;
+    esac
+}
+
+# Which pair of references a scenario is classified against. The A-J series
+# vary a masked exposure, so they use the exposure baselines. The K series
+# renders exposure at 0 EV as a mere mask producer and puts the mask on
+# monochrome downstream, so the exposure baselines would classify every one of
+# them as PARTIAL for the wrong reason -- they get a pair built from their own
+# pipeline instead.
+# Echoes "<always-zero reference> <always-opaque reference>".
+baseline_pair()
+{
+    case "$1" in
+        K*) echo "ZBASE_raster_sink_off ZBASE_raster_sink_uniform" ;;
+        *)  echo "ZBASE_module_off ZBASE_mask_disabled" ;;
     esac
 }
 
@@ -93,16 +120,18 @@ render()
         > "${out%.png}.log" 2>&1
 }
 
-render baselines/ZBASE_module_off.xmp "$OUTDIR/ZBASE_module_off.png"
-render baselines/ZBASE_mask_disabled.xmp "$OUTDIR/ZBASE_mask_disabled.png"
+for base in baselines/*.xmp; do
+    render "$base" "$OUTDIR/$(basename "$base" .xmp).png"
+done
 
 FAIL=0
 for xmp in xmps/*.xmp; do
     name=$(basename "$xmp" .xmp)
     render "$xmp" "$OUTDIR/${name}.png"
 
-    d_zero=$(python3 "$COUNT_DIFF" "$OUTDIR/ZBASE_module_off.png" "$OUTDIR/${name}.png")
-    d_full=$(python3 "$COUNT_DIFF" "$OUTDIR/ZBASE_mask_disabled.png" "$OUTDIR/${name}.png")
+    set -- $(baseline_pair "$name")
+    d_zero=$(python3 "$COUNT_DIFF" "$OUTDIR/$1.png" "$OUTDIR/${name}.png")
+    d_full=$(python3 "$COUNT_DIFF" "$OUTDIR/$2.png" "$OUTDIR/${name}.png")
 
     if [[ $d_zero == 0 ]]; then
         got=CONSTANT_ZERO

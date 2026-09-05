@@ -42,10 +42,11 @@ DT_MASKS_STATE_UNION = 1 << 3
 DT_MASKS_STATE_INTERSECTION = 1 << 4
 DT_MASKS_STATE_DIFFERENCE = 1 << 5
 DT_MASKS_STATE_EXCLUSION = 1 << 6
+DT_MASKS_STATE_SUM = 1 << 7
 # pre-v10 encoding of a first-class group boundary (see
-# dt_masks_point_group_t.group_start in masks.h); only used by
-# build_group_start_scenario() below to exercise the v9->v10 migration that
-# carries this bit forward into the real field.
+# dt_masks_point_group_t.group_start in masks.h); used by J7/J8 below to
+# exercise the v9->v10 migration that carries this bit forward into the real
+# field.
 DT_MASKS_STATE_GROUP_BREAK = 1 << 11
 
 DT_MASKS_CIRCLE = 1
@@ -75,10 +76,16 @@ def pack_blend_params(mask_mode=0, blend_cst=0,
                        mask_id=0, blendif=0, blendif_parameters=None,
                        blendif_boost_factors=None,
                        feathering_radius=0.0, blur_radius=0.0,
-                       contrast=0.0, brightness=0.0, details=0.0):
+                       contrast=0.0, brightness=0.0, details=0.0,
+                       raster_mask_source=b"", raster_mask_instance=-1,
+                       raster_mask_id=0, raster_mask_invert=0):
     """feathering_radius/blur_radius/contrast/brightness/details are the
     module-wide ("global") mask refinements, applied once to the finished
-    group mask -- as opposed to the per-member ones in pack_group_member."""
+    group mask -- as opposed to the per-member ones in pack_group_member.
+
+    raster_mask_*: the classic DEVELOP_MASK_RASTER configuration, which lives
+    entirely in these scalars outside the form tree -- migration synthesizes a
+    DT_MASKS_RASTER form element from them (see the K series)."""
     if blendif_parameters is None:
         blendif_parameters = [0.0, 0.0, 1.0, 1.0] * DEVELOP_BLENDIF_SIZE
     if blendif_boost_factors is None:
@@ -96,10 +103,10 @@ def pack_blend_params(mask_mode=0, blend_cst=0,
         0, 0,  # reserved[2]
         *blendif_parameters,
         *blendif_boost_factors,
-        b"",   # raster_mask_source
-        -1,    # raster_mask_instance
-        0,     # raster_mask_id
-        0,     # raster_mask_invert
+        raster_mask_source,
+        raster_mask_instance,
+        raster_mask_id,
+        raster_mask_invert,
     )
     assert len(data) == 420, len(data)
     return data
@@ -169,7 +176,7 @@ def pack_group_member_v9(formid, parentid, state, opacity=1.0, group_opacity=1.0
 
 CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER = 0.45, 0.45, 0.18, 0.21
 SQUARE_CORNERS = [(0.40, 0.30), (0.70, 0.30), (0.70, 0.60), (0.40, 0.60)]
-# second shape pair for build_group_start_scenario(): offset to the opposite
+# second shape pair for the two-group scenarios (J7/J8): offset to the opposite
 # corner so the two groups' masks aren't near-identical
 CIRCLE2_CX, CIRCLE2_CY, CIRCLE2_R, CIRCLE2_BORDER = 0.75, 0.75, 0.15, 0.18
 SQUARE2_CORNERS = [(0.05, 0.65), (0.30, 0.65), (0.30, 0.90), (0.05, 0.90)]
@@ -227,34 +234,43 @@ EXPOSURE_PARAMS_HEX = struct.pack("<iffffi", 0, 0.0, 5.0, 50.0, -4.0, 0).hex()
 DUMMY_HASH = "0" * 32
 
 
-def build_xmp(name, blend_params_bytes, masks_rows, outdir=None, exposure_enabled=True):
-    exposure_num = len(PIPELINE)
-    history_end = exposure_num + 1
-
-    hist_items = []
-    for (num, op, modv, params_hex, multi_name) in PIPELINE:
-        default_blend = pack_blend_params().hex()
-        hist_items.append(f'''     <rdf:li
+def _history_item(num, op, modversion, params_hex, blend_params_bytes,
+                  enabled=True, multi_name=""):
+    return f'''     <rdf:li
       darktable:num="{num}"
       darktable:operation="{op}"
-      darktable:enabled="1"
-      darktable:modversion="{modv}"
+      darktable:enabled="{1 if enabled else 0}"
+      darktable:modversion="{modversion}"
       darktable:params="{params_hex}"
       darktable:multi_name="{multi_name}"
       darktable:multi_priority="0"
       darktable:blendop_version="14"
-      darktable:blendop_params="{default_blend}"/>''')
+      darktable:blendop_params="{blend_params_bytes.hex()}"/>'''
 
-    hist_items.append(f'''     <rdf:li
-      darktable:num="{exposure_num}"
-      darktable:operation="exposure"
-      darktable:enabled="{1 if exposure_enabled else 0}"
-      darktable:modversion="6"
-      darktable:params="{EXPOSURE_PARAMS_HEX}"
-      darktable:multi_name=""
-      darktable:multi_priority="0"
-      darktable:blendop_version="14"
-      darktable:blendop_params="{blend_params_bytes.hex()}"/>''')
+
+def build_xmp(name, blend_params_bytes, masks_rows, outdir=None,
+              exposure_enabled=True, exposure_params_hex=None,
+              extra_items=()):
+    """extra_items: additional history entries appended *after* exposure, as
+    (operation, modversion, params_hex, blend_params_bytes, enabled) tuples --
+    used by the K series, where exposure is only the raster mask's producer and
+    a later module is the masked consumer under test."""
+    exposure_num = len(PIPELINE)
+    history_end = exposure_num + 1 + len(extra_items)
+
+    hist_items = []
+    for (num, op, modv, params_hex, multi_name) in PIPELINE:
+        hist_items.append(_history_item(num, op, modv, params_hex,
+                                        pack_blend_params(), multi_name=multi_name))
+
+    hist_items.append(_history_item(
+        exposure_num, "exposure", 6,
+        exposure_params_hex if exposure_params_hex is not None else EXPOSURE_PARAMS_HEX,
+        blend_params_bytes, enabled=exposure_enabled))
+
+    for i, (op, modv, params_hex, bp, enabled) in enumerate(extra_items):
+        hist_items.append(_history_item(exposure_num + 1 + i, op, modv,
+                                        params_hex, bp, enabled=enabled))
 
     masks_items = []
     for (mask_num, mask_id, mask_type, mask_name, points_hex, mask_nb) in masks_rows:
@@ -524,69 +540,74 @@ scenario("H2_combined_opacity_refinement", DEVELOP_MASK_MASK_CONDITIONAL,
           circle_opacity=0.6, circle_refine=_h_refine)
 
 
-# I: flexi-native regression (NOT a classic-migration scenario like A-H
-# above) for the masks v9->v10 migration that replaces the temporary
-# DT_MASKS_STATE_GROUP_BREAK bit with the real dt_masks_point_group_t.
-# group_start field (see masks.h / dt_masks_legacy_params_v9_to_v10 in
-# masks/masks.c). Writes a single DT_MASKS_GROUP form, masks version 9
-# (pre-group_start), with FOUR members forming two separate two-shape runs
-# that share the same between-group operator (INTERSECTION): circleA+squareA
-# as the bottom run, circleB+squareB as the run above it, with the old
-# GROUP_BREAK bit set on circleB (the upper run's own bottom/head member) so
-# it stays a distinct run despite matching circleA/squareA's operator.
+# I: per-member operator application -- the property the classic sequential
+# fold has and a naive run fold does not.
 #
-# INTERSECTION is deliberately used (not UNION) because it's the one
-# operator where "two separate same-op runs" and "one merged run" produce
-# different pixels: two intersect-groups compute
-# intersect(unionA, unionB), scoped as INDEPENDENT runs, while one merged
-# 4-member group computes intersect(unionA union unionB) -- mathematically
-# different in general. A wrong/no-op migration (group_start never set, or
-# read back as 0) collapses this into one merged run and silently changes
-# the rendered mask; this scenario's whole job is to make that collapse
-# visible as a pixel diff.
-def build_group_start_scenario():
-    ids = MaskIds(999000)
-    circleA_id, squareA_id, circleB_id, squareB_id, group_id = (
-        ids.circle, ids.path, ids.circle + 100, ids.path + 100, ids.group)
+# Classic walks the member list applying each member's OWN operator to the
+# accumulator, once per member. The flexi fold partitions the list into runs
+# and applies the run's operator once per RUN. For union those agree (max is
+# idempotent), for everything else they do not, so migration marks every
+# non-union member as its own run head -- _split_nonunion_runs() in
+# migrate_legacy.c, whose comment records a real 48-brush mask that reached
+# 0.6202 under classic and 0.1723 without the split.
+#
+# Nothing else in this matrix pins that in pixels: the A series uses one
+# operator-carrying member, where per-member and per-run application coincide.
+# These two use two members over the SAME overlapping circle+square geometry,
+# where the two readings are far apart:
+#
+#   I1  intersect: per-member gives min(circle, square) -- the overlap alone;
+#       a merged run would give max(circle, square), the whole pair.
+#   I2  sum: the operator that compounds per application, so a merged run
+#       under-composites exactly the way the brush mask above did.
+#
+# Both are ordinary classic-authorable configurations, so unlike the J series
+# below they also pass --verify-masks (see its note there).
+#
+# What was here before: a four-member scenario built to prove the masks v9->v10
+# carry-forward of DT_MASKS_STATE_GROUP_BREAK into dt_masks_point_group_t.
+# group_start. It became inert once the split above landed -- migration re-derives
+# the run boundary from the operators, so the scenario rendered identically with
+# and without the marker (both empty, since its two runs did not overlap), and
+# --verify-masks classified it inert too. J7/J8 cover that carry-forward and do
+# discriminate: they use union runs, which migration does not re-split, so
+# dropping the marker merges them and moves 16,877 pixels.
+def build_operator_chain_scenarios():
+    """Two members over the shared circle+square geometry, both carrying the
+    same non-union operator, so each becomes its own run."""
+    written = []
+    for name, op_bit in (("I1_intersection_chain", DT_MASKS_STATE_INTERSECTION),
+                         ("I2_sum_chain", DT_MASKS_STATE_SUM)):
+        ids = MaskIds(999000 if op_bit == DT_MASKS_STATE_INTERSECTION else 999200)
+        op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | op_bit
+        members = (pack_group_member_v9(ids.circle, ids.group, op)
+                   + pack_group_member_v9(ids.path, ids.group, op))
+        masks_rows = [
+            (ids.circle, DT_MASKS_CIRCLE, "circle #1",
+             pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
+            (ids.path, DT_MASKS_PATH, "square #1",
+             pack_path(SQUARE_CORNERS).hex(), len(SQUARE_CORNERS)),
+            (ids.group, DT_MASKS_GROUP, "grp exposure", members.hex(), 2),
+        ]
+        exposure_num = len(PIPELINE)
+        masks_rows = [(exposure_num,) + r for r in masks_rows]
 
-    op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_INTERSECTION
-    members = (
-        pack_group_member_v9(circleA_id, group_id, op)
-        + pack_group_member_v9(squareA_id, group_id, op)
-        + pack_group_member_v9(circleB_id, group_id, op | DT_MASKS_STATE_GROUP_BREAK)
-        + pack_group_member_v9(squareB_id, group_id, op)
-    )
+        bp = pack_blend_params(
+            mask_mode=DEVELOP_MASK_MASK | DEVELOP_MASK_ENABLED,
+            blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+            mask_combine=DEVELOP_COMBINE_NORM,
+            mask_id=ids.group,
+            blendif=0,
+        )
 
-    masks_rows = [
-        (circleA_id, DT_MASKS_CIRCLE, "circle #1",
-         pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
-        (squareA_id, DT_MASKS_PATH, "square #1",
-         pack_path(SQUARE_CORNERS).hex(), len(SQUARE_CORNERS)),
-        (circleB_id, DT_MASKS_CIRCLE, "circle #2",
-         pack_circle(CIRCLE2_CX, CIRCLE2_CY, CIRCLE2_R, CIRCLE2_BORDER).hex(), 1),
-        (squareB_id, DT_MASKS_PATH, "square #2",
-         pack_path(SQUARE2_CORNERS).hex(), len(SQUARE2_CORNERS)),
-        (group_id, DT_MASKS_GROUP, "grp exposure", members.hex(), 4),
-    ]
-    exposure_num = len(PIPELINE)
-    masks_rows = [(exposure_num,) + r for r in masks_rows]
-
-    bp = pack_blend_params(
-        mask_mode=DEVELOP_MASK_MASK | DEVELOP_MASK_ENABLED,
-        blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
-        mask_combine=DEVELOP_COMBINE_NORM,
-        mask_id=group_id,
-        blendif=0,
-    )
-
-    global DEVELOP_MASKS_VERSION
-    saved_version = DEVELOP_MASKS_VERSION
-    DEVELOP_MASKS_VERSION = 9  # pre-group_start; exercises v9->v10 on load
-    try:
-        path = build_xmp("I1_two_adjacent_intersect_groups", bp, masks_rows)
-    finally:
-        DEVELOP_MASKS_VERSION = saved_version
-    return path
+        global DEVELOP_MASKS_VERSION
+        saved = DEVELOP_MASKS_VERSION
+        DEVELOP_MASKS_VERSION = 9  # same v9 -> v10 load path as the J series
+        try:
+            written.append((name, build_xmp(name, bp, masks_rows)))
+        finally:
+            DEVELOP_MASKS_VERSION = saved
+    return written
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +631,18 @@ def build_group_start_scenario():
 # makes J4 (element on both) and J5 (group) distinguishable. If those two ever
 # render identically, a scope has stopped being honoured -- see
 # _group_get_mask_roi_flexi in src/develop/masks/group.c.
+#
+# NOTE on --verify-masks: this series is deliberately NOT classic-authorable.
+# DT_MASKS_REFINE_GROUP is a flexi concept, and the whole per-shape refinement
+# block is this branch's own masks v7 (upstream master is still at v6, with no
+# refinement field at all), so no released darktable ever wrote scope=2 and no
+# real classic edit can carry it. The classic fold reads the field as a plain
+# bool (`if(fpt->refinement.enabled)` in masks/group.c), applying group-scope
+# refinement per element, while the flexi fold applies it once per group -- so
+# harvesting these XMPs and running --verify-masks over them reports J5, J6 and
+# J7 as DIFFERENT. That is the two folds disagreeing about an input classic
+# cannot produce, not a migration defect; the A-I and K series are ordinary
+# classic configurations and do verify clean.
 #
 # J2 vs J3 covers a bug this branch already fixed once: group-scope refinement
 # is stored broadcast, so the renderer used to read the run head's copy
@@ -749,6 +782,177 @@ def build_refinement_scenarios():
     return written
 
 
+# ---------------------------------------------------------------------------
+# K: raster masks (DEVELOP_MASK_RASTER).
+#
+# The only classic mask mode the rest of this matrix never touches, and the one
+# whose classic configuration lives *entirely* outside the form tree -- four
+# scalars on blend_params (raster_mask_source / _instance / _id / _invert)
+# which migration has to synthesize a DT_MASKS_RASTER form element from (see
+# _migrate_raster() in migrate_legacy.c). Nothing about that synthesis is
+# exercised by a single-module scenario, because a raster mask needs two
+# modules: a producer and a consumer.
+#
+# Pipeline shape, mirroring the real-world case in
+# src/tests/integration/0167-raster-mask (colorbalancergb publishes, bilat
+# consumes):
+#
+#   exposure    at 0 EV, carrying the mask -- the *producer*. 0 EV so it is a
+#               pixel no-op and the only visible effect in the frame is the
+#               consumer's, gated by the raster mask. Its own mask is what gets
+#               published.
+#   monochrome  the *consumer*: mask_mode = RASTER|ENABLED, raster_mask_source
+#               = "exposure". Full desaturation is unmistakable on the colour
+#               sweep, so a wrongly-shaped mask is visible rather than subtle.
+#
+# monochrome sits well after exposure in the v2 iop order (exposure runs before
+# colorin; monochrome between colorize and grain), which is required -- a
+# raster mask can only be consumed downstream of its producer.
+#
+# These need their own baselines: ZBASE_module_off / ZBASE_mask_disabled
+# describe a masked *exposure*, which is not what varies here. See
+# build_raster_baselines() below.
+# ---------------------------------------------------------------------------
+# dt_iop_exposure_params_t at 0 EV: identical to EXPOSURE_PARAMS_HEX but for
+# the gain, so the producer contributes no pixels of its own.
+EXPOSURE_NEUTRAL_PARAMS_HEX = struct.pack("<iffffi", 0, 0.0, 0.0, 50.0, -4.0, 0).hex()
+
+# dt_iop_monochrome_params_t (modversion 2): a(f) b(f) size(f) highlights(f)
+MONOCHROME_PARAMS_HEX = struct.pack("<4f", 0.0, 0.0, 2.0, 0.0).hex()
+MONOCHROME_MODVERSION = 2
+
+
+def _monochrome_item(bp, enabled=True):
+    return ("monochrome", MONOCHROME_MODVERSION, MONOCHROME_PARAMS_HEX, bp, enabled)
+
+
+def _raster_producer_bp(mask_id, blendif=0, blendif_parameters=None,
+                        mask_mode=DEVELOP_MASK_MASK,
+                        mask_combine=DEVELOP_COMBINE_NORM):
+    return pack_blend_params(
+        mask_mode=mask_mode | DEVELOP_MASK_ENABLED,
+        blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+        mask_combine=mask_combine,
+        mask_id=mask_id,
+        blendif=blendif,
+        blendif_parameters=blendif_parameters,
+    )
+
+
+def _raster_consumer_bp(source=b"exposure", invert=0):
+    return pack_blend_params(
+        mask_mode=DEVELOP_MASK_RASTER | DEVELOP_MASK_ENABLED,
+        blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+        mask_combine=DEVELOP_COMBINE_NORM,
+        mask_id=0,
+        blendif=0,
+        raster_mask_source=source,
+        raster_mask_instance=0,
+        raster_mask_id=0,     # BLEND_RASTER_ID: the producer's own blend mask
+        raster_mask_invert=invert,
+    )
+
+
+def build_raster_scenarios():
+    written = []
+    base = 997000
+    last_num = len(PIPELINE) + 1   # the monochrome item: where mask rows live
+
+    def drawn_rows(ids):
+        op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
+        return masks_history_rows(last_num, ids,
+                                  circle_state=op,
+                                  square_state=op | DT_MASKS_STATE_UNION)
+
+    # K1: the base case -- a drawn union mask published by exposure and
+    # consumed by monochrome. Migration must turn the consumer's four scalars
+    # into a one-element group holding a DT_MASKS_RASTER form that resolves
+    # back to the same producer.
+    ids = MaskIds(base)
+    written.append(("K1_raster_from_drawn", build_xmp(
+        "K1_raster_from_drawn", _raster_producer_bp(ids.group), drawn_rows(ids),
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(_raster_consumer_bp())])))
+
+    # K1C: the control, and the reason K1 proves equivalence rather than merely
+    # locking in today's pixels. Same producer, but the consumer carries the
+    # same geometry as its OWN drawn mask instead of consuming a raster one.
+    # "Consume X as a raster mask" and "have X as your own drawn mask" must
+    # render identically; run.sh asserts K1 == K1C. Without this, the K series
+    # would only be a snapshot of current behaviour, since the regression mode
+    # compares against checked-in PNGs generated by the migrating binary.
+    ids_c = MaskIds(base + 100)
+    rows_c = drawn_rows(ids_c)
+    ids_c2 = MaskIds(base + 200)
+    rows_c += masks_history_rows(last_num, ids_c2,
+                                 circle_state=DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE,
+                                 square_state=DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
+                                 | DT_MASKS_STATE_UNION)
+    written.append(("K1C_drawn_control", build_xmp(
+        "K1C_drawn_control", _raster_producer_bp(ids_c.group), rows_c,
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(_raster_producer_bp(ids_c2.group))])))
+
+    # K2: raster_mask_invert. Classic stores the inversion in its own scalar;
+    # the flexi element has no such field, so migration has to move it onto the
+    # member's DT_MASKS_STATE_INVERSE bit. test_raster_inversion_moves_onto_the
+    # _state_bit checks that structurally -- this checks it in pixels, which is
+    # where an inversion that lands on the wrong side actually shows up.
+    ids2 = MaskIds(base + 300)
+    written.append(("K2_raster_inverted", build_xmp(
+        "K2_raster_inverted", _raster_producer_bp(ids2.group), drawn_rows(ids2),
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(_raster_consumer_bp(invert=1))])))
+
+    # K2C: the same control for the inverted case, and the more valuable of the
+    # two -- the consumer owns the geometry and inverts it the classic drawn
+    # way (DEVELOP_COMBINE_MASKS_POS, see blend.c:921). K2 arrives at the same
+    # picture by a completely different route: raster_mask_invert becomes
+    # DT_MASKS_STATE_INVERSE on the synthesized element. run.sh asserts
+    # K2 == K2C, which is what catches an inversion applied at the wrong level
+    # of the fold -- the failure mode a structural test cannot see.
+    ids2c = MaskIds(base + 500)
+    rows_2c = drawn_rows(ids2c)
+    ids2c2 = MaskIds(base + 600)
+    rows_2c += masks_history_rows(last_num, ids2c2,
+                                  circle_state=DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE,
+                                  square_state=DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
+                                  | DT_MASKS_STATE_UNION)
+    written.append(("K2C_drawn_inverted_control", build_xmp(
+        "K2C_drawn_inverted_control", _raster_producer_bp(ids2c.group), rows_2c,
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(_raster_producer_bp(
+            ids2c2.group, mask_combine=DEVELOP_COMBINE_MASKS_POS))])))
+
+    # K3: the producer's own mask is parametric, so BOTH ends migrate -- the
+    # producer's classic blendif becomes DT_MASKS_PARAMETRIC forms, and the
+    # consumer must still receive the same published mask afterwards. This is
+    # the shape 0167-raster-mask uses, and the case where a migration that
+    # changes what the producer publishes would go unnoticed by any
+    # single-module scenario.
+    _k3_blendif, _k3_params = channel_curve([CH_RED_in, CH_GREEN_in])
+    written.append(("K3_raster_from_parametric", build_xmp(
+        "K3_raster_from_parametric",
+        _raster_producer_bp(0, blendif=_k3_blendif, blendif_parameters=_k3_params,
+                            mask_mode=DEVELOP_MASK_CONDITIONAL),
+        [],
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(_raster_consumer_bp())])))
+
+    # K4: a consumer whose producer is not in the pipeline at all -- what a
+    # user gets by deleting the source module. dt_masks_raster_is_unresolved()
+    # has four structural tests; this pins the rendered result, an all-zero
+    # mask (raster.c's _raster_unresolved), so the consumer does nothing.
+    ids4 = MaskIds(base + 400)
+    written.append(("K4_raster_source_missing", build_xmp(
+        "K4_raster_source_missing", _raster_producer_bp(ids4.group), drawn_rows(ids4),
+        exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+        extra_items=[_monochrome_item(
+            _raster_consumer_bp(source=b"colorbalancergb"))])))
+
+    return written
+
+
 BASELINE_DIR = os.path.join(os.path.dirname(__file__), "baselines")
 
 
@@ -773,6 +977,34 @@ def build_baselines():
         blendif=0,
     )
     build_xmp("ZBASE_mask_disabled", bp_full, [], outdir=BASELINE_DIR)
+
+
+def build_raster_baselines():
+    """The K series' own pair of references. The A-J baselines vary a masked
+    *exposure*; in the K series exposure is only the producer (0 EV, a pixel
+    no-op) and what varies is a masked monochrome downstream of it, so those
+    baselines classify nothing there. Same two poles, same pipeline: the
+    consumer off ("mask is always zero") and the consumer on with a uniform
+    mask ("mask is always opaque")."""
+    os.makedirs(BASELINE_DIR, exist_ok=True)
+    last_num = len(PIPELINE) + 1
+    ids = MaskIds(996000)
+    op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
+    rows = masks_history_rows(last_num, ids, circle_state=op,
+                              square_state=op | DT_MASKS_STATE_UNION)
+
+    uniform_bp = pack_blend_params(
+        mask_mode=DEVELOP_MASK_ENABLED,
+        blend_cst=DEVELOP_BLEND_CS_RGB_SCENE,
+        mask_combine=DEVELOP_COMBINE_NORM, mask_id=0, blendif=0)
+
+    for name, (bp, enabled) in (
+            ("ZBASE_raster_sink_off", (uniform_bp, False)),
+            ("ZBASE_raster_sink_uniform", (uniform_bp, True))):
+        build_xmp(name, _raster_producer_bp(ids.group), rows,
+                  outdir=BASELINE_DIR,
+                  exposure_params_hex=EXPOSURE_NEUTRAL_PARAMS_HEX,
+                  extra_items=[_monochrome_item(bp, enabled=enabled)])
 
 
 def main():
@@ -806,17 +1038,22 @@ def main():
         generated.append(sc["name"])
         print(f"wrote {path}")
 
-    path = build_group_start_scenario()
-    generated.append("I1_two_adjacent_intersect_groups")
-    print(f"wrote {path}")
+    for name, path in build_operator_chain_scenarios():
+        generated.append(name)
+        print(f"wrote {path}")
 
     for name, path in build_refinement_scenarios():
+        generated.append(name)
+        print(f"wrote {path}")
+
+    for name, path in build_raster_scenarios():
         generated.append(name)
         print(f"wrote {path}")
 
     print(f"\n{len(generated)} scenarios generated: {', '.join(generated)}")
 
     build_baselines()
+    build_raster_baselines()
     print(f"baselines written to {BASELINE_DIR}")
 
 
