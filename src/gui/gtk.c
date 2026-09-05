@@ -185,6 +185,8 @@ static void _flexi_apply_side_classes(dt_ui_t *ui);
 static void _flexi_report_occlusion(dt_ui_t *ui);
 static void _flexi_overlay_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer d);
 static void _flexi_content_row_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer d);
+static gboolean _flexi_shape_highlighted(void);
+static void _flexi_halo_motion(GtkEventControllerMotion *controller, gdouble x, gdouble y, gpointer user_data);
 /* initialize the top container of panel */
 static GtkWidget *_ui_init_panel_container_top(GtkWidget *container);
 /* initialize the center container of panel */
@@ -1798,6 +1800,14 @@ static void _mouse_moved(GtkEventControllerMotion *controller,
 #if !GTK_CHECK_VERSION(4, 0, 0)
   if(event) gdk_event_free(event);
 #endif
+
+  dt_ui_t *ui = darktable.gui->ui;
+  if(ui && _flexi_shape_highlighted())
+  {
+    for(int i = 0; i < 2; i++)
+      if(ui->flexi_halo[i] && gtk_widget_get_visible(ui->flexi_halo[i]))
+        gtk_widget_set_visible(ui->flexi_halo[i], FALSE);
+  }
 }
 
 /* Feed touch motion to dt_control_mouse_moved() for panning and
@@ -3769,6 +3779,34 @@ static gboolean _flexi_canvas_op_pending(void)
   return FALSE;
 }
 
+// check if any shape element (a node, an edge, a control point or a whole shape)
+// is highlighted on canvas or being actively edited/dragged
+static gboolean _flexi_shape_highlighted(void)
+{
+  const dt_develop_t *dev = darktable.develop;
+  if(!dev || !dev->form_gui || !dev->form_visible) return FALSE;
+  const dt_masks_form_gui_t *gui = dev->form_gui;
+
+  if(gui->point_selected >= 0 || gui->point_border_selected >= 0
+     || gui->point_dragging >= 0 || gui->point_border_dragging >= 0)
+    return TRUE;
+
+  if(gui->seg_selected >= 0 || gui->seg_dragging >= 0
+     || gui->border_selected || gui->border_toggling)
+    return TRUE;
+
+  if(gui->feather_selected >= 0 || gui->feather_dragging >= 0
+     || gui->pivot_selected || gui->source_selected
+     || gui->source_dragging || gui->source_rotating)
+    return TRUE;
+
+  if(gui->form_selected || gui->form_dragging || gui->form_rotating
+     || dt_is_valid_maskid(gui->canvas_hover_formid))
+    return TRUE;
+
+  return FALSE;
+}
+
 
 // clicking a sliver pins the panel open on that side. The sliver only ever
 // stands for the module currently hosted in the (collapsed) flexi panel, which
@@ -4180,6 +4218,7 @@ static gboolean _flexi_sliver_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
   const gboolean is_halo = (w == ui->flexi_halo[0] || w == ui->flexi_halo[1]);
   if(is_halo && width > 1)
   {
+    if(_flexi_shape_highlighted()) return FALSE;
     const gboolean point_right = !_flexi_sliver_is_right(ui, w);
 
     GdkRGBA fg;
@@ -4428,6 +4467,51 @@ static GtkWidget *_flexi_build_sliver(dt_ui_t *ui, const gboolean right)
   return s;
 }
 
+static void _flexi_halo_motion(GtkEventControllerMotion *controller,
+                               gdouble x,
+                               gdouble y,
+                               gpointer user_data)
+{
+  dt_ui_t *ui = darktable.gui->ui;
+  GtkWidget *w = (GtkWidget *)user_data;
+  const gboolean right = _flexi_sliver_is_right(ui, w);
+  GtkWidget *center = dt_ui_center(ui);
+  if(!center) return;
+
+  gdouble cx = x;
+  if(right)
+  {
+    const int cw = gtk_widget_get_allocated_width(center);
+    const int hw = gtk_widget_get_allocated_width(w);
+    cx = cw - hw + x;
+  }
+  gdouble cy = y;
+
+  GdkEvent *event = dt_gui_get_current_event(GTK_EVENT_CONTROLLER(controller));
+  double pressure = 1.0;
+  if(event)
+  {
+    GdkDevice *device = dt_gdk_event_get_source_device(event);
+    if(device && gdk_device_get_source(device) == GDK_SOURCE_PEN)
+    {
+      gdk_event_get_axis(event, GDK_AXIS_PRESSURE, &pressure);
+      darktable.gui->have_pen_pressure = pressure != 1.0;
+    }
+  }
+
+  dt_control_mouse_moved(cx, cy, pressure,
+                         dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller)) & 0xf);
+#if !GTK_CHECK_VERSION(4, 0, 0)
+  if(event) gdk_event_free(event);
+#endif
+
+  if(_flexi_shape_highlighted())
+  {
+    gtk_widget_set_visible(w, FALSE);
+    dt_control_hinter_message("");
+  }
+}
+
 // The wide band the hairline grows into on approach. An overlay child of the
 // canvas, not a column: a column would push the image sideways every time the
 // pointer wandered near an edge. Carries the same handlers as the hairline, so
@@ -4455,6 +4539,7 @@ static GtkWidget *_flexi_build_halo(dt_ui_t *ui, const gboolean right)
                    G_CALLBACK(_flexi_sliver_crossing), NULL);
   g_signal_connect(G_OBJECT(h), "button-press-event",
                    G_CALLBACK(_flexi_sliver_button), NULL);
+  dt_gui_connect_motion(h, (GCallback)_flexi_halo_motion, NULL, NULL, h);
   gtk_widget_set_no_show_all(h, TRUE);
   gtk_overlay_add_overlay(GTK_OVERLAY(dt_ui_center_base(ui)), h);
   gtk_widget_hide(h);
@@ -4501,7 +4586,7 @@ static gboolean _flexi_proximity_poll(gpointer user_data)
   gboolean live[2] = { collapsed || ui->flexi_panel_right,
                        collapsed || !ui->flexi_panel_right };
 
-  if(!_flexi_canvas_op_pending() && gtk_widget_get_realized(base))
+  if(!_flexi_canvas_op_pending() && !_flexi_shape_highlighted() && gtk_widget_get_realized(base))
   {
     GdkWindow *win = gtk_widget_get_window(base);
     GdkDisplay *display = gtk_widget_get_display(base);
