@@ -646,8 +646,19 @@ void dt_group_events_post_expose(cairo_t *cr,
       // call only: a hovered list row/cluster member, else -- when nothing is
       // hovered -- the persistently selected shape.
       int eff = base_sel;
+      // a list-row hover must look exactly like a canvas hover, which takes two
+      // flags, not one: group_selected alone only brings out the feather and the
+      // anchors, while the bold outline every shape draws asks for
+      // form_selected on top of it (see the `selected` predicate in circle.c's
+      // post_expose, and its equivalent in every other shape). Forced on for
+      // this one call, the same way group_selected is, so nothing outside the
+      // draw sees a hover the pointer never made.
+      gboolean bold = FALSE;
       if(_panel_hovered(gui, fpt->formid, fpt->parentid))
+      {
         eff = pos;
+        bold = TRUE;
+      }
       else if(_panel_soloed(gui, fpt->formid, fpt->parentid))
         eff = pos;
       else if(!any_list_hover && base_sel < 0
@@ -657,9 +668,12 @@ void dt_group_events_post_expose(cairo_t *cr,
         eff = pos;
       else if(dt_is_valid_maskid(base_sel_bundle) && fpt->parentid == base_sel_bundle)
         eff = pos;
+      const gboolean base_form_selected = gui->form_selected;
       gui->group_selected = eff;
+      if(bold) gui->form_selected = TRUE;
       sel->functions->post_expose(cr, zoom_scale, gui, pos, g_list_length(sel->points));
       gui->group_selected = base_sel;
+      if(bold) gui->form_selected = base_form_selected;
     }
     pos++;
   }
