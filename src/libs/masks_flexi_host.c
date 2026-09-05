@@ -95,7 +95,7 @@ GtkWidget *gui_tool_box(dt_lib_module_t *self)
   dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
   if(!d->actions_box)
   {
-    d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+    d->actions_box = GTK_BOX(dt_gui_hbox());
     darktable.develop->proxy.masks_flexi_host.actions_box = d->actions_box;
   }
   return GTK_WIDGET(d->actions_box);
@@ -163,8 +163,8 @@ void gui_init(dt_lib_module_t *self)
 
   d->content_box = GTK_BOX(dt_gui_vbox());
   gtk_widget_set_name(GTK_WIDGET(d->content_box), "masks-flexi-host-content");
-  d->actions_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
-  d->toggle_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0));
+  d->actions_box = GTK_BOX(dt_gui_hbox());
+  d->toggle_box = GTK_BOX(dt_gui_hbox());
   gtk_widget_set_valign(GTK_WIDGET(d->actions_box), GTK_ALIGN_CENTER);
   gtk_widget_set_valign(GTK_WIDGET(d->toggle_box), GTK_ALIGN_CENTER);
   gtk_widget_show(GTK_WIDGET(d->actions_box));
