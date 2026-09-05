@@ -8261,13 +8261,14 @@ void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module)
   // actually changed, and the resulting burst of simultaneous panel
   // rebuilds was observed to perturb the right panel's scroll position.
   const gboolean had_empties = bd->empty_groups != NULL;
+  const gboolean had_content = bd->masks_list_sig != DT_INVALID_HASH;
   const gboolean flexi =
     module->blend_params && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI);
   _empty_groups_clear(bd);
   bd->insert_empty = NULL;
   bd->scaffold_seeded = FALSE;
   bd->masks_selection_seeded = FALSE;
-  if(had_empties || flexi)
+  if(had_empties || had_content || flexi)
   {
     bd->masks_list_sig = DT_INVALID_HASH;
     if(bd->masks_list_box) _queue_masks_list_rebuild(module);
@@ -17024,7 +17025,11 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     _box_set_visible(bd->masks_box, TRUE);
     // (re)build the per-shape composition list for this module's group -- only
     // for a live mask; with the mask off the list keeps what it last held
-    if(mode_flexi) _build_masks_list(module);
+    // unless the group was deleted or emptied
+    dt_masks_form_t *grp = _module_mask_group(module);
+    const gboolean has_group = grp && grp->points;
+    const gboolean had_list = bd->masks_list_sig != DT_INVALID_HASH;
+    if(mode_flexi || (!has_group && had_list)) _build_masks_list(module);
     // and nothing of an off mask belongs on canvas (this used to fall to the
     // classic branch below, which is now reached only by a live classic mask)
     if(!mask_enabled) dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
@@ -17066,6 +17071,9 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   gtk_widget_set_visible(bd->mask_enable_toggle, !module->hide_enable_button);
   gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
   gtk_widget_set_visible(bd->showmask, is_mask_enabled && !module->hide_enable_button);
+
+  if(darktable.develop && darktable.develop->gui_module == module)
+    _masks_flexi_relocate(module);
 
   DT_LEAVE_GUI_UPDATE();
 }
