@@ -372,6 +372,32 @@ static int _bundle_rotate_step(dt_iop_module_t *module,
   return 1;
 }
 
+// canvas -> list hover sync: highlight the matching row (or collapsed cluster
+// header) in the in-module mask list, or drop the highlight for INVALID_MASKID.
+// Only reported when the hovered shape changes.
+static void _group_hover_form(dt_iop_module_t *module,
+                              dt_masks_form_gui_t *gui,
+                              const dt_mask_id_t formid)
+{
+  if(gui->canvas_hover_formid == formid) return;
+  gui->canvas_hover_formid = formid;
+  dt_iop_gui_masks_hover_form(module, formid);
+}
+
+// does the cursor sit on any editable part of the form whose selection flags
+// were just refreshed? mirrors what the per-form mouse_moved implementations set
+static gboolean _form_under_cursor(const dt_masks_form_gui_t *gui)
+{
+  return gui->form_selected
+    || gui->border_selected
+    || gui->source_selected
+    || gui->pivot_selected
+    || gui->point_selected >= 0
+    || gui->feather_selected >= 0
+    || gui->seg_selected >= 0
+    || gui->point_border_selected >= 0;
+}
+
 static int _group_events_mouse_moved(dt_iop_module_t *module,
                                      const float pzx,
                                      const float pzy,
@@ -468,7 +494,17 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     if(rep) return 1;
     // if a point is in state editing, then we don't want that another
     // form can be selected
-    if(gui->point_edited >= 0) return 0;
+    if(gui->point_edited >= 0)
+    {
+      // the delegated pass above has just refreshed the hover flags, so sync the
+      // row highlight from them here: the code below that normally does it is
+      // skipped for as long as a node holds the selection, which would leave
+      // canvas_hover_formid latched on the last hovered shape indefinitely. That
+      // in turn keeps the panel halo suppressed with nothing under the cursor
+      // (gui/gtk.c:_flexi_shape_highlighted)
+      _group_hover_form(module, gui, _form_under_cursor(gui) ? sel->formid : INVALID_MASKID);
+      return 0;
+    }
   }
 
   // now we check if we are near a form
@@ -528,23 +564,13 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   if(sel && sel->functions)
   {
     gui->group_edited = gui->group_selected = sel_pos;
-    // canvas -> list hover sync: highlight the matching row (or collapsed cluster
-    // header) in the in-module mask list. Only when the hovered shape changes.
-    if(gui->canvas_hover_formid != sel_fpt->formid)
-    {
-      gui->canvas_hover_formid = sel_fpt->formid;
-      dt_iop_gui_masks_hover_form(module, sel_fpt->formid);
-    }
+    _group_hover_form(module, gui, sel_fpt->formid);
     return sel->functions->mouse_moved(module, pzx, pzy, pressure, which, zoom_scale,
                                        sel, sel_fpt->parentid, gui, gui->group_edited);
   }
 
   // nothing under the cursor: drop the list row hover highlight
-  if(dt_is_valid_maskid(gui->canvas_hover_formid))
-  {
-    gui->canvas_hover_formid = INVALID_MASKID;
-    dt_iop_gui_masks_hover_form(module, INVALID_MASKID);
-  }
+  _group_hover_form(module, gui, INVALID_MASKID);
 
   dt_control_queue_redraw_center();
   return 0;
