@@ -3817,6 +3817,12 @@ static gboolean _flexi_shape_highlighted(void)
 static void _flexi_sliver_activate(dt_ui_t *ui, const gboolean right)
 {
   dt_ui_flexi_panel_set_side(ui, right);
+  // record the side here and not only on the expand below: enabling the mask
+  // relocates the panel, and the relocate re-applies the stored side
+  // (_masks_flexi_relocate in develop/masks_gui_panel_host.c), which would pull
+  // the panel straight back to whichever edge the key still named -- the
+  // opposite one, on the click that moves it across.
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", right);
 
   dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
   if(module)

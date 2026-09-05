@@ -62,9 +62,21 @@ int _masks_panel_position(void)
 
 // which edge the panel is docked against. Not part of the position choice: a
 // the panel opens on whichever edge was clicked, and stays there.
+//
+// Until the user has pinned it once the key does not exist yet, and the panel
+// would fall to the left simply because that is what dt_conf_get_bool() returns
+// for an unset key. Land it next to the processing modules instead -- that is
+// the panel it belongs with, and it is the right-hand one unless
+// "plugins/darkroom/panel_swap" has moved it over (see
+// dt_ui_container_swap_left_right in views/view.c). Not written back here: the
+// derived side keeps tracking the preference until the user's first pin freezes
+// it (dt_ui_flexi_panel_set_collapsed in gui/gtk.c writes the key then).
 gboolean _masks_panel_side_right(void)
 {
-  return dt_conf_get_bool("plugins/darkroom/blend/masks_panel_side_right");
+  static const char *key = "plugins/darkroom/blend/masks_panel_side_right";
+  if(!dt_conf_key_exists(key))
+    return !dt_conf_get_bool("plugins/darkroom/panel_swap");
+  return dt_conf_get_bool(key);
 }
 
 void _masks_panel_set_side_right(const gboolean right)

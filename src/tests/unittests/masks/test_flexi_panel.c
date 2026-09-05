@@ -312,6 +312,36 @@ static void test_panel_position_preference_roundtrips(void **state)
   }
 }
 
+// which edge the panel docks against. Until the user has pinned it once the key
+// does not exist, and the panel must land next to the processing modules rather
+// than wherever an unset boolean happens to read.
+static void test_panel_side_defaults_to_the_processing_modules_side(void **state)
+{
+  dt_conf_remove_key("plugins/darkroom/blend/masks_panel_side_right");
+
+  // processing modules live on the right by default
+  dt_conf_set_bool("plugins/darkroom/panel_swap", FALSE);
+  assert_true(_masks_panel_side_right());
+
+  // ... and on the left once the two side panels are swapped
+  dt_conf_set_bool("plugins/darkroom/panel_swap", TRUE);
+  assert_false(_masks_panel_side_right());
+}
+
+// once the user has pinned the panel somewhere, that choice outranks the
+// processing-modules side: the panel stays where it was put, whatever
+// panel_swap says afterwards
+static void test_pinned_panel_side_outranks_the_default(void **state)
+{
+  dt_conf_set_bool("plugins/darkroom/panel_swap", FALSE);
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", FALSE);
+  assert_false(_masks_panel_side_right());
+
+  dt_conf_set_bool("plugins/darkroom/panel_swap", TRUE);
+  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", TRUE);
+  assert_true(_masks_panel_side_right());
+}
+
 // ---------------------------------------------------------------------------
 // mask panel & corner icon state transitions
 // ---------------------------------------------------------------------------
@@ -539,6 +569,10 @@ int main(void)
     cmocka_unit_test_setup_teardown(test_default_operator_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_panel_position_preference_roundtrips,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_panel_side_defaults_to_the_processing_modules_side,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_pinned_panel_side_outranks_the_default,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_teardown(test_panel_state_collapsed_module_shows_corner_icon, _teardown),
     cmocka_unit_test_teardown(test_panel_state_expanded_module_respects_pref, _teardown),

@@ -232,6 +232,21 @@ widget tree and real event delivery:
   and the single drop-indicator line between two groups.
 - **widget packing**, tooltips, drag icons, panel relocation between
   embedded / utility / left / right positions.
+- **in-place row refresh after an inversion.** Inverting a whole group refreshes
+  every row from one place (`_update_shape_row_state`), and a parametric row
+  shows its polarity in its sliders' markers rather than on the handle icon.
+  Check: with a group holding a drawn shape and a parametric element, "invert
+  all elements" must flip the shape's handle icon *and* the parametric row's
+  slider markers, exactly as inverting either one on its own does.
+- **hover highlight across an interaction.** Hovering a row highlights its shape
+  on the canvas; the highlight must survive the interaction, not just the
+  pointer being inside the row. Check: drag a row's opacity slider (or a
+  parametric slider) well outside the panel, and open a bauhaus popup from the
+  row -- the shape stays highlighted throughout, and stops being highlighted
+  once the pointer settles somewhere else. The highlight must also *look* like a
+  canvas hover, bold outline included, not just feather and anchors: check a
+  circle, an ellipse, a path, a brush stroke and a gradient side by side against
+  hovering each one on the canvas.
 
 
 ## gen_raster_matrix.py — raster masks, enumerated
