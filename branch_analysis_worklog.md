@@ -3828,3 +3828,29 @@ The checks read JSON, so `export` materialises harvest files for them. Teaching
 magic number) would let all five read the corpus directly, but it wants a
 library selector first: building one in-memory JSON tree for all twelve
 libraries at once is far more than any single check needs.
+
+## §54 -- the panel halo stayed hidden after clicking a path node
+
+`86b83e62` suppresses the flexi panel's approach halo while a mask element is
+under the cursor, so the halo cannot eat a click meant for a node or an edge.
+Reported symptom: after clicking a path node once, the halo stopped appearing
+at all, even with the cursor nowhere near the shape.
+
+The suspect was the wrong flag. `point_selected` is hover state, cleared at the
+top of every selection pass (`path.c:4101`) and re-set only within `as` of a
+node; it does not latch. The sticky flag is `point_edited`, the canvas sub-mode
+that reveals a node's two Bezier handles (`path.c:4265`) and makes them
+hit-testable (`path.c:4110`), and it is deliberate, not leftover.
+
+What latched was `canvas_hover_formid`, which `_flexi_shape_highlighted()` also
+tests. It is cleared in exactly one place, at the bottom of
+`_group_events_mouse_moved`, and `point_edited >= 0` returns before reaching it
+("we don't want that another form can be selected"). So for as long as a node
+held the selection, the last hovered shape stayed recorded as hovered forever.
+
+The fix syncs the hover id inside that early return, from the selection flags
+the delegated per-form pass has just refreshed, rather than from the delegated
+call's return value: a hovered shape in a non-`DT_MASKS_EDIT_FULL` mode returns
+0 while genuinely being hovered (`path.c:4210`), so the return value would drop
+the list-row highlight in that case. Both existing hover-sync sites now go
+through the same `_group_hover_form()` helper.
