@@ -1242,12 +1242,11 @@ void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
   GtkWidget *header = gtk_label_new(_("blend mask panel position"));
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(
-    header, _("where the blend mask panel (groups, elements, refinements)"
+  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements, refinements)"
               " is shown.\n"
               "moving to/from the utility module or a separate panel takes effect"
               " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
-  gtk_box_pack_start(GTK_BOX(box), header, FALSE, FALSE, 0);
+  dt_gui_box_add(box, header);
 
   static const struct
   {
@@ -1275,7 +1274,7 @@ void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
     if(!group) group = radios[i];
     g_object_set_data(G_OBJECT(radios[i]), "dt-panel-pos", GINT_TO_POINTER(items[i].pos));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(radios[i]), items[i].pos == cur_pos);
-    gtk_box_pack_start(GTK_BOX(box), radios[i], FALSE, FALSE, 0);
+    dt_gui_box_add(box, radios[i]);
   }
   --darktable.gui->reset;
 
