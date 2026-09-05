@@ -3460,6 +3460,7 @@ static GtkWidget *_ui_init_panel_container_bottom(GtkWidget *container)
 
 static int panel_drag_start_size = 0;
 static gdouble panel_drag_start_x = 0.0;
+static gboolean panel_canvas_toast_shown = FALSE;
 
 static void _panel_handle_button_pressed(GtkGestureSingle *gesture,
                                           gint n_press,
@@ -3497,6 +3498,7 @@ static void _panel_handle_button_pressed(GtkGestureSingle *gesture,
   else
     panel_drag_start_size = gtk_widget_get_allocated_width(widget);
 
+  panel_canvas_toast_shown = FALSE;
   darktable.gui->widgets.panel_handle_dragging = TRUE;
 }
 
@@ -3506,6 +3508,7 @@ static void _panel_handle_button_released(GtkGestureSingle *gesture,
                                           gdouble y,
                                           gpointer user_data)
 {
+  panel_canvas_toast_shown = FALSE;
   darktable.gui->widgets.panel_handle_dragging = FALSE;
 }
 
@@ -3570,7 +3573,8 @@ static void _panel_set_side_panel_width(GtkWidget *widget, const dt_ui_panel_t p
       used_w += gtk_widget_get_allocated_width(p);
   }
 
-  if(app_window_w - used_w < max_w)
+  const gboolean canvas_constrained = (app_window_w - used_w < max_w);
+  if(canvas_constrained)
     max_w = app_window_w - used_w;
 
   const int min_w = darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width");
@@ -3583,8 +3587,21 @@ static void _panel_set_side_panel_width(GtkWidget *widget, const dt_ui_panel_t p
   // shrink past min_panel_width is the honest answer.
   max_w = MAX(max_w, min_w);
 
-  int sx = panel_drag_start_size;
-  sx = CLAMP((int)(sx + delta_x), min_w, max_w);
+  const int target_w = (int)(panel_drag_start_size + delta_x);
+  if(target_w > max_w + (int)DT_PIXEL_APPLY_DPI(2) && canvas_constrained)
+  {
+    if(!panel_canvas_toast_shown)
+    {
+      dt_toast_log(_("cannot expand panel: minimum visible canvas size reached"));
+      panel_canvas_toast_shown = TRUE;
+    }
+  }
+  else if(target_w <= max_w)
+  {
+    panel_canvas_toast_shown = FALSE;
+  }
+
+  int sx = CLAMP(target_w, min_w, max_w);
   dt_ui_panel_set_size(darktable.gui->ui, panel, sx);
 }
 
@@ -3806,11 +3823,13 @@ static gboolean _flexi_handle_button_callback(GtkWidget *w,
       GtkWidget *widget = (GtkWidget *)user_data;
       panel_drag_start_x = e->x_root;
       panel_drag_start_size = gtk_widget_get_allocated_width(widget);
+      panel_canvas_toast_shown = FALSE;
       darktable.gui->widgets.panel_handle_dragging = TRUE;
       _flexi_handle_dragged = FALSE;
     }
     else if(e->type == GDK_BUTTON_RELEASE)
     {
+      panel_canvas_toast_shown = FALSE;
       darktable.gui->widgets.panel_handle_dragging = FALSE;
       // a press that never moved was a click, and a click here hides the panel.
       // Deciding on release rather than press is what lets one control carry
