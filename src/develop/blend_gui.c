@@ -564,7 +564,10 @@ void _reparent_into(GtkWidget *w,
   if(at_end)
     gtk_box_pack_end(GTK_BOX(parent), w, expand, expand, 0);
   else
-    gtk_box_pack_start(GTK_BOX(parent), w, expand, expand, 0);
+  {
+    if(expand) gtk_widget_set_hexpand(w, TRUE);
+    dt_gui_box_add(parent, w);
+  }
 
   if(was_visible) gtk_widget_show(w);
   g_object_unref(w);
@@ -597,9 +600,9 @@ static void _masks_toolbar_place_shapes_box(dt_iop_gui_blend_data_t *bd)
 // stay apart proportionally to the panel's width instead of hugging the left
 static void _toolbar_pack_stretch(GtkWidget *box)
 {
-  GtkWidget *stretch = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *stretch = dt_gui_hbox();
   gtk_widget_show(stretch);
-  gtk_box_pack_start(GTK_BOX(box), stretch, TRUE, TRUE, 0);
+  dt_gui_box_add(box, dt_gui_expand(stretch));
 }
 
 // defined much further down (grouping shape rows / naming clusters); forward
@@ -2112,7 +2115,7 @@ static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
   gtk_widget_set_tooltip_text(var, tip);                                          \
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(var), active);                   \
   g_signal_connect(G_OBJECT(var), "toggled", G_CALLBACK(cb), module);             \
-  gtk_box_pack_start(GTK_BOX(box), var, FALSE, FALSE, 0);
+  dt_gui_box_add(box, var);
 
 static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module)
 {
@@ -2121,7 +2124,7 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
   dt_gui_add_class(header, "dt_section_label");
   gtk_widget_set_tooltip_text(header,
                               _("behavioural options for the blend mask panel."));
-  gtk_box_pack_start(GTK_BOX(box), header, FALSE, FALSE, 0);
+  dt_gui_box_add(box, header);
 
   // the checkbox reads "sticky" (on = remember last opacity for new shapes),
   // the conf key is stored inverted (absent/FALSE = sticky, the default) so
@@ -2192,7 +2195,7 @@ static GtkWidget *_masks_pref_radio(GtkWidget *box,
     group ? GTK_RADIO_BUTTON(group) : NULL, label);
   g_object_set_data(G_OBJECT(rb), key, GINT_TO_POINTER(data));
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rb), active);
-  gtk_box_pack_start(GTK_BOX(box), rb, FALSE, FALSE, 0);
+  dt_gui_box_add(box, rb);
   return rb;
 }
 
@@ -2202,7 +2205,7 @@ static GtkWidget *_masks_pref_section(GtkWidget *box, const gchar *title, const 
   gtk_label_set_justify(GTK_LABEL(lb), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(lb, "dt_section_label");
   if(tip) gtk_widget_set_tooltip_text(lb, tip);
-  gtk_box_pack_start(GTK_BOX(box), lb, FALSE, FALSE, 0);
+  dt_gui_box_add(box, lb);
   return lb;
 }
 
@@ -2232,7 +2235,7 @@ static void _blendif_options_callback(GtkButton *button,
   const gboolean blendif_ok = bd->blendif_support && bd->blendif_inited;
 
   GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *box = dt_gui_vbox();
   gtk_container_add(GTK_CONTAINER(pop), box);
 
   _masks_pref_section(box, _("blend mask panel settings"), NULL);
@@ -2305,7 +2308,7 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
     // alone. Same popover shape as the full one, minus every section that needs
     // a module to talk about.
     GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *box = dt_gui_vbox();
     gtk_container_add(GTK_CONTAINER(pop), box);
     _masks_pref_section(box, _("blend mask panel settings"), NULL);
     _add_masks_panel_position_box(box, NULL);
@@ -3728,7 +3731,7 @@ static void _refine_update_header(dt_iop_module_t *module)
 
   if(icon_w && bd->masks_refine_icon_box)
   {
-    gtk_box_pack_start(GTK_BOX(bd->masks_refine_icon_box), icon_w, FALSE, FALSE, 0);
+    dt_gui_box_add(bd->masks_refine_icon_box, icon_w);
     gtk_widget_show_all(bd->masks_refine_icon_box);
   }
 
@@ -4858,8 +4861,8 @@ static GtkWidget *_style_inline_opacity_box(GtkWidget *box, dt_iop_module_t *mod
 
   GtkWidget *val_widget = _make_inline_opacity_value_widget(slider, module);
 
-  GtkWidget *container = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(container), box, FALSE, FALSE, 0);
+  GtkWidget *container = dt_gui_hbox();
+  dt_gui_box_add(container, box);
   gtk_box_pack_end(GTK_BOX(container), val_widget, TRUE, TRUE, 0);
   gtk_widget_set_halign(val_widget, GTK_ALIGN_END);
   gtk_widget_set_valign(val_widget, GTK_ALIGN_CENTER);
@@ -4886,13 +4889,12 @@ static void _pack_row_header(GtkWidget *row,
                              GtkWidget *actions,
                              GtkWidget *expander_toggle)
 {
-  GtkWidget *hbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *hbox = dt_gui_hbox();
 
-  if(handle) gtk_box_pack_start(GTK_BOX(hbox), handle, FALSE, FALSE, 0);
+  if(handle) dt_gui_box_add(hbox, handle);
   if(name)
   {
-    gtk_widget_set_hexpand(name, TRUE);
-    gtk_box_pack_start(GTK_BOX(hbox), name, TRUE, TRUE, 0);
+    dt_gui_box_add(hbox, dt_gui_expand(name));
   }
 
   // 1. Right-most slot: expander arrow (if present)
@@ -4931,7 +4933,7 @@ static void _pack_row_header(GtkWidget *row,
     gtk_box_pack_end(GTK_BOX(hbox), badge_stack, FALSE, FALSE, DT_PIXEL_APPLY_DPI(2));
   }
 
-  gtk_box_pack_start(GTK_BOX(row), hbox, TRUE, TRUE, 0);
+  dt_gui_box_add(row, dt_gui_expand(hbox));
 }
 
 // Recursively walk a stored mask group, recording each *leaf* shape's effective
@@ -5527,12 +5529,13 @@ static GtkWidget *_make_lowop_badge(void)
 // gap between the two squares.
 static GtkWidget *_make_badge_stack(GtkWidget *lowop_badge, GtkWidget *solo_status_badge)
 {
-  GtkWidget *stack = gtk_box_new(GTK_ORIENTATION_VERTICAL, DT_PIXEL_APPLY_DPI(2));
+  GtkWidget *stack = dt_gui_vbox();
+  gtk_box_set_spacing(GTK_BOX(stack), DT_PIXEL_APPLY_DPI(2));
   gtk_widget_set_valign(stack, GTK_ALIGN_CENTER);
   dt_gui_add_class(stack, "mask-badge-stack");
-  if(lowop_badge) gtk_box_pack_start(GTK_BOX(stack), lowop_badge, FALSE, FALSE, 0);
+  if(lowop_badge) dt_gui_box_add(stack, lowop_badge);
   if(solo_status_badge)
-    gtk_box_pack_start(GTK_BOX(stack), solo_status_badge, FALSE, FALSE, 0);
+    dt_gui_box_add(stack, solo_status_badge);
   return stack;
 }
 
@@ -6382,10 +6385,9 @@ static void _stage_new_group(dt_iop_module_t *module,
 static GtkWidget *_op_menu_item(DTGTKCairoPaintIconFunc paint, const char *name)
 {
   GtkWidget *it = gtk_menu_item_new();
-  GtkWidget *hb = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(6));
-  gtk_box_pack_start(GTK_BOX(hb), gtk_image_new_from_pixbuf(_op_pixbuf(paint)), FALSE,
-                     FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(hb), gtk_label_new(_(name)), FALSE, FALSE, 0);
+  GtkWidget *hb = dt_gui_hbox();
+  gtk_box_set_spacing(GTK_BOX(hb), DT_PIXEL_APPLY_DPI(6));
+  dt_gui_box_add(hb, gtk_image_new_from_pixbuf(_op_pixbuf(paint)), gtk_label_new(_(name)));
   gtk_container_add(GTK_CONTAINER(it), hb);
   return it;
 }
@@ -6401,11 +6403,11 @@ static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u
 static GtkWidget *
 _make_op_combo(GtkWidget **inner, DTGTKCairoPaintIconFunc icon, GCallback press)
 {
-  GtkWidget *box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *box = dt_gui_hbox();
   dt_gui_add_class(box, "mask-op-combo");
   GtkWidget *btn = dtgtk_button_new(icon, 0, NULL);
   gtk_widget_set_valign(btn, GTK_ALIGN_CENTER);
-  gtk_box_pack_start(GTK_BOX(box), btn, FALSE, FALSE, 0);
+  dt_gui_box_add(box, btn);
   // use g_signal_connect_data directly: the checked g_signal_connect macro only
   // accepts a literal G_CALLBACK(func), not a GCallback variable.
   //
@@ -9603,7 +9605,7 @@ static void _start_group_rename(GtkWidget *lbl_box,
   g_object_set_data(G_OBJECT(entry), "group-cid", GINT_TO_POINTER(cid));
   g_object_set_data(G_OBJECT(entry), "eg", eg);
   g_object_set_data(G_OBJECT(lbl_box), "title-child", entry);
-  gtk_box_pack_start(GTK_BOX(lbl_box), entry, TRUE, TRUE, 0);
+  dt_gui_box_add(lbl_box, dt_gui_expand(entry));
   gtk_box_reorder_child(GTK_BOX(lbl_box), entry, 0);
   g_signal_connect(G_OBJECT(entry), "activate", G_CALLBACK(_group_rename_commit), module);
   g_signal_connect(G_OBJECT(entry), "focus-out-event",
@@ -11294,7 +11296,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
 {
   const guint kind = _form_kind(form);
 
-  GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *row = dt_gui_hbox();
   GtkWidget *handle = _make_drag_handle(
     _kind_icon_paint(kind), FALSE,
     _("this shape has not been added yet -- finish drawing it on canvas to add it"));
@@ -11345,8 +11347,8 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   gtk_widget_set_no_show_all(opacity, TRUE);
   gtk_widget_hide(opacity);
 
-  GtkWidget *opacity_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(opacity_slot), opacity, FALSE, FALSE, 0);
+  GtkWidget *opacity_slot = dt_gui_hbox();
+  dt_gui_box_add(opacity_slot, opacity);
   gtk_box_pack_end(GTK_BOX(opacity_slot), val_widget, TRUE, TRUE, 0);
   gtk_widget_set_halign(val_widget, GTK_ALIGN_END);
   gtk_widget_set_valign(opacity_slot, GTK_ALIGN_CENTER);
@@ -11392,7 +11394,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
       _("fade-out border the next node placed on this path will start with."));
-    gtk_box_pack_start(GTK_BOX(props_box), feather, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, feather);
   }
   else if(kind == DT_MASKS_CIRCLE)
   {
@@ -11404,7 +11406,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                                _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].format,
                                _("radius of the next circle, before it is placed -- same "
                                  "as scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), size, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, size);
 
     GtkWidget *feather = _pending_conf_slider_new(
       module, DT_MASKS_CONF(form->type, circle, border),
@@ -11414,7 +11416,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
       _("fade-out border of the next circle, before it is placed --\n"
         "same as shift+scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), feather, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, feather);
   }
   else if(kind == DT_MASKS_ELLIPSE)
   {
@@ -11441,7 +11443,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                      G_CALLBACK(_pending_ellipse_size_changed), NULL);
     dt_gui_add_class(size, "mask-props-slider");
     dt_bauhaus_widget_set_quad_visibility(size, FALSE);
-    gtk_box_pack_start(GTK_BOX(props_box), size, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, size);
 
     GtkWidget *feather = _pending_conf_slider_new(
       module, DT_MASKS_CONF(form->type, ellipse, border),
@@ -11451,7 +11453,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
       _("fade-out border of the next ellipse, before it is placed --\n"
         "same as shift+scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), feather, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, feather);
 
     GtkWidget *rotation =
       _pending_conf_slider_new(module, DT_MASKS_CONF(form->type, ellipse, rotation),
@@ -11461,7 +11463,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                                _blend_masks_properties[DT_MASKS_PROPERTY_ROTATION].format,
                                _("rotation of the next ellipse, before it is placed --\n"
                                  "same as ctrl+shift+scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), rotation, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, rotation);
   }
   else if(kind == DT_MASKS_GRADIENT)
   {
@@ -11470,14 +11472,14 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_COMPRESSION].name, 0.001f, 1.0f, 2, "%",
       _("compression of the next gradient, before it is placed --\n"
         "same as shift+scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), compression, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, compression);
 
     GtkWidget *curvature = _pending_conf_slider_new(
       module, DT_MASKS_CONF(form->type, gradient, curvature),
       _blend_masks_properties[DT_MASKS_PROPERTY_CURVATURE].name, -2.0f, 2.0f, 2, NULL,
       _("curvature of the next gradient, before it is placed --\n"
         "same as scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), curvature, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, curvature);
   }
   else if(kind == DT_MASKS_BRUSH)
   {
@@ -11488,7 +11490,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].format,
       _("width of the next brush stroke -- same as scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), size, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, size);
 
     GtkWidget *hardness = _pending_conf_slider_new(
       module, DT_MASKS_CONF(form->type, brush, hardness),
@@ -11497,7 +11499,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_HARDNESS].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_HARDNESS].format,
       _("hardness of the next brush stroke -- same as shift+scrolling on canvas."));
-    gtk_box_pack_start(GTK_BOX(props_box), hardness, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, hardness);
   }
 
 #ifdef HAVE_AI
@@ -11526,7 +11528,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_SMOOTHING));
     g_signal_connect(G_OBJECT(sm), "value-changed",
                      G_CALLBACK(_pending_ai_slider_changed), module);
-    gtk_box_pack_start(GTK_BOX(props_box), sm, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, sm);
     bd->pending_ai_smoothing_slider = sm;
 
     bd->pending_ai_cleanup_last = (float)cleanup;
@@ -11547,7 +11549,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_CLEANUP));
     g_signal_connect(G_OBJECT(cl), "value-changed",
                      G_CALLBACK(_pending_ai_slider_changed), module);
-    gtk_box_pack_start(GTK_BOX(props_box), cl, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, cl);
     bd->pending_ai_cleanup_slider = cl;
   }
 #endif
@@ -11578,15 +11580,15 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       GtkWidget *pressure =
         dt_gui_preferences_enum(DT_ACTION(module), "pressure_sensitivity");
       dt_bauhaus_widget_set_label(pressure, N_("blend"), N_("pressure"));
-      gtk_box_pack_start(GTK_BOX(props_box), pressure, FALSE, FALSE, 0);
+      dt_gui_box_add(props_box, pressure);
     }
 
     GtkWidget *smoothing = dt_gui_preferences_enum(DT_ACTION(module), "brush_smoothing");
     dt_bauhaus_widget_set_label(smoothing, N_("blend"), N_("smoothing"));
-    gtk_box_pack_start(GTK_BOX(props_box), smoothing, FALSE, FALSE, 0);
+    dt_gui_box_add(props_box, smoothing);
   }
 
-  gtk_box_pack_start(GTK_BOX(row_vbox), props_box, FALSE, FALSE, 0);
+  dt_gui_box_add(row_vbox, props_box);
 
   GtkWidget *pending_evbox = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(pending_evbox), TRUE);
@@ -11707,9 +11709,9 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // wrapped in a box, exactly like a populated group's own lbl_box, so
   // ctrl+click can swap the label for a rename entry in place (see
   // _empty_header_press / _group_rename_commit)
-  GtkWidget *lbl_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *lbl_box = dt_gui_hbox();
   dt_gui_add_class(lbl_box, "mask-row-name");
-  gtk_box_pack_start(GTK_BOX(lbl_box), lbl, TRUE, TRUE, 0);
+  dt_gui_box_add(lbl_box, dt_gui_expand(lbl));
   g_object_set_data(G_OBJECT(lbl_box), "title-child", lbl);
   GtkWidget *labevt = gtk_event_box_new();
   // windowless: the label must not capture the button-press/motion stream, or
@@ -11739,7 +11741,7 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   g_free(egtip);
   g_object_set_data(G_OBJECT(labevt), "eg", eg);
 
-  GtkWidget *hdr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *hdr = dt_gui_hbox();
   // unique per-kind id (#mask-empty-header-row) so CSS/lookups can target this
   // row kind directly, without combinator rules against other row kinds that
   // used to share the generic "mask-list-row" name; .mask-panel-row is the
@@ -11817,8 +11819,8 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   gtk_widget_set_no_show_all(opacity_slider, TRUE);
   gtk_widget_hide(opacity_slider);
 
-  GtkWidget *opacity_inner = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(opacity_inner), opacity_slider, FALSE, FALSE, 0);
+  GtkWidget *opacity_inner = dt_gui_hbox();
+  dt_gui_box_add(opacity_inner, opacity_slider);
   gtk_box_pack_end(GTK_BOX(opacity_inner), val_widget, TRUE, TRUE, 0);
   gtk_widget_set_halign(val_widget, GTK_ALIGN_END);
   gtk_widget_set_valign(opacity_inner, GTK_ALIGN_CENTER);
@@ -11857,7 +11859,7 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // group's own header uses -- keeps a selected empty group's highlight
   // wrapping its whole body (header + any pending-shape placeholder row)
   // instead of hdr's own edges alone.
-  GtkWidget *block = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *block = dt_gui_vbox();
   // a staged group is a group: its block carries the same id/class as a real
   // one, which is what gives it the shared spacing and -- the reason this is
   // unconditional rather than only when a pending row exists, as it used to be
@@ -11866,7 +11868,7 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
   // no indicator at all.
   gtk_widget_set_name(block, "mask-group-block");
   dt_gui_add_class(block, "mask-group-block");
-  gtk_box_pack_start(GTK_BOX(block), hdr_evbox, FALSE, FALSE, 0);
+  dt_gui_box_add(block, hdr_evbox);
 
   // highlight this group's frame while a drag hovers it. The frame is the whole
   // block, not just the header row: a staged group's block can also hold the
@@ -11910,13 +11912,12 @@ static void _pack_empty_group_header(dt_iop_module_t *module,
       // box carries (see _build_masks_list's own elem_box), so the pending
       // row reads as nested inside this group instead of sitting flush with
       // the header at the group's own indent level.
-      GtkWidget *pending_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+      GtkWidget *pending_box = dt_gui_vbox();
       gtk_widget_set_name(pending_box, "mask-group-elements");
       dt_gui_add_class(pending_box, "masks-list");
       dt_gui_add_class(pending_box, "mask-group-elements");
-      gtk_box_pack_start(GTK_BOX(pending_box), _make_pending_shape_row(module, pending),
-                         FALSE, FALSE, 0);
-      gtk_box_pack_start(GTK_BOX(block), pending_box, FALSE, FALSE, 0);
+      dt_gui_box_add(pending_box, _make_pending_shape_row(module, pending));
+      dt_gui_box_add(block, pending_box);
       // the "one visual card" framing this body needs (.mask-group-block) is
       // now applied unconditionally where the block is created above
     }
@@ -13729,9 +13730,9 @@ static GtkWidget *_make_param_bypass_btn(const char *tooltip,
 // slightly-offset column of their own.
 static GtkWidget *_make_param_bypass_slot(GtkWidget *btn)
 {
-  GtkWidget *slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *slot = dt_gui_hbox();
   dt_gui_add_class(slot, "mask-param-bypass-slot");
-  gtk_box_pack_start(GTK_BOX(slot), btn, TRUE, TRUE, 0);
+  dt_gui_box_add(slot, dt_gui_expand(btn));
   return slot;
 }
 
@@ -13788,7 +13789,7 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   // both real pickers stay fully functional (dt_color_picker_click below
   // arms them programmatically), just never shown -- see master_picker,
   // built after them, which is the row's one visible button.
-  GtkWidget *picker_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *picker_box = dt_gui_hbox();
   gtk_widget_set_size_request(picker_box, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_valign(picker_box, GTK_ALIGN_CENTER);
   dt_gui_add_class(picker_box, "mask-within-combo");
@@ -13841,7 +13842,7 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
                    G_CALLBACK(_param_row_master_picker_pressed), ed);
   g_signal_connect(master_gesture, "begin",
                    G_CALLBACK(_param_row_master_picker_begin_claim), NULL);
-  gtk_box_pack_start(GTK_BOX(picker_box), ed->master_picker, FALSE, FALSE, 0);
+  dt_gui_box_add(picker_box, ed->master_picker);
 
   ed->boost_slider = dt_bauhaus_slider_new_with_range(module, 0.0f, 18.0f, 0, 0.0f, 3);
   dt_bauhaus_slider_set_format(ed->boost_slider, _(" EV"));
@@ -13913,11 +13914,10 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_grid_attach(GTK_GRID(sliders_grid), input_lbl, 0, 0, 1, 1);
   ed->input_lbl = input_lbl;
 
-  GtkWidget *input_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *input_slot = dt_gui_hbox();
   gtk_widget_set_hexpand(input_slot, TRUE);
   gtk_widget_set_valign(GTK_WIDGET(ed->filter[0].slider), GTK_ALIGN_CENTER);
-  gtk_box_pack_start(GTK_BOX(input_slot), GTK_WIDGET(ed->filter[0].slider), TRUE, TRUE,
-                     0);
+  dt_gui_box_add(input_slot, dt_gui_expand(ed->filter[0].slider));
   gtk_grid_attach(GTK_GRID(sliders_grid), input_slot, 1, 0, 1, 1);
   ed->input_slot = input_slot;
 
@@ -13933,11 +13933,10 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_grid_attach(GTK_GRID(sliders_grid), output_lbl, 0, 1, 1, 1);
   ed->output_lbl = output_lbl;
 
-  GtkWidget *output_slot = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *output_slot = dt_gui_hbox();
   gtk_widget_set_hexpand(output_slot, TRUE);
   gtk_widget_set_valign(GTK_WIDGET(ed->filter[1].slider), GTK_ALIGN_CENTER);
-  gtk_box_pack_start(GTK_BOX(output_slot), GTK_WIDGET(ed->filter[1].slider), TRUE, TRUE,
-                     0);
+  dt_gui_box_add(output_slot, dt_gui_expand(ed->filter[1].slider));
   gtk_grid_attach(GTK_GRID(sliders_grid), output_slot, 1, 1, 1, 1);
   ed->output_slot = output_slot;
 
@@ -14038,7 +14037,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   const dt_mask_id_t fid = fpt->formid;
-  GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+  GtkWidget *row = dt_gui_hbox();
 
   // column 0 -- drag handle (the reliable drag source for moving the shape onto
   // another group), showing this shape's own kind icon (circle/path/...), or,
@@ -14361,14 +14360,14 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // border highlight is on this box (a GtkBox renders its CSS frame reliably;
   // a GtkEventBox does not) and carries the form id so _update_row_selection /
   // _dock_editor_under can find it without a rebuild.
-  GtkWidget *row_vbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  GtkWidget *row_vbox = dt_gui_vbox();
   // unique per-kind id (#mask-shape-row) -- shared by every element kind (drawn
   // shape, parametric, raster), which all go through this same function; see
   // .mask-panel-row in darktable.css for the base styling shared with every
   // other row/header kind in the panel.
   gtk_widget_set_name(row_vbox, "mask-shape-row");
   dt_gui_add_class(row_vbox, "mask-panel-row");
-  gtk_box_pack_start(GTK_BOX(row_vbox), row_evbox, FALSE, FALSE, 0);
+  dt_gui_box_add(row_vbox, row_evbox);
   g_object_set_data(G_OBJECT(row_evbox), "row-vbox", row_vbox);
   g_object_set_data(G_OBJECT(evbox), "row-vbox", row_vbox);
 
@@ -14427,7 +14426,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                      G_CALLBACK(_row_crossing), module);
     // clicking the editor's own background selects this element, not its group
     _wire_element_click_surface(param_evbox, module, fid, handle, evbox);
-    gtk_box_pack_start(GTK_BOX(row_vbox), param_evbox, FALSE, FALSE, 0);
+    dt_gui_box_add(row_vbox, param_evbox);
     // "param-editor-box" must keep pointing at the editor itself (not the
     // hover wrapper): _masks_param_inout_toggled / _masks_param_compact_press
     // look up the "param-editor" data that _build_param_row_editor attached
@@ -14455,7 +14454,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                      G_CALLBACK(_row_crossing), module);
     // same as the parametric editor above: this is still inside the element
     _wire_element_click_surface(props_evbox, module, fid, handle, evbox);
-    gtk_box_pack_start(GTK_BOX(row_vbox), props_evbox, FALSE, FALSE, 0);
+    dt_gui_box_add(row_vbox, props_evbox);
   }
 
   // this element belongs to a bypassed group (the bypass bit is broadcast onto
@@ -15016,9 +15015,9 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     // used to live in here too, but that let their visibility change this
     // box's own width, throwing off the fixed title column every other row
     // in the panel now shares (see labevt's size request below).
-    GtkWidget *lbl_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    GtkWidget *lbl_box = dt_gui_hbox();
     dt_gui_add_class(lbl_box, "mask-row-name");
-    gtk_box_pack_start(GTK_BOX(lbl_box), lbl, TRUE, TRUE, 0);
+    dt_gui_box_add(lbl_box, dt_gui_expand(lbl));
     // tagged so _group_header_press's ctrl+click can find (and later replace)
     // whichever of lbl / the rename entry currently occupies this slot
     g_object_set_data(G_OBJECT(lbl_box), "title-child", lbl);
@@ -15164,7 +15163,7 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     g_signal_connect(G_OBJECT(group_opacity_slider), "button-press-event",
                      G_CALLBACK(_group_opacity_press), module);
 
-    GtkWidget *hdr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    GtkWidget *hdr = dt_gui_hbox();
     // unique per-kind id (#mask-group-header-row); .mask-panel-row is the
     // shared base styling class every row/header kind in the panel keeps
     gtk_widget_set_name(hdr, "mask-group-header-row");
@@ -15180,9 +15179,8 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     gtk_widget_set_no_show_all(group_opacity_slider, TRUE);
     gtk_widget_hide(group_opacity_slider);
 
-    GtkWidget *group_opacity_inner = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_start(GTK_BOX(group_opacity_inner), group_opacity_slider, FALSE, FALSE,
-                       0);
+    GtkWidget *group_opacity_inner = dt_gui_hbox();
+    dt_gui_box_add(group_opacity_inner, group_opacity_slider);
     gtk_box_pack_end(GTK_BOX(group_opacity_inner), group_val_widget, FALSE, FALSE, 0);
     gtk_widget_set_halign(group_val_widget, GTK_ALIGN_END);
     gtk_widget_set_valign(group_opacity_inner, GTK_ALIGN_CENTER);
@@ -15307,13 +15305,13 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     // consume their clicks first; only what falls through reaches here.
     GtkWidget *group_block = gtk_event_box_new();
     gtk_event_box_set_visible_window(GTK_EVENT_BOX(group_block), TRUE);
-    GtkWidget *block_inner = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *block_inner = dt_gui_vbox();
     gtk_container_add(GTK_CONTAINER(group_block), block_inner);
     // id mirrors the class for direct CSS targeting alongside the existing
     // class-based rules (shared by every real group's own block instance)
     gtk_widget_set_name(group_block, "mask-group-block");
     dt_gui_add_class(group_block, "mask-group-block");
-    gtk_box_pack_start(GTK_BOX(block_inner), hdr_evbox, FALSE, FALSE, 0);
+    dt_gui_box_add(block_inner, hdr_evbox);
     g_object_set_data(G_OBJECT(hdr_evbox), "header-widget", group_block);
     // "header-widget" above targets the whole block (selection shades the
     // group's entire body); solo-suppression dimming (_apply_group_header_dimming)
@@ -15393,7 +15391,7 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
        && (dt_mask_id_t)cid == bd->panel_selected_group_cid)
       dt_gui_add_class(group_block, "mask-list-row-selected");
 
-    GtkWidget *elem_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *elem_box = dt_gui_vbox();
     // indent/inset entirely via CSS (.mask-group-elements's margin-left/
     // margin-right in darktable.css), not hardcoded here. id mirrors the
     // class for direct CSS targeting alongside the existing class-based rules
@@ -15412,10 +15410,9 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
     // commits (a new element is inserted above the run's current top member).
     if(pending_form && bd->insert_active && !bd->insert_realize_empty
        && g_list_find(formids, GINT_TO_POINTER(bd->insert_after_fid)))
-      gtk_box_pack_start(GTK_BOX(elem_box), _make_pending_shape_row(module, pending_form),
-                         FALSE, FALSE, 0);
+      dt_gui_box_add(elem_box, _make_pending_shape_row(module, pending_form));
 
-    gtk_box_pack_start(GTK_BOX(block_inner), elem_box, FALSE, FALSE, 0);
+    dt_gui_box_add(block_inner, elem_box);
 
     gtk_box_pack_end(GTK_BOX(bd->masks_list_box), group_block, FALSE, FALSE, 0);
 
@@ -15697,7 +15694,7 @@ static void _pack_group_elements(dt_iop_module_t *module,
     // nested one level deeper than a plain (unclustered) element row, via CSS
     // (.mask-cluster-elements' own margin-left in darktable.css), so expanding
     // a cluster visually reads as revealing its members as its own children.
-    GtkWidget *inner = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *inner = dt_gui_vbox();
     // id mirrors the class for direct CSS targeting alongside the existing
     // class-based rules (shared by every cluster's own elements-box instance)
     gtk_widget_set_name(inner, "mask-cluster-elements");
@@ -15749,16 +15746,15 @@ static void _pack_group_elements(dt_iop_module_t *module,
     GtkWidget *kicon =
       _make_drag_handle(_kind_icon_paint(kind), TRUE, _kind_name(kind, FALSE));
     // label and disclosure triangle side-by-side
-    GtkWidget *lblbox = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_PIXEL_APPLY_DPI(4));
-    gtk_box_pack_start(GTK_BOX(lblbox), lbl, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(lblbox), arrow, FALSE, FALSE, 0);
-    GtkWidget *chdr = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    GtkWidget *lblbox = dt_gui_hbox();
+    gtk_box_set_spacing(GTK_BOX(lblbox), DT_PIXEL_APPLY_DPI(4));
+    dt_gui_box_add(lblbox, lbl, arrow);
+    GtkWidget *chdr = dt_gui_hbox();
     // unique per-kind id (#mask-cluster-header-row); .mask-panel-row is the
     // shared base styling class every row/header kind in the panel keeps
     gtk_widget_set_name(chdr, "mask-cluster-header-row");
     dt_gui_add_class(chdr, "mask-panel-row");
-    gtk_box_pack_start(GTK_BOX(chdr), kicon, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(chdr), lblbox, TRUE, TRUE, 0);
+    dt_gui_box_add(chdr, kicon, dt_gui_expand(lblbox));
     GtkWidget *hdr_evbox = gtk_event_box_new();
     gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evbox), TRUE);
     gtk_container_add(GTK_CONTAINER(hdr_evbox), chdr);
@@ -15812,9 +15808,8 @@ static void _pack_group_elements(dt_iop_module_t *module,
     g_signal_connect(G_OBJECT(arrow), "button-release-event",
                      G_CALLBACK(_element_cluster_arrow_release), NULL);
 
-    GtkWidget *cbox = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
-    gtk_box_pack_start(GTK_BOX(cbox), hdr_evbox, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(cbox), rev, FALSE, FALSE, 0);
+    GtkWidget *cbox = dt_gui_vbox();
+    dt_gui_box_add(cbox, hdr_evbox, rev);
     gtk_box_pack_end(GTK_BOX(container), cbox, FALSE, FALSE, 0);
 
     // same "fill the cracks" fix as the group's own block above: the gaps
@@ -15990,7 +15985,7 @@ static void _rebuild_param_channel_buttons(dt_iop_module_t *module)
     dt_gui_connect_motion(btn, NULL, _param_channel_button_enter_cb,
                           _param_channel_button_leave_cb, module);
     gtk_widget_show(btn);
-    gtk_box_pack_start(GTK_BOX(bd->masks_param_channels_inner), btn, FALSE, FALSE, 0);
+    dt_gui_box_add(bd->masks_param_channels_inner, btn);
     // makes each channel button individually shortcut-assignable, like the
     // add-shape buttons (dt_iop_togglebutton_new does this internally for
     // those; this is a plain gtk_button_new, rebuilt per csp, so it needs the
@@ -16413,7 +16408,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // and exact row contents). Built first (empty) so the add-group button
     // below has somewhere to go; the rest of its permanent (flexi-only)
     // children are appended further down, as each is built.
-    GtkWidget *toolbar = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *toolbar = dt_gui_vbox();
     gtk_box_set_spacing(GTK_BOX(toolbar), DT_PIXEL_APPLY_DPI(3));
     gtk_widget_set_no_show_all(toolbar, TRUE);
     dt_gui_add_class(toolbar, "masks-toolbar");
@@ -16422,12 +16417,12 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     gtk_box_set_spacing(GTK_BOX(toolbar_row1), DT_PIXEL_APPLY_DPI(3));
     gtk_widget_show(toolbar_row1);
     bd->masks_toolbar_row1 = toolbar_row1;
-    gtk_box_pack_start(GTK_BOX(toolbar), toolbar_row1, FALSE, FALSE, 0);
+    dt_gui_box_add(toolbar, toolbar_row1);
     GtkWidget *toolbar_row2 = dt_gui_hbox();
     gtk_box_set_spacing(GTK_BOX(toolbar_row2), DT_PIXEL_APPLY_DPI(3));
     gtk_widget_show(toolbar_row2);
     bd->masks_toolbar_row2 = toolbar_row2;
-    gtk_box_pack_start(GTK_BOX(toolbar), toolbar_row2, FALSE, FALSE, 0);
+    dt_gui_box_add(toolbar, toolbar_row2);
 
     // "add group": a plain "+" that opens the operator chooser (its icon is a
     // fixed add affordance, it never reflects the selection). Row 1, leftmost.
@@ -16446,7 +16441,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
                                   "right-click for group layout presets, which"
                                   " build a whole set of groups at once"));
     gtk_widget_show(bd->masks_new_op_box);
-    gtk_box_pack_start(GTK_BOX(toolbar_row1), bd->masks_new_op_box, FALSE, FALSE, 0);
+    dt_gui_box_add(toolbar_row1, bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
 
     // clusters are separated by a single expanding stretch so the gap grows
@@ -16533,7 +16528,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
       G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0, dtgtk_cairo_paint_masks_path,
       NULL);
     gtk_widget_show(bd->masks_shapes[0]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[0], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[0]);
     _stash_base_tooltip(bd->masks_shapes[0]);
 
     bd->masks_type[1] = DT_MASKS_BRUSH;
@@ -16542,7 +16537,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
       G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0, dtgtk_cairo_paint_masks_brush,
       NULL);
     gtk_widget_show(bd->masks_shapes[1]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[1], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[1]);
     _stash_base_tooltip(bd->masks_shapes[1]);
 
     bd->masks_type[2] = DT_MASKS_CIRCLE;
@@ -16551,7 +16546,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
       G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0, dtgtk_cairo_paint_masks_circle,
       NULL);
     gtk_widget_show(bd->masks_shapes[2]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[2], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[2]);
     _stash_base_tooltip(bd->masks_shapes[2]);
 
     bd->masks_type[3] = DT_MASKS_ELLIPSE;
@@ -16560,7 +16555,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
       G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0, dtgtk_cairo_paint_masks_ellipse,
       NULL);
     gtk_widget_show(bd->masks_shapes[3]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[3], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[3]);
     _stash_base_tooltip(bd->masks_shapes[3]);
 
     bd->masks_type[4] = DT_MASKS_GRADIENT;
@@ -16569,7 +16564,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
       G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0, dtgtk_cairo_paint_masks_gradient,
       NULL);
     gtk_widget_show(bd->masks_shapes[4]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[4], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[4]);
     _stash_base_tooltip(bd->masks_shapes[4]);
 
 #ifdef HAVE_AI
@@ -16579,7 +16574,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
                               G_CALLBACK(_blendop_masks_add_shape), FALSE, 0, 0,
                               dtgtk_cairo_paint_masks_object, NULL);
     gtk_widget_show(bd->masks_shapes[5]);
-    gtk_box_pack_start(GTK_BOX(shapes_box), bd->masks_shapes[5], FALSE, FALSE, 0);
+    dt_gui_box_add(shapes_box, bd->masks_shapes[5]);
     _stash_base_tooltip(bd->masks_shapes[5]);
 #endif
 
@@ -16608,7 +16603,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     g_signal_connect(G_OBJECT(bd->masks_raster_add_btn), "button-press-event",
                      G_CALLBACK(_masks_raster_add_press), module);
     gtk_widget_show(bd->masks_raster_add_btn);
-    gtk_box_pack_start(GTK_BOX(toolbar_row1), bd->masks_raster_add_btn, FALSE, FALSE, 0);
+    dt_gui_box_add(toolbar_row1, bd->masks_raster_add_btn);
     // makes the button assignable a shortcut like the shape-add buttons above
     // (those go through dt_iop_togglebutton_new, which does this internally --
     // this button is a plain dtgtk_button_new, so it needs the call explicitly)
@@ -16628,30 +16623,27 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // no no_show_all of its own, so it stays realized -- the cluster's
     // visibility is driven by the outer box.
     bd->masks_param_channels_inner = dt_gui_hbox();
-    gtk_box_pack_start(GTK_BOX(bd->masks_param_channels_box),
-                       bd->masks_param_channels_inner, FALSE, FALSE, 0);
+    dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    gtk_box_pack_start(GTK_BOX(toolbar_row2), bd->masks_param_channels_box, FALSE, FALSE,
-                       0);
+    dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
 
     _toolbar_pack_stretch(toolbar_row2);
 
     // "import/reuse shape": row 2, rightmost (see masks_import_btn's own
     // construction, earlier in this function, for the button itself).
     gtk_widget_show(bd->masks_import_btn);
-    gtk_box_pack_start(GTK_BOX(toolbar_row2), bd->masks_import_btn, FALSE, FALSE, 0);
+    dt_gui_box_add(toolbar_row2, bd->masks_import_btn);
 
     // ---- shapes row (classic two-row toolbar): "show & edit elements" leftmost,
     // then the shapes box. The initial (classic) home; _masks_apply_layout re-homes
     // edit + shapes_box for flexi.
     GtkWidget *abox = dt_gui_hbox();
     bd->masks_shapes_row = abox;
-    gtk_box_pack_start(GTK_BOX(abox), bd->masks_edit, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(abox), shapes_box, FALSE, FALSE, 0);
+    dt_gui_box_add(abox, bd->masks_edit, shapes_box);
 
     // per-shape composition list (the groups), populated by _build_masks_list()
     // whenever the module is in flexi-mask mode.
-    bd->masks_list_box = GTK_BOX(gtk_box_new(GTK_ORIENTATION_VERTICAL, 0));
+    bd->masks_list_box = GTK_BOX(dt_gui_vbox());
     gtk_widget_set_no_show_all(GTK_WIDGET(bd->masks_list_box), TRUE);
     // unique id for the panel's own top-level list container, alongside the
     // existing "masks-list" class every nested list box in the panel shares
@@ -17336,27 +17328,25 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_add_class(bd->opacity_slider, "blend-main-opacity-slider");
     module->fusion_slider = bd->opacity_slider;
 
-    GtkWidget *opacity_header = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    GtkWidget *opacity_header = dt_gui_hbox();
     GtkWidget *opacity_lbl = gtk_label_new(_("opacity"));
     gtk_label_set_xalign(GTK_LABEL(opacity_lbl), 0.0f);
-    gtk_box_pack_start(GTK_BOX(opacity_header), opacity_lbl, TRUE, TRUE, 0);
+    dt_gui_box_add(opacity_header, dt_gui_expand(opacity_lbl));
 
     bd->blend_opacity_lowop_badge = _make_lowop_badge();
     GtkWidget *val_widget = _make_inline_opacity_value_widget(bd->opacity_slider, module);
 
-    GtkWidget *val_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-    gtk_box_pack_start(GTK_BOX(val_box), bd->blend_opacity_lowop_badge, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(val_box), val_widget, FALSE, FALSE, 0);
+    GtkWidget *val_box = dt_gui_hbox();
+    dt_gui_box_add(val_box, bd->blend_opacity_lowop_badge, val_widget);
 
     gtk_box_pack_end(GTK_BOX(opacity_header), val_box, FALSE, FALSE, 0);
 
     g_signal_connect(G_OBJECT(bd->opacity_slider), "value-changed",
                      G_CALLBACK(_blend_opacity_slider_changed_cb), bd);
 
-    GtkWidget *opacity_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+    GtkWidget *opacity_box = dt_gui_vbox();
     dt_gui_add_class(opacity_box, "blend-main-opacity-box");
-    gtk_box_pack_start(GTK_BOX(opacity_box), opacity_header, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(opacity_box), bd->opacity_slider, FALSE, FALSE, 0);
+    dt_gui_box_add(opacity_box, opacity_header, bd->opacity_slider);
 
     bd->masks_combine_combo = _combobox_new_from_list
       (module,
@@ -17440,7 +17430,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // Expander header bar (darktable standard section expander):
     // shows "(element|group|whole mask) refinement" centered, and the solid arrow toggle
     // on the right.
-    GtkWidget *destdisp_head = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, DT_BAUHAUS_SPACE);
+    GtkWidget *destdisp_head = dt_gui_hbox();
+    gtk_box_set_spacing(GTK_BOX(destdisp_head), DT_BAUHAUS_SPACE);
     dt_gui_add_class(destdisp_head, "dt_section_expander");
     dt_gui_add_class(destdisp_head, "mask-refine-section-expander");
 
@@ -17479,17 +17470,17 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     g_signal_connect(G_OBJECT(bd->masks_refine_toggle_btn), "toggled",
                      G_CALLBACK(_refine_toggle_toggled), module);
 
-    gtk_box_pack_start(GTK_BOX(destdisp_head), icon_evb, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(destdisp_head), header_evb, TRUE, TRUE, 0);
+    dt_gui_box_add(destdisp_head, icon_evb, dt_gui_expand(header_evb));
     gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_toggle_btn, FALSE, FALSE,
                      0);
 
     // Inside the expanded section:
     // Top row showing: <icon> <label> <actions>
-    GtkWidget *inner_header_row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 4);
+    GtkWidget *inner_header_row = dt_gui_hbox();
+    gtk_box_set_spacing(GTK_BOX(inner_header_row), 4);
     dt_gui_add_class(inner_header_row, "mask-refine-inner-header");
 
-    bd->masks_refine_icon_box = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
+    bd->masks_refine_icon_box = dt_gui_hbox();
     gtk_widget_set_valign(bd->masks_refine_icon_box, GTK_ALIGN_CENTER);
 
     bd->masks_refine_name_label = gtk_label_new(_("whole mask"));
@@ -17498,10 +17489,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     gtk_widget_set_hexpand(bd->masks_refine_name_label, TRUE);
     dt_gui_add_class(bd->masks_refine_name_label, "mask-refine-header-name");
 
-    gtk_box_pack_start(GTK_BOX(inner_header_row), bd->masks_refine_icon_box, FALSE, FALSE,
-                       0);
-    gtk_box_pack_start(GTK_BOX(inner_header_row), bd->masks_refine_name_label, TRUE, TRUE,
-                       0);
+    dt_gui_box_add(inner_header_row, bd->masks_refine_icon_box, dt_gui_expand(bd->masks_refine_name_label));
 
     // Actions on the right of the inner header: [reset] [bypass toggle]
     bd->masks_refine_reset_btn = dtgtk_button_new(dtgtk_cairo_paint_reset, 0, NULL);

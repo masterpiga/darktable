@@ -2607,12 +2607,13 @@ static void _init_main_table(GtkWidget *container)
   // exactly the canvas's own height, with the window's top/bottom bars
   // (which span the whole LEFT..RIGHT width, see _ui_init_panel_top/bottom)
   // above and below it, the same as the canvas itself.
-  GtkWidget *centerrow = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(widget), centerrow, TRUE, TRUE, 0);
+  GtkWidget *centerrow = dt_gui_hbox();
+  gtk_widget_set_vexpand(centerrow, TRUE);
+  dt_gui_box_add(widget, dt_gui_expand(centerrow));
 
   GtkWidget *centergrid = gtk_grid_new();
-  gtk_widget_set_hexpand(centergrid, TRUE);
-  gtk_box_pack_start(GTK_BOX(centerrow), centergrid, TRUE, TRUE, 0);
+  gtk_widget_set_vexpand(centergrid, TRUE);
+  dt_gui_box_add(centerrow, dt_gui_expand(centergrid));
 
   /* setup center drawing area */
   GtkWidget *ocda = gtk_overlay_new();
@@ -4061,14 +4062,14 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // their clicks are consumed before they ever reach this.
   GtkWidget *hdr_evb = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evb), FALSE);
-  ui->flexi_header = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  ui->flexi_header = dt_gui_vbox();
   gtk_widget_set_name(ui->flexi_header, "flexi-panel-header-host");
   gtk_container_add(GTK_CONTAINER(hdr_evb), ui->flexi_header);
   // the gesture is invisible, so the header has to say it is there. The buttons
   // sitting in the header keep their own tooltips over their own area.
   gtk_widget_set_tooltip_text(hdr_evb, _("double-click to hide the mask panel"));
   dt_gui_connect_click(hdr_evb, _flexi_header_pressed, NULL, NULL);
-  gtk_box_pack_start(GTK_BOX(widget), hdr_evb, FALSE, FALSE, 0);
+  dt_gui_box_add(widget, hdr_evb);
   gtk_widget_show_all(hdr_evb);
 
   // scrolled window: gives vertical overflow scrolling like the LEFT/RIGHT
@@ -4096,12 +4097,13 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // handle's width.
   // No spacing: a gap let the image show through in a thin line, which read as a
   // seam in the panel rather than as breathing room.
-  GtkWidget *content_row = ui->flexi_content_row =
-    gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(content_row), scroll, TRUE, TRUE, 0);
-  gtk_box_pack_start(GTK_BOX(widget), content_row, TRUE, TRUE, 0);
+  GtkWidget *content_row = ui->flexi_content_row = dt_gui_hbox();
+  gtk_widget_set_vexpand(scroll, TRUE);
+  dt_gui_box_add(content_row, dt_gui_expand(scroll));
+  gtk_widget_set_vexpand(content_row, TRUE);
+  dt_gui_box_add(widget, dt_gui_expand(content_row));
 
-  ui->flexi_content = gtk_box_new(GTK_ORIENTATION_VERTICAL, 0);
+  ui->flexi_content = dt_gui_vbox();
   gtk_container_add(GTK_CONTAINER(scroll), ui->flexi_content);
 
   // the scrollbar appears and disappears with the content's height, and the
@@ -4109,9 +4111,9 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   g_signal_connect(G_OBJECT(content_row), "size-allocate",
                    G_CALLBACK(_flexi_content_row_size_allocate), NULL);
 
-  GtkWidget *over = ui->flexi_panel_overlay =
-    gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 0);
-  gtk_box_pack_start(GTK_BOX(over), widget, TRUE, TRUE, 0);
+  GtkWidget *over = ui->flexi_panel_overlay = dt_gui_hbox();
+  gtk_widget_set_vexpand(widget, TRUE);
+  dt_gui_box_add(over, dt_gui_expand(widget));
 
   GtkWidget *handle = ui->flexi_handle = gtk_drawing_area_new();
   gtk_widget_set_valign(handle, GTK_ALIGN_FILL);
@@ -4120,7 +4122,7 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   gtk_widget_set_tooltip_text(handle, _("drag to resize the mask panel\n"
                                         "click to hide it"));
   g_signal_connect(G_OBJECT(handle), "draw", G_CALLBACK(_flexi_handle_draw), NULL);
-  gtk_box_pack_start(GTK_BOX(content_row), handle, FALSE, FALSE, 0);
+  dt_gui_box_add(content_row, handle);
   gtk_widget_set_events(handle,
                         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK
                         | GDK_ENTER_NOTIFY_MASK
@@ -4166,8 +4168,8 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // grow into over the canvas when the pointer comes near
   ui->flexi_sliver[0] = _flexi_build_sliver(ui, FALSE);
   ui->flexi_sliver[1] = _flexi_build_sliver(ui, TRUE);
-  gtk_box_pack_start(GTK_BOX(container), ui->flexi_sliver[0], FALSE, FALSE, 0);
-  gtk_box_pack_start(GTK_BOX(container), ui->flexi_sliver[1], FALSE, FALSE, 0);
+  dt_gui_box_add(container, ui->flexi_sliver[0]);
+  dt_gui_box_add(container, ui->flexi_sliver[1]);
   ui->flexi_halo[0] = _flexi_build_halo(ui, FALSE);
   ui->flexi_halo[1] = _flexi_build_halo(ui, TRUE);
   _flexi_dock_reorder(ui);
