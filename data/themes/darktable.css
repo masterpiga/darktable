@@ -150,6 +150,16 @@ Why that? Just because it's a developer choice and most classes use underscore i
 @define-color bauhaus_fg_selected @grey_80;
 @define-color bauhaus_fg_insensitive alpha(@fg_color, 0.4);
 
+/* Gradient slider handles. They are drawn at the same size as a bauhaus
+   slider's indicator, whatever the shape preference, and the two edges of a
+   range slider are each other's negative: the range points are filled with
+   the fg color over a thin bg outline, the feather points the other way
+   round. Both outlines are drawn inside the shape, so neither style is
+   larger than the other. */
+@define-color gslider_marker_fg shade(@bauhaus_fg, 0.85);
+@define-color gslider_marker_fg_hover @bauhaus_fg_hover;
+@define-color gslider_marker_bg @grey_05;
+
 /* GTK Buttons and tabs */
 @define-color button_bg @grey_25;
 @define-color button_fg alpha(@fg_color, 0.55);
@@ -712,12 +722,31 @@ dialog .sidebar row:selected:hover label,
   margin-top: 0.5em;
 }
 
-/* Gradient sliders */
+/* Gradient sliders are sized by three independent numbers (gradientslider.c):
+   the widget's own min-height is the whole control; its gslider-bar child
+   node is the colored bar, vertically centered in it; its gslider-marker
+   child node is the handles, always drawn flush with the widget's top and
+   bottom edge. Shrink the bar without shrinking the widget and the handles
+   stand further off it, grow it and they close in. min-height 0 on either
+   part means "unset": the bar then fills the widget, and a handle is the
+   same size as a bauhaus slider's indicator. */
 .dt_gslider,
 .dt_gslider_multivalue
 {
   min-height: 1.7em;
   padding: 0.56em;
+}
+
+.dt_gslider gslider-bar,
+.dt_gslider_multivalue gslider-bar
+{
+  min-height: 0;
+}
+
+.dt_gslider gslider-marker,
+.dt_gslider_multivalue gslider-marker
+{
+  min-height: 0;
 }
 
 /* Set duplicate module space in darkroom */
@@ -1090,11 +1119,19 @@ dialog .sidebar row:selected:hover label,
   margin-top: 0.14em;
 }
 
-/* the input/output gradient sliders inside a parametric row's own editor. */
+/* the input/output gradient sliders inside a parametric row's own editor.
+   the widget is kept to a normal row's height and the bar takes most of it,
+   leaving just enough above and below for the handles to sit against the
+   widget's edges -- see the three-number sizing note above. */
 .mask-param-slider
 {
-  min-height: 1.2em;
+  min-height: 1.7em;
   padding: 0;
+}
+
+.mask-param-slider gslider-bar
+{
+  min-height: 1.2em;
 }
 
 /* every row/group's own inline "properties" expander with a subtle left rail */
