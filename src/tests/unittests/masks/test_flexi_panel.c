@@ -156,7 +156,7 @@ static void test_a_shape_is_never_a_noop(void **state)
 // an expanded row always shows both sub-ranges, whatever the user has touched
 static void test_expanded_row_shows_both_ranges(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(TRUE, FALSE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = _model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_true(v.output);
 }
@@ -164,38 +164,38 @@ static void test_expanded_row_shows_both_ranges(void **state)
 // the boost-factor slider only exists for channels that have one
 static void test_boost_slider_follows_the_channel(void **state)
 {
-  assert_true(_model_param_row_visibility(TRUE, TRUE, TRUE, TRUE).boost);
-  assert_false(_model_param_row_visibility(TRUE, TRUE, TRUE, FALSE).boost);
+  assert_true(_model_param_row_visibility(TRUE, TRUE, TRUE, TRUE, FALSE).boost);
+  assert_false(_model_param_row_visibility(TRUE, TRUE, TRUE, FALSE, FALSE).boost);
   // never on a collapsed row, whatever the channel supports
-  assert_false(_model_param_row_visibility(FALSE, TRUE, TRUE, TRUE).boost);
+  assert_false(_model_param_row_visibility(FALSE, TRUE, TRUE, TRUE, FALSE).boost);
 }
 
 // a collapsed row adapts: an untouched channel shows only the input slider,
 // rather than a second slider that says nothing
 static void test_collapsed_untouched_row_shows_input_only(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_false(v.output);
 }
 
 static void test_collapsed_row_with_only_output_used(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, TRUE, FALSE);
+  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE);
   assert_false(v.input);
   assert_true(v.output);
 }
 
 static void test_collapsed_row_with_both_used_shows_both(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, TRUE, FALSE);
+  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE);
   assert_true(v.input);
   assert_true(v.output);
 }
 
 static void test_collapsed_row_with_only_input_used(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_false(v.output);
 }
@@ -203,10 +203,145 @@ static void test_collapsed_row_with_only_input_used(void **state)
 // the per-sub-range bypass toggles only mean something when both are in play
 static void test_bypass_shown_only_when_both_ranges_used(void **state)
 {
-  assert_true(_model_param_row_visibility(FALSE, TRUE, TRUE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(FALSE, TRUE, FALSE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(FALSE, FALSE, TRUE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(TRUE, TRUE, FALSE, FALSE).bypass);
+  assert_true(_model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE).bypass);
+  assert_false(_model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE).bypass);
+  assert_false(_model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE).bypass);
+  assert_false(_model_param_row_visibility(TRUE, TRUE, FALSE, FALSE, FALSE).bypass);
+}
+
+// a parametric row is an element row like any other: with "use sliders for
+// opacity" in effect, its expanded controls lead with a full opacity slider.
+// Its in/out chevron *is* its expander, so the slider appears exactly when
+// that row is expanded -- never on a collapsed row, and never at all while the
+// option is off.
+static void test_parametric_opacity_slider_needs_expanded_and_the_option(void **state)
+{
+  assert_true(_model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, TRUE).opacity);
+  assert_false(_model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE).opacity);
+  assert_false(_model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, TRUE).opacity);
+  assert_false(_model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE).opacity);
+}
+
+// and it does not depend on anything about the channel itself -- which
+// sub-ranges are used, or whether the channel has a boost factor, decide which
+// *channel* sliders show, never whether opacity does
+static void test_parametric_opacity_slider_ignores_the_channel_state(void **state)
+{
+  for(int in_used = 0; in_used < 2; in_used++)
+    for(int out_used = 0; out_used < 2; out_used++)
+      for(int boost = 0; boost < 2; boost++)
+        assert_true(_model_param_row_visibility(TRUE, in_used, out_used, boost,
+                                                TRUE).opacity);
+}
+
+// ---------------------------------------------------------------------------
+// "use sliders for opacity", and what it depends on
+// ---------------------------------------------------------------------------
+
+// the option hangs off auto-expand: the slider it moves opacity into lives at
+// the top of an expanded panel, and auto-expand is what keeps the panel you
+// are working in open. On its own it does nothing -- which is why the panel
+// nests its checkbox under auto-expand and greys it out.
+static void test_opacity_sliders_need_auto_expand(void **state)
+{
+  assert_true(_model_opacity_sliders_in_effect(TRUE, TRUE));
+  assert_false(_model_opacity_sliders_in_effect(FALSE, TRUE));
+  assert_false(_model_opacity_sliders_in_effect(TRUE, FALSE));
+  assert_false(_model_opacity_sliders_in_effect(FALSE, FALSE));
+}
+
+// a conf value left over from a session with auto-expand on must not leak a
+// half-applied layout -- headers keep their opacity value the moment
+// auto-expand goes off, whatever the stored preference still says
+static void test_a_stale_slider_preference_cannot_leak_through(void **state)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_sliders", TRUE);
+  dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", FALSE);
+  assert_false(_model_opacity_sliders_in_effect(
+    dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"),
+    dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders")));
+  // ... and comes back into effect, unchanged, as soon as auto-expand returns
+  dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", TRUE);
+  assert_true(_model_opacity_sliders_in_effect(
+    dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"),
+    dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders")));
+}
+
+// ---------------------------------------------------------------------------
+// what "auto-expand selected" keeps open
+// ---------------------------------------------------------------------------
+
+// selection is the anchor whenever there is one, at both levels -- selecting
+// an element sets the group half too (see _set_form_target), so picking an
+// element anchors its group as well as itself
+static void test_auto_expand_anchors_on_the_selection(void **state)
+{
+  flexi_build("u:1,2 | i:3");
+  flexi_bd.panel_selected_formid = 2;
+  flexi_bd.panel_selected_group_cid = 1;
+  flexi_bd.masks_last_expanded_elem = 3;
+  flexi_bd.masks_last_expanded_group = 3;
+
+  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+}
+
+// with nothing selected it falls back to whatever was open last, rather than
+// collapsing the panel down to bare headers
+static void test_auto_expand_falls_back_to_the_last_expanded(void **state)
+{
+  flexi_build("u:1,2 | i:3");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = INVALID_MASKID;
+  flexi_bd.masks_last_expanded_elem = 2;
+  flexi_bd.masks_last_expanded_group = 1;
+
+  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+}
+
+// a selected element with nothing to expand does not become the anchor: a
+// raster mask, while "show opacity slider in expanded elements" is off, has no
+// expander, so whatever was open stays open instead of everything collapsing.
+// Its *group* still anchors normally -- every group can be expanded.
+static void test_auto_expand_ignores_a_selection_it_cannot_expand(void **state)
+{
+  flexi_build("u:1,2");
+  dt_masks_form_t *f = dt_masks_get_from_id(&flexi_dev, 2);
+  const dt_masks_type_t saved = f->type;
+  f->type = DT_MASKS_RASTER;
+
+  flexi_bd.panel_selected_formid = 2;
+  flexi_bd.panel_selected_group_cid = 1;
+  flexi_bd.masks_last_expanded_elem = 1;
+  flexi_bd.masks_last_expanded_group = INVALID_MASKID;
+
+  dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", TRUE);
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_sliders", FALSE);
+  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 1);
+  // ... and becomes the anchor as soon as the option gives it a slider
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_sliders", TRUE);
+  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
+
+  // the group half never consults the element's kind
+  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+
+  f->type = saved;
+}
+
+// nothing selected and nothing remembered: no anchor, which is what tells the
+// panel to fall back to each group's own remembered expanded state rather than
+// open exactly one group
+static void test_auto_expand_has_no_anchor_when_nothing_is_known(void **state)
+{
+  flexi_build("u:1,2");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = INVALID_MASKID;
+  flexi_bd.masks_last_expanded_elem = INVALID_MASKID;
+  flexi_bd.masks_last_expanded_group = INVALID_MASKID;
+
+  assert_false(dt_is_valid_maskid(_model_auto_expand_anchor(&flexi_bd)));
+  assert_false(dt_is_valid_maskid(_model_auto_expand_group_anchor(&flexi_bd)));
 }
 
 // the "is this sub-range used" predicate the rule above consumes
@@ -279,6 +414,64 @@ static void test_auto_expand_preference_roundtrips(void **state)
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"));
   dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", FALSE);
   assert_false(dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"));
+}
+
+// the three expander options ship with the defaults the panel's own
+// documentation promises: auto-expand on, both opacity sliders off. These come
+// from darktableconfig.xml via conf_gen.h, so an unset key must already read
+// that way -- the panel never writes them until the user touches one.
+static void test_expander_option_defaults(void **state)
+{
+  dt_conf_remove_key("plugins/darkroom/masks/auto_expand_selected");
+  dt_conf_remove_key("plugins/darkroom/masks/opacity_sliders");
+
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected"));
+  assert_false(dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders"));
+}
+
+static void test_opacity_sliders_preference_roundtrips(void **state)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_sliders", TRUE);
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders"));
+  dt_conf_set_bool("plugins/darkroom/masks/opacity_sliders", FALSE);
+  assert_false(dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders"));
+}
+
+// ---------------------------------------------------------------------------
+// which element rows carry an expander chevron
+// ---------------------------------------------------------------------------
+
+// every kind with properties of its own has an expander whatever the options
+// say: drawn shapes (whose expanded panel holds size/hardness/...), AI objects,
+// and parametric elements (whose in/out chevron is their expander)
+static void test_rows_with_properties_are_always_expandable(void **state)
+{
+  const dt_masks_type_t kinds[] = { DT_MASKS_CIRCLE,  DT_MASKS_ELLIPSE,
+                                    DT_MASKS_PATH,    DT_MASKS_GRADIENT,
+                                    DT_MASKS_BRUSH,   DT_MASKS_PARAMETRIC,
+                                    DT_MASKS_OBJECT };
+  for(size_t i = 0; i < G_N_ELEMENTS(kinds); i++)
+  {
+    assert_true(_model_row_is_expandable(kinds[i], FALSE));
+    assert_true(_model_row_is_expandable(kinds[i], TRUE));
+  }
+}
+
+// a raster mask's only property is opacity, which its row header already shows
+// inline -- so it has nothing to expand, and no chevron, until "use sliders for
+// opacity" moves that one property into the expanded panel
+static void test_raster_rows_expand_only_with_the_opacity_option(void **state)
+{
+  assert_false(_model_row_is_expandable(DT_MASKS_RASTER, FALSE));
+  assert_true(_model_row_is_expandable(DT_MASKS_RASTER, TRUE));
+}
+
+// forms carry their kind alongside DT_MASKS_CLONE/NON_CLONE and friends, so the
+// rule must key off the kind bit rather than the whole type word
+static void test_expandability_ignores_the_non_kind_type_bits(void **state)
+{
+  assert_false(_model_row_is_expandable(DT_MASKS_RASTER | DT_MASKS_NON_CLONE, FALSE));
+  assert_true(_model_row_is_expandable(DT_MASKS_CIRCLE | DT_MASKS_CLONE, FALSE));
 }
 
 static void test_collapse_refinements_preference_roundtrips(void **state)
@@ -558,12 +751,36 @@ int main(void)
     cmocka_unit_test_teardown(test_collapsed_row_with_both_used_shows_both, _teardown),
     cmocka_unit_test_teardown(test_collapsed_row_with_only_input_used, _teardown),
     cmocka_unit_test_teardown(test_bypass_shown_only_when_both_ranges_used, _teardown),
+    cmocka_unit_test_teardown(test_parametric_opacity_slider_ignores_the_channel_state,
+                              _teardown),
+    cmocka_unit_test_teardown(test_opacity_sliders_need_auto_expand, _teardown),
+    cmocka_unit_test_setup_teardown(test_a_stale_slider_preference_cannot_leak_through,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_teardown(test_parametric_opacity_slider_needs_expanded_and_the_option,
+                              _teardown),
+    cmocka_unit_test_setup_teardown(test_auto_expand_anchors_on_the_selection,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_auto_expand_falls_back_to_the_last_expanded,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_auto_expand_ignores_a_selection_it_cannot_expand,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_auto_expand_has_no_anchor_when_nothing_is_known,
+                                    _conf_setup, _conf_teardown),
     cmocka_unit_test_teardown(test_channel_used_detects_a_touched_range, _teardown),
     cmocka_unit_test_teardown(test_channel_used_honours_the_active_bit, _teardown),
     cmocka_unit_test_setup_teardown(test_sticky_opacity_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_auto_expand_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_expander_option_defaults,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_opacity_sliders_preference_roundtrips,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_teardown(test_rows_with_properties_are_always_expandable, _teardown),
+    cmocka_unit_test_teardown(test_raster_rows_expand_only_with_the_opacity_option,
+                              _teardown),
+    cmocka_unit_test_teardown(test_expandability_ignores_the_non_kind_type_bits,
+                              _teardown),
     cmocka_unit_test_setup_teardown(test_collapse_refinements_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_default_operator_preference_roundtrips,

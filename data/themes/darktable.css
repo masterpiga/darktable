@@ -1117,6 +1117,23 @@ dialog .sidebar row:selected:hover label,
 .mask-boost-factor-box
 {
   margin-top: 0.14em;
+  /* the editor itself has no right margin, so the bypass-eye column can line up
+     under the row header's expander. That column is not this slider's to fill:
+     stop where the gradient sliders beside it stop, or the full-width sliders
+     overhang every other slider in the panel. 21px = .mask-param-bypass-slot's
+     17px plus the grid's 4px column spacing */
+  margin-right: 21px;
+}
+
+/* "use sliders for opacity": the slider leading a parametric
+   row's expanded controls. Sits above the channel sliders rather than below
+   them, so its breathing room goes underneath */
+.mask-param-opacity-box
+{
+  margin-bottom: 0.14em;
+  /* same overhang as the boost factor below the channel sliders: see
+     .mask-boost-factor-box */
+  margin-right: 21px;
 }
 
 /* the input/output gradient sliders inside a parametric row's own editor.
@@ -1149,6 +1166,16 @@ dialog .sidebar row:selected:hover label,
 .mask-list-row-selected .mask-props-row-editor
 {
   border-left-color: rgba(255, 255, 255, 0.42);
+}
+
+/* "use sliders for opacity": the slider leading a group's expanded contents.
+   It sits inside .mask-group-elements, which already draws the left rail and
+   indent, so this only spaces it off the member rows below */
+.mask-group-opacity-editor
+{
+  margin-top: 3px;
+  margin-bottom: 3px;
+  margin-right: 22px;
 }
 
 /* refinement section header label styling */
@@ -2981,6 +3008,15 @@ treeview *:checked:not(check),
 {
   background-color: @field_selected_bg;
   color: @field_selected_fg;
+}
+
+/* a checked check button that has gone insensitive: the rule above paints the
+   indicator at full contrast whatever the state, so an option greyed out
+   because it depends on another one still read as live and clickable */
+checkbutton check:checked:disabled
+{
+  background-color: alpha(@field_selected_bg, 0.4);
+  color: @disabled_fg_color;
 }
 
 
