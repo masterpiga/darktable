@@ -231,6 +231,27 @@ typedef enum dt_masks_badge_kind_t
 
 dt_masks_badge_kind_t _model_badge_kind(const float opacity, const gboolean is_noop);
 
+/** does an element row of this kind carry an expander chevron of its own?
+    `opacity_sliders` is "use sliders for opacity" as actually in effect (see
+    _model_opacity_sliders_in_effect), which is what gives a raster mask --
+    whose only property is opacity -- something to expand. */
+gboolean _model_row_is_expandable(const dt_masks_type_t type,
+                                  const gboolean opacity_sliders);
+
+/** is "use sliders for opacity" actually in effect? It only takes hold while
+    "auto-expand selected" is on, which is what keeps the expanded panel
+    holding the slider open. */
+gboolean _model_opacity_sliders_in_effect(const gboolean auto_expand,
+                                          const gboolean use_sliders);
+
+/** which element "auto-expand selected" keeps open: the selection if it can be
+    expanded at all, else whatever was expanded last. Resolves the form's kind
+    through darktable.develop. */
+dt_mask_id_t _model_auto_expand_anchor(const dt_iop_gui_blend_data_t *bd);
+/** the same, one level up: which group it keeps open. Every group can be
+    expanded, so this needs no kind test. */
+dt_mask_id_t _model_auto_expand_group_anchor(const dt_iop_gui_blend_data_t *bd);
+
 /** does this parametric form still cover its channel's whole span, i.e.
     restrict the mask not at all? */
 gboolean _parametric_form_is_noop(const dt_masks_form_t *const sel);
@@ -246,12 +267,16 @@ typedef struct dt_masks_param_vis_t
   gboolean output;
   gboolean boost;
   gboolean bypass;
+  /** the full opacity slider leading the expanded controls -- the row header's
+      own compact opacity value is always shown and is not covered here */
+  gboolean opacity;
 } dt_masks_param_vis_t;
 
 dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
                                                  const gboolean in_used,
                                                  const gboolean out_used,
-                                                 const gboolean boost_enabled);
+                                                 const gboolean boost_enabled,
+                                                 const gboolean opacity_slider_enabled);
 
 /** state transition decisions for the mask panel and corner icon */
 typedef struct dt_masks_panel_state_t

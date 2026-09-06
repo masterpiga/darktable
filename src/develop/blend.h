@@ -733,7 +733,7 @@ typedef struct dt_iop_gui_blend_data_t
   // gtk_toggle_button_set_active calls (see blend_gui.c): its own
   // "toggling this row's expander also selects it" side effect is meant for
   // a real user click, not a toggle flipped by code to enforce "auto-expand
-  // selected shape"'s single-expansion invariant -- without this guard,
+  // selected element"'s single-expansion invariant -- without this guard,
   // collapsing another row's toggle re-selects it, which recurses back into
   // _auto_expand_selected_row without end. Deliberately a dedicated flag
   // rather than DT_ENTER/LEAVE_GUI_UPDATE: that one already makes
@@ -741,13 +741,27 @@ typedef struct dt_iop_gui_blend_data_t
   // guard), which would also suppress the hash/visibility update this
   // programmatic toggle still needs to take effect.
   gboolean masks_suppress_toggle_select;
-  // "auto-expand selected shape" option: the most recently selected shape
-  // that actually has its own props row (see _make_props_row_toggle /
+  // "auto-expand selected" option: the most recently selected element that
+  // actually has an expander of its own (see _model_row_is_expandable /
   // _auto_expand_selected_row, blend_gui.c) -- kept separate from
-  // panel_selected_formid so selecting a parametric channel row or a group
-  // (neither of which has a props toggle) does not collapse whichever shape
-  // was expanded before. NO_MASKID (0, the zero-init value) means none yet.
-  dt_mask_id_t masks_last_expanded_shape;
+  // panel_selected_formid so selecting an element with nothing to expand (a
+  // raster mask, unless "show opacity slider in expanded elements" gives it a
+  // property to show) does not collapse whichever element was expanded before.
+  // NO_MASKID (0, the zero-init value) means none yet.
+  dt_mask_id_t masks_last_expanded_elem;
+  // the same, one level up: the group whose elements the option last opened
+  // (its head/cid, see _auto_expand_selected_group). Groups expand their
+  // members rather than a properties panel, so they keep their own "at most
+  // one open" track, driven by the group half of the selection -- which an
+  // element selection sets too (see _set_form_target -> _set_group_target), so
+  // picking an element opens both its group and itself.
+  dt_mask_id_t masks_last_expanded_group;
+  // one-shot, set by _group_expand_toggled when the user collapses a group by
+  // its own chevron and consumed by the very next _auto_expand_selected_group.
+  // That click bubbles up to the group header, which selects the group (see
+  // _group_header_release) -- and auto-expand would then immediately reopen
+  // what the user just closed. INVALID_MASKID when nothing is pending.
+  dt_mask_id_t masks_group_collapse_click;
   // set by _row_drag_begin (element rows' handle/name), consumed by
   // _row_click_release: a plain click that turns into a real drag still gets
   // its row selected (see _row_drag_begin), so the eventual release -- drop or
