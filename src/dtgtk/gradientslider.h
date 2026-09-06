@@ -117,6 +117,12 @@ struct _GtkDarktableGradientSlider
   // dtgtk_gradient_slider_multivalue's draw handler.
   gint pinned;
   gint markers_type;
+  // css-driven geometry, cached because reading it back costs a full
+  // selector match: the bar's height and the marker's height, both 0 until
+  // first read and invalidated on "style-updated". See _css_part_height()
+  gint css_bar_height;
+  gint css_marker_height;
+  gboolean css_metrics_valid;
   guint timeout_handle;
   float (*scale_callback)(GtkWidget*, float, int); // scale callback function
 };
