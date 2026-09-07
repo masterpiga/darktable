@@ -1,386 +1,258 @@
-# masks_revamp — caching & responsiveness findings
+# masks_revamp — caching & responsiveness: open items
 
-Living document. Tracks every caching / UI-responsiveness issue found while hardening the
-`masks_revamp` (Flexi mask) branch, plus the fixes landed and the ones still proposed.
-Update as new findings appear.
+Living document. Tracks the caching / UI-responsiveness work on the `masks_revamp` (Flexi mask)
+branch that is **not yet done**, in two buckets:
 
-**Status legend:** ✅ fixed this session · 🔬 root cause confirmed, fix proposed · 🧭 under
-investigation · 💡 proposed optimization (not started) · ℹ️ pre-existing context (not a
-regression)
+1. **[§1] Upstreamable to `master`** — fixes that exist on this branch (or are specified here)
+   for bugs that `master` also has.
+2. **[§2] Still missing** — work not started or only half done on the branch.
 
-**Scope tag:** `[masks]` = introduced/owned by masks_revamp · `[core]` = pre-existing
-darktable pixelpipe/cache behaviour surfaced during this work.
+Items already fixed *and* already on `master` have been removed; see git history of this file
+if you need the old diagnoses.
 
-**⬆ Upstream impact** — every caching/efficiency/responsiveness item records whether the
-affected code also exists on `master`, i.e. whether the fix is worth upstreaming:
-- **⬆ YES** — the code/bug exists on `master`; fix applies there too.
-- **⬆ no** — branch-only (the code doesn't exist on `master`).
-- **⬆ n/a** — context/observation, not a fix.
+**Verified against `master` at `52435b9a0c` (2026-09-06)**, which is an ancestor of
+`masks_revamp` — so every line reference below was read out of the current tree. Re-read the
+`master` code before acting on any §1 item: two earlier candidates in this file were overtaken
+by upstream rewrites that solved the same bug a different way.
 
----
+**Status legend:** 🎁 fix exists on the branch, ready to port · 🔬 root cause confirmed, fix not
+written · 🧭 under investigation · 💡 proposed, not started · ◐ half done
 
-## 0. TL;DR of the live investigation — ROOT CAUSE FOUND & FIXED
-
-A user reported 2–3 s lag toggling a mask value (feathering on an `agx` mask, `agx` last in a
-deep pipe) even returning to a previously-computed value. Profiling (`-d perf`, `-d pipe`)
-established that the whole pipe re-executed on every mask edit, with
-`pipe cache check … Freed: invalid 4933MB` — the entire pipe cache explicitly invalidated on
-every commit. The focused-module input pin worked (`importance hints … agx … focus
-important_in`), but the pinned buffer was invalidated before it could be reused.
-
-`-d pipe` named the culprit:
-
-```
-pipecache invalidate [full HQ]  blend new raster: 7 cachelines after ioporder=2700, blend cache
-pipecache invalidate [full HQ]  blend new raster: 6 cachelines after ioporder=2600, blend cache
-```
-
-`exposure.1` is ioporder 2500, so 2600/2700 are `exposure.2`/`exposure` — the raster mask
-**sources**. Invalidating "after ioporder=2600" wiped the whole tail, which is exactly why
-every recompute restarted at `exposure.2`.
-
-**Two independent bugs, both fixed; both made every mask commit report a bogus "new raster
-user", invalidating the pipe cache downstream of the raster source:**
-1. **[A8]** `[masks]` — a `GINT_TO_POINTER(0)`/NULL truthiness bug in the raster-**form**
-   reconciliation. Fixing it made *whole-mask* refinement instant.
-2. **[A9]** `[core, ⬆ upstreamable]` — the **legacy** raster path returned `candidate`
-   unconditionally, ignoring its own `new` flag. This only bit the `synch_all` path (full
-   history replay), which is why *group-level* refinement stayed slow after A8. Fixing it made
-   group-level refinement snappy too.
-
-Verified by instrumentation: exactly one legitimate `NEW (invalidates)` at startup, `already`
-thereafter. **[A10]** records a plausible-but-wrong hypothesis that the log disproved.
+**Scope tag:** `[masks]` = owned by masks_revamp · `[core]` = pre-existing darktable
+pixelpipe/cache behaviour surfaced during this work.
 
 ---
 
-## A. Fixed this session
+## 1. Upstreamable to `master`
 
-### A11 ❌ `[core]` Attempted `usedetails` flush-skip — **REVERTED (caused "detail mask blending error")**
-**Attempt:** skip the `usedetails` order-0 full flush during `synch_all` when the detail
-requirement is unchanged; invalidate once at the end only on a `want_detail_mask` toggle
-(guard `pipe->synch_no_detail_invalidate`, new struct field).
-**Why it broke:** `synch_all` *also* calls `dt_dev_clear_scharr_mask(pipe)` unconditionally at
-its top ([pixelpipe_hb.c:692](src/develop/pixelpipe_hb.c#L692)), which **frees**
-`pipe->scharr.data`. That buffer is (re)produced *only* when its producer module
-(demosaic / rawprepare, `IOP_FLAGS_WRITE_DETAILS`) runs `process` →
-`dt_dev_write_scharr_mask`. On `master` the order-0 flush that fires right after the clear is
-what invalidates the producer's cacheline and forces it to reprocess and **regenerate** the
-scharr buffer. The clear and the flush are a **load-bearing pair**. Removing the flush in the
-steady state left the buffer freed but never regenerated → the per-shape detail refinement read
-`p->scharr.data == NULL` → `dt_control_log("detail mask blending error")`
-([blend.c:271,302](src/develop/blend.c#L271)). Repro: set a per-shape *details threshold*, then
-move a shape handle (→ `synch_all`).
-**Reverted** to master behaviour (`git checkout` of `pixelpipe_hb.c/.h`; they carried only this
-change).
-**Why C2 is not a one-line flush-skip (for whoever retries D2):** the scharr content depends on
-producer-stage inputs (raw data, ROI, `dsc.temperature.coeffs` / WB, `rawmode`). When any of
-those change the producer reprocesses on its own (hash miss) and rewrites the buffer, so the
-`synch_all` clear is *usually* redundant — **but** there are cases (notably sraw scharr written
-by `rawprepare`, whose params don't include WB, on a WB change) where the producer may not
-reprocess yet the scharr must change; master's clear+flush covers those conservatively. A sound
-C2 must (a) stop unconditionally clearing the scharr in `synch_all`, and (b) add a real
-"scharr is stale" test (or force just the producer piece to reprocess) rather than skipping the
-flush. That's an investigation, not a quick fix — deferred. The perf cost it targets only bites
-when detail refinement is actively in use.
+### U1 🎁 `[core]` `usedetails` flushes nearly the whole pipe on every `synch_all`
+**The bug on `master`:** `dt_dev_pixelpipe_synch_all` calls `dt_dev_clear_scharr_mask(pipe)` and
+resets `want_detail_mask = FALSE` at its top
+([pixelpipe_hb.c:776-777](src/develop/pixelpipe_hb.c#L776)); history replay then re-requests the
+detail mask in `_dev_pixelpipe_synch`, which (flag now false) calls
+`dt_dev_pixelpipe_cache_invalidate_later(pipe, gen ? gen->iop_order : 0, "usedetails ")`
+([pixelpipe_hb.c:664-668](src/develop/pixelpipe_hb.c#L664)). `gen` is `demosaic` for raws, which
+sits near the head of the pipe, so this is very nearly a full flush. The in-code comment already
+flags it ("Can this somehow be avoided?").
 
-### A14 ✅ `[core]` `usedetails` order-0 flush on every `synch_all` — **FIXED CORRECTLY** — **⬆ YES** — *implements C2/D2*
-The real cause of the **~2 s mask-overlay toggle** lag once a detail mask is in use (found via the
-user's XMP + `-d perf`): toggling the overlay calls `dt_iop_refresh_center` → sets
-`DT_DEV_PIPE_SYNCH` → `synch_all`, which reset `want_detail_mask=FALSE`; replay then re-requested it
-via `dt_dev_pixelpipe_usedetails` → `cache_invalidate_later(pipe, 0, "usedetails ")` = **full-pipe
-flush**. The whole pipe (incl. `colorin`, upstream `atrous` ~0.9 s) recomputed on every toggle *and*
-every mask edit. (This is why A11's naive skip broke: `synch_all` *also* freed the scharr and relied
-on this flush to rebuild it.)
-**Correct fix:** stop freeing the scharr in `synch_all`; suppress the per-module `usedetails` flush
-during replay (guard `pipe->synch_no_detail_invalidate`); after replay decide from the **actual
-scharr-buffer presence** (NOT a cross-`synch_all` `want_detail_mask` compare — that flickers mid-drag
-and is reset by node rebuilds, which caused spurious per-slider-move full flushes in the first cut):
-flush at order 0 only when the buffer is *needed but missing* (`"usedetails build "` — first process /
-after a node rebuild) or *no longer needed but present* (`"usedetails drop "` — clear it). A mere
-detail-threshold slider move touches neither (scharr unchanged): the mask hash changes, so the masked
-module invalidates on its own — no full flush. Safe because the scharr only changes when its
-producer reprocesses: **rawprepare writes it WB-independently** (`rawmode=FALSE` →
-[rawprepare.c:445](src/iop/rawprepare.c#L445)) and **demosaic is downstream of `temperature`**, so no
-scharr input can change without the producer reprocessing (and rewriting it). Per-piece distortion
-caches are still dropped each `synch_all` (hash-guarded); only the scharr buffer is preserved.
-Files: [pixelpipe_hb.c](src/develop/pixelpipe_hb.c) (`dt_dev_pixelpipe_synch_all`,
-`dt_dev_pixelpipe_usedetails`, init), [pixelpipe_hb.h](src/develop/pixelpipe_hb.h) (guard field).
-**Effect:** overlay toggle drops from full-pipe (~1.5 s) to just the focused module + its tail
-(`agx` ~0.4 s); `atrous`/`colorin` stay cached. **Upstream: YES** (verbatim on master).
-**NEEDS runtime verify:** neutrality of detail masks + no "detail mask blending error" (the A11 failure).
+**Trigger:** any masked module with global `bp->details` ≠ 0. Cost is real: on the reporting
+user's XMP, toggling the mask overlay recomputed the whole pipe (incl. `colorin` and an upstream
+`atrous` at ~0.9 s) on *every* toggle and *every* mask edit — ~1.5 s → ~0.4 s once fixed.
 
-### A12 ✅ `[core]` Raised the full-pipe cache budget (`mipmap_memory/4 → /2`) — **⬆ YES** — *implements D3*
-`dt_dev_pixelpipe_init` capped the FULL pipe cache at `MAX(64MB, mipmap_memory/4)`
-([pixelpipe_hb.c:254](src/develop/pixelpipe_hb.c#L254)). For large images a single full-res RGBA
-intermediate is ~0.5 GB, so `/4` held barely one or two → deep pipes churned and A→B→A was rarely a
-hit. Doubled to `/2` so ~2× more intermediates survive between edits. One-token change; the line is
-verbatim on `master`. Trade-off: more RAM for the pipe cache (bounded by the resource level).
-**Upstream: YES** (could also be exposed as a dedicated setting rather than hard-coded).
+**The fix (on the branch, `pixelpipe_hb.c` / `.h`):** stop freeing the scharr in `synch_all`;
+suppress the per-module `usedetails` flush during replay behind a new `pipe->synch_no_detail_invalidate`
+guard; after replay, decide from the **actual scharr-buffer presence** and flush at order 0 only
+when the buffer is *needed but missing* (`"usedetails build "`) or *no longer needed but present*
+(`"usedetails drop "`). A mere detail-threshold slider move touches neither — the mask hash
+changes, so the masked module invalidates on its own, with no full flush.
 
-### A13 ✅ `[masks/core]` Per-module rasterized drawn-mask cache — **⬆ YES (concept)** — *implements D4 (CPU path)*
+**Why it's safe:** the scharr only changes when its producer reprocesses. `rawprepare` writes it
+WB-independently (`rawmode=FALSE`, [rawprepare.c:445](src/iop/rawprepare.c#L445)) and `demosaic`
+is downstream of `temperature`, so no scharr input can change without the producer rerunning and
+rewriting it. Per-piece distortion caches are still dropped each `synch_all` (hash-guarded); only
+the scharr buffer is preserved.
+
+**Two traps for whoever ports this** — both were hit here:
+- **Do not just skip the flush.** `synch_all`'s scharr clear and the flush that follows are a
+  **load-bearing pair**: the flush is what invalidates the producer's cacheline and forces it to
+  regenerate the buffer it just freed. Skipping only the flush leaves `pipe->scharr.data == NULL`
+  forever, and per-shape detail refinement then reports `dt_control_log("detail mask blending
+  error")` ([blend.c:271,302](src/develop/blend.c#L271)). Repro: set a per-shape *details
+  threshold*, then move a shape handle. You must remove the clear as well.
+- **Do not decide from a cross-`synch_all` `want_detail_mask` compare.** It flickers mid-drag and
+  is reset by node rebuilds, which caused spurious full flushes on every slider move in the first
+  cut. Test the buffer, not the flag.
+
+**Not yet verified at runtime:** neutrality of detail masks, and absence of the "detail mask
+blending error" above. Do this before opening the PR.
+
+### U2 🔬 `[core]` `toneequal` invalidates its whole downstream tail on every overlay toggle
+Pre-existing on `master`, unrelated to masks — it only surfaced here once U1 removed the other
+causes, and it is now the residual cost in the ~1.5 s mask-overlay toggle.
+
+`toneequal` caches its luminance mask in GUI state and, when it deems it stale
+(`saved_hash != hash || !luminance_valid`, [toneequal.c:1108/1123](src/iop/toneequal.c#L1108)),
+recomputes it and calls `dt_dev_pixelpipe_cache_invalidate_later(piece->pipe, self->iop_order,
+"toneequal: ")` ([toneequal.c:1140](src/iop/toneequal.c#L1140)) — wiping every cacheline
+downstream of iop_order 3000. Toggling a *downstream* module's mask overlay cannot change
+toneequal's input, so the recompute is spurious.
+
+**Proven by bisection:** with `toneequal` disabled, the same toggle invalidates only
+`refresh: after ioporder=6200` (the focused module and its tail), serves the rest from cache, and
+the hit rate goes 0.00 → 0.75.
+
+**Still to pin down:** which of the two triggers fires — a spurious `luminance_valid` reset (set
+by `invalidate_luminance_cache`, [toneequal.c:624](src/iop/toneequal.c#L624), called from
+`gui_update` and the auto-adjust quads) or a genuinely volatile `hash`. Fix belongs in its own
+PR, not the masks work.
+
+### U3 ✔ `[core/masks]` Per-module rendered-mask cache — CPU and OpenCL
 A module re-rasterizes its drawn mask (`dt_masks_group_render_roi`) from scratch every time it
-(re)processes, even when the mask is unchanged — the standing cost behind B4. Added
-`piece->drawn_mask_cache` (reusing `dt_dev_distorted_mask_cache_t`) that memoizes the raw render
-output. **Key = `dt_masks_group_hash(form) + roi_out`; src_hash = `pipe->scharr.hash`.**
-**Correctness (the part that bit C2 — verified here):** the render output depends on module *pixels*
-only via (a) guided-filter feathering and (b) parametric-as-form members — both gated out by
-`!_group_needs_host_guides(form, piece)` (those guides have no cheap stable hash); and (c) per-shape
-*details* refinement, which depends on the scharr buffer — captured by `src_hash`. Global post-ops
-(feather/blur/tone/**global** details) and invert are applied *after* the cached point, so they run
-fresh and need not be in the key; global blend opacity is applied later too (so opacity slides reuse
-the mask). `suppress_mask`/`uniform` short-circuit before the render block, so no interaction.
-Cache is cleared in `_clear_piece_mask_caches` (piece destroy + scharr rewrite), bounding memory.
-**Payoff:** spares rasterization when a module reprocesses with an unchanged mask — chiefly while the
-**mask overlay is shown** (pipe cache disabled downstream of focus, so every downstream masked module
-re-renders each frame) and when a **non-mask slider on a masked module** moves. It does *not* remove
-the downstream *pixel* processing under mask overlay (that's B1, separate).
-File: [src/develop/blend.c](src/develop/blend.c) (CPU `dt_develop_blend_process`),
-[src/develop/pixelpipe_hb.h](src/develop/pixelpipe_hb.h)/[.c](src/develop/pixelpipe_hb.c).
-**TODO:** mirror into the OpenCL blend path (`dt_develop_blend_process_cl`, ~[blend.c:1300](src/develop/blend.c#L1300));
-verify neutrality (plain drawn mask renders byte-identical). **Upstream: concept YES** (master also
-re-rasterizes every process); the exact hooks are branch-shaped.
+reprocesses, even when the mask is unchanged. True on `master` too, so the concept upstreams;
+the exact hooks here are branch-shaped.
 
-### A10 ❌ `[masks]` "synch_all replay transiently unregisters raster users" — **HYPOTHESIS DISPROVEN**
-Recorded so nobody re-derives it. After A8, group-level refinement (but not whole-mask) still
-invalidated. The hypothesis was that `synch_all`'s full-history replay transiently *unregistered*
-the raster user (via `_reconcile_raster_form_users`'s else-branch with `grp == NULL`, or the
-legacy remove at [imageop.c:2063](src/develop/imageop.c#L2063)), so the final re-registration
-looked "new".
-**Instrumentation disproved it.** A `-d pipe -d masks -d verbose` run showed exactly **one**
-`raster form register … -> NEW (invalidates)` (the legitimate first registration at startup),
-then `present=1 old=0 -> already` on every subsequent call, and **zero**
-`raster form unregister` lines. Registration is stable across replay.
-**Actual cause: A9.** The residual invalidation came from the legacy path's unconditional
-`return candidate;`, which fires for any module carrying a legacy raster sink on every
-*full-history* replay (`synch_all`) but not on `synch_top` (which commits only the top item, and
-`agx` has no legacy sink) — precisely the whole-mask vs. group-level asymmetry.
-**Confirmed fixed:** user reports group-level feathering is now snappy.
+**Done:** `piece->drawn_mask_cache` memoizes the raw render output, keyed on
+`dt_masks_group_hash_ext(form, pipe->forms) + refine-bypass hash + roi_out + mask_mode`, with
+`src_hash = pipe->scharr.hash`. Cleared in `_clear_piece_mask_caches` (piece destroy + scharr
+rewrite), which bounds memory. Both blend paths go through one function,
+`_render_drawn_mask_cached()` ([blend.c:772](src/develop/blend.c#L772)), called from
+`dt_develop_blend_process` ([:1031](src/develop/blend.c#L1031)) and
+`dt_develop_blend_process_cl` ([:1647](src/develop/blend.c#L1647)) — the group renderer runs on
+the host in both pipes, so a cached buffer is valid for either, and sharing the function is what
+keeps a CPU/OpenCL divergence from creeping in. Other files:
+[pixelpipe_hb.h:101](src/develop/pixelpipe_hb.h#L101),
+[pixelpipe_hb.c:3822](src/develop/pixelpipe_hb.c#L3822).
 
-### D9 💡 `[masks]` `_reconcile_raster_form_users` runs once per replayed history item — **⬆ no**
-The instrumented run showed ~40 identical `(agx → exposure.2)` reconcile calls per commit — one
+On the CL path the cache sits after the guide readback, which only happens when
+`_group_needs_host_guides()` is true — exactly the case the cache declines to serve, so the two
+never interact; a failed readback also leaves `cacheable` false.
+
+**It was inert in the darkroom until 2026-09-07, on both paths.**
+`dt_dev_pixelpipe_synch_all` cleared every piece's mask caches wholesale
+([pixelpipe_hb.c:883](src/develop/pixelpipe_hb.c#L883)), and a synch_all runs before essentially
+every interactive render — every history change, every mask edit, every overlay toggle. An
+instrumented darkroom session (10 full-pipe `blend with form CL0` renders at a fixed roi, mask
+overlay on) logged **zero** hits. The blanket clear was written for the *distortion* caches,
+which the comment there calls "hash-guarded and cheap"; `drawn_mask_cache` was added to the same
+helper and inherited it, though it is the one cache whose entire premise is that refilling it is
+not cheap. Three changes came out of that:
+
+- `_clear_piece_distortion_caches()` splits detail+raster from drawn; synch_all clears only the
+  first two. The drawn cache is still freed with the piece and on scharr clear.
+- surviving synch_all means the buffer is *retained* (~183 MB per masked piece at 45 MP), so it
+  now allocates through `dt_dev_pixelpipe_prepare_mask_cache()` /
+  `dt_dev_pixelpipe_clear_mask_cache()` (the former statics, now exported) instead of raw
+  `dt_alloc_align_float`. It is therefore counted in `pipe->mask_cache_size`, visible to the
+  pipe-cache trimming, and honours the `_use_mask_cache()` low-memory opt-out (≥ 6 GB available)
+  that the detail and raster caches already obeyed.
+- the key now resolves group members through the *pipe's* form list
+  (`dt_masks_group_hash_ext`, new) rather than `darktable.develop`'s. An unresolvable member
+  contributes nothing to the hash, which then collapses to the group's own
+  type/formid/version/source and stops tracking the mask — the trap recorded in
+  `verify.c:837`. Harmless while synch_all wiped the cache every render; not harmless now, and
+  it also covers second-window pinned devs and exports of an image other than the open one.
+
+**Correctness argument:** the render output depends on module
+*pixels* only via guided-filter feathering and parametric-as-form members, both gated out by
+`!_group_needs_host_guides(form, piece)` (no cheap stable hash for those guides); and via
+per-shape *details* refinement, which depends on the scharr buffer and is captured by `src_hash`.
+Global post-ops (feather/blur/tone/global details) and invert are applied *after* the cached
+point, so they run fresh and need not be in the key; global blend opacity is applied later too,
+so opacity slides reuse the mask. `suppress_mask`/`uniform` short-circuit before the render
+block.
+
+**Verified (macOS, OpenCL on an available GPU device):**
+
+- `src/tests/masking/flexi/run.sh` (CPU): 44/46, unchanged. The two failures, `F1`/`F2`,
+  reproduce identically with the change stashed out — the documented JzCzhz build variance, not
+  this change.
+- All 44 fixture XMPs re-rendered through `darktable-cli` with `opencl=TRUE`, before and after
+  the change: **byte-identical**. That covers the CL miss path only, since one export renders
+  each piece once.
+- The **CL hit path** is exercised by `--verify-masks`, whose `_render_mask_cl()`
+  ([verify.c:530](src/develop/masks/verify.c#L530)) calls `dt_develop_blend_process_cl` on the
+  same `piece` once per replayed edit. Over the 49-edit fixture harvest: `CPU vs GPU gap,
+  migrated: 1.01e-06`, `edits where migration widened that gap by >1/255: 0`, `CLASSIC CHANGED:
+  0`, and the 3 DIFFERENT are the known `J5`/`J6`/`J7` `DT_MASKS_REFINE_GROUP` cases. A stale
+  buffer served across edits would have shown up as a large CPU-vs-GPU gap.
+- `ctest -R flexi` in `build-tests`: 11/11. (`test_filmicrgb` does not link on macOS —
+  `ld: unknown options: --wrap=…`, pre-existing and unrelated.)
+- All of the above re-run after the synch_all/accounting/hash changes: same numbers.
+- **Interactive, both directions**, two instrumented darkroom sessions on the OpenCL pipe:
+  - *sliders only* (a downstream module's slider, then exposure's own): 5 `exposure` blend
+    renders, **4 hits** — one miss to populate, everything after served. Three on
+    `CL0 [full HQ]` and one on `CPU [preview]`, so the shared entry serves both devices and both
+    pipes in a real session, not just in the harness.
+  - *node dragging*: 124 `dt_masks_events_mouse_moved`, 10 renders, **0 hits**. Every render
+    lands immediately after a drag burst ends, i.e. the mask had just changed, so a miss is
+    correct at each one. Had the key been missing shape geometry this log would have been all
+    hits and the shape would have looked frozen on canvas.
+  - cost removed, same roi (5520x8288, one circle, 45 MP): mask ready in **75.5 ms** on the
+    miss, **12.0-12.2 ms** on a hit. The residue is the 183 MB memcpy out of the cache.
+
+**Payoff and limits:** spares rasterization when a module reprocesses with an unchanged mask —
+chiefly while the mask overlay is shown (pipe cache is off downstream of focus, so every
+downstream masked module re-renders each frame) and when a non-mask slider on a masked module
+moves. It does **not** remove the downstream *pixel* processing under mask overlay; that is C1,
+and it is by design.
+
+### U4 💡 `[core/masks]` On-device (OpenCL) mask compositing / feather
+Mask rendering is CPU-only even on the OpenCL pipe (C3). In the reporting user's profile the
+masked `exposure.2` + `exposure` cost ~0.8 s wall / ~7 s CPU **each** in mask compositing,
+dominating a ~2.8 s recompute, while `agx` itself was ~0.17 s on GPU.
+
+Move the group fold and the guided-filter feather onto the GPU. Large effort. The group-fold
+*operators* are branch-specific, but the underlying "masks composite on CPU only" limitation is
+`master`'s too, so the core of this upstreams.
+
+### U5 💡 `[core]` Interactive downscaling during slider drag
+Process at preview scale while dragging, full resolution on release.
+
+---
+
+## 2. Still missing (branch-only)
+
+### N1 💡 `[masks]` `_reconcile_raster_form_users` runs once per replayed history item
+An instrumented run showed ~40 identical `(agx → exposure.2)` reconcile calls per commit — one
 per history item replayed by `synch_all`, times the pipes. Now cheap (hash lookups, no
 invalidation), but redundant: reconciliation only needs to run once per module per synch, from
-the final committed state. Low priority; worth doing if `synch_all` ever shows up in a profile.
+the final committed state. Low priority; do it if `synch_all` ever shows up in a profile.
 
-### A9 ✅ `[core]` `dt_iop_commit_blend_params` reported a "new raster" on every commit — **⬆ YES** — *the group-level fix*
-The legacy raster-sink path computed `const gboolean new = g_hash_table_insert(...)` but used it
-only for a debug print, then did `return candidate;` **unconditionally**. The caller
-(`dt_iop_commit_params`) treats a non-NULL return as "a source gained a new user" and calls
-`dt_dev_pixelpipe_cache_invalidate_later(pipe, new_raster->iop_order, "blend new raster: ")` —
-so **any module using a legacy raster mask invalidated its source's downstream cache on every
-history commit**. It also discarded `_reconcile_raster_form_users`'s return, so a genuinely-new
-raster *form* source never invalidated when a legacy sink was also present.
-**Fix:** return `candidate` only when the registration is genuinely `new`; otherwise return the
-form-reconcile result; when both are new, report the one with the **earlier** `iop_order` so the
-invalidation covers both.
-File: [src/develop/imageop.c](src/develop/imageop.c) (`dt_iop_commit_blend_params`).
-**Upstream: YES.** `master` has the identical `new`-computed-then-ignored + `return candidate;`
-pattern and invalidates on it. Master gates the invalidation on
-`blendop_params->mask_mode & DEVELOP_MASK_RASTER` — true for exactly the raster users that hit
-this path — so **master wipes the pipe cache downstream of a raster source on every history
-commit**. Strong upstream candidate.
+### N2 💡 `[masks]` Fine-grained widget-diff reconciliation of `_build_masks_list`
+The panel currently skips a rebuild entirely when `_masks_list_signature` is unchanged, which
+covers the common case. The full per-widget reuse/move/destroy diff is still unwritten, and needs
+interactive GTK testing (DnD / revealer / parametric-editor lifecycles) to be worth attempting.
 
-#### Exact upstream patch (against `master`)
-On this branch the fix spans `imageop.c:2068-2081`, but most of that is branch-only
-(`_reconcile_raster_form_users` / the `form_raster` iop_order preference). The upstreamable
-essence is the `if(!new)` guard. On `master` it is a **one-liner at `imageop.c:1962`**:
-```diff
--        return candidate;
-+        // Only report a *genuinely new* registration. The caller uses a non-NULL
-+        // return to invalidate the pipe cache downstream of the source; returning
-+        // `candidate` unconditionally wipes that cache on every history commit.
-+        return new ? candidate : NULL;
-```
-Safety verified on `master`: the return value is captured only at `imageop.c:2186`
-(`new_raster`) and consumed only at `imageop.c:2241-2242` (the invalidation); the other call
-sites (82, 431, 2330) discard it. Master's own doc comment (`imageop.c:1920-1921`) already
-specifies the function "either returns NULL or the source module".
-*Reviewer caveat for the commit message:* `g_hash_table_insert` reports **key** novelty, not
-value change, so a *retarget* to a different `raster_mask_id` on the same source would not
-invalidate. This cannot occur in practice — a source exports exactly one raster slot
-(`BLEND_RASTER_ID == 0`), so `raster_mask_id` is effectively constant.
-
-### A8 ✅ `[masks]` Raster-form reconciliation invalidated the pipe cache on every commit — **⬆ no**
-`_reconcile_raster_form_users` decided "is this raster user already registered?" with:
-```c
-const gpointer old_value = g_hash_table_lookup(cand->raster_mask.source.users, module);
-const gboolean already = old_value && GPOINTER_TO_INT(old_value) == (int)want;
-```
-`want` is *always* `BLEND_RASTER_ID == 0` for a raster form (the function's own comment says
-so), and `GINT_TO_POINTER(0)` is **NULL** — so `g_hash_table_lookup` returns NULL whether the
-key is absent or present-with-value-0. `already` was therefore **always FALSE**, making every
-commit report a new raster user → `dt_dev_pixelpipe_cache_invalidate_later(pipe,
-new_raster->iop_order, "blend new raster: ")` → the whole pipe downstream of the raster source
-invalidated on *every mask edit*.
-**Fix:** probe key presence explicitly with `g_hash_table_lookup_extended` so a stored value of
-0 is distinguishable from an absent key.
-File: [src/develop/imageop.c](src/develop/imageop.c) (`_reconcile_raster_form_users`).
-**Upstream: no.** `_reconcile_raster_form_users` is branch-only (raster-as-form). `master`
-registers via `g_hash_table_insert`'s *return value* (imageop.c:1951), which correctly reports
-"key newly inserted" and never hits this trap. (Minor latent difference: master's form can't
-detect a *retarget* — value change on an existing key — only new keys; not a live bug there
-since a retarget changes the source module, hence the hash key.)
-*Consequence:* the `set raster:` invalidations seen alongside are secondary —
-`dt_iop_piece_set_raster` only invalidates when the source actually reprocesses and rewrites
-its mask ([imageop.c:3734](src/develop/imageop.c#L3734)). With A8 fixed the sources stay cached,
-don't reprocess, and don't rewrite. Correctness is preserved: genuinely editing a source's mask
-changes its own hash → it reprocesses → `set raster:` correctly invalidates downstream.
-
-### A1 ✅ `[masks]` Per-shape/group refinement missing from the render cache hash — **⬆ no**
-`dt_masks_group_hash` hashed a group point's `state` + `opacity` but not `refinement`, so
-refinement edits (blur/feather/contrast/details/brightness) did not change any `piece->hash`
-and could be served stale. **Fix:** hash `grpt->refinement` alongside state/opacity.
-File: [src/develop/masks/masks.c](src/develop/masks/masks.c) (`dt_masks_group_hash`).
-**Upstream: no** — `dt_masks_refinement_t` does not exist on `master` (per-shape refinement is
-a branch feature).
-
-### A2 ✅ `[masks]` Parametric-as-form & per-group feather broken on the OpenCL pipe — **⬆ no**
-On the GPU pipe `blend_refine_guide_in/out` were NULL, so parametric-form masks rendered a
-uniform 1.0 and per-group guided-filter feathering was silently skipped (CPU/GPU divergence).
-**Fix:** predicate `_group_needs_host_guides` + read the guide images back to host
-(`dt_opencl_copy_image_to_host`) only when a group needs them; plain drawn shapes keep the
-no-readback fast path.
-File: [src/develop/blend.c](src/develop/blend.c) (`dt_develop_blend_process_cl`).
-**Upstream: no** — `blend_refine_guide_in/out` and `DT_MASKS_PARAMETRIC` are branch-only.
-
-### A3 ✅ `[masks]` Multi-form opacity commit fired N history items per gesture — **⬆ no**
-`_props_row_apply` looped over every targeted form calling `dt_masks_form_change_opacity`, each
-committing a full history item (3-pipe synch + panel rebuild) — N× per drag, ×per tick.
-**Fix:** mutate all forms' opacity in place, commit exactly once after the loop.
-File: [src/develop/blend_gui.c](src/develop/blend_gui.c) (`_props_row_apply`).
-**Upstream: no** — the multi-form loop is flexi-only. (`dt_masks_form_change_opacity` still
-self-commits on `master`, which is correct there: it's called once per gesture.)
-
-### A4 ✅ `[masks]` Solo-group did a full panel rebuild — **⬆ no**
-`_toggle_solo_group` did a full `_build_masks_list` rebuild where `_toggle_solo_form` already
-did a cheap in-place refresh. **Fix:** solo-group now uses `_refresh_all_shape_rows` +
-`_sync_solo_canvas_highlight`. Stays persistent + undoable.
-File: [src/develop/blend_gui.c](src/develop/blend_gui.c). **Upstream: no** — flexi-only.
-
-### A5 ✅ `[masks]` Per-hover recursive tree walks → O(1) map — **⬆ no**
-Every canvas-hover motion ran several full recursive walks of the nested `masks_list_box` tree.
-**Fix:** a `formid → row` GHashTable (`bd->masks_row_map`) rebuilt alongside the panel; O(1)
-lookups with a tree-walk fallback.
-Files: [src/develop/blend_gui.c](src/develop/blend_gui.c), [src/develop/blend.h](src/develop/blend.h).
-**Upstream: no** — flexi panel only.
-
-### A6 ✅ `[masks]` Deferred panel rebuilds not de-duplicated — **⬆ no**
-One gesture could enqueue several `g_idle_add(_rebuild_masks_list_idle)` full rebuilds.
-**Fix:** `_queue_masks_list_rebuild` behind a single `masks_rebuild_pending` guard; 18 call
-sites routed through it. **Upstream: no** — flexi panel only.
-
-### A7 ✅ `[masks]` `_build_masks_list` full teardown on every mutation (reconcile-by-skip) — **⬆ no**
-**Fix:** `_masks_list_signature` hashes everything the tree is built from; when unchanged the
-rebuild is skipped entirely. Hoisted loop-invariant `_group_count` out of the per-group loop
-(O(groups×points) → O(points)). Fine-grained per-widget diff deliberately deferred (see D7).
-File: [src/develop/blend_gui.c](src/develop/blend_gui.c). **Upstream: no** — flexi panel only.
+### N3 💡 `[masks]` Remaining plan follow-ups
+- slider-drag history debounce (plan item 2.2)
+- skip the mask-manager *lib* rebuild that every `dt_dev_add_masks_history_item` still triggers
+  in flexi mode (2.4)
+- consolidate the direct/deferred rebuild call sites (3.4)
 
 ---
 
-## B. Caching context established during the investigation
+## 3. Context needed to read the above
 
-### B1 ℹ️ `[core]` The mask overlay disables the pipe cache entirely — **⬆ n/a** (by design)
+### C1 `[core]` The mask overlay disables the pipe cache entirely — by design
 With `pipe->mask_display` set, `dt_dev_pixelpipe_cache_available` returns FALSE
-([pixelpipe_cache.c:182](src/develop/pixelpipe_cache.c#L182)) and cachelines are stored with
-`DT_INVALID_HASH` ([:353-354](src/develop/pixelpipe_cache.c#L353)). So with the overlay ON,
+([pixelpipe_cache.c:178](src/develop/pixelpipe_cache.c#L178)) and cachelines are stored with
+`DT_INVALID_HASH` ([:349-350](src/develop/pixelpipe_cache.c#L349)). So with the overlay ON,
 returning to a previous value can never be a cache hit. Intentional: `pipe->mask_display` is
-excluded from the piece hash ([pixelpipe_hb.c:2066](src/develop/pixelpipe_hb.c#L2066)).
+excluded from the piece hash. Do not "fix" this; work around it (U3).
 
-### B2 ℹ️ `[core]` Full-pipe cache is memory-bounded; the resource dropdown barely helps — **⬆ YES**
-Full pipe = 64 lines but capped by `memlimit = MAX(64MB, mipmap_memory/4)`
-([pixelpipe_hb.c:254](src/develop/pixelpipe_hb.c#L254) — **present verbatim on master**);
-`checkmem` evicts oldest lines over budget ([pixelpipe_cache.c:473](src/develop/pixelpipe_cache.c#L473)).
-For large images each full-res RGBA-float buffer is huge (6984×4660 ≈ 520 MB), so deep pipes
-churn. **Gotcha:** the *resource level* dropdown's `large` uses the **same** mipmap fraction
-(128/1024) as `default` — only `small` differs ([darktable.c:1814-1818](src/common/darktable.c#L1814)) —
-so default→large does **not** raise this budget. Both facts hold on `master`.
-- Workaround (no code): with the app closed, set in `darktablerc` e.g.
-  `resource_large=700 16 512 900` (3rd number = mipmap fraction), then pick `large`.
+### C2 `[core]` How the full-pipe cache budget is actually computed
+Full pipe = 64 lines (`darktable.pipe_cache ? 64 : DT_PIPECACHE_MIN`) bounded by
+`dt_get_available_mem() / cache->mem_fraction`, with `mem_fraction = 8` for the FULL pipe
+([pixelpipe_hb.c:263](src/develop/pixelpipe_hb.c#L263),
+[pixelpipe_cache.c:506,532](src/develop/pixelpipe_cache.c#L506)); `checkmem` evicts oldest lines
+over budget. Each full-res RGBA-float buffer is large (6984×4660 ≈ 520 MB), so deep pipes churn.
 
-### B3 ℹ️ `[core]` With OpenCL, intermediate GPU outputs aren't host-cached — **⬆ n/a**
+`dt_get_available_mem()` is `MAX(512MB, (total_memory - cl_uni_memory)/1024 * fractions[4*level + 0])`
+([darktable.c:2590-2599](src/common/darktable.c#L2590)) — the **first** number of the resource
+tuple (the third is `_get_mipmap_size`, which no longer feeds the pipe cache at all). Index 0 is
+`128 / 512 / 700 / 16384` for small/default/large/unrestricted
+([darktable.c:1937-1942](src/common/darktable.c#L1937)), so **default → large does raise the pipe
+cache budget**, by ~1.37×.
+- Tuning without code: with the app closed, raise the **1st** number in `darktablerc`, e.g.
+  `resource_large=900 16 128 900`, then select `large`.
+
+### C3 `[core]` With OpenCL, intermediate GPU outputs aren't host-cached
 Device buffers aren't copied back for the cache except the focused module's pinned input
 ([pixelpipe_hb.c:2661-2708](src/develop/pixelpipe_hb.c#L2661)), so the pipe re-executes
-top-to-bottom each edit (cheap for GPU modules).
-
-### B5 🔬 `[core]` Tone equalizer invalidates the whole tail below it on every overlay toggle — **⬆ YES (pre-existing, not masks_revamp)**
-Residual cause of the ~1.5 s mask-overlay-toggle latency after C2/D3/D4 landed. `toneequal`
-caches its luminance mask in GUI state and, when it deems it stale
-(`saved_hash != hash || !luminance_valid`, [toneequal.c:1109/1125](src/iop/toneequal.c#L1109)),
-recomputes it and calls `dt_dev_pixelpipe_cache_invalidate_later(pipe, self->iop_order,
-"toneequal: ")` ([toneequal.c:1134](src/iop/toneequal.c#L1134)) — wiping every cacheline
-downstream of `toneequal` (iop_order 3000): `colorin → channelmixerrgb → atrous → agx`.
-Toggling a *downstream* module's mask overlay (agx) should not change toneequal's input, so the
-recompute is spurious/wasteful. `invalidate_luminance_cache` (sets `luminance_valid=FALSE`,
-[toneequal.c:622](src/iop/toneequal.c#L622)) is called from `gui_update` + the auto-adjust
-quads; the exact toggle trigger (spurious `luminance_valid` reset vs a volatile `hash`) is not
-yet pinned down. **Proven by bisection:** with toneequal disabled, the same toggle invalidates
-only `refresh: after ioporder=6200` (agx+tail), serves the rest from cache, hit rate 0.00→0.75.
-**Pre-existing on master** (stock `toneequal.c`), independent of the Flexi panel; only surfaced
-because C2/D3/D4 removed the other causes. Out of scope for the masks hardening; upstreamable as
-its own fix. See B4.
-
-### B4 🔬 `[core]` Mask rendering is CPU-only even on the OpenCL pipe — **⬆ YES**
-`dt_masks_group_render_roi` always runs on CPU; the result is uploaded to the device
-([blend.c:1263](src/develop/blend.c#L1263)). In the user's profile the masked modules
-`exposure.2` + `exposure` cost ~0.8 s wall / ~7 s CPU **each** (their CPU mask compositing),
-dominating a ~2.8 s recompute — while `agx` itself is ~0.17 s on GPU. Also true on `master`.
-See D4/D5.
+top-to-bottom on each edit. Cheap for GPU modules, expensive for the CPU-side mask work in U4.
 
 ---
 
-## C. Root-cause findings — fix proposed
-
-### C2 ✅ `[core]` `usedetails` wipes the whole cache on every commit when details are in use — **⬆ YES** — **FIXED, see A14**
-(A11 was a failed first attempt — reverted. A14 is the correct fix: preserve the scharr across
-`synch_all` so no regeneration flush is needed.)
-`synch_all` resets `want_detail_mask = FALSE` ([pixelpipe_hb.c:692](src/develop/pixelpipe_hb.c#L692))
-then history replay re-requests it via `dt_dev_pixelpipe_usedetails`, which (flag now false)
-calls `dt_dev_pixelpipe_cache_invalidate_later(pipe, 0, "usedetails ")` — a **full flush**
-([pixelpipe_hb.c:785](src/develop/pixelpipe_hb.c#L785)). The in-code comment already flags this
-("Can this somehow be avoided?"). Trigger: any masked module with global `bp->details` ≠ 0 (on
-`master`), or additionally a per-shape `refinement.details` ≠ 0 via `_blend_group_wants_details`
-(branch-only extra trigger).
-**Not** the current user's lag (confirmed: no `details requested` in their log), but a real
-full-cache wipe for anyone using detail refinement.
-**Upstream: YES** — `dt_dev_pixelpipe_usedetails` and the `synch_all` reset exist verbatim on
-`master`; only the extra branch-side trigger is new.
-- **Fix direction:** preserve `want_detail_mask` across `synch_all`; suppress the `usedetails`
-  invalidation during history replay and invalidate once at the end only if the detail-mask
-  requirement actually toggled.
-
----
-
-## D. Proposed optimizations (not started)
-
-### D2 ✅ `[core]` Fix `synch_all`/`usedetails` spurious full-flush (implements C2) — **⬆ YES** — **DONE, see A14**
-### D3 ✅ `[core]` Raise the full-pipe cache budget for deep pipes — **⬆ YES** — **DONE, see A12**
-### D4 ◐ `[core/masks]` Per-module rendered-mask cache — **⬆ YES** — **CPU path DONE (A13); OpenCL path TODO**
-### D5 💡 `[core/masks]` On-device (OpenCL) mask compositing / feather — **⬆ YES**
-Move the group fold + guided-filter feather onto the GPU so OpenCL actually accelerates masked
-modules (B4). Large effort. The group-fold operators are branch-specific, but the underlying
-"masks composite on CPU only" limitation is `master`'s too.
-### D6 💡 `[core]` Interactive downscaling during slider drag — **⬆ YES**
-Process at preview scale while dragging, full-res on release.
-### D7 💡 `[masks]` Fine-grained widget-diff reconciliation of `_build_masks_list` — **⬆ no**
-The full per-widget reuse/move/destroy diff (beyond the A7 signature-skip). Needs interactive
-GTK testing (DnD/revealer/parametric-editor lifecycles).
-### D8 💡 `[masks]` Remaining plan follow-ups — **⬆ no**
-2.2 slider-drag history debounce · 2.4 skip the mask-manager *lib* rebuild that every
-`dt_dev_add_masks_history_item` still triggers in flexi mode · 3.4 direct/deferred rebuild
-call-site consolidation.
-
----
-
-## E. Diagnostic playbook
+## 4. Diagnostic playbook
 
 - **Per-module timing:** `darktable -d perf` → `processed <module> … took Ns`.
 - **Cache decisions:** `darktable -d pipe` → `cache HIT`, `importance hints … focus
   important_in`, `pipe cache check … Freed: invalid NMB`, and crucially
   `pipecache invalidate|flush <reason>` — the reason string names the invalidator
-  (`blend new raster:`, `set raster:`, `refresh:`, `usedetails `).
+  (`blend new raster:`, `set raster:`, `refresh:`, `usedetails `, `toneequal: `).
 - **Memory eviction:** `-d pipe -d memory` → `pipe cache check … limit=NMB`.
 - **Isolate masks vs pipe:** move a *non-mask* slider on the same module A→B→A; if it lags
   identically, the cost is the pipe cache, not the mask code.
-- **Isolate detail path (C2):** set all `details` to 0; if lag drops, C2 is involved.
-- **Verify A8:** with `-d pipe`, moving a mask slider must **no longer** print
-  `blend new raster:` on every commit, and the tail (`exposure.2` …) must stop recomputing.
+- **Isolate the detail path (U1):** set all `details` to 0; if the lag drops, U1 is involved.
+- **Isolate toneequal (U2):** disable `toneequal`; if the invalidation collapses to
+  `refresh: after ioporder=<focused>`, U2 is involved.
