@@ -3895,3 +3895,132 @@ up from 7932 shapes and 1 in 2,648. The 330 classic-GPU outliers are unchanged
 in kind. `masks_corpus.py verify` rebuilds all 1746 benp edits field-for-field
 from the stored database, 0 differing, so the committed corpus reproduces the
 file that was contributed.
+
+## §56 -- the drawn-mask cache reaches the OpenCL path
+
+Upstream plan item 1b (perf finding U3). `piece->drawn_mask_cache` memoized the
+rasterized drawn mask on the CPU blend path only; `dt_develop_blend_process_cl`
+still called `dt_masks_group_render_roi` on every reprocess, even though it
+renders the group on the *host* exactly as the CPU path does.
+
+The obvious move was to copy the cache block into the CL function. That is the
+shape of defect this tree keeps finding -- two copies of the same policy, one of
+which is later fixed -- so instead both paths now call one
+`_render_drawn_mask_cached()` (`blend.c:772`). The key is unchanged: group hash,
+refine-bypass hash, `roi_out`, `mask_mode`, with `src_hash = pipe->scharr.hash`.
+The CPU side is pure code motion.
+
+On the CL path the call sits after the guide readback, which only runs when
+`_group_needs_host_guides()` is true -- precisely the case the cache refuses to
+serve, so the two cannot interact, and a failed readback leaves `cacheable`
+false as well.
+
+### Verification, and what a single export cannot show
+
+`run.sh` is CPU-only, and one `darktable-cli` export renders each piece once, so
+neither can ever produce a cache *hit*. Both were still worth running:
+
+- `run.sh`: 44/46, same as before. `F1`/`F2` fail identically with the change
+  stashed out and rebuilt -- the documented JzCzhz build variance.
+- all 44 fixture XMPs re-rendered with `opencl=TRUE`, before and after:
+  byte-identical. That is the CL *miss* path.
+
+The hit path needed a harness that renders the same piece more than once on the
+GPU, and one already exists: `_render_mask_cl()` (`verify.c:530`) calls
+`dt_develop_blend_process_cl` on the same `piece` once per replayed edit. Over
+the 49-edit fixture harvest:
+
+    CPU vs GPU gap, migrated : 1.01327896e-06
+    edits where migration widened that gap by >1/255 : 0
+    CLASSIC CHANGED : 0
+    DIFFERENT : 3   (edits 33-35, the known J5/J6/J7 refine-group cases)
+
+A stale buffer served across edits would have shown as a large CPU-vs-GPU gap,
+since the CPU render of each edit is fresh by construction of the comparison.
+
+Not verified: the interactive case that is the whole payoff -- mask overlay on,
+non-mask slider dragged on a masked module, OpenCL pipe -- has not been driven
+by hand.
+
+### The cache had never hit in the darkroom
+
+The interactive test that was supposed to confirm the payoff reported nothing.
+The log had the right shape -- ten `blend with form CL0 [full HQ] exposure …
+5520x8288 sc=1.000` renders at a fixed roi, `invalidate cacheline … 'pipe mask
+display'` confirming the overlay was on -- and **zero** `drawn mask cache hit`
+lines.
+
+Every one of those renders was preceded by `dev_pixelpipe_change … synch all`,
+and `dt_dev_pixelpipe_synch_all` cleared every piece's mask caches wholesale
+(`pixelpipe_hb.c:883`). A synch_all runs before essentially every interactive
+render, so the cache was emptied before each one. Not an OpenCL problem: U3 had
+been inert on the CPU path too, since the day it was written. "CPU path done"
+described code that existed, not a cache that ever hit.
+
+The blanket clear was written for the *distortion* caches and its own comment
+says why -- "hash-guarded and cheap". `drawn_mask_cache` was added to the same
+helper and inherited it, being the one cache whose whole premise is that
+refilling it is expensive.
+
+Three changes, and the second two exist only because of the first:
+
+1. `_clear_piece_distortion_caches()` splits detail+raster from drawn; synch_all
+   clears only those two. The drawn cache is still freed with the piece and on
+   scharr clear, and its key already covers everything a replay can change.
+2. Surviving synch_all means the buffer is *retained* -- ~183 MB per masked
+   piece on a 45 MP file. It had been allocated with a bare
+   `dt_alloc_align_float`, outside `pipe->mask_cache_size` and outside the
+   `_use_mask_cache()` low-memory opt-out that the detail and raster caches
+   obey. It now goes through `dt_dev_pixelpipe_prepare_mask_cache()` /
+   `dt_dev_pixelpipe_clear_mask_cache()`, exported for the purpose.
+3. The key resolved group members through `darktable.develop` while the mask is
+   rendered from `piece->pipe->forms`. Where those differ -- headless, a
+   second-window pinned dev, an export of an image other than the open one -- an
+   unresolvable member contributes *nothing* to the hash, which collapses to the
+   group's own type/formid/version/source and stops tracking the mask. That is
+   the trap `verify.c:837` documents, and synch_all's clear had been hiding it.
+   New `dt_masks_group_hash_ext(hash, form, forms)` takes the list explicitly;
+   `dt_masks_group_hash()` is now a wrapper passing `darktable.develop->forms`,
+   so every other caller is unchanged.
+
+Re-ran everything after: `run.sh` 44/46 (same F1/F2), `--verify-masks` numbers
+identical to the digit, all 44 CL exports still byte-identical to the
+pre-change baseline, `ctest -R flexi` 11/11. None of that touches the thing
+that was actually broken, which is the point: the defect was invisible to every
+headless check, because none of them calls synch_all between renders. Only the
+instrumented GUI session could see it, and only by counting a log line that
+should have been there and was not.
+
+### What the two sessions showed
+
+Re-running the instrumented session after the three changes, deliberately in two
+halves, because a cache is two claims and one log can only carry one of them.
+
+*Sliders only* -- a downstream module's slider, then exposure's own. Five
+`exposure` blend renders, four hits:
+
+    18.9091  blend with form       CL0 [full HQ]   <- miss, mask rasterized
+    29.9952  drawn mask cache hit  CL0 [full HQ]
+    36.0732  drawn mask cache hit  CL0 [full HQ]
+    55.6431  drawn mask cache hit  CPU [preview]
+    56.0164  drawn mask cache hit  CL0 [full HQ]
+
+Both devices and both pipes, from one shared function. The cost it removes, at
+5520x8288 with a single circle: 75.5 ms to rasterize on the miss, 12.0-12.2 ms
+on a hit -- the residue being the 183 MB memcpy out of the cache.
+
+*Node dragging.* 124 `dt_masks_events_mouse_moved`, 10 renders, zero hits. The
+renders group tightly behind the drag bursts:
+
+    burst 30.081 -> 31.689 (40 events)  ->  renders 31.798, 31.984
+    burst 35.867 -> 36.281  (8 events)  ->  renders 36.507, 36.712
+    burst 38.352 -> 39.132 (20 events)  ->  renders 39.210, 39.331
+    burst 40.982 -> 42.583 (30 events)  ->  renders 42.647, 42.856
+
+so the mask had changed at every one and a miss is what the cache owes. There is
+no render in that log where the mask was unchanged, which is why zero is the
+right number rather than a regression.
+
+Zero was also the number that had to be read carefully: it is the same reading
+the broken build gave. The difference is which renders produced it -- eight
+renders that each followed a mask edit, against ten that followed nothing.
