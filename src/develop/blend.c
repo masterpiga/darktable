@@ -759,9 +759,16 @@ static const char *_develop_blend_colorspace_to_str(const dt_develop_blend_color
 // mask -- e.g. while the mask overlay is shown (pipe cache disabled downstream
 // of focus) or when a non-mask slider on a masked module moves.
 //
+// Only safe when the group needs no host guides: guided-filter feathering and
+// parametric-as-form members depend on the module in/out pixels, which have no
+// cheap stable hash here. Per-shape details refinement depends on the scharr
+// buffer, tracked via src_hash. Global post-ops, invert and global opacity are
+// applied by the callers *after* this point, so they need not be in the key.
+//
 // Shared by the CPU and OpenCL blend paths: the group renderer runs on the host
 // in both, so a cached buffer is valid for either, and going through one
-// function is what keeps the two from drifting apart.
+// function is what keeps the two from drifting apart. The caller must have set
+// piece->blend_refine_guide_* already.
 static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
                                           dt_dev_pixelpipe_iop_t *piece,
                                           dt_masks_form_t *form,
@@ -777,7 +784,6 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
   dt_dev_distorted_mask_cache_t *const mc = &piece->drawn_mask_cache;
   const gboolean cacheable = !_group_needs_host_guides(form, piece);
   const dt_hash_t msrc = piece->pipe->scharr.hash;
-
   dt_hash_t mkey = DT_INVALID_HASH;
   if(cacheable)
   {
@@ -793,6 +799,15 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
     const dt_hash_t bph = dt_masks_refine_bypass_hash(&piece->refine_bypass);
     mkey = dt_hash(mkey, &bph, sizeof(dt_hash_t));
     mkey = dt_hash(mkey, roi_out, sizeof(dt_iop_roi_t));
+    // mask_mode belongs in the key because it selects *which renderer runs*:
+    // dt_masks_group_get_mask_roi() dispatches to the flexi fold when
+    // DEVELOP_MASK_FLEXI is set and to the classic sequential fold when it
+    // is not, for the same form. Keying only on the form means a mask
+    // rendered under one mode is served back under the other -- so a
+    // module that flips between them (migration, a preset or copied
+    // history applied to a live module) silently reuses the wrong
+    // renderer's output. A cache key has to cover everything the result
+    // depends on, and the choice of algorithm is the largest such thing.
     mkey = dt_hash(mkey, &d->mask_mode, sizeof(d->mask_mode));
   }
 
@@ -825,6 +840,7 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
   }
   else if(mc->data)
   {
+    // group now needs host guides: drop the stale (guide-independent) entry
     dt_dev_pixelpipe_clear_mask_cache(piece->pipe, mc);
   }
 
@@ -1020,6 +1036,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
       piece->blend_refine_roi_in = roi_in;
       piece->blend_refine_roi_out = roi_out;
 
+      // the global post-ops and invert below run on the (cached or fresh) mask
       form_ok = _render_drawn_mask_cached(self, piece, form, roi_in, roi_out,
                                          DT_DEVICE_CPU, mask);
 

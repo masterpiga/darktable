@@ -888,9 +888,10 @@ void dt_dev_pixelpipe_synch_all(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
      essentially every interactive render -- every history change, every mask
      edit, every overlay toggle -- so clearing it here meant it could never hit
      in the darkroom and the memoization bought nothing. It does not need the
-     blanket clear either: its key (group hash, roi_out, mask_mode; blend.c)
-     already covers everything a replay can change about the rendered mask.
-     It is still freed with the piece and whenever the scharr is dropped. */
+     blanket clear either: its key (group hash, refine-bypass hash, roi_out,
+     mask_mode, scharr hash; blend.c) already covers everything a replay can
+     change about the rendered mask. It is still freed with the piece and
+     whenever the scharr is dropped. */
   for(GList *n = pipe->nodes; n; n = g_list_next(n))
     _clear_piece_distortion_caches(n->data);
 

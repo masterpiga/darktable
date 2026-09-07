@@ -202,11 +202,25 @@ today and none of them mentions flexi.
   follows are a load-bearing pair, and the decision must be made from
   buffer presence, not from a `want_detail_mask` compare. Runtime neutrality of
   detail masks is still unverified (findings §U1); do that before opening.
-- **1b — U3, per-module rendered-mask cache.** CPU path done
-  (`piece->drawn_mask_cache`, `blend.c:954`); the OpenCL path is unwritten. Two
-  options: hold the PR until `dt_develop_blend_process_cl` is mirrored, or land
-  CPU-only and follow up. Prefer mirroring first — a cache that exists on one
-  path invites exactly the CPU/OpenCL divergence this tree keeps finding.
+- **1b — U3, per-module rendered-mask cache.** Done on both paths. Rather than
+  mirroring the CPU block into `dt_develop_blend_process_cl`, both call one
+  `_render_drawn_mask_cached()` (`blend.c:772`), so there is no second copy to
+  drift: the group renderer runs on the host in either pipe. Verified per §6 —
+  the CPU pixel suite unchanged, all 44 fixture XMPs byte-identical when
+  re-rendered with OpenCL on before and after, and the CL *hit* path exercised
+  through `--verify-masks` (`CPU vs GPU gap, migrated: 1.01e-06`, 0 edits
+  widened).
+
+  An instrumented darkroom session then showed the cache never hit *at all*:
+  `synch_all` cleared it before every interactive render, so U3 had been inert
+  on the CPU too. Fixed by excluding the drawn cache from that blanket clear,
+  which makes the buffer retained — so it also moved onto the pipe's own
+  `dt_dev_pixelpipe_prepare_mask_cache()` (memory accounting + the low-memory
+  opt-out), and its key onto `dt_masks_group_hash_ext(form, pipe->forms)` so an
+  unresolvable member can no longer collapse the hash. Those three are part of
+  1b, not separable from it. Re-tested interactively both ways: sliders → 4 hits
+  in 5 renders (mask ready in 12 ms rather than 75 ms), node dragging → 0 hits
+  in 10 renders over 124 move events. Numbers for the PR description.
 - **1c — `imagebuf.c` negative-RoI fast path.** Small and self-contained.
 
 Not in this batch: **U2** (`toneequal` invalidating its downstream tail) is a
