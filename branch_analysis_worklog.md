@@ -3854,3 +3854,44 @@ call's return value: a hovered shape in a non-`DT_MASKS_EDIT_FULL` mode returns
 0 while genuinely being hovered (`path.c:4210`), so the return value would drop
 the list-row highlight in that case. Both existing hover-sync sites now go
 through the same `_group_hover_form()` helper.
+
+## §55 -- a fifteenth library: benp
+
+`masks_harvest.benp.json.gz` arrived on 2026-09-07: 1746 edits, 1068 distinct,
+358 configuration shapes. It went through the two commands a contributed
+harvest always goes through, and into the corpus file.
+
+    darktable --library :memory: --check-masks data/harvested_masks/masks_harvest.benp.json.gz
+    tools/masks_migration_confidence.py --record --label benp data/harvested_masks/masks_harvest.benp.json.gz
+    tools/masks_corpus.py add data/masks_corpus.db data/harvested_masks/masks_harvest.benp.json.gz
+
+Five of the six sections passed outright: round-trip, style-apply, post-edit,
+persistence, and undo/redo (1539 edits swept, 35343 cycles compared, 16118 of
+them on an action that actually changed the mask, 0 that did not come back).
+Verify reported `FAILED` on one edit of 1746.
+
+### The one differing edit is the classic OpenCL bug again
+
+Edit 1695, `colorbalancergb`. On the CPU the migrated mask is bit-identical to
+classic: `max_diff` 0 over the whole frame. The difference is entirely on the
+GPU, and the report says whose:
+
+    dev_diff_before : 0.141596854     (classic's own CPU-vs-OpenCL gap)
+    dev_diff_after  : 0.000174880028  (the migrated tree's own gap)
+
+Classic disagrees with itself by 0.14 across the two backends; the migrated
+tree disagrees with itself by 0.00017, some 800x less. `dev_gap_widened` is 0.
+Migration did not introduce the divergence, it narrowed it -- the same
+pre-existing master bug recorded in `classic_opencl_blend_findings.md`, which
+is why the summariser counts these separately from failures rather than
+letting a wrong reference decide the verdict.
+
+### Where the bound stands
+
+    0 migration failures in 8172 distinct configuration shapes
+    -> below 0.037% (1 in 2,728) at 95% confidence
+
+up from 7932 shapes and 1 in 2,648. The 330 classic-GPU outliers are unchanged
+in kind. `masks_corpus.py verify` rebuilds all 1746 benp edits field-for-field
+from the stored database, 0 differing, so the committed corpus reproduces the
+file that was contributed.
