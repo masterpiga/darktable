@@ -568,9 +568,9 @@ typedef struct dt_iop_gui_blend_data_t
   // reasons that didn't resolve after substantial debugging. A fixed,
   // possibly-clipping-if-the-panel-is-extremely-narrow two-row layout is far
   // more reliable. masks_toolbar_row1: add-group (masks_new_op_box) | shape
-  // buttons (masks_shapes_box).
+  // buttons (masks_shapes_box) | import (masks_import_btn).
   // masks_toolbar_row2: parametric channel buttons
-  // (masks_param_channels_box) | import (masks_import_btn). Of these,
+  // (masks_param_channels_box), centered. Of these,
   // only masks_shapes_box is shared with classic mode (via masks_shapes_row)
   // and needs re-homing on every layout pass; the rest are flexi-only and
   // are inserted here once, at construction (parametric buttons lazily,
