@@ -457,6 +457,44 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
   return FALSE;
 }
 
+// what the raster members of a mask group read: each source's mask as the pipe
+// produced it, so the pipe's cumulative hash up to that source. The group's own
+// hash only holds the reference (source op, instance, mask id), and a key
+// without this served the mask cached before the source's own mask changed
+static dt_hash_t _group_raster_sources_hash(dt_hash_t hash,
+                                            const dt_masks_form_t *const form,
+                                            dt_dev_pixelpipe_iop_t *const piece)
+{
+  if(!form) return hash;
+  for(const GList *l = form->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *const grpt = l->data;
+    const dt_masks_form_t *const f =
+      dt_masks_get_from_id_ext(piece->pipe->forms, grpt->formid);
+    if(!f) continue;
+    if(f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
+    {
+      hash = _group_raster_sources_hash(hash, f, piece);
+      continue;
+    }
+    if(!(f->type & DT_MASKS_RASTER) || !f->points) continue;
+    const dt_masks_point_raster_t *const p = f->points->data;
+    // a missing source hashes as such, so its (dis)appearance moves the key
+    dt_hash_t source_hash = DT_INVALID_HASH;
+    for(GList *n = piece->pipe->nodes; n; n = g_list_next(n))
+    {
+      dt_dev_pixelpipe_iop_t *const src = n->data;
+      if(!dt_iop_module_is(src->module, p->source)
+         || src->module->multi_priority != p->instance)
+        continue;
+      source_hash = dt_dev_pixelpipe_piece_hash(src, &src->processed_roi_out, TRUE);
+      break;
+    }
+    hash = dt_hash(hash, &source_hash, sizeof(source_hash));
+  }
+  return hash;
+}
+
 
 /* May the blend render `mask_id`'s group as this module's blend mask?
 
@@ -809,6 +847,7 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
     // renderer's output. A cache key has to cover everything the result
     // depends on, and the choice of algorithm is the largest such thing.
     mkey = dt_hash(mkey, &d->mask_mode, sizeof(d->mask_mode));
+    mkey = _group_raster_sources_hash(mkey, form, piece);
   }
 
   if(cacheable && mc->data && mkey != DT_INVALID_HASH

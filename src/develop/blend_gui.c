@@ -329,6 +329,7 @@ dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
 static gboolean _module_has_drawn_shapes(const dt_iop_module_t *module);
 static void _queue_masks_list_rebuild(dt_iop_module_t *module);
+static void _queue_link_peers_rebuild(const dt_iop_module_t *module);
 static void _auto_expand_selected_row(dt_iop_module_t *module, const dt_mask_id_t id);
 
 static gboolean _blendif_blend_parameter_enabled(dt_develop_blend_colorspace_t csp,
@@ -606,43 +607,311 @@ static void _toolbar_pack_stretch(GtkWidget *box)
 }
 
 // defined much further down (grouping shape rows / naming clusters); forward
-// declared here so the import menu can group its "existing shape" entries by
-// kind the same way the mask list clusters same-kind elements.
+// declared here so the import menu can group its shapes by kind the same way
+// the mask list clusters same-kind elements
 static guint _form_kind(const dt_masks_form_t *form);
 static const char *_kind_name(const guint kind, const gboolean plural);
 // defined further up (module.c-adjacent helpers); forward declared here so
 // the import menu can look up which module (if any) currently uses a form.
 void _build_masks_list(dt_iop_module_t *module);
+// defined further down, with the rest of the raster element, group naming and
+// refinement code
+static void _add_raster_mask(dt_iop_module_t *self,
+                             dt_iop_module_t *src,
+                             const dt_mask_id_t id);
+static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t cid);
+static const char *_op_name_for_state(const int state);
+static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd);
+void _refresh_canvas_edit(dt_iop_module_t *module);
 
-// a picked menu entry just replays it on the (permanently hidden, headless)
-// masks_combo: dt_bauhaus_combobox_set fires "value-changed" exactly as a
-// real click on the combo's own popup would, so dt_masks_iop_value_changed_callback
-// (connected once, in dt_iop_gui_init_masks) handles it completely unchanged.
-static void _masks_import_pick_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
+// ---- linking and copying elements between modules' masks -----------------
+// A shape or AI object can sit in several modules' masks at once: each mask's
+// point refers to the same form, so editing the form changes it in all of
+// them, while the point's own opacity, operator, invert state and refinement
+// stay per module. That is a link. A copy is a new form, independent from the
+// start. Parametric channels are only ever copied: the same thresholds select
+// something else in another module's pixels
+
+// a shape or AI object: what can be linked. A parametric or raster element
+// is not, and neither is a clone/heal source nor a whole group
+static gboolean _form_is_shape(const dt_masks_form_t *f)
 {
-  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
-  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
-  if(bd)
-  {
-    const int idx = g_variant_get_int32(parameter);
-    dt_bauhaus_combobox_set(bd->masks_combo, idx);
-  }
-  if(darktable.gui->active_popover_menu)
-    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  return f
+         && !(f->type & (DT_MASKS_GROUP | DT_MASKS_CLONE | DT_MASKS_NON_CLONE
+                         | DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+         && _form_kind(f);
 }
 
-// build a single "idx"-carrying, _masks_import_pick-wired menu item
-static void _masks_import_append_item(GMenu *menu, const char *label, const int idx)
+GList *_model_form_users(const dt_mask_id_t fid)
+{
+  GList *users = NULL;
+  for(GList *l = darktable.develop ? darktable.develop->iop : NULL; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *m = l->data;
+    dt_masks_form_t *grp = _module_mask_group(m);
+    if(grp && _group_point(grp, fid)) users = g_list_append(users, m);
+  }
+  return users;
+}
+
+GList *_model_module_shapes(dt_iop_module_t *src, const dt_mask_id_t cid)
+{
+  dt_masks_form_t *grp = _module_mask_group(src);
+  GList *out = NULL;
+  gboolean in_run = !dt_is_valid_maskid(cid);
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_is_valid_maskid(cid) && _starts_group(l)) in_run = pt->formid == cid;
+    if(in_run && _form_is_shape(dt_masks_get_from_id(darktable.develop, pt->formid)))
+      out = g_list_append(out, GINT_TO_POINTER(pt->formid));
+  }
+  return out;
+}
+
+GList *_model_import_forms(dt_iop_module_t *module,
+                           dt_iop_module_t *src,
+                           GList *fids,
+                           const gboolean copy)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *src_grp = src ? _module_mask_group(src) : NULL;
+  GList *added = NULL;
+  for(GList *l = fids; l; l = g_list_next(l))
+  {
+    const dt_mask_id_t fid = GPOINTER_TO_INT(l->data);
+    dt_masks_form_t *grp = _module_mask_group(module);
+    if(grp && _group_point(grp, fid)) continue;
+
+    const dt_mask_id_t id = copy ? dt_masks_form_copy(darktable.develop, fid) : fid;
+    dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
+    if(!form) continue;
+    dt_masks_point_group_t *pt = dt_masks_group_insert_point(darktable.develop, module, form);
+    if(!pt) continue;
+
+    // it looks the way it does in the mask it comes from; the operator is the
+    // target group's, set by the insertion above
+    const dt_masks_point_group_t *spt = src_grp ? _group_point(src_grp, fid) : NULL;
+    if(spt)
+    {
+      pt->opacity = spt->opacity;
+      pt->state = (pt->state & ~DT_MASKS_STATE_INVERSE) | (spt->state & DT_MASKS_STATE_INVERSE);
+      pt->refinement = spt->refinement;
+    }
+
+    // the next one lands above this one, in the same group: the first
+    // insertion has already turned a staged empty group into a real one
+    if(bd && bd->insert_active)
+    {
+      bd->insert_after_fid = id;
+      bd->insert_realize_empty = FALSE;
+    }
+    added = g_list_append(added, GINT_TO_POINTER(id));
+  }
+  return added;
+}
+
+// move a hash table entry keyed by form id over to another id
+static void _remap_formid_key(GHashTable *table, const dt_mask_id_t from, const dt_mask_id_t to)
+{
+  gpointer value = NULL;
+  if(table && g_hash_table_lookup_extended(table, GINT_TO_POINTER(from), NULL, &value))
+  {
+    g_hash_table_steal(table, GINT_TO_POINTER(from));
+    g_hash_table_insert(table, GINT_TO_POINTER(to), value);
+  }
+}
+
+dt_mask_id_t _model_unlink_form(dt_iop_module_t *module, const dt_mask_id_t fid)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  dt_masks_point_group_t *pt = grp ? _group_point(grp, fid) : NULL;
+  if(!pt) return INVALID_MASKID;
+  const dt_mask_id_t nid = dt_masks_form_copy(darktable.develop, fid);
+  if(!dt_is_valid_maskid(nid)) return INVALID_MASKID;
+  pt->formid = nid;
+
+  // the panel knows elements, and groups through their head, by id: carry
+  // each reference over, or the copy loses its selection, its group's number
+  // and its expanded state
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd) return nid;
+  dt_mask_id_t *refs[] = {
+    &bd->panel_selected_formid,    &bd->panel_selected_group_cid,
+    &bd->solo_formid,              &bd->soloedit_formid,
+    &bd->masks_last_expanded_elem, &bd->masks_last_expanded_group,
+    &bd->masks_group_collapse_click, &bd->masks_refine_scope_formid,
+    &bd->insert_after_fid,
+  };
+  for(size_t k = 0; k < G_N_ELEMENTS(refs); k++)
+    if(*refs[k] == fid) *refs[k] = nid;
+  if(bd->solo_group_key == (guint)fid) bd->solo_group_key = (guint)nid;
+  _remap_formid_key(bd->group_ordinals, fid, nid);
+  _remap_formid_key(bd->masks_props_expanded, fid, nid);
+  for(GList *l = bd->empty_groups; l; l = g_list_next(l))
+  {
+    dt_masks_empty_group_t *eg = l->data;
+    if(eg->below_fid == fid) eg->below_fid = nid;
+  }
+  return nid;
+}
+
+// what a pick in the import menu does. Its target carries `a` and `b`, as
+// noted per op; a source module travels as an index into the menu's module
+// table (see _masks_import_module_index), since a GVariant cannot carry it
+typedef enum _masks_import_op_t
+{
+  _IMPORT_LINK_ONE = 0,    // a: source module (-1: none), b: the form
+  _IMPORT_COPY_ONE,
+  _IMPORT_LINK_GROUP,      // a: source module, b: its group's head (INVALID_MASKID: all)
+  _IMPORT_COPY_GROUP,
+  _IMPORT_COPY_PARAMETRIC, // a: source module, b: the form
+  _IMPORT_ADD_MASK,        // a: raster source (see _raster_sources_collect)
+  _IMPORT_USE_MASK,
+} _masks_import_op_t;
+
+typedef struct _masks_raster_source_entry_t
+{
+  dt_iop_module_t *src;
+  dt_mask_id_t id;
+  char *name;
+} _masks_raster_source_entry_t;
+
+static void _raster_source_entry_free(gpointer data)
+{
+  _masks_raster_source_entry_t *entry = data;
+  if(entry)
+  {
+    g_free(entry->name);
+    g_free(entry);
+  }
+}
+
+// every mask another module offers as a raster source, in pipe order: those
+// upstream of `module` into `usable`, those downstream, which are processed
+// after it and so never available to it, into `later`
+static void _raster_sources_collect(dt_iop_module_t *module, GPtrArray *usable, GPtrArray *later)
+{
+  gboolean past = FALSE;
+  for(GList *iter = darktable.develop->iop; iter; iter = g_list_next(iter))
+  {
+    dt_iop_module_t *iop = iter->data;
+    if(iop == module)
+    {
+      past = TRUE;
+      continue;
+    }
+    if(!iop->raster_mask.source.masks) continue;
+
+    GHashTableIter masks_iter;
+    gpointer key, value;
+    g_hash_table_iter_init(&masks_iter, iop->raster_mask.source.masks);
+    while(g_hash_table_iter_next(&masks_iter, &key, &value))
+    {
+      // the mask's available identifier (module display name, or the mask
+      // name/path for an external source): the same string the whole-mask
+      // raster picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask)
+      _masks_raster_source_entry_t *entry = g_new0(_masks_raster_source_entry_t, 1);
+      entry->src = iop;
+      entry->id = GPOINTER_TO_INT(key);
+      entry->name = g_strdup(value ? (const char *)value : iop->name());
+      g_ptr_array_add(past ? later : usable, entry);
+    }
+  }
+}
+
+// commit shapes or parametric channels brought in from another module
+static void _masks_import_forms(dt_iop_module_t *module,
+                                dt_iop_module_t *src,
+                                GList *fids,
+                                const gboolean copy)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  GList *added = _model_import_forms(module, src, fids, copy);
+  if(!added) return;
+  const dt_mask_id_t last = GPOINTER_TO_INT(g_list_last(added)->data);
+  g_list_free(added);
+  dt_print(DT_DEBUG_MASKS, "[masks] %s %d element(s) into '%s'", copy ? "copied" : "linked",
+           g_list_length(fids), module->op);
+
+  bd->panel_selected_formid = last;
+  if(darktable.develop->form_gui) darktable.develop->form_gui->panel_selected_formid = last;
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+  _queue_link_peers_rebuild(module);
+  dt_masks_iop_update(module);
+  dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
+}
+
+// "use the mask of": this module's mask becomes a single raster element
+// reading the source's mask. Everything else in it goes, after asking
+static void _masks_use_mask_of(dt_iop_module_t *module,
+                               const _masks_raster_source_entry_t *entry)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(grp && grp->points)
+  {
+    if(!dt_gui_show_yes_no_dialog(
+         _("replace the mask?"), "",
+         _("this removes every element from this module's mask and uses the mask"
+           " of %s in their place"),
+         entry->name))
+      return;
+    _masks_reset_mask_core(module);
+  }
+  // the reset left no group to aim at: the raster element starts the mask
+  bd->insert_active = FALSE;
+  _add_raster_mask(module, entry->src, entry->id);
+  _flexi_refine_follow_selection(bd);
+  _refresh_canvas_edit(module);
+}
+
+static void _masks_import_pick_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  GtkWidget *btn = GTK_WIDGET(user_data);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
+  GPtrArray *mods = g_object_get_data(G_OBJECT(btn), "import_modules");
+  GPtrArray *rasters = g_object_get_data(G_OBJECT(btn), "import_rasters");
+  int op = 0, a = -1, b = INVALID_MASKID;
+  g_variant_get(parameter, "(iii)", &op, &a, &b);
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(!module || !module->blend_data) return;
+
+  if(op == _IMPORT_ADD_MASK || op == _IMPORT_USE_MASK)
+  {
+    if(!rasters || a < 0 || a >= (int)rasters->len) return;
+    const _masks_raster_source_entry_t *entry = g_ptr_array_index(rasters, a);
+    if(op == _IMPORT_USE_MASK)
+      _masks_use_mask_of(module, entry);
+    else
+      _add_raster_mask(module, entry->src, entry->id);
+    return;
+  }
+
+  dt_iop_module_t *src = (mods && a >= 0 && a < (int)mods->len) ? g_ptr_array_index(mods, a) : NULL;
+  const gboolean whole = op == _IMPORT_LINK_GROUP || op == _IMPORT_COPY_GROUP;
+  if(whole && !src) return;
+  GList *fids = whole ? _model_module_shapes(src, b) : g_list_prepend(NULL, GINT_TO_POINTER(b));
+  const gboolean copy =
+    op == _IMPORT_COPY_ONE || op == _IMPORT_COPY_GROUP || op == _IMPORT_COPY_PARAMETRIC;
+  _masks_import_forms(module, src, fids, copy);
+  g_list_free(fids);
+}
+
+static void _masks_import_append(GMenu *menu,
+                                 const char *label,
+                                 const _masks_import_op_t op,
+                                 const int a,
+                                 const int b)
 {
   GMenuItem *it = g_menu_item_new(label ? label : "", NULL);
-  g_menu_item_set_action_and_target_value(it, "masks_import.pick", g_variant_new_int32(idx));
+  g_menu_item_set_action_and_target_value(it, "masks_import.pick",
+                                          g_variant_new("(iii)", (int)op, a, b));
   g_menu_append_item(menu, it);
   g_object_unref(it);
 }
 
-// marks a form-kind bucket holding whole other-module mask groups (imported
-// as one composite "shape"), distinct from every real _form_kind() bit
-#define _IMPORT_KIND_GROUP ((guint) - 1)
 #define _IMPORT_MAX_KIND_BUCKETS 16
 
 // find (or create, appending to menu) the submenu for a given shape kind
@@ -658,64 +927,272 @@ static GMenu *_masks_import_kind_bucket(
   submenus[*n_buckets] = sub;
   (*n_buckets)++;
 
-  const char *name =
-    kind == _IMPORT_KIND_GROUP ? _("groups") : _kind_name(kind, TRUE);
-  g_menu_append_submenu(menu, name, G_MENU_MODEL(sub));
+  g_menu_append_submenu(menu, _kind_name(kind, TRUE), G_MENU_MODEL(sub));
   return sub;
 }
 
-#define _IMPORT_MAX_MODULE_BUCKETS 32
-
-// which module (if any) currently uses this form in its own mask group --
-// used to group the import menu's "by source module" view. A form can only
-// ever be a member of one group at a time in this UI (dt_masks_iop_combo_populate's
-// own "existing shape" list already only offers forms unused by the *current*
-// module, not forms unused by everyone), so the first match is the only one.
-static dt_iop_module_t *_masks_import_form_owner(const dt_mask_id_t formid)
+// index of `m` in the menu's module table, adding it if new
+static int _masks_import_module_index(GPtrArray *mods, dt_iop_module_t *m)
 {
-  for(GList *iter = darktable.develop->iop; iter; iter = g_list_next(iter))
+  if(!m) return -1;
+  for(guint k = 0; k < mods->len; k++)
+    if(g_ptr_array_index(mods, k) == m) return (int)k;
+  g_ptr_array_add(mods, m);
+  return (int)mods->len - 1;
+}
+
+// a path that is one of an AI object's members: the object is the element,
+// importing one of its paths on its own would split it apart
+static gboolean _masks_import_is_object_member(const dt_mask_id_t formid)
+{
+  for(GList *l = darktable.develop->forms; l; l = g_list_next(l))
   {
-    dt_iop_module_t *m = iter->data;
-    if(!(m->flags() & IOP_FLAGS_SUPPORTS_BLENDING) || (m->flags() & IOP_FLAGS_NO_MASKS))
-      continue;
-    dt_masks_form_t *grp = _module_mask_group(m);
-    if(grp && _group_point(grp, formid)) return m;
+    const dt_masks_form_t *f = l->data;
+    if(!(f->type & DT_MASKS_OBJECT)) continue;
+    for(GList *p = f->points; p; p = g_list_next(p))
+      if(((dt_masks_point_group_t *)p->data)->formid == formid) return TRUE;
   }
-  return NULL;
+  return FALSE;
 }
 
-// find (or create, appending to menu) the submenu for a given owning module
-// (NULL = not currently used by any module, but still importable)
-static GMenu *_masks_import_module_bucket(GMenu *menu,
-                                          dt_iop_module_t **owners,
-                                          GMenu **submenus,
-                                          int *n_buckets,
-                                          dt_iop_module_t *owner)
+// shapes of `src`'s mask (see _model_module_shapes) the mask `grp` does not
+// use yet
+static GList *_masks_import_candidates(dt_iop_module_t *src,
+                                       const dt_mask_id_t cid,
+                                       dt_masks_form_t *grp)
 {
-  for(int k = 0; k < *n_buckets; k++)
-    if(owners[k] == owner) return submenus[k];
-  if(*n_buckets >= _IMPORT_MAX_MODULE_BUCKETS) return NULL;
+  GList *fids = _model_module_shapes(src, cid);
+  for(GList *l = fids; l;)
+  {
+    GList *next = g_list_next(l);
+    if(grp && _group_point(grp, GPOINTER_TO_INT(l->data))) fids = g_list_delete_link(fids, l);
+    l = next;
+  }
+  return fids;
+}
 
-  GMenu *sub = g_menu_new();
-  owners[*n_buckets] = owner;
-  submenus[*n_buckets] = sub;
-  (*n_buckets)++;
+// the group headed by `cid` in `src`'s mask, named the way its own panel
+// names it
+static gchar *_masks_import_group_label(dt_iop_module_t *src,
+                                        dt_masks_form_t *sgrp,
+                                        const dt_mask_id_t cid)
+{
+  const char *custom = _group_custom_name(sgrp, cid);
+  if(custom) return g_strdup(custom);
+  const dt_masks_point_group_t *head = _group_point(sgrp, cid);
+  const char *op = _op_name_for_state(head ? head->state : 0);
+  // numbers live in the module's own panel data, and are handed out on first
+  // request in the order they are asked for: bottom-up, as here, is how that
+  // panel numbers them itself
+  return src->blend_data ? g_strdup_printf("%s-%d", op, _group_ordinal_of_cid(src, cid))
+                         : g_strdup(op);
+}
 
-  gchar *label =
-    owner ? dt_history_item_get_name(owner) : g_strdup(_("not currently used"));
-  g_menu_append_submenu(menu, label, G_MENU_MODEL(sub));
-  g_free(label);
-  return sub;
+// "link shapes" or "copy shapes": every shape and AI object that another
+// module's mask uses, or that no mask does, and that this module's mask does
+// not use yet, reachable by the module it comes from and by its kind. Added
+// to `menu` as one section, under `caption`. Returns how many there are
+static int _masks_import_fill_shapes(GMenu *menu,
+                                     const char *caption,
+                                     dt_iop_module_t *module,
+                                     GPtrArray *mods,
+                                     const gboolean copy)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const _masks_import_op_t one = copy ? _IMPORT_COPY_ONE : _IMPORT_LINK_ONE;
+  const _masks_import_op_t group = copy ? _IMPORT_COPY_GROUP : _IMPORT_LINK_GROUP;
+  GMenu *by_module = g_menu_new();
+  GMenu *by_type = g_menu_new();
+  guint kinds[_IMPORT_MAX_KIND_BUCKETS];
+  GMenu *kind_submenus[_IMPORT_MAX_KIND_BUCKETS];
+  int n_kinds = 0;
+  int n = 0;
+
+  for(GList *l = darktable.develop->iop; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *src = l->data;
+    if(src == module) continue;
+    GList *shapes = _masks_import_candidates(src, INVALID_MASKID, grp);
+    if(!shapes) continue;
+    dt_masks_form_t *sgrp = _module_mask_group(src);
+    const int a = _masks_import_module_index(mods, src);
+    GMenu *sub = g_menu_new();
+
+    GMenu *whole = g_menu_new();
+    _masks_import_append(whole, _("all shapes"), group, a, INVALID_MASKID);
+    // one entry per group, worth offering only when there is more than one
+    GMenu *groups = g_menu_new();
+    int n_groups = 0;
+    for(GList *p = sgrp->points; p; p = g_list_next(p))
+    {
+      if(!_starts_group(p)) continue;
+      const dt_mask_id_t cid = ((dt_masks_point_group_t *)p->data)->formid;
+      GList *members = _masks_import_candidates(src, cid, grp);
+      if(!members) continue;
+      g_list_free(members);
+      gchar *label = _masks_import_group_label(src, sgrp, cid);
+      _masks_import_append(groups, label, group, a, cid);
+      g_free(label);
+      n_groups++;
+    }
+    if(n_groups > 1)
+      g_menu_append_submenu(whole, _("all shapes from group"), G_MENU_MODEL(groups));
+    g_object_unref(groups);
+    g_menu_append_section(sub, NULL, G_MENU_MODEL(whole));
+    g_object_unref(whole);
+
+    GMenu *each = g_menu_new();
+    for(GList *s = shapes; s; s = g_list_next(s))
+    {
+      const dt_mask_id_t fid = GPOINTER_TO_INT(s->data);
+      const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, fid);
+      _masks_import_append(each, f->name, one, a, fid);
+    }
+    g_menu_append_section(sub, NULL, G_MENU_MODEL(each));
+    g_object_unref(each);
+
+    gchar *mlabel = dt_history_item_get_name(src);
+    g_menu_append_submenu(by_module, mlabel, G_MENU_MODEL(sub));
+    g_free(mlabel);
+    g_object_unref(sub);
+    n += g_list_length(shapes);
+    g_list_free(shapes);
+  }
+
+  // every shape once, by kind, plus the ones no module uses at all
+  GMenu *unused = g_menu_new();
+  int n_unused = 0;
+  for(GList *l = darktable.develop->forms; l; l = g_list_next(l))
+  {
+    const dt_masks_form_t *f = l->data;
+    if(!_form_is_shape(f) || _masks_import_is_object_member(f->formid)) continue;
+    if(grp && _group_point(grp, f->formid)) continue;
+    GList *users = _model_form_users(f->formid);
+    dt_iop_module_t *owner = users ? users->data : NULL;
+    g_list_free(users);
+    if(!owner)
+    {
+      _masks_import_append(unused, f->name, one, -1, f->formid);
+      n_unused++;
+      n++;
+    }
+    GMenu *bucket =
+      _masks_import_kind_bucket(by_type, kinds, kind_submenus, &n_kinds, _form_kind(f));
+    if(bucket)
+      _masks_import_append(bucket, f->name, one, _masks_import_module_index(mods, owner),
+                           f->formid);
+  }
+  if(n_unused)
+    g_menu_append_submenu(by_module, _("not currently used"), G_MENU_MODEL(unused));
+  g_object_unref(unused);
+
+  if(n)
+  {
+    GMenu *sec = g_menu_new();
+    g_menu_append_submenu(sec, _("by source module"), G_MENU_MODEL(by_module));
+    g_menu_append_submenu(sec, _("by type"), G_MENU_MODEL(by_type));
+    g_menu_append_section(menu, caption, G_MENU_MODEL(sec));
+    g_object_unref(sec);
+  }
+  g_object_unref(by_module);
+  g_object_unref(by_type);
+  for(int k = 0; k < n_kinds; k++) g_object_unref(kind_submenus[k]);
+  return n;
+}
+
+// "copy parametric channel": every other module's parametric channels. One
+// set up in another blend colorspace is listed but cannot be picked: its
+// stored channel would be read through this module's channel table (see
+// _parametric_get_mask_roi in masks/parametric.c). Returns how many there are
+static int _masks_import_fill_parametric(GMenu *menu, dt_iop_module_t *module, GPtrArray *mods)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const uint32_t csp = (uint32_t)module->blend_params->blend_cst;
+  int n = 0;
+  for(GList *l = darktable.develop->iop; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *src = l->data;
+    dt_masks_form_t *sgrp = src == module ? NULL : _module_mask_group(src);
+    if(!sgrp) continue;
+    GMenu *ok = g_menu_new();
+    GMenu *other = g_menu_new();
+    int n_ok = 0, n_other = 0;
+    for(GList *p = sgrp->points; p; p = g_list_next(p))
+    {
+      const dt_mask_id_t fid = ((dt_masks_point_group_t *)p->data)->formid;
+      const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, fid);
+      if(!f || !(f->type & DT_MASKS_PARAMETRIC) || !f->points) continue;
+      if(grp && _group_point(grp, fid)) continue;
+      const dt_masks_point_parametric_t *pp = f->points->data;
+      if(pp->colorspace == csp)
+      {
+        _masks_import_append(ok, f->name, _IMPORT_COPY_PARAMETRIC,
+                             _masks_import_module_index(mods, src), fid);
+        n_ok++;
+      }
+      else
+      {
+        g_menu_append(other, f->name, "masks_import.unavailable");
+        n_other++;
+      }
+    }
+    if(n_ok || n_other)
+    {
+      GMenu *sub = g_menu_new();
+      if(n_ok) g_menu_append_section(sub, NULL, G_MENU_MODEL(ok));
+      if(n_other)
+        g_menu_append_section(sub, _("other blend colorspace"), G_MENU_MODEL(other));
+      gchar *mlabel = dt_history_item_get_name(src);
+      g_menu_append_submenu(menu, mlabel, G_MENU_MODEL(sub));
+      g_free(mlabel);
+      g_object_unref(sub);
+      n += n_ok + n_other;
+    }
+    g_object_unref(ok);
+    g_object_unref(other);
+  }
+  return n;
+}
+
+// "add the mask of" / "use the mask of": the raster sources from
+// _raster_sources_collect, the downstream ones listed but not pickable.
+// Returns how many there are
+static int _masks_import_fill_raster(GMenu *menu,
+                                     GPtrArray *usable,
+                                     GPtrArray *later,
+                                     const _masks_import_op_t op)
+{
+  if(usable->len)
+  {
+    GMenu *ok = g_menu_new();
+    for(guint k = 0; k < usable->len; k++)
+    {
+      const _masks_raster_source_entry_t *entry = g_ptr_array_index(usable, k);
+      _masks_import_append(ok, entry->name, op, (int)k, 0);
+    }
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(ok));
+    g_object_unref(ok);
+  }
+  if(later->len)
+  {
+    GMenu *na = g_menu_new();
+    for(guint k = 0; k < later->len; k++)
+    {
+      const _masks_raster_source_entry_t *entry = g_ptr_array_index(later, k);
+      g_menu_append(na, entry->name, "masks_import.unavailable");
+    }
+    g_menu_append_section(menu, _("processed later in the pipe"), G_MENU_MODEL(na));
+    g_object_unref(na);
+  }
+  return (int)(usable->len + later->len);
 }
 
 // removing a shape from a module's own group only detaches it from that
 // group (see dt_masks_form_remove's grp != NULL branch in masks.c) -- it
-// stays in darktable.develop->forms, unused, until something purges it. That
-// purge already existed (dt_masks_cleanup_unused, wired to "delete unused
-// shapes" in the classic mask manager panel's right-click menu); this just
-// offers the same action from the flexi import menu, since that is where a
-// user is now more likely to notice the clutter (it is exactly what ends up
-// in the "not currently used" bucket of "by source module").
+// stays in darktable.develop->forms, unused, until something purges it:
+// dt_masks_cleanup_unused, offered from this menu since that is where the
+// clutter shows (it is exactly what ends up in the "not currently used"
+// bucket of "by source module").
 static void _masks_import_cleanup_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)user_data;
@@ -726,126 +1203,129 @@ static void _masks_import_cleanup_action(GSimpleAction *action, GVariant *parame
     gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
 }
 
-// flexi's "import shape" trigger: like the add-group button, a single click
-// shows the choices immediately as a plain popup menu -- no combobox is ever
-// shown on screen. masks_combo itself stays hidden permanently and is used
-// purely as a headless data source: dt_masks_iop_combo_populate (the same
-// function the combo would call on its own popup open) fills its entries/ids,
-// which are then just regrouped instead of shown as one flat list -- flat
-// became unwieldy with more than a handful of entries (every shape in the
-// image, plus one entry per other module in "use same shapes as"). Existing
-// shapes get two parallel groupings, each just a different lens on the same
-// entries -- "by source module" (which module currently uses each shape, or
-// "not currently used") and "by type" (matching how the mask list itself
-// clusters same-kind elements, see _pack_group_elements / _form_kind) -- so
-// the user can navigate whichever way they already have in mind. Raster
-// forms are dropped entirely: raster elements have their own dedicated
-// add-raster button (with its own, more precise upstream-module picker, see
-// _masks_raster_add_press), so listing them here too would just be the same
-// targets reachable two different, inconsistently-named ways.
+// the reach of the cleanup above ends at the history stack: a shape only an
+// earlier, since replaced step still uses has to stay for that step. Removing
+// those too means dropping the steps, so this compresses history first, after
+// saying so -- it takes undo and redo history with it.
+static void _masks_import_compress_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
+{
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(!dt_gui_show_yes_no_dialog(
+       _("compress history and clean up unused shapes?"), "",
+       _("this compresses the history stack, dropping every earlier step and"
+         " anything you could redo, then deletes every shape no module uses.\n\n"
+         "shapes still used by earlier steps can only be removed this way.")))
+    return;
+  dt_dev_history_truncate(darktable.develop, TRUE);
+  dt_masks_cleanup_unused(darktable.develop);
+  dt_control_log(_("history compressed and unused shapes removed"));
+  // reloading history can rebuild module instances: go through the focused
+  // module rather than the one this menu was opened on
+  dt_iop_module_t *module = darktable.develop->gui_module;
+  if(module && module->blend_data) _build_masks_list(module);
+}
+
+// the import menu: everything that brings in what another module already has.
+// Shapes and AI objects are linked or copied (see the linking section above),
+// parametric channels copied, and another module's whole mask arrives as a
+// raster element, always live: added to the selected group, or replacing this
+// module's mask outright. Submenu entries get no tooltips (see
+// _popover_menu_apply_tooltips in gui/gtk.c), so section captions carry the
+// explanations instead
 static gboolean
 _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *module)
 {
   if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd || !bd->masks_combo) return FALSE;
+  if(!bd) return FALSE;
+  dt_iop_request_focus(module);
 
-  dt_masks_iop_combo_populate(bd->masks_combo, &module);
-
-  GActionGroup *action_group = gtk_widget_get_action_group(btn, "masks_import");
-  if(action_group == NULL)
+  if(gtk_widget_get_action_group(btn, "masks_import") == NULL)
   {
-    GActionEntry action_entries[] =
-    {
-      { "pick",    _masks_import_pick_action,    "i",  NULL },
-      { "cleanup", _masks_import_cleanup_action, NULL, NULL },
+    GActionEntry pick_entries[] = {
+      { "pick", _masks_import_pick_action, "(iii)", NULL },
     };
-    action_group = G_ACTION_GROUP(g_simple_action_group_new());
-    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
-                                    G_N_ELEMENTS(action_entries), module);
-    gtk_widget_insert_action_group(btn, "masks_import", action_group);
+    GActionEntry module_entries[] = {
+      { "cleanup",  _masks_import_cleanup_action,  NULL, NULL },
+      { "compress", _masks_import_compress_action, NULL, NULL },
+    };
+    GSimpleActionGroup *sag = g_simple_action_group_new();
+    g_action_map_add_action_entries(G_ACTION_MAP(sag), pick_entries,
+                                    G_N_ELEMENTS(pick_entries), btn);
+    g_action_map_add_action_entries(G_ACTION_MAP(sag), module_entries,
+                                    G_N_ELEMENTS(module_entries), module);
+    // entries shown for context but not pickable point here
+    GSimpleAction *unavailable = g_simple_action_new("unavailable", NULL);
+    g_simple_action_set_enabled(unavailable, FALSE);
+    g_action_map_add_action(G_ACTION_MAP(sag), G_ACTION(unavailable));
+    g_object_unref(unavailable);
+    gtk_widget_insert_action_group(btn, "masks_import", G_ACTION_GROUP(sag));
+    g_object_unref(sag);
   }
+  g_object_set_data(G_OBJECT(btn), "module", module);
 
-  const int n = dt_bauhaus_combobox_length(bd->masks_combo);
-  GMenu *by_type_menu = g_menu_new();
-  GMenu *by_module_menu = g_menu_new();
-  GMenu *reuse_menu = g_menu_new();
-  guint kinds[_IMPORT_MAX_KIND_BUCKETS];
-  GMenu *kind_submenus[_IMPORT_MAX_KIND_BUCKETS];
-  int n_kinds = 0;
-  dt_iop_module_t *owners[_IMPORT_MAX_MODULE_BUCKETS];
-  GMenu *owner_submenus[_IMPORT_MAX_MODULE_BUCKETS];
-  int n_owners = 0;
-  int n_existing = 0, n_reuse = 0;
-
-  // entry 0 is the fixed "import shape" placeholder itself (a permanent
-  // no-op, see dt_masks_iop_value_changed_callback); every other entry with
-  // id 0 is one of dt_masks_iop_combo_populate's own section dividers -- we
-  // rebuild that grouping ourselves as submenus, so both kinds are skipped
-  // here on the strength of the id's sign alone (positive = existing shape
-  // formid, negative = -1*iop-index-1 for "use same shapes as").
-  for(int i = 1; i < n; i++)
-  {
-    const int id = bd->masks_combo_ids ? bd->masks_combo_ids[i] : 0;
-    if(id == 0) continue;
-    const char *label = dt_bauhaus_combobox_get_entry(bd->masks_combo, i);
-
-    if(id > 0)
-    {
-      const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
-      if(form && (form->type & DT_MASKS_RASTER)) continue;
-
-      const guint kind =
-        (form && (form->type & DT_MASKS_GROUP)) ? _IMPORT_KIND_GROUP : _form_kind(form);
-      GMenu *type_bucket =
-        _masks_import_kind_bucket(by_type_menu, kinds, kind_submenus, &n_kinds, kind);
-      if(type_bucket)
-        _masks_import_append_item(type_bucket, label, i);
-
-      dt_iop_module_t *owner = _masks_import_form_owner(id);
-      GMenu *module_bucket = _masks_import_module_bucket(
-        by_module_menu, owners, owner_submenus, &n_owners, owner);
-      if(module_bucket)
-        _masks_import_append_item(module_bucket, label, i);
-
-      n_existing++;
-    }
-    else
-    {
-      _masks_import_append_item(reuse_menu, label, i);
-      n_reuse++;
-    }
-  }
+  GPtrArray *mods = g_ptr_array_new();
+  GPtrArray *usable = g_ptr_array_new_with_free_func(_raster_source_entry_free);
+  GPtrArray *later = g_ptr_array_new_with_free_func(_raster_source_entry_free);
+  _raster_sources_collect(module, usable, later);
 
   GMenu *menu = g_menu_new();
-  if(n_existing > 0)
-  {
-    g_menu_append_submenu(menu, _("add existing shape by source module"), G_MENU_MODEL(by_module_menu));
-    g_menu_append_submenu(menu, _("add existing shape by type"), G_MENU_MODEL(by_type_menu));
-  }
-  g_object_unref(by_module_menu);
-  g_object_unref(by_type_menu);
 
-  if(n_reuse > 0)
+  GMenu *link_menu = g_menu_new();
+  GMenu *copy_menu = g_menu_new();
+  const int n_shapes = _masks_import_fill_shapes(
+    link_menu, _("shared: editing one changes it everywhere"), module, mods, FALSE);
+  _masks_import_fill_shapes(copy_menu, _("independent copies"), module, mods, TRUE);
+  GMenu *param_menu = g_menu_new();
+  const int n_param =
+    bd->blendif_support ? _masks_import_fill_parametric(param_menu, module, mods) : 0;
+  GMenu *sec_elements = g_menu_new();
+  if(n_shapes)
   {
-    g_menu_append_submenu(menu, _("use same shapes as"), G_MENU_MODEL(reuse_menu));
+    g_menu_append_submenu(sec_elements, _("link shapes"), G_MENU_MODEL(link_menu));
+    g_menu_append_submenu(sec_elements, _("copy shapes"), G_MENU_MODEL(copy_menu));
   }
-  g_object_unref(reuse_menu);
+  if(n_param)
+    g_menu_append_submenu(sec_elements, _("copy parametric channel"), G_MENU_MODEL(param_menu));
+  g_menu_append_section(menu, NULL, G_MENU_MODEL(sec_elements));
+  g_object_unref(sec_elements);
+  g_object_unref(link_menu);
+  g_object_unref(copy_menu);
+  g_object_unref(param_menu);
 
-  if(n_existing == 0 && n_reuse == 0)
+  GMenu *add_menu = g_menu_new();
+  GMenu *use_menu = g_menu_new();
+  const int n_raster = _masks_import_fill_raster(add_menu, usable, later, _IMPORT_ADD_MASK);
+  _masks_import_fill_raster(use_menu, usable, later, _IMPORT_USE_MASK);
+  if(n_raster)
   {
-    GMenuItem *none_it = g_menu_item_new(_("nothing to import"), NULL);
-    g_menu_append_item(menu, none_it);
-    g_object_unref(none_it);
+    GMenu *sec_mask = g_menu_new();
+    g_menu_append_submenu(sec_mask, _("add the mask of"), G_MENU_MODEL(add_menu));
+    g_menu_append_submenu(sec_mask, _("use the mask of"), G_MENU_MODEL(use_menu));
+    g_menu_append_section(menu, _("another module's whole mask, kept up to date"),
+                          G_MENU_MODEL(sec_mask));
+    g_object_unref(sec_mask);
   }
+  g_object_unref(add_menu);
+  g_object_unref(use_menu);
+
+  if(!n_shapes && !n_param && !n_raster)
+    g_menu_append(menu, _("nothing to import"), "masks_import.unavailable");
 
   GMenu *cleanup_sec = g_menu_new();
   g_menu_append(cleanup_sec, _("clean up unused shapes"), "masks_import.cleanup");
+  g_menu_append(cleanup_sec, _("compress history and clean up unused shapes"),
+                "masks_import.compress");
   g_menu_append_section(menu, NULL, G_MENU_MODEL(cleanup_sec));
   g_object_unref(cleanup_sec);
 
-  for(int k = 0; k < n_kinds; k++) g_object_unref(kind_submenus[k]);
-  for(int k = 0; k < n_owners; k++) g_object_unref(owner_submenus[k]);
+  // the picks resolve their targets through these until the next popup
+  g_object_set_data_full(G_OBJECT(btn), "import_modules", mods,
+                         (GDestroyNotify)g_ptr_array_unref);
+  g_object_set_data_full(G_OBJECT(btn), "import_rasters", usable,
+                         (GDestroyNotify)g_ptr_array_unref);
+  g_ptr_array_unref(later);
 
   darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, menu);
   gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
@@ -854,16 +1334,12 @@ _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *mod
 }
 
 // apply the mask toolbar layout for the current mode. Classic restores the master
-// two-row toolbar: combo row [import combo][invert], shapes row [edit][shapes].
+// two-row toolbar: header row [invert], shapes row [edit][shapes].
 // Flexi is compact: masks_toolbar takes over every "add an element" action
 // (see its field comment in blend.h), while "edit on canvas" and the
-// whole-mask "invert" toggle move up into the "mask elements" header.
-// masks_combo stays wherever it already is (masks_combo_row) either way --
-// in flexi it is a headless data source for masks_import_btn's popup menu
-// and is never shown, so it does not need a visible home there; hiding
-// masks_combo_row hides it along with everything else in that row. Every
-// other shared widget is simply re-homed, so neither layout duplicates
-// state. Called on every blending update (idempotent).
+// whole-mask "invert" toggle move up into the "mask elements" header. Every
+// shared widget is simply re-homed, so neither layout duplicates state.
+// Called on every blending update (idempotent).
 static void _masks_apply_layout(dt_iop_gui_blend_data_t *bd, const gboolean flexi)
 {
   if(!bd->masks_combo_row || !bd->masks_shapes_row || !bd->masks_toolbar
@@ -895,7 +1371,6 @@ static void _masks_apply_layout(dt_iop_gui_blend_data_t *bd, const gboolean flex
   }
   else
   {
-    _reparent_into(bd->masks_combo, bd->masks_combo_row, FALSE, TRUE);
     _reparent_into(bd->masks_polarity, bd->masks_combo_row, TRUE, FALSE);
     _reparent_into(bd->masks_edit, bd->masks_shapes_row, FALSE, FALSE);
     _reparent_into(bd->masks_shapes_box, bd->masks_shapes_row, FALSE, FALSE);
@@ -1173,10 +1648,6 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
 
   if(data->masks_inited && show_mask_ui)
   {
-    // section caption reflects the mode: flexi drops the label (the combo value
-    // "N shapes used" already says enough); classic keeps "drawn mask"
-    dt_bauhaus_widget_set_label(data->masks_combo, N_("blend"),
-                                show_flexi_ui ? "" : N_("drawn mask"));
     // flexi-only widgets: new-shape operator selector, add-parametric button,
     // and the per-shape composition list. classic drawn mask keeps the vanilla
     // toolbar.
@@ -2892,28 +3363,12 @@ void dt_iop_gui_update_masks(dt_iop_module_t *module)
   const gboolean flexi = bp->mask_mode & DEVELOP_MASK_FLEXI;
   dt_masks_form_t *grp =
     dt_masks_get_from_id(darktable.develop, module->blend_params->mask_id);
-  dt_bauhaus_combobox_clear(bd->masks_combo);
-  if(flexi)
+  // classic drawn mode has nothing to edit on canvas without shapes
+  if(!flexi && !(grp && (grp->type & DT_MASKS_GROUP) && grp->points))
   {
-    // in flexi the combo is purely a shape importer: its entries import an
-    // existing shape (or another module's shapes) into the selected group.
-    dt_bauhaus_combobox_add(bd->masks_combo, _("import shape"));
-  }
-  else if(grp && (grp->type & DT_MASKS_GROUP) && grp->points)
-  {
-    char txt[512];
-    const guint n = g_list_length(grp->points);
-    snprintf(txt, sizeof(txt), ngettext("%d shape used", "%d shapes used", n), n);
-    dt_bauhaus_combobox_add(bd->masks_combo, txt);
-  }
-  else
-  {
-    dt_bauhaus_combobox_add(bd->masks_combo, _("no mask used"));
     bd->masks_shown = DT_MASKS_EDIT_OFF;
-    // reset the gui
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
   }
-  dt_bauhaus_combobox_set(bd->masks_combo, 0);
 
   if(bd->masks_support)
   {
@@ -2939,10 +3394,6 @@ void dt_iop_gui_update_masks(dt_iop_module_t *module)
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_shapes[n]), FALSE);
     }
   }
-
-  // classic mode keeps the import/shape combo always usable (the flexi rebuild
-  // re-derives this from the group selection)
-  if(!flexi) gtk_widget_set_sensitive(bd->masks_combo, TRUE);
 
   DT_LEAVE_GUI_UPDATE();
 
@@ -3005,6 +3456,18 @@ static void _queue_masks_list_rebuild(dt_iop_module_t *module)
     return;
   }
   g_idle_add(_rebuild_masks_list_idle, (gpointer)module);
+}
+
+// the modules sharing a form all show its chain icon, so a change of who uses
+// it (import, unlink, delete) must reach their panels too. Their signatures
+// fold the users (see _masks_list_signature), so the unaffected ones skip
+static void _queue_link_peers_rebuild(const dt_iop_module_t *module)
+{
+  for(GList *l = darktable.develop->iop; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *m = l->data;
+    if(m != module && m->blend_data) _queue_masks_list_rebuild(m);
+  }
 }
 
 // defined near the other group helpers (below _starts_group); declared here
@@ -3099,14 +3562,7 @@ static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t c
 // scope level as REFINE_SCOPE_GROUP, but the value lives in the empty group's
 // own slot (dt_masks_empty_group_t.refinement) rather than in member points,
 // and is adopted by the run once the group is realized.
-enum
-{
-  REFINE_SCOPE_GLOBAL = 0,
-  REFINE_SCOPE_ALL_SHAPES,
-  REFINE_SCOPE_ELEMENT,
-  REFINE_SCOPE_GROUP,
-  REFINE_SCOPE_EMPTY_GROUP
-};
+// The REFINE_SCOPE_* values live in blend_gui_internal.h.
 
 // accessors for that slot. dt_masks_empty_group_t is defined much further down
 // (with the rest of the empty-group machinery) and bd->selected_empty is a void*,
@@ -3488,10 +3944,10 @@ static void _refine_header_clicked(
 // group header (no specific element within it) targets the whole group;
 // nothing selected targets global. Defined here so _update_row_selection
 // (above the scope helpers) can drive it.
-static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd)
+void _model_refine_scope_from_selection(dt_iop_module_t *module)
 {
-  if(!bd || !bd->blend_inited || !bd->module) return;
-  const gboolean flexi = !(bd->module->blend_params->mask_mode & DEVELOP_MASK_RASTER);
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const gboolean flexi = !(module->blend_params->mask_mode & DEVELOP_MASK_RASTER);
   if(flexi && dt_is_valid_maskid(bd->panel_selected_formid))
   {
     bd->masks_refine_scope_kind = REFINE_SCOPE_ELEMENT;
@@ -3516,6 +3972,32 @@ static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd)
     bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
     bd->masks_refine_scope_formid = INVALID_MASKID;
   }
+}
+
+// the refinement scope outlives its target when that is removed by a route
+// that does not reselect (canvas, an AI object losing its last path, undo),
+// and the caption kept naming it
+gboolean _model_refine_scope_prune(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const gboolean scope_gone =
+    (bd->masks_refine_scope_kind == REFINE_SCOPE_ELEMENT
+     || bd->masks_refine_scope_kind == REFINE_SCOPE_GROUP)
+    && !_group_point(grp, bd->masks_refine_scope_formid);
+  if(!scope_gone) return FALSE;
+  if(!_group_point(grp, bd->panel_selected_formid))
+    bd->panel_selected_formid = INVALID_MASKID;
+  if(!_group_point(grp, bd->panel_selected_group_cid))
+    bd->panel_selected_group_cid = INVALID_MASKID;
+  return TRUE;
+}
+
+// retarget from the selection, then reload the refinement controls for it
+static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd)
+{
+  if(!bd || !bd->blend_inited || !bd->module) return;
+  _model_refine_scope_from_selection(bd->module);
   _refine_populate(bd->module);
   // clicking a row (the lightweight _update_row_selection path, not a full
   // list rebuild) changes the scope kind above but does not otherwise touch
@@ -3733,6 +4215,7 @@ static GtkWidget *_make_icon_widget(DTGTKCairoPaintIconFunc paint)
 // the refinement section caption mirrors the row being refined:
 // Expander header shows "(element|group|whole mask) refinement",
 // and when expanded, inner header row shows <icon> <label> <actions>.
+static const char *_form_type_prefix(const dt_masks_form_t *form);
 static void _refine_update_header(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
@@ -3767,7 +4250,15 @@ static void _refine_update_header(dt_iop_module_t *module)
       dt_masks_get_from_id(darktable.develop, bd->masks_refine_scope_formid);
     if(form)
     {
-      name = g_strdup(form->name);
+      if(form->type & DT_MASKS_RASTER)
+      {
+        // a raster element's own name can be its source's, see _form_display_name
+        gchar *shown = _form_display_name(form);
+        name = g_strdup_printf("%s %s", _form_type_prefix(form), shown);
+        g_free(shown);
+      }
+      else
+        name = g_strdup(form->name);
       if(form->type & DT_MASKS_PARAMETRIC)
       {
         const gchar *code = dt_masks_parametric_type_label(form);
@@ -6341,12 +6832,28 @@ static GtkWidget *_find_collapsed_cluster_header(GtkWidget *w, const dt_mask_id_
 // highlight its row in the flexi mask list. An invalid id clears the selection
 // (e.g. clicking empty canvas, or toggling the selected shape off). No-op when
 // there is no list (classic mode / no masks).
+// a path of an AI object the canvas stepped into is selected through its
+// object: the panel has no row of its own for it
+dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t formid)
+{
+  if(!dt_is_valid_maskid(formid)) return INVALID_MASKID;
+  dt_masks_form_t *mgrp = _module_mask_group(module);
+  if(!mgrp || _group_point(mgrp, formid)) return formid;
+  for(GList *l = mgrp->points; l; l = g_list_next(l))
+  {
+    dt_masks_form_t *f =
+      dt_masks_get_from_id(darktable.develop, ((dt_masks_point_group_t *)l->data)->formid);
+    if(f && (f->type & DT_MASKS_OBJECT) && _group_point(f, formid)) return f->formid;
+  }
+  return formid;
+}
+
 void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   if(!module) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd || !bd->masks_list_box) return;
-  const dt_mask_id_t id = dt_is_valid_maskid(formid) ? formid : INVALID_MASKID;
+  const dt_mask_id_t id = _model_panel_formid_for(module, formid);
   if(bd->panel_selected_formid == id) return;
   bd->panel_selected_formid = id;
 
@@ -6914,6 +7421,7 @@ void _masks_reset_mask_core(dt_iop_module_t *module)
   if(bd->masks_props_expanded) g_hash_table_remove_all(bd->masks_props_expanded);
   bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
   bd->masks_refine_scope_formid = INVALID_MASKID;
+  _queue_link_peers_rebuild(module);
 }
 
 // "reset mask": remove every shape and restore the virgin add/intersect/subtract
@@ -7951,9 +8459,10 @@ static const char *_form_type_prefix(const dt_masks_form_t *form)
 // for parametric, the channel badge) already say what kind this is, so
 // repeating it in the text would be redundant. Used both for the row label and
 // to prefill the rename entry with only the editable part. Caller frees.
-static gchar *_form_display_name(const dt_masks_form_t *form)
+gchar *_form_display_name(const dt_masks_form_t *form)
 {
   const char *prefix = _form_type_prefix(form);
+  if(!prefix) prefix = "";
   const size_t plen = strlen(prefix);
   const char *rest = form->name;
   if(g_str_has_prefix(form->name, prefix)
@@ -7962,7 +8471,136 @@ static gchar *_form_display_name(const dt_masks_form_t *form)
     rest = form->name + plen;
     while(*rest == ' ') rest++;
   }
+  // a raster element named by its type alone shows its source's current name,
+  // so renaming the source renames it; a name of its own stops that
+  if((form->type & DT_MASKS_RASTER) && !*rest)
+  {
+    const dt_iop_module_t *src = dt_masks_raster_source(form);
+    if(src) return dt_history_item_get_name(src);
+    const dt_masks_point_raster_t *p = form->points ? form->points->data : NULL;
+    return g_strdup(p ? p->source : "");
+  }
   return g_strdup(rest);
+}
+
+gboolean _model_rename_form(dt_masks_form_t *form, const char *txt)
+{
+  if(!form || !txt) return FALSE;
+  char name[sizeof(form->name)];
+  // the entry edits only the part after the type prefix, so a rename replaces
+  // the auto-assigned "#<id>" without ever dropping the "what is this"
+  // indication. Emptying a raster element's name makes it follow its source
+  if(*txt)
+    g_snprintf(name, sizeof(name), "%s %s", _form_type_prefix(form), txt);
+  else if(form->type & DT_MASKS_RASTER)
+    g_strlcpy(name, _form_type_prefix(form), sizeof(name));
+  else
+    return FALSE;
+  if(!strcmp(name, form->name)) return FALSE;
+  g_strlcpy(form->name, name, sizeof(form->name));
+  return TRUE;
+}
+
+// raster elements used to store their source's name as it was then; one still
+// showing it follows the source from now on, like a new one
+void _model_raster_names_follow_sources(dt_masks_form_t *grp)
+{
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    dt_masks_form_t *f =
+      dt_masks_get_from_id(darktable.develop, ((dt_masks_point_group_t *)l->data)->formid);
+    const dt_iop_module_t *src = f && (f->type & DT_MASKS_RASTER) ? dt_masks_raster_source(f) : NULL;
+    if(!src) continue;
+    gchar *label = dt_history_item_get_name(src);
+    gchar *stored = g_strdup_printf("%s %s", _form_type_prefix(f), label);
+    if(!strcmp(f->name, stored)) g_strlcpy(f->name, _form_type_prefix(f), sizeof(f->name));
+    g_free(stored);
+    g_free(label);
+  }
+}
+
+// a shared element shows the chain and offers "unlink". A raster element never
+// does: it has nothing shared to edit, and unlinking it would change nothing
+gboolean _model_form_is_linked(const dt_masks_form_t *form)
+{
+  if(!form || (form->type & DT_MASKS_RASTER)) return FALSE;
+  GList *users = _model_form_users(form->formid);
+  const gboolean linked = !g_list_shorter_than(users, 2);
+  g_list_free(users);
+  return linked;
+}
+
+// the tooltip of a linked element's chain icon, naming the other modules that
+// use it; NULL when no other module does
+static gchar *_linked_tooltip(const dt_iop_module_t *module,
+                              const dt_mask_id_t fid,
+                              const dt_masks_form_t *form)
+{
+  GList *users = _model_form_users(fid);
+  GString *names = g_string_new(NULL);
+  for(GList *l = users; l; l = g_list_next(l))
+  {
+    if(l->data == module) continue;
+    gchar *name = dt_history_item_get_name(l->data);
+    if(names->len) g_string_append(names, ", ");
+    g_string_append(names, name);
+    g_free(name);
+  }
+  g_list_free(users);
+  if(!names->len)
+  {
+    g_string_free(names, TRUE);
+    return NULL;
+  }
+  // parametric channels are only ever copied, but edits made before that rule
+  // (duplicated instances used to share them) can still hold a shared one
+  const char *format =
+    (form->type & DT_MASKS_OBJECT)
+      ? _("linked with %s\n"
+          "this AI object is shared: editing it changes it in every module it is linked with,\n"
+          "while its opacity, operator and refinements stay separate\n"
+          "right-click and pick \"unlink\" to give this module its own copy")
+    : (form->type & DT_MASKS_PARAMETRIC)
+      ? _("linked with %s\n"
+          "this channel is shared: changing its range changes it in every module it is"
+          " linked with,\n"
+          "while its opacity, operator and refinements stay separate\n"
+          "right-click and pick \"unlink\" to give this module its own copy")
+      : _("linked with %s\n"
+          "this shape is shared: editing it changes it in every module it is linked with,\n"
+          "while its opacity, operator and refinements stay separate\n"
+          "right-click and pick \"unlink\" to give this module its own copy");
+  gchar *tip = g_strdup_printf(format, names->str);
+  g_string_free(names, TRUE);
+  return tip;
+}
+
+// the chain of a linked element: a chip like the solo badge (see .mask-row-linked)
+static gboolean _linked_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
+{
+  GtkAllocation a;
+  gtk_widget_get_allocation(w, &a);
+  GtkStyleContext *ctx = gtk_widget_get_style_context(w);
+  gtk_render_background(ctx, cr, 0, 0, a.width, a.height);
+  GdkRGBA c;
+  gtk_style_context_get_color(ctx, gtk_widget_get_state_flags(w), &c);
+  cairo_set_source_rgba(cr, c.red, c.green, c.blue, c.alpha);
+  const gint pad = DT_PIXEL_APPLY_DPI(1);
+  dtgtk_cairo_paint_link(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad, 0, NULL);
+  return TRUE;
+}
+
+static GtkWidget *_make_linked_badge(const char *tooltip)
+{
+  GtkWidget *badge = gtk_event_box_new();
+  gtk_event_box_set_visible_window(GTK_EVENT_BOX(badge), TRUE);
+  gtk_widget_set_app_paintable(badge, TRUE);
+  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(11), DT_PIXEL_APPLY_DPI(11));
+  gtk_widget_set_valign(badge, GTK_ALIGN_CENTER);
+  dt_gui_add_class(badge, "mask-row-linked");
+  gtk_widget_set_tooltip_text(badge, tooltip);
+  g_signal_connect(G_OBJECT(badge), "draw", G_CALLBACK(_linked_badge_draw), NULL);
+  return badge;
 }
 
 static void _rename_commit(GtkWidget *entry, dt_iop_module_t *module)
@@ -7973,12 +8611,8 @@ static void _rename_commit(GtkWidget *entry, dt_iop_module_t *module)
   dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   gchar *txt = g_strdup(gtk_entry_get_text(GTK_ENTRY(entry)));
   if(txt) g_strstrip(txt);
-  if(form && txt && *txt)
+  if(_model_rename_form(form, txt))
   {
-    // the entry only edits the part after the type prefix (see
-    // _row_click_press), so a rename replaces the auto-assigned "#<id>"
-    // without ever dropping the "what is this" indication.
-    g_snprintf(form->name, sizeof(form->name), "%s %s", _form_type_prefix(form), txt);
     dt_print(DT_DEBUG_MASKS, "[masks] form %d renamed to '%s'", id, form->name);
     dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
   }
@@ -8096,6 +8730,8 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
   dt_masks_form_t *grp = _module_mask_group(module);
   dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(!grp || !form) return;
+  // deferred, so it sees the group after either branch below
+  _queue_link_peers_rebuild(module);
 
   int op = DT_MASKS_STATE_UNION;
   if(_group_sole_member(grp, id, &op))
@@ -8133,6 +8769,11 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
   _refresh_canvas_edit(module);
 }
 
+void dt_iop_gui_blend_delete_element(dt_iop_module_t *module, const dt_mask_id_t id)
+{
+  if(module && module->blend_data) _delete_single_shape(module, id);
+}
+
 #ifdef HAVE_AI
 // "break into components": re-parent an AI-mask bundle's own children (see
 // _register_vectorized_forms/object.c) as direct members of the containing
@@ -8143,11 +8784,35 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
 // entry in the row's actions menu (_build_shape_actions_menu).
 static void _break_apart_ai_bundle(dt_iop_module_t *module, const dt_mask_id_t id)
 {
-  dt_masks_form_t *grp = _module_mask_group(module);
-  dt_masks_form_t *bundle = dt_masks_get_from_id(darktable.develop, id);
-  if(!grp || !bundle || !(bundle->type & DT_MASKS_OBJECT) || !bundle->points) return;
+  const dt_masks_form_t *bundle = dt_masks_get_from_id(darktable.develop, id);
+  if(!bundle || !(bundle->type & DT_MASKS_OBJECT) || !bundle->points) return;
 
   dt_masks_clear_form_gui(darktable.develop);
+  const gboolean linked = _model_form_is_linked(bundle);
+  if(!_model_break_apart(module, id)) return;
+  if(linked) _queue_link_peers_rebuild(module);
+
+  dt_print(DT_DEBUG_MASKS, "[masks] AI mask %d broken into components", id);
+  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  _queue_masks_list_rebuild(module);
+  _refresh_canvas_edit(module);
+}
+#endif
+
+gboolean _model_break_apart(dt_iop_module_t *module, dt_mask_id_t id)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  dt_masks_form_t *bundle = dt_masks_get_from_id(darktable.develop, id);
+  if(!grp || !bundle || !(bundle->type & DT_MASKS_OBJECT) || !bundle->points) return FALSE;
+
+  // other modules linked to this object keep it whole: this module breaks
+  // its own copy of it
+  if(_model_form_is_linked(bundle))
+  {
+    id = _model_unlink_form(module, id);
+    bundle = dt_masks_get_from_id(darktable.develop, id);
+    if(!bundle) return FALSE;
+  }
 
   // build the replacement points, one per child, in the bundle's own order
   GList *replacement = NULL;
@@ -8195,14 +8860,8 @@ static void _break_apart_ai_bundle(dt_iop_module_t *module, const dt_mask_id_t i
   // independent forms in dev->forms, now referenced directly by `grp`)
   darktable.develop->forms = g_list_remove(darktable.develop->forms, bundle);
   dt_masks_free_form(bundle);
-
-  dt_print(DT_DEBUG_MASKS, "[masks] AI mask %d broken into components", id);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
-  _queue_masks_list_rebuild(module);
-  _refresh_canvas_edit(module);
+  return TRUE;
 }
-
-#endif // HAVE_AI
 
 // forward declared here (defined much further down, near _build_shape_actions_menu's
 // other caller) so _row_click_press's own right-click can open the same menu
@@ -9043,7 +9702,6 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
                            " the new element goes is ambiguous)")
                      : target.implicit ? _("\n(added to the only group)")
                                        : _("\n(added to the selected group)");
-  gtk_widget_set_sensitive(bd->masks_combo, has_target);
   for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
     if(bd->masks_shapes[n])
     {
@@ -9075,23 +9733,14 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     g_free(ch_hint);
   }
 
-  // raster and import/reuse also add an element to the target group, so they
-  // need the same target and the same explanation when there isn't one
-  if(bd->masks_raster_add_btn)
-  {
-    gtk_widget_set_sensitive(bd->masks_raster_add_btn, has_target);
-    gchar *tt =
-      g_strconcat(_("add a raster mask element: use another module's mask as an element\n"
-                    "of this group, combined with the group's operator"),
-                  hint, NULL);
-    gtk_widget_set_tooltip_text(bd->masks_raster_add_btn, tt);
-    g_free(tt);
-  }
+  // import also adds elements to the target group, so it needs the same
+  // target and the same explanation when there isn't one
   if(bd->masks_import_btn)
   {
     gtk_widget_set_sensitive(bd->masks_import_btn, has_target);
-    gchar *tt = g_strconcat(_("import an existing shape, or reuse another\n"
-                              "module's mask (click to pick one)"),
+    gchar *tt = g_strconcat(_("link or copy shapes from other modules, copy their parametric\n"
+                              "channels, or add or use another module's whole mask\n"
+                              "(click to pick)"),
                             hint, NULL);
     gtk_widget_set_tooltip_text(bd->masks_import_btn, tt);
     g_free(tt);
@@ -12526,6 +13175,62 @@ static void _shape_act_break_apart(GSimpleAction *action, GVariant *param, gpoin
 }
 #endif
 
+// give this module its own copy of a linked shape or AI object: the other
+// modules keep the original
+static void _unlink_element(dt_iop_module_t *module, const dt_mask_id_t id)
+{
+  dt_masks_clear_form_gui(darktable.develop);
+  const dt_mask_id_t nid = _model_unlink_form(module, id);
+  if(!dt_is_valid_maskid(nid)) return;
+  dt_print(DT_DEBUG_MASKS, "[masks] form %d unlinked in '%s' as %d", id, module->op, nid);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+  _queue_masks_list_rebuild(module);
+  _queue_link_peers_rebuild(module);
+  _refresh_canvas_edit(module);
+}
+
+static void _shape_act_unlink(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module) _unlink_element(module, id);
+}
+
+// a raster element's mask is edited where it is made: its source module gets
+// the focus, expanded, with its mask on the canvas
+static void _edit_raster_source(const dt_masks_form_t *form)
+{
+  dt_iop_module_t *src = dt_masks_raster_source(form);
+  if(!src) return;
+  if(!src->expanded)
+    dt_iop_gui_set_expanded(src, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
+  dt_iop_request_focus(src);
+  dt_iop_gui_blend_data_t *sbd = src->blend_data;
+  if(sbd && _module_mask_group(src))
+  {
+    sbd->masks_shown = DT_MASKS_EDIT_FULL;
+    dt_masks_set_edit_mode(src, DT_MASKS_EDIT_FULL);
+  }
+}
+
+static void _shape_act_edit_source(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  _edit_raster_source(dt_masks_get_from_id(darktable.develop, id));
+}
+
+void dt_iop_gui_blend_module_renamed(dt_iop_module_t *module)
+{
+  // raster elements following this module's name show it in other panels
+  if(module && darktable.develop) _queue_link_peers_rebuild(module);
+}
+
 static void _shape_act_delete(GSimpleAction *action, GVariant *param, gpointer u)
 {
   GtkWidget *anchor = GTK_WIDGET(u);
@@ -12571,6 +13276,8 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   GActionEntry action_entries[] =
   {
     { "rename",      _shape_act_rename,      NULL, NULL },
+    { "edit_source", _shape_act_edit_source, NULL, NULL },
+    { "unlink",      _shape_act_unlink,      NULL, NULL },
 #ifdef HAVE_AI
     { "break_apart", _shape_act_break_apart, NULL, NULL },
 #endif
@@ -12579,6 +13286,9 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   g_action_map_add_action_entries(map, action_entries, G_N_ELEMENTS(action_entries), anchor);
 
   gtk_widget_insert_action_group(anchor, "masks_shape_act", G_ACTION_GROUP(sag));
+
+  const dt_masks_form_t *elem = dt_masks_get_from_id(darktable.develop, id);
+  const gboolean linked = _model_form_is_linked(elem);
 
   GMenu *menu = g_menu_new();
 
@@ -12598,14 +13308,39 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   }
 
   GMenu *sec_edit = g_menu_new();
+  const dt_iop_module_t *raster_src = dt_masks_raster_source(elem);
+  if(raster_src)
+  {
+    gchar *src_name = dt_history_item_get_name(raster_src);
+    gchar *tip = g_strdup_printf(_("focus %s and edit its mask on the canvas"), src_name);
+    GMenuItem *it = g_menu_item_new(_("edit source mask"), "masks_shape_act.edit_source");
+    g_menu_item_set_attribute(it, "tooltip", "s", tip);
+    g_menu_append_item(sec_edit, it);
+    g_object_unref(it);
+    g_free(tip);
+    g_free(src_name);
+  }
   g_menu_append(sec_edit, _("rename"), "masks_shape_act.rename");
+  if(linked)
+  {
+    GMenuItem *it = g_menu_item_new(_("unlink"), "masks_shape_act.unlink");
+    g_menu_item_set_attribute(it, "tooltip", "s",
+      _("give this module its own copy, so editing it no longer changes it in"
+        " the modules it is linked with"));
+    g_menu_append_item(sec_edit, it);
+    g_object_unref(it);
+  }
 #ifdef HAVE_AI
   const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(form && (form->type & DT_MASKS_OBJECT) && g_list_length(form->points) > 1)
   {
     GMenuItem *it = g_menu_item_new(_("break into components"), "masks_shape_act.break_apart");
     g_menu_item_set_attribute(it, "tooltip", "s",
-      _("convert this AI mask's paths into ordinary, independently editable shapes in this group"));
+      linked
+        ? _("convert this AI mask's paths into ordinary, independently editable shapes in this group\n"
+            "it is linked with other modules: this module gets its own copy first, and theirs"
+            " stays whole")
+        : _("convert this AI mask's paths into ordinary, independently editable shapes in this group"));
     g_menu_append_item(sec_edit, it);
     g_object_unref(it);
   }
@@ -14622,6 +15357,64 @@ static void _wire_element_click_surface(GtkWidget *w,
                    G_CALLBACK(_row_click_release), module);
 }
 
+// an expanded AI object lists its paths, each removable on its own and, while
+// hovered, highlighted alone on the canvas: the panel's side of stepping into
+// the object there (double-click, see masks/group.c)
+static void _object_path_remove_clicked(GtkButton *button, dt_iop_module_t *module)
+{
+  const dt_mask_id_t path = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "formid"));
+  const dt_mask_id_t object = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "object"));
+  dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, path);
+  if(!form) return;
+  dt_masks_clear_form_gui(darktable.develop);
+  dt_masks_remove_shape(module, form, object, FALSE);
+  _queue_masks_list_rebuild(module);
+  _refresh_canvas_edit(module);
+}
+
+static void _append_object_path_rows(dt_iop_module_t *module,
+                                     const dt_masks_form_t *object,
+                                     GtkWidget *box)
+{
+  GtkWidget *caption = dt_ui_section_label_new(_("paths"));
+  gtk_widget_show_all(caption);
+  dt_gui_box_add(box, caption);
+  for(const GList *l = object->points; l; l = g_list_next(l))
+  {
+    const dt_mask_id_t pid = ((dt_masks_point_group_t *)l->data)->formid;
+    const dt_masks_form_t *path = dt_masks_get_from_id(darktable.develop, pid);
+    if(!path) continue;
+
+    gchar *name = _form_display_name(path);
+    GtkWidget *label = gtk_label_new(name);
+    g_free(name);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+    GtkWidget *remove = dtgtk_button_new(dtgtk_cairo_paint_remove, 0, NULL);
+    gtk_widget_set_tooltip_text(remove, _("remove this path from the AI object"));
+    g_object_set_data(G_OBJECT(remove), "formid", GINT_TO_POINTER(pid));
+    g_object_set_data(G_OBJECT(remove), "object", GINT_TO_POINTER(object->formid));
+    g_signal_connect(G_OBJECT(remove), "clicked", G_CALLBACK(_object_path_remove_clicked),
+                     module);
+    GtkWidget *row = dt_gui_hbox(_make_icon_widget(_kind_icon_paint(_form_kind(path))),
+                                 dt_gui_expand(label), remove);
+
+    // a windowed box, like the element rows', so hovering it highlights just
+    // this path on the canvas (see _row_crossing)
+    GtkWidget *evbox = gtk_event_box_new();
+    gtk_event_box_set_visible_window(GTK_EVENT_BOX(evbox), TRUE);
+    gtk_container_add(GTK_CONTAINER(evbox), row);
+    g_object_set_data_full(G_OBJECT(evbox), "hover-formids",
+                           g_list_prepend(NULL, GINT_TO_POINTER(pid)),
+                           (GDestroyNotify)g_list_free);
+    gtk_widget_add_events(evbox, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
+    g_signal_connect(G_OBJECT(evbox), "enter-notify-event", G_CALLBACK(_row_crossing), module);
+    g_signal_connect(G_OBJECT(evbox), "leave-notify-event", G_CALLBACK(_row_crossing), module);
+    gtk_widget_show_all(evbox);
+    dt_gui_box_add(box, evbox);
+  }
+}
+
 static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                                   dt_masks_point_group_t *fpt,
                                   dt_masks_form_t *form,
@@ -14932,8 +15725,27 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // row is registered in bd->masks_row_map (it isn't yet, here).
   GtkWidget *lowop_badge = _make_lowop_badge();
 
+  // a linked element carries a chain icon ending its name column. It cannot
+  // sit right after the text: the name is capped to one character of natural
+  // width (see gtk_label_set_max_width_chars above) and only grows by
+  // expanding into the whole column, so the icon goes at the column's end.
+  // A raster element has nothing shared to edit, so it never shows one
+  GtkWidget *name_slot = evbox;
+  if(_model_form_is_linked(form))
+  {
+    gchar *linked_tip = _linked_tooltip(module, fid, form);
+    if(linked_tip)
+    {
+      GtkWidget *chain = _make_linked_badge(linked_tip);
+      g_free(linked_tip);
+      name_slot = dt_gui_hbox(dt_gui_expand(evbox), chain);
+      gtk_widget_show(chain);
+      gtk_widget_show(name_slot);
+    }
+  }
+
   GtkWidget *action_icon = (form->type & DT_MASKS_PARAMETRIC) ? param_picker_box : NULL;
-  _pack_row_header(row, handle, evbox, opacity_box,
+  _pack_row_header(row, handle, name_slot, opacity_box,
                    _make_badge_stack(lowop_badge, solo_badge), action_icon,
                    expand_toggle);
 
@@ -15073,6 +15885,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // the toggle that shows/hides it).
   if(props_editor_box)
   {
+    if(form->type & DT_MASKS_OBJECT) _append_object_path_rows(module, form, props_editor_box);
     // indent/inset entirely via CSS (.mask-props-row-editor's margin-left/
     // margin-right in darktable.css), not hardcoded here
     GtkWidget *props_evbox = gtk_event_box_new();
@@ -15197,7 +16010,7 @@ static void _consolidate_cluster_in_group(dt_masks_form_t *grp,
 // realize/seed/auto-select blocks the build runs before packing are no-ops in
 // steady state, and any pending one is flagged here (insert_realized_fid /
 // scaffold_seeded), so a top-of-function signature is safe.
-static dt_hash_t _masks_list_signature(dt_iop_module_t *module)
+dt_hash_t _masks_list_signature(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -15216,8 +16029,19 @@ static dt_hash_t _masks_list_signature(dt_iop_module_t *module)
     sig = dt_hash(sig, &pt->opacity, sizeof(pt->opacity));
     sig = dt_hash(sig, &pt->refinement, sizeof(pt->refinement));
     const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, pt->formid);
-    if(f && f->name[0]) sig = dt_hash(sig, f->name, strlen(f->name));
+    if(f)
+    {
+      // what the row shows, which for a raster element can be its source's name
+      gchar *shown = _form_display_name(f);
+      sig = dt_hash(sig, shown, strlen(shown));
+      g_free(shown);
+    }
     if(pt->name[0]) sig = dt_hash(sig, pt->name, strlen(pt->name));
+    // the chain icon and its tooltip follow which modules share the form,
+    // which another module changes without touching this group
+    GList *users = _model_form_users(pt->formid);
+    for(GList *u = users; u; u = g_list_next(u)) sig = dt_hash(sig, &u->data, sizeof(u->data));
+    g_list_free(users);
   }
 
   const uint32_t mode = module->blend_params->mask_mode;
@@ -15415,6 +16239,7 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
     _assign_group_ordinals(module);
   }
   _prune_stale_solo(module);
+  _model_raster_names_follow_sources(grp);
 
   const gboolean have_content = (grp && grp->points) || bd->empty_groups;
 
@@ -16145,6 +16970,9 @@ _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp, const gboolean 
   g_list_free(children);
   gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), TRUE);
 
+  // a scope whose target is gone follows the surviving selection instead
+  if(_model_refine_scope_prune(module)) _flexi_refine_follow_selection(bd);
+
   // keep the canvas mirror of the persistent selection in step with the rebuild
   if(darktable.develop && darktable.develop->form_gui)
     darktable.develop->form_gui->panel_selected_formid = bd->panel_selected_formid;
@@ -16702,8 +17530,7 @@ static void _rebuild_param_channel_buttons(dt_iop_module_t *module)
 // reload), so nothing here touches the single legacy blend_params raster sink.
 static void _add_raster_mask(dt_iop_module_t *self,
                              dt_iop_module_t *src,
-                             const dt_mask_id_t id,
-                             const char *srcname)
+                             const dt_mask_id_t id)
 {
   dt_iop_gui_blend_data_t *bd = self->blend_data;
   if(!bd->masks_support || !src) return;
@@ -16733,16 +17560,11 @@ static void _add_raster_mask(dt_iop_module_t *self,
   // which reprocesses -> commits -> reconciles the raster source registration)
   dt_masks_gui_form_save_creation(darktable.develop, self, form, NULL);
 
-  // name the element after its source: the row shows the identifier the user
-  // picked in the menu. Done AFTER save_creation because that calls the form's
-  // set_form_name ("raster mask #N") during its de-dup numbering, which would
-  // otherwise clobber this. form name = "<prefix> <srcname>" so
-  // _form_display_name (strips the "raster mask" prefix) leaves the source name.
-  if(srcname && *srcname)
-  {
-    snprintf(form->name, sizeof(form->name), "%s %s", _("raster mask"), srcname);
-    dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
-  }
+  // named by its type alone, the element shows its source's current name (see
+  // _form_display_name). Set AFTER save_creation, whose de-dup numbering names
+  // it "raster mask #N"
+  g_strlcpy(form->name, _("raster mask"), sizeof(form->name));
+  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
 
   _build_masks_list(self);
   // full reprocess so the (possibly newly-used) source recomputes and stores its
@@ -16750,112 +17572,8 @@ static void _add_raster_mask(dt_iop_module_t *self,
   if(reprocess) dt_dev_reprocess_all(self->dev);
 }
 
-typedef struct _masks_raster_source_entry_t
-{
-  dt_iop_module_t *src;
-  dt_mask_id_t id;
-  char *name;
-} _masks_raster_source_entry_t;
-
-static void _raster_source_entry_free(gpointer data)
-{
-  _masks_raster_source_entry_t *entry = data;
-  if(entry)
-  {
-    g_free(entry->name);
-    g_free(entry);
-  }
-}
-
-static void _raster_add_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
-{
-  GtkWidget *button = GTK_WIDGET(user_data);
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(button), "module");
-  GPtrArray *sources = g_object_get_data(G_OBJECT(button), "raster_sources");
-  const int idx = g_variant_get_int32(parameter);
-  if(darktable.gui->active_popover_menu)
-    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(module && sources && idx >= 0 && idx < (int)sources->len)
-  {
-    _masks_raster_source_entry_t *entry = g_ptr_array_index(sources, idx);
-    _add_raster_mask(module, entry->src, entry->id, entry->name);
-  }
-}
-
-// pop up a menu of every upstream module that offers a raster mask, mirroring
-// the whole-mask raster source list (see _raster_combo_populate). Picking one
-// adds (or retargets) this module's raster mask element.
-static gboolean
-_masks_raster_add_press(GtkWidget *button, GdkEventButton *event, dt_iop_module_t *module)
-{
-  if(DT_IN_GUI_UPDATE()) return TRUE;
-
-  GPtrArray *sources = g_ptr_array_new_with_free_func(_raster_source_entry_free);
-  GMenu *menu = g_menu_new();
-
-  for(GList *iter = darktable.develop->iop; iter; iter = g_list_next(iter))
-  {
-    dt_iop_module_t *iop = iter->data;
-    if(iop == module) break; // only modules earlier in the pipe can be a source
-
-    GHashTableIter masks_iter;
-    gpointer key, value;
-    g_hash_table_iter_init(&masks_iter, iop->raster_mask.source.masks);
-    while(g_hash_table_iter_next(&masks_iter, &key, &value))
-    {
-      const dt_mask_id_t id = GPOINTER_TO_INT(key);
-      // the mask's available identifier (module display name, or the mask
-      // name/path for an external source): the same string the classic raster
-      // picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask)
-      const char *name = value ? (const char *)value : iop->name();
-      _masks_raster_source_entry_t *entry = g_new0(_masks_raster_source_entry_t, 1);
-      entry->src = iop;
-      entry->id = id;
-      entry->name = g_strdup(name);
-      const int idx = (int)sources->len;
-      g_ptr_array_add(sources, entry);
-
-      GMenuItem *mi = g_menu_item_new(name, NULL);
-      g_menu_item_set_action_and_target_value(mi, "masks_raster.add", g_variant_new_int32(idx));
-      g_menu_append_item(menu, mi);
-      g_object_unref(mi);
-    }
-  }
-
-  if(sources->len == 0)
-  {
-    g_ptr_array_unref(sources);
-    g_object_unref(menu);
-    dt_control_log(_("no raster mask is available from an earlier module.\n"
-                     "enable a mask on a module above this one first."));
-    return TRUE;
-  }
-
-  g_object_set_data(G_OBJECT(button), "module", module);
-  g_object_set_data_full(G_OBJECT(button), "raster_sources", sources,
-                         (GDestroyNotify)g_ptr_array_unref);
-
-  GActionGroup *action_group = gtk_widget_get_action_group(button, "masks_raster");
-  if(action_group == NULL)
-  {
-    GActionEntry action_entries[] =
-    {
-      { "add", _raster_add_action, "i", NULL },
-    };
-    action_group = G_ACTION_GROUP(g_simple_action_group_new());
-    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
-                                    G_N_ELEMENTS(action_entries), button);
-    gtk_widget_insert_action_group(button, "masks_raster", action_group);
-  }
-
-  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(button, menu);
-  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
-  g_object_unref(menu);
-  return TRUE;
-}
-
 // ---- shortcut actions on "whatever is currently selected in the panel" -----
-// These have no fixed on-screen widget (unlike the add-shape/add-raster/
+// These have no fixed on-screen widget (unlike the add-shape and
 // add-parametric buttons, which are made shortcut-assignable directly via
 // dt_action_define_iop above and in _rebuild_param_channel_buttons): they act
 // on the module's current panel selection (bd->panel_selected_formid /
@@ -16863,9 +17581,9 @@ _masks_raster_add_press(GtkWidget *button, GdkEventButton *event, dt_iop_module_
 // is a thin wrapper around the same helper the matching click handler already
 // uses (see _toggle_element_hidden, _toggle_ids_hidden, _invert_element,
 // _invert_group_members, _toggle_soloedit, _build_group_op_menu,
-// _build_within_menu, _stage_new_group, _add_parametric_channel,
-// _masks_raster_add_press), so a keyboard shortcut and the matching mouse
-// click always do exactly the same thing.
+// _build_within_menu, _stage_new_group, _add_parametric_channel), so a
+// keyboard shortcut and the matching mouse click always do exactly the same
+// thing.
 //
 // dt_action_register's callback gets no per-instance context (see
 // dt_action_t / DT_ACTION_TYPE_COMMAND in accelerators.c), so -- like the
@@ -16881,15 +17599,6 @@ static void _shortcut_add_group_above_selected(dt_action_t *action)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd->masks_support || !bd->masks_inited) return;
   _stage_new_group(module, bd->masks_new_group_op, FALSE);
-}
-
-static void _shortcut_add_raster_mask(dt_action_t *action)
-{
-  dt_iop_module_t *module = dt_dev_gui_module();
-  if(!module || !module->blend_data) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(!bd->masks_support || !bd->masks_inited) return;
-  _masks_raster_add_press(NULL, NULL, module);
 }
 
 static void _shortcut_invert_selected_group(dt_action_t *action)
@@ -17037,8 +17746,6 @@ static void _register_masks_action_shortcuts(void)
                      _shortcut_toggle_masks_panel, 0, 0);
   dt_action_register(masks, N_("add group above selected group"),
                      _shortcut_add_group_above_selected, 0, 0);
-  dt_action_register(masks, N_("add raster mask to current group"),
-                     _shortcut_add_raster_mask, 0, 0);
   dt_action_register(masks, N_("invert selected group visibility"),
                      _shortcut_invert_selected_group, 0, 0);
   dt_action_register(masks, N_("invert selected element visibility"),
@@ -17068,44 +17775,22 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
   /* create and add masks support if module supports it */
   if(bd->masks_support)
   {
-    bd->masks_combo_ids = NULL;
     bd->masks_shown = DT_MASKS_EDIT_OFF;
 
-    bd->masks_combo = dt_bauhaus_combobox_new(module);
-    dt_bauhaus_widget_set_label(bd->masks_combo, N_("blend"), N_("drawn mask"));
-    // left-align the value ("N shapes used" in flexi) instead of the default right
-    dt_bauhaus_combobox_set_selected_text_align(bd->masks_combo,
-                                                DT_BAUHAUS_COMBOBOX_ALIGN_LEFT);
-    // this is an action menu (each entry adds/uses a shape), not a value picker:
-    // mute scroll so spinning the wheel over the open popup doesn't fire
-    // value-changed per tick (which would add a shape per tick). The selection
-    // is committed once, on click / popup close.
-    dt_bauhaus_combobox_mute_scrolling(bd->masks_combo);
-
-    dt_bauhaus_combobox_add(bd->masks_combo, _("no mask used"));
-    g_signal_connect(G_OBJECT(bd->masks_combo), "value-changed",
-                     G_CALLBACK(dt_masks_iop_value_changed_callback), module);
-    dt_bauhaus_combobox_add_populate_fct(bd->masks_combo, dt_masks_iop_combo_populate);
-
-    // flexi-only: in flexi, masks_combo is never actually shown (see
-    // _masks_apply_layout) -- it stays alive purely as the headless data
-    // source (entries/ids/value-changed) for this compact button, whose
-    // click shows the same choices immediately as a plain popup menu, like
-    // the add-group button, instead of asking for a second click to open a
-    // combo the user never otherwise sees.
+    // flexi-only: opens the import menu (see _masks_import_btn_press)
     bd->masks_import_btn = dtgtk_button_new(dtgtk_cairo_paint_import, 0, NULL);
     gtk_widget_set_tooltip_text(bd->masks_import_btn,
-                                _("import an existing shape, or reuse another\n"
-                                  "module's mask (click to pick one)"));
+                                _("link or copy shapes from other modules, copy their parametric\n"
+                                  "channels, or add or use another module's whole mask\n"
+                                  "(click to pick)"));
     g_signal_connect(G_OBJECT(bd->masks_import_btn), "button-press-event",
                      G_CALLBACK(_masks_import_btn_press), module);
 
-    // ---- combo header row (classic two-row toolbar): the mask source/import combo
-    // + the whole-mask "invert" toggle. In flexi this row is hidden by
-    // _masks_apply_layout (masks_combo stays put, unused/invisible; invert
-    // moves onto the "mask elements" header instead). Section-label styling =
-    // text with a line below, matching every other section header.
-    GtkWidget *hbox = dt_gui_hbox(dt_gui_expand(bd->masks_combo));
+    // ---- header row (classic two-row toolbar): the whole-mask "invert"
+    // toggle. In flexi this row is hidden by _masks_apply_layout (invert moves
+    // onto the "mask elements" header instead). Section-label styling = text
+    // with a line below, matching every other section header.
+    GtkWidget *hbox = dt_gui_hbox();
     dt_gui_add_class(hbox, "dt_section_label");
     bd->masks_combo_row = hbox;
 
@@ -17334,25 +18019,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->insert_realized_fid = INVALID_MASKID;
     bd->solo_formid = INVALID_MASKID;
 
-    // "add raster": an icon button (the same raster-mask glyph the rows use),
-    // its own toolbar cluster -- a raster element brings in another module's
-    // mask, same as import/reuse below, rather than drawing something new.
-    // Row 1, rightmost.
-    bd->masks_raster_add_btn = dtgtk_button_new(dtgtk_cairo_paint_masks_raster, 0, NULL);
-    gtk_widget_set_tooltip_text(
-      bd->masks_raster_add_btn,
-      _("add a raster mask element: use another module's mask as an element\n"
-        "of this group, combined with the group's operator"));
-    g_signal_connect(G_OBJECT(bd->masks_raster_add_btn), "button-press-event",
-                     G_CALLBACK(_masks_raster_add_press), module);
-    gtk_widget_show(bd->masks_raster_add_btn);
-    dt_gui_box_add(toolbar_row1, bd->masks_raster_add_btn);
-    // makes the button assignable a shortcut like the shape-add buttons above
-    // (those go through dt_iop_togglebutton_new, which does this internally --
-    // this button is a plain dtgtk_button_new, so it needs the call explicitly)
-    dt_action_define_iop(module, "blend`shapes", N_("add raster mask"),
-                         bd->masks_raster_add_btn, &dt_action_def_button);
-
     // ---- "add parametric" cluster (flexi-only, toolbar row 2, leftmost):
     // one flat button per channel of the module's blend colorspace,
     // populated lazily by _rebuild_param_channel_buttons once the csp is
@@ -17449,7 +18115,6 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
   if(bd->masks_refine_bypassed) g_hash_table_destroy(bd->masks_refine_bypassed);
   if(bd->masks_row_map) g_hash_table_destroy(bd->masks_row_map);
   if(bd->group_ordinals) g_hash_table_destroy(bd->group_ordinals);
-  free(bd->masks_combo_ids);
   dt_pthread_mutex_unlock(&bd->lock);
   dt_pthread_mutex_destroy(&bd->lock);
 
@@ -17737,10 +18402,6 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
 
   if(bd->masks_inited && show_mask_ui)
   {
-    // section caption reflects the mode: flexi drops the label (the combo value
-    // "N shapes used" already says enough); classic keeps "drawn mask"
-    dt_bauhaus_widget_set_label(bd->masks_combo, N_("blend"),
-                                show_flexi_ui ? "" : N_("drawn mask"));
     // flexi-only widgets: new-shape operator selector, add-parametric button,
     // and the per-shape composition list (classic drawn mask stays vanilla)
     if(bd->masks_reset_mask_btn)
@@ -17823,6 +18484,11 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
 {
   DT_GUARD_GUI_UPDATE();
   if(!module) return;
+
+  // stepping into an AI object (see dt_masks_form_gui_t.entered_object) is
+  // part of editing this module's mask on the canvas: it ends with it
+  if(darktable.develop->form_gui)
+    darktable.develop->form_gui->entered_object = INVALID_MASKID;
 
   const gboolean has_mask_display =
     module->request_mask_display

@@ -229,6 +229,123 @@ static void test_pre_v7_refinement_stays_disabled(void **state)
   }
 }
 
+// ---------------------------------------------------------------------------
+// clean up unused shapes
+// ---------------------------------------------------------------------------
+
+#define CLEANUP_GROUP 100
+
+static dt_masks_form_t *_cleanup_form(const dt_mask_id_t id, const dt_masks_type_t type)
+{
+  dt_masks_form_t *f = calloc(1, sizeof(dt_masks_form_t));
+  f->formid = id;
+  f->type = type;
+  return f;
+}
+
+// a snapshot as a history item carries it: group CLEANUP_GROUP holding shapes
+// 1 and 2, and shape 3, detached from every group
+static GList *_cleanup_snapshot(void)
+{
+  dt_masks_form_t *grp = _cleanup_form(CLEANUP_GROUP, DT_MASKS_GROUP);
+  for(dt_mask_id_t id = 1; id <= 2; id++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = id;
+    pt->parentid = CLEANUP_GROUP;
+    grp->points = g_list_append(grp->points, pt);
+  }
+  GList *forms = g_list_append(NULL, grp);
+  for(dt_mask_id_t id = 1; id <= 3; id++)
+    forms = g_list_append(forms, _cleanup_form(id, DT_MASKS_CIRCLE));
+  return forms;
+}
+
+static void _cleanup_free(GList *forms)
+{
+  for(GList *l = forms; l; l = g_list_next(l))
+  {
+    dt_masks_form_t *f = l->data;
+    g_list_free_full(f->points, free);
+    free(f);
+  }
+  g_list_free(forms);
+}
+
+static gboolean _cleanup_has(GList *forms, const dt_mask_id_t id)
+{
+  return dt_masks_get_from_id_ext(forms, id) != NULL;
+}
+
+// the report: a module's mask was removed, so only its earlier, replaced
+// history item still names the group. The newer snapshot must lose it all,
+// the older one keeps what that item used, for going back in history. Neither
+// item is a mask_manager one, which the old cleanup skipped entirely.
+static void test_cleanup_drops_shapes_only_replaced_steps_use(void **state)
+{
+  flexi_build("u:1");
+  dt_iop_module_t mod = { 0 };
+  dt_develop_blend_params_t with_mask = { 0 }, no_mask = { 0 };
+  with_mask.mask_id = CLEANUP_GROUP;
+  no_mask.mask_id = NO_MASKID;
+  dt_dev_history_item_t older = { 0 }, newer = { 0 };
+  older.module = newer.module = &mod;
+  older.blend_params = &with_mask;
+  newer.blend_params = &no_mask;
+  older.forms = _cleanup_snapshot();
+  newer.forms = _cleanup_snapshot();
+  GList *history = g_list_append(g_list_append(NULL, &older), &newer);
+
+  dt_masks_cleanup_unused_from_list(history);
+
+  assert_null(newer.forms);
+  assert_true(_cleanup_has(older.forms, CLEANUP_GROUP));
+  assert_true(_cleanup_has(older.forms, 1));
+  assert_true(_cleanup_has(older.forms, 2));
+  assert_false(_cleanup_has(older.forms, 3));
+
+  _cleanup_free(older.forms);
+  _cleanup_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+  g_list_free(history);
+}
+
+// an older item of a *different* module is still in effect: its group stays
+// in the newer snapshot too
+static void test_cleanup_keeps_shapes_another_module_still_uses(void **state)
+{
+  flexi_build("u:1");
+  dt_iop_module_t mod_a = { 0 }, mod_b = { 0 };
+  dt_develop_blend_params_t with_mask = { 0 }, no_mask = { 0 };
+  with_mask.mask_id = CLEANUP_GROUP;
+  no_mask.mask_id = NO_MASKID;
+  dt_dev_history_item_t older = { 0 }, newer = { 0 };
+  older.module = &mod_a;
+  newer.module = &mod_b;
+  older.blend_params = &with_mask;
+  newer.blend_params = &no_mask;
+  older.forms = _cleanup_snapshot();
+  newer.forms = _cleanup_snapshot();
+  GList *history = g_list_append(g_list_append(NULL, &older), &newer);
+
+  dt_masks_cleanup_unused_from_list(history);
+
+  for(int i = 0; i < 2; i++)
+  {
+    GList *forms = i ? newer.forms : older.forms;
+    assert_true(_cleanup_has(forms, CLEANUP_GROUP));
+    assert_true(_cleanup_has(forms, 1));
+    assert_true(_cleanup_has(forms, 2));
+    assert_false(_cleanup_has(forms, 3));
+  }
+
+  _cleanup_free(older.forms);
+  _cleanup_free(newer.forms);
+  _cleanup_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+  g_list_free(history);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -242,6 +359,8 @@ int main(void)
     cmocka_unit_test_teardown(test_migration_rejects_impossible_versions, _teardown),
     cmocka_unit_test_teardown(test_migration_preserves_membership, _teardown),
     cmocka_unit_test_teardown(test_pre_v7_refinement_stays_disabled, _teardown),
+    cmocka_unit_test_teardown(test_cleanup_drops_shapes_only_replaced_steps_use, _teardown),
+    cmocka_unit_test_teardown(test_cleanup_keeps_shapes_another_module_still_uses, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

@@ -4182,6 +4182,7 @@ void dt_iop_update_multi_name(dt_iop_module_t *module,
     g_strlcpy(module->multi_name, l_name, sizeof(module->multi_name));
     module->multi_name_hand_edited = hand_edited;
     dt_iop_gui_update_header(module);
+    dt_iop_gui_blend_module_renamed(module);
     dt_dev_add_history_item(module->dev, module, enable);
   }
 
