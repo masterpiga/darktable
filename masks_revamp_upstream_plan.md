@@ -74,8 +74,8 @@ for, or a casualty of, the panel swap.
 
 ## 1. What is actually on the branch today
 
-83 commits, 251 files, ~52k insertions over `master` (docs and test fixtures
-included). The code footprint:
+90 commits, 266 files, ~85k insertions over `master` (`620e80c1e0`, 2026-09-09;
+docs and test fixtures included). The code footprint:
 
 | Area | Size | Note |
 |---|---:|---|
@@ -131,7 +131,7 @@ This is the argument the PR description leads with, not an appendix.
 | Layer | What it proves | Where |
 |---|---|---|
 | 261 cmocka tests, 12 suites | model, grouping, DnD, selection, cache-hash contract, persistence, migration case table, operator algebra — **structural only, no pixels** | `src/tests/unittests/masks/` |
-| 44-scenario pixel suite | migrated render == classic render on the export pipe; plus two route-equivalence controls (K1/K1C, K2/K2C) that hold without a pristine build | `src/tests/masking/flexi/run.sh` |
+| 46-scenario pixel suite | migrated render == classic render on the export pipe, re-established against a real pristine build on `620e80c1e0` (43/46 bit-identical, the 3 being the known `J5`/`J6`/`J7`; 46/46 in normal mode) — plus two route-equivalence controls (K1/K1C, K2/K2C) that hold without a pristine build. See §5a | `src/tests/masking/flexi/run.sh` |
 | Corpus campaign | 14 libraries, 61,332 edits, 7,932 distinct configuration *shapes*, **0 failures** → failure rate < 0.038% (1 in 2,648) at 95% confidence | `masks_revamp_migration_confidence.md` |
 | `--persist-masks` | a save/reload between two edits does not change the mask | `masks/persist.c` |
 | `--postedit-masks` | a migrated group edited through every panel control matches the from-scratch equivalent — the only check that looks *past* migration | `masks/postedit.c` |
@@ -167,17 +167,24 @@ is not pixel coverage on this machine.
 
 ## 4. Staging principles
 
-- **Ship the fixes master already wants, first.** The performance and widget
-  work on this branch fixes bugs `master` has today. It is the fastest to
-  review, it needs none of the rest, and it buys credibility for the batches
-  that follow.
+- **Ship the fixes master already wants, first.** The performance work on this
+  branch fixes bugs `master` has today. It is the fastest to review, it needs
+  none of the rest, and it buys credibility for the batches that follow.
+- **All UI work goes last, and the swap goes last of all.** The widget and
+  general-UI fixes (Batch 6) also fix `master` today and are flexi-neutral, so
+  nothing in the sequence waits on them. Holding them back keeps every
+  UI-touching diff — panel chrome, the widget layer, the swap — in one
+  contiguous run at the end, rather than opening the sequence with screenshots
+  and closing it with them too. The swap stays the final batch: it is the only
+  one a user's existing edits notice, so nothing should have to be reviewed
+  around it afterwards.
 - **Engine before UI, and dormant.** The data model, the flexi fold, and
   `migrate_legacy.c` can all land while `DEVELOP_BLEND_VERSION` stays 14.
   Nothing sets `DEVELOP_MASK_FLEXI`, so rendering is provably unchanged for
   every user; the unit tests and the CLI verbs call the new code directly, so
   it is not untested dead code either.
 - **No batch writes code whose only purpose is to be deleted.** The panel host
-  is never taught to carry classic; it lands with a placeholder (Batch 6) that
+  is never taught to carry classic; it lands with a placeholder (Batch 5) that
   the swap replaces (Batch 7).
 - **Exactly one PR changes mask behaviour.** The version bump, the flexi panel,
   and the deletion of `libs/masks.c` are one atomic change. Splitting them
@@ -187,86 +194,33 @@ is not pixel coverage on this machine.
 
 ## 5. PR sequence
 
-Seven batches. 1–2 fix `master`; 3–6 add dormant code and dormant UI; 7 is the
-swap and the only batch a user's existing edits notice.
+Seven batches. 1 fixes `master`; 2–5 add dormant code and dormant UI; 6 is the
+general UI and widget work, held back so that all UI lands together; 7 is the
+swap, and the only batch a user's existing edits notice.
 
-### Batch 1 — performance fixes, already implemented
+Everything from earlier revisions of this sequence that has since landed
+upstream is in the ledger at §7, out of the way of what is left to do.
+
+### Batch 1 — performance fixes — **all but one now merged**
 
 Section 1 of `masks_revamp_perf_findings.md`. All `[core]`: they fix `master`
 today and none of them mentions flexi.
 
-- **1a — U1, `usedetails` flushes nearly the whole pipe on every `synch_all`.**
-  Fix is written and on the branch (`pixelpipe_hb.{c,h}`, the
-  `synch_no_detail_invalidate` guard). **Read the two porting traps in the
-  findings doc before touching it** — the scharr clear and the flush that
-  follows are a load-bearing pair, and the decision must be made from
-  buffer presence, not from a `want_detail_mask` compare. Runtime neutrality of
-  detail masks is still unverified (findings §U1); do that before opening.
-- **1b — U3, per-module rendered-mask cache.** Done on both paths. Rather than
-  mirroring the CPU block into `dt_develop_blend_process_cl`, both call one
-  `_render_drawn_mask_cached()` (`blend.c:772`), so there is no second copy to
-  drift: the group renderer runs on the host in either pipe. Verified per §6 —
-  the CPU pixel suite unchanged, all 44 fixture XMPs byte-identical when
-  re-rendered with OpenCL on before and after, and the CL *hit* path exercised
-  through `--verify-masks` (`CPU vs GPU gap, migrated: 1.01e-06`, 0 edits
-  widened).
+The three that carried this batch — 1a (U1), 1b (U3) and U2 — have landed
+upstream (§7), leaving one item:
 
-  An instrumented darkroom session then showed the cache never hit *at all*:
-  `synch_all` cleared it before every interactive render, so U3 had been inert
-  on the CPU too. Fixed by excluding the drawn cache from that blanket clear,
-  which makes the buffer retained — so it also moved onto the pipe's own
-  `dt_dev_pixelpipe_prepare_mask_cache()` (memory accounting + the low-memory
-  opt-out), and its key onto `dt_masks_group_hash_ext(form, pipe->forms)` so an
-  unresolvable member can no longer collapse the hash. Those three are part of
-  1b, not separable from it. Re-tested interactively both ways: sliders → 4 hits
-  in 5 renders (mask ready in 12 ms rather than 75 ms), node dragging → 0 hits
-  in 10 renders over 124 move events. Numbers for the PR description.
-- **1c — `imagebuf.c` negative-RoI fast path.** Small and self-contained.
+- **1c — `imagebuf.c` negative-RoI fast path.** `dt_iop_copy_image_roi` takes
+  its per-line fast path on `roi_in->width - dx >= roi_out->width` (and the
+  height equivalent), which does not catch a *negative* `dx`/`dy` — that puts
+  the first requested row or column before the start of the input buffer. The
+  fix requires both offsets non-negative and leaves the rest to the slow path.
+  Small and self-contained.
 
-Not in this batch: **U2** (`toneequal` invalidating its downstream tail) is a
-`master` bug whose root cause is confirmed but whose fix is unwritten, and it is
-not masks work — its own PR, whenever someone writes it. **U4** (on-device mask
-compositing) and **U5** (interactive downscaling) are unstarted; see "beyond the
-sequence" below.
+**U4** (on-device mask compositing) and **U5** (interactive downscaling) are
+unstarted; see "beyond the sequence" below. Two further items from earlier
+revisions of this batch went upstream independently or were superseded — §7.
 
-*Dropped from earlier revisions of this list:* the raster-mask commit
-invalidation landed upstream as
-[#21519](https://github.com/darktable-org/darktable/pull/21519), and the
-full-pipe cache budget was superseded by `cdc84de4d3`.
-
-### Batch 2 — general UI and correctness fixes, already implemented
-
-Already merged, kept here as the batch's ledger:
-
-| PR | Status |
-|---|---|
-| `exif.cc`: O(n²) → O(n) XMP tag deletion | **merged** |
-| `history.c`: include `masks_history` in the edit-history hash ([#21896](https://github.com/darktable-org/darktable/pull/21896)) | **merged** |
-| `bauhaus.c`: dragging in the popup's precise-entry mode on GTK3 ([#21894](https://github.com/darktable-org/darktable/pull/21894)) | **merged** |
-| Better mask editing near/outside image borders ([#21382](https://github.com/darktable-org/darktable/pull/21382)) | **merged** (caused #21594/#21606, fixed; #21602 was pre-existing) |
-| OpenCL publishes a stale raster mask (finding 1) | **merged** |
-| JzCzhz hue divergence (finding 2) | **merged** |
-
-Still to extract, all flexi-neutral and independently useful:
-
-- **2a — widget layer:** `dtgtk/gradientslider.{c,h}` marker redesign,
-  `dtgtk/paint.{c,h}` new glyphs, bauhaus indicator tweaks. Visible on any
-  existing slider, so it carries its own screenshots.
-- **2b — `darkroom.c` module-focus restore** and the other small behavioural
-  fixes the branch accumulated that have nothing to do with masks.
-- **2c — the unrecognised-newer-blend-version fallback.** Today an unknown
-  `blendop_version` silently becomes `default_blendop_params` (i.e. the mask
-  vanishes) rather than being flagged. It cannot help *this* transition, since
-  released versions already behave that way, but it helps the next bump and it
-  is the same shape as the rest of this batch.
-- **2d — `count-diff-pixels` uint8 underflow** (in the `darktable-tests`
-  submodule, so a separate PR there). `np.abs(arr1 - arr2)` runs on the uint8
-  arrays PIL returns, so a -1 difference wraps to 255 and every `--threshold`
-  comparison reads it as a large one. Harmless at the default threshold of 0,
-  which is why nobody noticed, but it makes the option unusable — and it cost a
-  full bisect here before being spotted.
-
-### Batch 3 — flexi data model and renderer, dormant
+### Batch 2 — flexi data model and renderer, dormant
 
 `develop/masks.h`, `masks/{masks,group}.c` + `group_internal.h`, new
 `masks/{parametric,raster}.c`, `masks/object.c`, `blend.{c,h}`,
@@ -280,7 +234,7 @@ Version stays 14; nothing sets the flexi bit; zero rendering change, and the
 integration suite proves it. This PR also carries `masks_revamp_data_model.md`,
 rewritten as a `dev-doc/` page, since it is what makes the rest reviewable.
 
-### Batch 4 — migration, still not invoked
+### Batch 3 — migration, still not invoked
 
 `masks/migrate_legacy.c` plus `test_flexi_migrate` and the
 `src/tests/masking/flexi/` pixel suite. Still not called from
@@ -290,11 +244,11 @@ but a reviewer can run `run.sh` and see migrated pixels match classic.
 This is the PR whose description carries §3's evidence table, including the
 `J5`/`J6`/`J7` result and the stated coverage gaps. Note the ordering
 consequence: at this point the campaign's *results* are being cited, but the
-tooling that produced them lands in Batch 5. Say so in the description and link
+tooling that produced them lands in Batch 4. Say so in the description and link
 the follow-up, rather than letting a reviewer discover that `--verify-masks`
 isn't in the tree they just read.
 
-### Batch 5 — verification tooling (reduced core)
+### Batch 4 — verification tooling (reduced core)
 
 **Decided: upstream the reduced core.** `masks/{harvest,verify,check}.c`, the
 `probe_image`/`scratch_image` support they need, and the corresponding
@@ -316,9 +270,9 @@ Two constraints on this batch regardless:
   behaviour change when the flags are absent.
 
 If maintainers would rather have none of it, fall back to citing results only
-and keep the whole harness on the branch — but ask in Batch 4's PR, not here.
+and keep the whole harness on the branch — but ask in Batch 3's PR, not here.
 
-### Batch 6 — relocation logic, placeholder content
+### Batch 5 — relocation logic, placeholder content
 
 Everything about *where* a mask panel can live, with nothing real in it yet.
 Isolates "can this live in a repositionable panel" — the question most likely to
@@ -335,7 +289,7 @@ is in it except what the host reparents. Landing `gtk.c` alone would ship an
 empty container with a hot edge onto nothing and a handle that resizes nothing
 — untestable, and a reviewer would rightly ask what it is for.
 
-So Batch 6 is:
+So Batch 5 is:
 
 - **`gui/gtk.{c,h}`** — the `DT_UI_PANEL_FLEXI` placement (`gtk.h:396`), the
   centerrow docking (`_flexi_dock_reorder`, `gtk.c:3760`), hot edges, the resize
@@ -366,7 +320,7 @@ Split it into *commits* along those lines if it helps review, but not into PRs.
 the only state a user ever sees — the lib registers but never shows: no toolbar
 button, no position preference in the UI, no panel. With it on, the panel
 appears with dummy content and every position, hot edge and resize behaviour is
-exercisable. Consistent with Batches 3–5, which also ship dormant.
+exercisable. Consistent with Batches 2–4, which also ship dormant.
 
 Make it a **runtime** guard (a `dt_conf_get_bool` on an undocumented key read
 where the lib decides visibility), not a CMake option: a maintainer can then
@@ -379,7 +333,7 @@ otherwise the reviewer's first objection.
 Batch 7 deletes the flag, the guard and the dummy content together with the
 placeholder.
 
-**What Batch 6 does not prove.** The reparenting code lands here, but its real
+**What Batch 5 does not prove.** The reparenting code lands here, but its real
 client — `bd->relocatable_box`, `bd->masks_blend_header`, `bd->masks_panel_body`,
 all built by the new `blend_gui.c` — only arrives in Batch 7
 (`_masks_flexi_release_full()`, `masks_gui_panel_host.c:696-753`). A placeholder
@@ -388,13 +342,44 @@ DnD may not. Two further behaviours are simply inert against dummy content: the
 halo poll stands down while on-canvas mask editing is armed
 (`_flexi_proximity_poll` / `_flexi_shape_highlighted`, `gtk.c:36,1805`), and
 `flexi_mask_active`/`flexi_mask_label` describe a mask that does not exist yet.
-Treat 6 as evidence about window chrome and panel mechanics, not about hosting a
+Treat 5 as evidence about window chrome and panel mechanics, not about hosting a
 live mask UI, and expect fixes to the host in 7.
+
+### Batch 6 — general UI and correctness fixes
+
+Flexi-neutral, independently useful, and fixes to `master` as it stands —
+nothing else in the sequence waits on any of them. They sit here so that the UI
+work runs together at the end, and so that the widget layer is already on
+`master` when the swap lands on top of it: 6a in particular touches sliders the
+flexi panel then uses, and reviewing that change on its own is much easier
+before the panel exists than after. Nothing about their content requires this
+position, so any of them can be pulled forward if a maintainer prefers. Most of
+this batch has already merged — see §7.
+
+Still to extract:
+
+- **6a — widget layer:** `dtgtk/gradientslider.{c,h}` marker redesign,
+  `dtgtk/paint.{c,h}` new glyphs, bauhaus indicator tweaks. Visible on any
+  existing slider, so it carries its own screenshots.
+- **6b — `darkroom.c` module-focus restore** and the other small behavioural
+  fixes the branch accumulated that have nothing to do with masks.
+- **6b′ — the drag-anchor remainder of `dcadd60129`.** That commit removed the
+  redundant recompute on button-release; what did *not* go with it is the
+  companion fix in `_circle_events_button_pressed`, which forces
+  `dt_masks_gui_form_create()` before reading `gpt`'s cached corner. `gpt` is
+  only refreshed by a redraw, so if geometry or the view changed since the last
+  one the drag starts from a stale anchor and the shape jumps. Same class of
+  bug, same file, flexi-neutral.
+- **6c — the unrecognised-newer-blend-version fallback.** Today an unknown
+  `blendop_version` silently becomes `default_blendop_params` (i.e. the mask
+  vanishes) rather than being flagged. It cannot help *this* transition, since
+  released versions already behave that way, but it helps the next bump and it
+  is the same shape as the rest of this batch.
 
 ### Batch 7 — flexi replaces classic
 
 `develop/blend_gui.c` (+17.7k) and `blend_gui_internal.h`, the real content of
-the Batch 6 host (replacing the placeholder), `masks_gui_presets.c`,
+the Batch 5 host (replacing the placeholder), `masks_gui_presets.c`,
 `data/themes/darktable.css` and the two chunk themes, the
 `DEVELOP_BLEND_VERSION` 14 → 15 bump that turns migration on, the deletion of
 `libs/masks.c`, the remaining panel-behaviour suites (`test_flexi_dnd`,
@@ -443,32 +428,147 @@ Not part of upstreaming, tracked so they don't get lost:
   the last build that had both, or keep the classic fold compiled only under
   `BUILD_TESTING`.
 
+## 5a. Verification status after the 2026-09-09 rebase onto `620e80c1e0`
+
+The rebase pulled in 67 upstream commits. Everything in §3 that can be re-run
+without a corpus was re-run, and **migration neutrality was re-established from
+scratch on the new base**. Summary:
+
+| Layer | Result |
+|---|---|
+| `ctest -R flexi` (`build-tests`) | **11/11** |
+| Mask cases in `src/tests/integration` (`0004`, `0081`, `0090`, `0091`, `0144`, `0150-detail-mask`, `0167-raster-mask`, `0033`, `0034`) | all OK |
+| `run.sh --pristine` (real pristine build) | **43/46** — the 3 failures are the known `J5`/`J6`/`J7` `DT_MASKS_REFINE_GROUP` cases |
+| `run.sh` (normal mode, after regenerating references) | **46/46** |
+| Route-equivalence controls `K1 == K1C`, `K2 == K2C` | OK in both modes |
+
+### Why the references had to be regenerated
+
+Upstream's exposure rework (the #21974 and #22182 series) bumped
+`dt_iop_exposure_params_t` to v7 with `compensate_hilite_pres`. Every fixture
+packs exposure at modversion 6, so all 46 now run through `legacy_params` 6 → 7
+and land on a different base render — the whole image, uniformly darker, in every
+scenario including the trivial ones. Before regeneration the suite reported 2/46.
+That was baseline drift, not a mask defect: `G1_bare_uniform` rendered by a
+`master` build and by the branch was **byte-identical**, and both sat 53,237 px
+from the old reference, which still matches a build at `19558f22b6` exactly.
+
+The 44 `expected/*.png` were regenerated from the branch build, with the same
+invocation `run.sh` uses, **after** the pristine run below had cleared the
+migration. Note for the future: the references are now tied to exposure params
+v7, and any later `legacy_params` bump on a module the fixtures use will
+invalidate them the same way.
+
+### The pristine run, and a trap worth recording
+
+`run.sh --pristine` needs a build **of this branch** with `migrate_legacy.c`'s
+effects stashed out. It was produced by compiling with the single production call
+to `dt_masks_migrate_classic_to_flexi()` (`blend.c`, in
+`dt_develop_blend_legacy_params_ext`) preprocessed out — that is sufficient,
+because every production writer of the `DEVELOP_MASK_FLEXI` bit lives inside
+`migrate_legacy.c` and that call is its only entry point. Same `-O3 -flto=thin`
+as the normal build, separate prefix.
+
+Result: **43/46 bit-identical**, including all six A-series operators, all four
+C-series drawn+parametric combinations, both K control pairs, and `F1`/`F2` —
+which passed *exactly*, not merely inside their tolerance of 5. The three
+failures are `J5`, `J6`, `J7`, the `DT_MASKS_REFINE_GROUP` scenarios §3 already
+documents as the two folds disagreeing about an input classic cannot produce
+(scope=2 is this branch's masks v7; no released darktable ever wrote it). They
+differ by 969 / 1321 / 573 px, consistent with the earlier measurements.
+
+**Do not substitute a stock `master` build for the pristine one.** Tried here
+first: it gives 18/46, split exactly along "does the scenario contain a drawn
+shape". The fixtures write `mask_version="8"` while `master` is still at
+`DEVELOP_MASKS_VERSION (6)`, so master cannot read the mask blobs at all and
+renders no shape. It looks exactly like a migration regression and is not one.
+
 ## 6. Verification per PR
 
-- **Batch 1:** `src/tests/integration/run` on Linux (**not** macOS, where deltae
-  never runs) — these change the pipe, so pixel neutrality is the whole claim —
-  plus `-d perf` / `-d pipe` before-and-after numbers in the description, and
-  for U3 an explicit CPU-vs-OpenCL comparison of a plain drawn mask. Also the
-  per-shape-details repro named in the findings doc (set a details threshold,
-  move a handle, watch for "detail mask blending error").
-- **Batch 2:** existing suites plus the manual smoke each fix implies — slider
-  redraw for 2a, focus behaviour for 2b.
-- **Batch 3/4:** `ctest -R flexi`, `src/tests/masking/flexi/run.sh` +
+- **Batch 1:** now only 1c. `src/tests/integration/run` on Linux (**not** macOS,
+  where deltae never runs) — it changes a pixel-copy path, so neutrality is the
+  whole claim — plus a case that actually takes the negative-offset branch, since
+  the fast path it disables is the one every ordinary RoI already uses.
+  (The `-d perf` / `-d pipe` before-and-after numbers, the CPU-vs-OpenCL drawn
+  mask comparison and the per-shape-details repro belonged to U1/U3 and went
+  upstream with them.)
+- **Batch 2/3:** `ctest -R flexi`, `src/tests/masking/flexi/run.sh` +
   `verify_effect.sh`, `src/tests/integration/run` on Linux, and a full
   `--check-masks` pass over the corpus (run locally; the corpus does not ship).
-  For Batch 3 the load-bearing claim is *no rendering change at all*, so the
+  For Batch 2 the load-bearing claim is *no rendering change at all*, so the
   integration suite matters more than the flexi tests.
-- **Batch 5:** each verb exercised from a clean checkout with no corpus present,
+- **Batch 4:** each verb exercised from a clean checkout with no corpus present,
   and a run of the full binary with no `--*-masks` flag to show it is inert.
-- **Batch 6:** `ctest -R flexi_panel`; with the flag on, a manual walkthrough of
+- **Batch 5:** `ctest -R flexi_panel`; with the flag on, a manual walkthrough of
   every panel position and of the resize handle, on all three platforms if
   possible — this is the batch most likely to break a window manager we don't
   run; and with the flag off, confirmation that the UI is byte-for-byte the
   darkroom users have today. State explicitly that the walkthrough ran against
   dummy content, not a live module UI.
+- **Batch 6:** existing suites plus the manual smoke each fix implies — slider
+  redraw for 6a, focus behaviour for 6b, a drag started right after a zoom or a
+  geometry change for 6b′.
 - **Batch 7:** all of the above, plus a manual walkthrough per capability the
   panel offers *in every position*, plus at least one real library migrated and
   edited in anger by someone who is not us.
 
 State in each PR description what was run and what was not, and disclose AI
 assistance.
+
+## 7. Already upstreamed — reference only
+
+Nothing here needs any further work; it is kept so that an old note, commit
+message or review comment referring to one of these by number still resolves.
+Items are listed under the batch they used to sit in.
+
+### From Batch 1 (performance)
+
+| Was | Landed as |
+|---|---|
+| **1a — U1**, `usedetails` flushing nearly the whole pipe on every `synch_all` | `917646d131` |
+| **1b — U3**, per-module rendered-mask cache (CPU *and* OpenCL, one shared `_render_drawn_mask_cached()`) | `a108707551` |
+| **U2**, `toneequal` invalidating its downstream tail | `50e0964f68` |
+| Raster-mask commit invalidation | [#21519](https://github.com/darktable-org/darktable/pull/21519) |
+| Full-pipe cache budget | superseded by `cdc84de4d3` |
+
+Four notes for anyone reading the old entries in git history:
+
+- U1 landed with the *same design* — stop freeing the scharr in `synch_all`,
+  then decide from **buffer presence** — but gated on a `replaying` parameter
+  threaded through `_dev_pixelpipe_synch` rather than the branch's
+  `pipe->synch_no_detail_invalidate` field. The branch's field became dead code
+  on the rebase and has been removed.
+- U2 was still listed as "root cause confirmed, fix unwritten", with an open
+  question about which of two triggers fired. The answer was neither: the
+  invalidation was unnecessary outright, and the fix is its deletion.
+- #21519 landed as a *per-pipe* check (does this pipe's source piece already
+  hold a mask for this id?) rather than the `new`-flag guard this doc once
+  proposed, because the users hash table is shared across pipes and the flag is
+  already consumed by the time any pipe commits.
+- `cdc84de4d3` replaced the `MAX(64MB, mipmap_memory/4)` cap with a
+  `dt_get_available_mem() / mem_fraction` budget, which is what the branch's
+  own cache-budget change was after.
+
+**U4** (on-device mask compositing) and **U5** (interactive downscaling) are
+*not* here: they are unstarted, and live under "beyond the sequence".
+
+### From Batch 6 (general UI and correctness)
+
+| Was | Landed as |
+|---|---|
+| `exif.cc`: O(n²) → O(n) XMP tag deletion | merged |
+| `history.c`: include `masks_history` in the edit-history hash | [#21896](https://github.com/darktable-org/darktable/pull/21896) |
+| `bauhaus.c`: dragging in the popup's precise-entry mode on GTK3 | [#21894](https://github.com/darktable-org/darktable/pull/21894) |
+| Better mask editing near/outside image borders | [#21382](https://github.com/darktable-org/darktable/pull/21382) — caused #21594/#21606, both fixed; #21602 was pre-existing |
+| OpenCL publishes a stale raster mask (finding 1) | merged |
+| JzCzhz hue divergence (finding 2) | merged |
+| `masks`: shape/source/handle drag snapping on release | [`dcadd60129`](https://github.com/darktable-org/darktable/commit/dcadd60129) — the drag-*anchor* half did not go with it and is still open as 6b′ |
+| **2d — `count-diff-pixels` uint8 underflow** | [darktable-tests#46](https://github.com/darktable-org/darktable-tests/pull/46), **merged** |
+
+On 2d, since it is the newest and the odd one out: it lives in the
+`darktable-tests` submodule, hence its own PR in that repo rather than in
+darktable. `np.abs(arr1 - arr2)` ran on the uint8 arrays PIL returns, so a -1
+difference wrapped to 255 and every `--threshold` comparison read it as a large
+one. Harmless at the default threshold of 0, which is why nobody noticed, but it
+made the option unusable — and it cost a full bisect here before being spotted.
+The submodule pointer will want updating on the branch to pick it up.
