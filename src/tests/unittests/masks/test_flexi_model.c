@@ -381,6 +381,66 @@ static void test_click_other_group_switches_directly(void **state)
 }
 
 // ---------------------------------------------------------------------------
+// element chevrons under "auto-expand selected": the click decides what is
+// open, not the selection it also makes
+// ---------------------------------------------------------------------------
+
+// a chevron click with the option on, applied the way _element_chevron_clicked
+// applies it
+static dt_masks_chevron_click_t _chevron(const dt_mask_id_t id, const gboolean expanded)
+{
+  const dt_masks_chevron_click_t c =
+    _model_element_chevron_click(&flexi_bd, id, expanded, TRUE);
+  flexi_bd.masks_last_expanded_elem = c.last_expanded;
+  return c;
+}
+
+static void test_chevron_expand_collapses_previous(void **state)
+{
+  flexi_build("u:1,2,3");
+  flexi_bd.masks_last_expanded_elem = INVALID_MASKID;
+  assert_int_equal(_chevron(1, TRUE).collapse, INVALID_MASKID);
+  assert_int_equal(flexi_bd.masks_last_expanded_elem, 1);
+  assert_int_equal(_chevron(2, TRUE).collapse, 1);
+  assert_int_equal(flexi_bd.masks_last_expanded_elem, 2);
+}
+
+// the reported bug: collapsing the open row must stick, not be re-opened
+static void test_chevron_collapse_forgets_the_open_row(void **state)
+{
+  flexi_build("u:1,2,3");
+  flexi_bd.masks_last_expanded_elem = 2;
+  assert_int_equal(_chevron(2, FALSE).collapse, INVALID_MASKID);
+  assert_int_equal(flexi_bd.masks_last_expanded_elem, INVALID_MASKID);
+}
+
+static void test_chevron_collapse_of_other_row_keeps_the_open_one(void **state)
+{
+  flexi_build("u:1,2,3");
+  flexi_bd.masks_last_expanded_elem = 2;
+  assert_int_equal(_chevron(1, FALSE).collapse, INVALID_MASKID);
+  assert_int_equal(flexi_bd.masks_last_expanded_elem, 2);
+}
+
+static void test_chevron_reexpand_open_row_collapses_nothing(void **state)
+{
+  flexi_build("u:1,2,3");
+  flexi_bd.masks_last_expanded_elem = 1;
+  assert_int_equal(_chevron(1, TRUE).collapse, INVALID_MASKID);
+  assert_int_equal(flexi_bd.masks_last_expanded_elem, 1);
+}
+
+static void test_chevron_without_auto_expand_moves_nothing(void **state)
+{
+  flexi_build("u:1,2,3");
+  flexi_bd.masks_last_expanded_elem = 2;
+  const dt_masks_chevron_click_t c =
+    _model_element_chevron_click(&flexi_bd, 1, TRUE, FALSE);
+  assert_int_equal(c.collapse, INVALID_MASKID);
+  assert_int_equal(c.last_expanded, 2);
+}
+
+// ---------------------------------------------------------------------------
 // operator normalisation
 // ---------------------------------------------------------------------------
 
@@ -519,6 +579,11 @@ int main(void)
     cmocka_unit_test_teardown(test_element_then_group_reaches_empty_selection, _teardown),
     cmocka_unit_test_teardown(test_click_other_element_switches_directly, _teardown),
     cmocka_unit_test_teardown(test_click_other_group_switches_directly, _teardown),
+    cmocka_unit_test_teardown(test_chevron_expand_collapses_previous, _teardown),
+    cmocka_unit_test_teardown(test_chevron_collapse_forgets_the_open_row, _teardown),
+    cmocka_unit_test_teardown(test_chevron_collapse_of_other_row_keeps_the_open_one, _teardown),
+    cmocka_unit_test_teardown(test_chevron_reexpand_open_row_collapses_nothing, _teardown),
+    cmocka_unit_test_teardown(test_chevron_without_auto_expand_moves_nothing, _teardown),
     cmocka_unit_test_teardown(test_normalize_clears_break_on_base_point, _teardown),
     cmocka_unit_test_teardown(test_normalize_defaults_missing_operator_to_union, _teardown),
     cmocka_unit_test_teardown(test_normalize_keeps_operator_under_bypass, _teardown),

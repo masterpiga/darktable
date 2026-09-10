@@ -1119,10 +1119,9 @@ dialog .sidebar row:selected:hover label,
   margin-top: 0.14em;
   /* the editor itself has no right margin, so the bypass-eye column can line up
      under the row header's expander. That column is not this slider's to fill:
-     stop where the gradient sliders beside it stop, or the full-width sliders
-     overhang every other slider in the panel. 21px = .mask-param-bypass-slot's
-     17px plus the grid's 4px column spacing */
-  margin-right: 21px;
+     stop where it starts, which is also where the header's opacity value ends
+     and where the gradient sliders' bars end. 17px = .mask-param-bypass-slot */
+  margin-right: 17px;
 }
 
 /* "use sliders for opacity": the slider leading a parametric
@@ -1133,7 +1132,7 @@ dialog .sidebar row:selected:hover label,
   margin-bottom: 0.14em;
   /* same overhang as the boost factor below the channel sliders: see
      .mask-boost-factor-box */
-  margin-right: 21px;
+  margin-right: 17px;
 }
 
 /* the input/output gradient sliders inside a parametric row's own editor.
@@ -1237,10 +1236,10 @@ button.mask-param-bypass-btn
   margin: 0 1px 0 2px;
 }
 
-/* the column that eye sits in. It keeps its width whether or not the eye is
-   currently shown, so the sliders beside it never grow and shrink as channels
-   gain and lose their bypass toggle (see _make_param_bypass_slot in
-   blend_gui.c). 17px = the expander's 14px plus its 2px/1px side margins. */
+/* the box that eye sits in, over the right end of its slider. It keeps its
+   width whether or not the eye is currently shown, and the slider's bar ends
+   where it starts (see _param_slider_fit_eye in blend_gui.c). 17px = the
+   expander's 14px plus its 2px/1px side margins. */
 .mask-param-bypass-slot
 {
   min-width: 17px;
