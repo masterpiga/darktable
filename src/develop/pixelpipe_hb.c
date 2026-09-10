@@ -292,7 +292,6 @@ static gboolean _dev_pixelpipe_init_cached(dt_dev_pixelpipe_t *pipe,
 
   memset(&pipe->scharr, 0, sizeof(dt_dev_detail_mask_t));
   pipe->want_detail_mask = FALSE;
-  pipe->synch_no_detail_invalidate = FALSE;
 
   dt_atomic_set_int(&pipe->shutdown, DT_DEV_PIXELPIPE_STOP_NO);
   pipe->opencl_error = FALSE;
@@ -896,7 +895,6 @@ void dt_dev_pixelpipe_synch_all(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
     _clear_piece_distortion_caches(n->data);
 
   pipe->want_detail_mask = FALSE;
-  pipe->synch_no_detail_invalidate = TRUE;
 
   /* go through all history items and adjust params */
   GList *history = dev->history;

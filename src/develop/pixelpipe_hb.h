@@ -260,10 +260,6 @@ typedef struct dt_dev_pixelpipe_t
   // the data for the luminance mask are kept in a buffer written by demosaic or rawprepare
   // as we have to scale the mask later we keep size at that stage
   gboolean want_detail_mask;
-  // set only while dt_dev_pixelpipe_synch_all replays history: suppresses the
-  // per-module usedetails order-0 flush; synch_all invalidates once at the end
-  // and only if the detail requirement actually toggled.
-  gboolean synch_no_detail_invalidate;
   struct dt_dev_detail_mask_t scharr;
 
   // avoid cached data for processed module
