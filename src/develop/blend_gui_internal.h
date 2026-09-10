@@ -248,6 +248,20 @@ gboolean _model_opacity_sliders_in_effect(const gboolean auto_expand,
     expanded at all, else whatever was expanded last. Resolves the form's kind
     through darktable.develop. */
 dt_mask_id_t _model_auto_expand_anchor(const dt_iop_gui_blend_data_t *bd);
+
+/** what a real click on an element row's chevron does to "auto-expand
+    selected": the row to collapse (INVALID_MASKID for none) and the element
+    the option considers open afterwards. */
+typedef struct dt_masks_chevron_click_t
+{
+  dt_mask_id_t collapse;
+  dt_mask_id_t last_expanded;
+} dt_masks_chevron_click_t;
+
+dt_masks_chevron_click_t _model_element_chevron_click(const dt_iop_gui_blend_data_t *bd,
+                                                      const dt_mask_id_t id,
+                                                      const gboolean expanded,
+                                                      const gboolean auto_expand);
 /** the same, one level up: which group it keeps open. Every group can be
     expanded, so this needs no kind test. */
 dt_mask_id_t _model_auto_expand_group_anchor(const dt_iop_gui_blend_data_t *bd);
