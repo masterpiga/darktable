@@ -73,6 +73,17 @@ typedef struct dt_masks_empty_group_t
 // ---------------------------------------------------------------------------
 
 /** the module's mask group, or NULL if it has none / it is not a group */
+/** what the refinement controls target (dt_iop_gui_blend_data_t's
+    masks_refine_scope_kind); see the scope comment in blend_gui.c */
+enum
+{
+  REFINE_SCOPE_GLOBAL = 0,
+  REFINE_SCOPE_ALL_SHAPES,
+  REFINE_SCOPE_ELEMENT,
+  REFINE_SCOPE_GROUP,
+  REFINE_SCOPE_EMPTY_GROUP
+};
+
 dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
 /** the group point for `id` within `grp`, or NULL */
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
@@ -351,6 +362,49 @@ float _param_row_slider_precise_display(const dt_iop_gui_blendif_channel_t *chan
 float _param_row_slider_precise_parse(const dt_iop_gui_blendif_channel_t *channel,
                                       const float boost_factor,
                                       const float typed);
+
+/** every module whose own mask uses form `fid`: more than one means the form
+    is linked. Caller frees the list. */
+GList *_model_form_users(const dt_mask_id_t fid);
+/** the shapes and AI objects in `src`'s mask, bottom-up: those of the group
+    headed by `cid`, or all of them for INVALID_MASKID. Caller frees. */
+GList *_model_module_shapes(dt_iop_module_t *src, const dt_mask_id_t cid);
+/** add `fids` (bottom-up) where the insertion hint points, linked or, with
+    `copy`, as independent copies. Each keeps the opacity, invert state and
+    refinement it has in `src`'s mask (NULL: defaults); forms the mask already
+    uses are skipped. Returns the ids added, bottom-up. Records no history. */
+GList *_model_import_forms(dt_iop_module_t *module,
+                           dt_iop_module_t *src,
+                           GList *fids,
+                           const gboolean copy);
+/** replace linked form `fid` in `module`'s mask with its own copy, carrying
+    the panel's references over. Returns the copy's id. Records no history. */
+dt_mask_id_t _model_unlink_form(dt_iop_module_t *module, const dt_mask_id_t fid);
+/** "break into components": the AI object `id` becomes its paths, in its
+    place in `module`'s mask. A linked object is unlinked first, so the other
+    modules keep it whole. Records no history */
+gboolean _model_break_apart(dt_iop_module_t *module, dt_mask_id_t id);
+/** the name a row shows: the form's own without its type prefix, or for a
+    raster element named by its type alone, its source's current name */
+gchar *_form_display_name(const dt_masks_form_t *form);
+/** rename from the row's entry, which edits the part after the type prefix;
+    an empty name sets a raster element to follow its source. TRUE if changed */
+gboolean _model_rename_form(dt_masks_form_t *form, const char *txt);
+/** raster elements still named "<prefix> <source name>" from before names
+    followed the source are set to follow it */
+void _model_raster_names_follow_sources(dt_masks_form_t *grp);
+/** a shared element: another module's mask uses it too. Never a raster one */
+gboolean _model_form_is_linked(const dt_masks_form_t *form);
+/** point the refinement scope at what the panel selection names: the
+    element, its group, a staged group, or the whole mask */
+void _model_refine_scope_from_selection(dt_iop_module_t *module);
+/** forget a refinement scope whose element or group left the mask, with the
+    selections naming it. TRUE when the scope must be derived again */
+gboolean _model_refine_scope_prune(dt_iop_module_t *module);
+/** the row a canvas selection names: a path of an AI object maps to the object */
+dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t formid);
+/** everything the element list is built from; an unchanged one skips the rebuild */
+dt_hash_t _masks_list_signature(dt_iop_module_t *module);
 
 /** group numbering: identity that must survive a group emptying and refilling */
 int _op_index_for_state(const int state);

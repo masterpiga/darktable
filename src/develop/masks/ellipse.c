@@ -824,7 +824,7 @@ static int _ellipse_events_button_released(dt_iop_module_t *module,
     }
 
     // we remove the shape
-    dt_masks_form_remove(module, dt_masks_get_from_id(darktable.develop, parentid), form);
+    dt_masks_remove_shape(module, form, parentid, TRUE);
     return 1;
   }
   if(gui->form_dragging)

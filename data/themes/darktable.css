@@ -1440,6 +1440,7 @@ button.mask-row-expander:hover
    every button 1px, and dropping it only while checked makes the header jump). */
 .mask-list-handle-inverted,
 .mask-power-solo,
+.mask-row-linked,
 .mask-invert-toggle:checked:not(:disabled)
 {
   background-color: #e8e8e8;
@@ -1449,7 +1450,8 @@ button.mask-row-expander:hover
 
 /* the solo badge is a chip rather than a plate: tighter than .mask-list-handle's
    3px, and padding-free so the glyph fills it */
-.mask-power-solo
+.mask-power-solo,
+.mask-row-linked
 {
   border-radius: 2px;
   padding: 0px;

@@ -31,11 +31,36 @@
 // bundle's own formid. Returns the bundle form if `fpt` is one of its
 // children, else NULL. Used throughout this file to treat a bundle as one
 // coordinated unit on the canvas (select/highlight/drag/grow-shrink), while
-// individual bezier-node dragging still targets just the one child.
-static dt_masks_form_t *_bundle_parent_of(const dt_masks_point_group_t *fpt)
+// individual bezier-node dragging still targets just the one child. Returns
+// NULL too for the object the user stepped into (see
+// dt_masks_form_gui_t.entered_object), whose paths then act one by one.
+static dt_masks_form_t *_object_of(const dt_masks_point_group_t *fpt)
 {
   dt_masks_form_t *parent = dt_masks_get_from_id(darktable.develop, fpt->parentid);
   return (parent && (parent->type & DT_MASKS_OBJECT)) ? parent : NULL;
+}
+
+dt_masks_form_t *dt_masks_bundle_of(const dt_masks_point_group_t *fpt)
+{
+  dt_masks_form_t *object = _object_of(fpt);
+  const dt_masks_form_gui_t *gui = darktable.develop->form_gui;
+  return (object && gui && gui->entered_object == object->formid) ? NULL : object;
+}
+
+gboolean dt_masks_gui_step_object(dt_masks_form_gui_t *gui,
+                                  const dt_mask_id_t hit_object,
+                                  const gboolean primary,
+                                  const gboolean double_click)
+{
+  if(!gui || !primary) return FALSE;
+  if(dt_is_valid_maskid(gui->entered_object) && hit_object != gui->entered_object)
+    gui->entered_object = INVALID_MASKID;
+  if(double_click && dt_is_valid_maskid(hit_object) && gui->entered_object != hit_object)
+  {
+    gui->entered_object = hit_object;
+    return TRUE;
+  }
+  return FALSE;
 }
 
 // after a bundle-wide edit (coordinated resize/drag) has mutated every
@@ -84,8 +109,10 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
     // also true for ctrl+shift together, which an earlier version of this
     // function got wrong: it hijacked ctrl+shift's legacy-resize gesture into
     // plain resize instead of leaving it alone).
-    dt_masks_form_t *bundle = _bundle_parent_of(fpt);
-    if(bundle && dt_modifier_is(state, GDK_CONTROL_MASK))
+    // opacity stays the object's even inside it: a path's own opacity within
+    // the object is shown nowhere
+    dt_masks_form_t *object = _object_of(fpt);
+    if(object && dt_modifier_is(state, GDK_CONTROL_MASK))
     {
       // ctrl+scroll (opacity): the panel's own inline opacity control for a
       // bundle row edits the bundle's own membership entry in the module's
@@ -95,11 +122,12 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
       // bundle, which is invisible bookkeeping nothing else in the UI
       // exposes. Drive the exact same call here.
       const float amount = up ? 0.05f : -0.05f;
-      dt_masks_form_change_opacity(bundle, module->blend_params->mask_id, amount);
+      dt_masks_form_change_opacity(object, module->blend_params->mask_id, amount);
       dt_masks_iop_update(module);
       dt_control_queue_redraw_center();
       return 1;
     }
+    dt_masks_form_t *bundle = dt_masks_bundle_of(fpt);
     if(bundle && !dt_modifier_is(state, GDK_CONTROL_MASK))
     {
       if(dt_modifier_is(state, GDK_SHIFT_MASK) && bundle->functions
@@ -184,6 +212,19 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
                                         dt_masks_form_gui_t *gui,
                                         const int unused2)
 {
+  // double-click on an AI object steps into it: its paths are then picked,
+  // edited and removed one by one (see dt_masks_bundle_of). A click anywhere
+  // else steps back out, and still does what it would have done
+  const dt_masks_point_group_t *hit =
+    gui->group_selected >= 0 ? g_list_nth_data(form->points, gui->group_selected) : NULL;
+  const dt_masks_form_t *hit_object = hit ? _object_of(hit) : NULL;
+  const dt_mask_id_t was_entered = gui->entered_object;
+  const gboolean stepped_in =
+    dt_masks_gui_step_object(gui, hit_object ? hit_object->formid : INVALID_MASKID,
+                             which == GDK_BUTTON_PRIMARY, type == GDK_2BUTTON_PRESS);
+  if(gui->entered_object != was_entered) dt_control_queue_redraw_center();
+  if(stepped_in) return 1;
+
   if(gui->group_edited != gui->group_selected)
   {
     // we set the selected form in edit mode
@@ -238,7 +279,7 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
       // logic below, which highlights every child sharing the selected parent).
       if(darktable.develop->mask_form_selected_id == sel->formid)
       {
-        dt_masks_form_t *bundle = _bundle_parent_of(fpt);
+        dt_masks_form_t *bundle = dt_masks_bundle_of(fpt);
         if(bundle) dt_masks_select_form(module, bundle);
       }
       return ret;
@@ -270,7 +311,7 @@ static int _group_events_button_released(dt_iop_module_t *module,
     // rotation slider still needs to catch up once the drag actually ends,
     // the same way scroll-driven feather/size/opacity already do per tick.
     const gboolean was_rotating = gui->form_rotating;
-    const dt_masks_form_t *bundle = was_rotating ? _bundle_parent_of(fpt) : NULL;
+    const dt_masks_form_t *bundle = was_rotating ? dt_masks_bundle_of(fpt) : NULL;
     const int ret = sel->functions->button_released(
       module, pzx, pzy, which, state, sel, fpt->parentid, gui, gui->group_edited);
     if(bundle) dt_masks_iop_update(module);
@@ -436,7 +477,7 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     // child's own per-shape rotation entirely (see _bundle_rotate_step).
     if(gui->form_rotating)
     {
-      dt_masks_form_t *rot_bundle = _bundle_parent_of(fpt);
+      dt_masks_form_t *rot_bundle = dt_masks_bundle_of(fpt);
       if(rot_bundle) return _bundle_rotate_step(module, rot_bundle, form, gui, pzx, pzy);
     }
 
@@ -449,7 +490,7 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     // exactly the delta it just applied, which is then reapplied verbatim to
     // every sibling (a pure translation needs no per-child sign-awareness,
     // unlike SIZE/ROTATION).
-    dt_masks_form_t *bundle = gui->form_dragging ? _bundle_parent_of(fpt) : NULL;
+    dt_masks_form_t *bundle = gui->form_dragging ? dt_masks_bundle_of(fpt) : NULL;
     float anchor_before[2] = { 0.0f, 0.0f };
     if(bundle && sel->points)
     {
@@ -621,12 +662,12 @@ void dt_group_events_post_expose(cairo_t *cr,
 
   // if the canvas-hovered/selected entry is a child of an AI-mask bundle,
   // every sibling shares its highlight too -- the bundle is one coordinated
-  // unit (see _bundle_parent_of/masks/object.c), not N independent shapes.
+  // unit (see dt_masks_bundle_of/masks/object.c), not N independent shapes.
   dt_mask_id_t base_sel_bundle = INVALID_MASKID;
   if(base_sel >= 0)
   {
     const dt_masks_point_group_t *base_fpt = g_list_nth_data(form->points, base_sel);
-    const dt_masks_form_t *bundle = base_fpt ? _bundle_parent_of(base_fpt) : NULL;
+    const dt_masks_form_t *bundle = base_fpt ? dt_masks_bundle_of(base_fpt) : NULL;
     if(bundle) base_sel_bundle = bundle->formid;
   }
 

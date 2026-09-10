@@ -3522,7 +3522,7 @@ static int _path_events_button_pressed(dt_iop_module_t *module,
 
       // we delete or remove the shape
       _resize_state_invalidate(form->formid);
-      dt_masks_form_remove(module, NULL, form);
+      dt_masks_remove_shape(module, form, parentid, FALSE);
       dt_control_queue_redraw_center();
       return 1;
     }
@@ -3595,7 +3595,7 @@ static int _path_events_button_pressed(dt_iop_module_t *module,
 
     // we remove the shape
     dt_dev_masks_list_remove(darktable.develop, form->formid, parentid);
-    dt_masks_form_remove(module, dt_masks_get_from_id(darktable.develop, parentid), form);
+    dt_masks_remove_shape(module, form, parentid, TRUE);
     return 1;
   }
 

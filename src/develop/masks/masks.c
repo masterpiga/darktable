@@ -149,10 +149,11 @@ static void _set_hinter_message(const dt_masks_form_gui_t *gui,
   int opacity = 100;
 
   const dt_masks_form_t *sel = form;
+  const dt_masks_point_group_t *fpt = NULL;
   if((ftype & DT_MASKS_GROUP) && (gui->group_edited >= 0))
   {
     // we get the selected form
-    const dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
+    fpt = g_list_nth_data(form->points, gui->group_edited);
     sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return;
 
@@ -171,6 +172,20 @@ static void _set_hinter_message(const dt_masks_form_gui_t *gui,
     sel->functions->set_hint_message(gui, sel, opacity, msg, sizeof(msg));
   }
 
+  // a path of an AI object: say how its paths are reached one by one
+  const dt_masks_form_t *object =
+    fpt ? dt_masks_get_from_id(darktable.develop, fpt->parentid) : NULL;
+  if(object && (object->type & DT_MASKS_OBJECT))
+  {
+    if(msg[0]) g_strlcat(msg, "\n", sizeof(msg));
+    g_strlcat(msg,
+              gui->entered_object == object->formid
+                ? _("inside the AI object: its paths are edited and removed one by one,"
+                    " click outside it to leave")
+                : _("double-click to edit and remove the AI object's paths one by one"),
+              sizeof(msg));
+  }
+
   dt_control_hinter_message(msg);
 }
 
@@ -184,6 +199,7 @@ void dt_masks_init_form_gui(dt_masks_form_gui_t *gui)
   gui->panel_hover_formids = NULL;
   gui->panel_selected_formid = INVALID_MASKID;
   gui->canvas_hover_formid = INVALID_MASKID;
+  gui->entered_object = INVALID_MASKID;
 }
 
 void dt_masks_gui_form_create(dt_masks_form_t *form,
@@ -435,10 +451,9 @@ static float _new_shape_default_opacity(const dt_masks_type_t type)
   return op;
 }
 
-void dt_masks_group_insert_member(dt_develop_t *dev,
-                                  dt_iop_module_t *module,
-                                  dt_masks_form_t *form,
-                                  dt_masks_form_gui_t *gui)
+dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
+                                                    dt_iop_module_t *module,
+                                                    dt_masks_form_t *form)
 {
   // is there already a masks group for this module ?
   dt_masks_form_t *grp = _group_from_module(dev, module);
@@ -516,6 +531,15 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
     if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
     grp->points = g_list_append(grp->points, grpt);
   }
+  return grpt;
+}
+
+void dt_masks_group_insert_member(dt_develop_t *dev,
+                                  dt_iop_module_t *module,
+                                  dt_masks_form_t *form,
+                                  dt_masks_form_gui_t *gui)
+{
+  dt_masks_group_insert_point(dev, module, form);
   // we save the group
   dt_dev_add_masks_history_item(dev, module, TRUE);
   if(gui)
@@ -592,6 +616,40 @@ int dt_masks_form_duplicate(dt_develop_t *dev, const dt_mask_id_t formid)
 
   // and we return its id
   return fdest->formid;
+}
+
+dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid)
+{
+  dt_masks_form_t *base = dt_masks_get_from_id(dev, formid);
+  if(!base) return INVALID_MASKID;
+  dt_masks_form_t *dest = dt_masks_create(base->type);
+  if(!dest) return INVALID_MASKID;
+  _check_id(dest);
+  memcpy(dest->source, base->source, sizeof(dest->source));
+  dest->version = base->version;
+  g_strlcpy(dest->name, base->name, sizeof(dest->name));
+  dev->forms = g_list_append(dev->forms, dest);
+
+  // a container's members are copied too: dt_masks_group_duplicate_points
+  // would do the same, but records a history item per member
+  if(base->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
+  {
+    for(GList *l = base->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      const dt_mask_id_t nid = dt_masks_form_copy(dev, pt->formid);
+      if(!dt_is_valid_maskid(nid)) continue;
+      dt_masks_point_group_t *npt = malloc(sizeof(dt_masks_point_group_t));
+      memcpy(npt, pt, sizeof(dt_masks_point_group_t));
+      npt->formid = nid;
+      npt->parentid = dest->formid;
+      dest->points = g_list_append(dest->points, npt);
+    }
+  }
+  else if(base->functions && base->functions->duplicate_points)
+    base->functions->duplicate_points(dev, base, dest);
+
+  return dest->formid;
 }
 
 int dt_masks_get_points_border(dt_develop_t *dev,
@@ -1904,116 +1962,6 @@ void dt_masks_iop_edit_toggle_callback(GtkToggleButton *togglebutton,
     (bd->masks_shown == DT_MASKS_EDIT_OFF ? DT_MASKS_EDIT_FULL : DT_MASKS_EDIT_OFF));
 }
 
-static void _menu_no_masks(dt_iop_module_t *module)
-{
-  // we drop all the forms in the iop
-  dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
-  if(grp) dt_masks_form_remove(module, NULL, grp);
-
-  dt_print(DT_DEBUG_MASKS, "[masks] _menu_no_masks '%s': mask_id %d->NO_MASKID",
-           module->op, module->blend_params->mask_id);
-  module->blend_params->mask_id = NO_MASKID;
-
-  // and we update the iop
-  dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
-  dt_masks_iop_update(module);
-
-  dt_dev_add_history_item(darktable.develop, module, TRUE);
-}
-
-static void _menu_add_shape(dt_iop_module_t *module,
-                            const dt_masks_type_t type)
-{
-  // we want to be sure that the iop has focus
-  dt_iop_request_focus(module);
-  // we create the new form
-  dt_masks_form_t *form = dt_masks_create(type);
-  dt_masks_change_form_gui(form);
-  darktable.develop->form_gui->creation_module = module;
-  dt_control_queue_redraw_center();
-}
-
-// flexi: a form was just appended to the module's mask group as the top point with
-// the default operator (the import path). Reposition it per the panel's insertion
-// hint so it lands in the selected (or single default) group, mirroring how a freshly
-// drawn shape is placed in dt_masks_gui_form_save_creation. No-op outside flexi or
-// when no hint is active, so the classic path stays byte-identical.
-static void _flexi_reposition_imported(dt_iop_module_t *module,
-                                       dt_masks_form_t *grp,
-                                       dt_masks_point_group_t *grpt,
-                                       const dt_masks_form_t *form)
-{
-  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
-  if(!bd || !grp || !grpt || !form) return;
-  if(!(module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) || !bd->insert_active)
-    return;
-
-  grpt->state &= ~DT_MASKS_STATE_OP;
-  grpt->state |= (dt_masks_state_t)bd->insert_op;
-  grpt->state &= ~DT_MASKS_STATE_WITHIN;
-  grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
-
-  grp->points = g_list_remove(grp->points, grpt);
-  if(dt_is_valid_maskid(bd->insert_after_fid))
-  {
-    int pos = -1, k = 0;
-    for(GList *l = grp->points; l; l = g_list_next(l), k++)
-      if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
-      {
-        pos = k;
-        break;
-      }
-    if(pos >= 0)
-      grp->points = g_list_insert(grp->points, grpt, pos + 1);
-    else
-      grp->points = g_list_append(grp->points, grpt);
-  }
-  else
-    grp->points = g_list_prepend(grp->points, grpt); // bottom-anchored -> base
-
-  // realizing an empty group: tell the panel which form filled it, and mark the new
-  // single-member group as a head so it stays distinct from a same-op neighbour
-  // (first-class groups; see dt_masks_point_group_t.group_start)
-  if(bd->insert_realize_empty)
-  {
-    bd->insert_realized_fid = form->formid;
-    grpt->group_start = 1;
-    // a brand-new group always starts fully opaque, unless it's realizing a
-    // saved layout preset's remembered opacity; see dt_masks_gui_form_save_creation
-    grpt->opacity = bd->insert_opacity;
-  }
-}
-
-static void _menu_add_exist(dt_iop_module_t *module,
-                            const dt_mask_id_t formid)
-{
-  if(!module) return;
-  dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, formid);
-  if(!form) return;
-
-  // is there already a masks group for this module ?
-  dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
-  if(!grp)
-  {
-    grp = _group_create(darktable.develop, module, DT_MASKS_GROUP);
-  }
-  // we add the form in this group, then (flexi) move it into the target group
-  dt_masks_point_group_t *grpt = dt_masks_group_add_form(grp, form);
-  _flexi_reposition_imported(module, grp, grpt, form);
-  if(darktable.develop->form_gui)
-    darktable.develop->form_gui->panel_selected_formid = formid;
-  if(module && module->blend_data)
-  {
-    dt_iop_gui_blend_data_t *bd = module->blend_data;
-    bd->panel_selected_formid = formid;
-  }
-  // we save the group
-  // and we ensure that we are in edit mode
-  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  dt_masks_iop_update(module);
-  dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-}
-
 void dt_masks_group_update_name(dt_iop_module_t *module)
 {
   dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
@@ -2023,6 +1971,29 @@ void dt_masks_group_update_name(dt_iop_module_t *module)
   _set_group_name_from_module(module, grp);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   dt_masks_iop_update(module);
+}
+
+void dt_masks_group_add_members_of(dt_masks_form_t *grp, const dt_masks_form_t *src_grp)
+{
+  for(GList *points = src_grp->points; points; points = g_list_next(points))
+  {
+    const dt_masks_point_group_t *pt = points->data;
+    const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
+    // shapes are shared with the source, but a parametric channel is copied:
+    // two modules hardly want the same range, and a shared one would move both
+    if(form && (form->type & DT_MASKS_PARAMETRIC))
+      form = dt_masks_get_from_id(darktable.develop,
+                                  dt_masks_form_copy(darktable.develop, form->formid));
+    if(form)
+    {
+      dt_masks_point_group_t *grpt = dt_masks_group_add_form(grp, form);
+      if(grpt)
+      {
+        grpt->state = pt->state;
+        grpt->opacity = pt->opacity;
+      }
+    }
+  }
 }
 
 void dt_masks_iop_use_same_as(dt_iop_module_t *module,
@@ -2041,200 +2012,10 @@ void dt_masks_iop_use_same_as(dt_iop_module_t *module,
   {
     grp = _group_create(darktable.develop, module, DT_MASKS_GROUP);
   }
-  // we copy the src group in this group
-  for(GList *points = src_grp->points; points; points = g_list_next(points))
-  {
-    const dt_masks_point_group_t *pt = points->data;
-    const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
-    if(form)
-    {
-      dt_masks_point_group_t *grpt = dt_masks_group_add_form(grp, form);
-      if(grpt)
-      {
-        grpt->state = pt->state;
-        grpt->opacity = pt->opacity;
-      }
-    }
-  }
+  dt_masks_group_add_members_of(grp, src_grp);
 
   // we save the group
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-}
-
-void dt_masks_iop_combo_populate(GtkWidget *w, dt_iop_module_t **m)
-{
-  // we ensure that the module has focus
-  dt_iop_module_t *module = *m;
-  dt_iop_request_focus(module);
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-
-  // we determine a higher approx of the entry number
-  const guint nbe = 5
-    + g_list_length(darktable.develop->forms)
-    + g_list_length(darktable.develop->iop);
-
-  free(bd->masks_combo_ids);
-  bd->masks_combo_ids = malloc(sizeof(int) * nbe);
-
-  int *cids = bd->masks_combo_ids;
-  GtkWidget *combo = bd->masks_combo;
-
-  // we remove all the combo entries except the first one
-  while(dt_bauhaus_combobox_length(combo) > 1)
-  {
-    dt_bauhaus_combobox_remove_at(combo, 1);
-  }
-
-  int pos = 0;
-  cids[pos++] = 0; // nothing to do for the first entry (already here)
-
-
-  // add existing shapes
-  int nb = 0;
-  for(GList *forms = darktable.develop->forms;
-      forms;
-      forms = g_list_next(forms))
-  {
-    const dt_masks_form_t *form = forms->data;
-    if((form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
-       || form->formid == module->blend_params->mask_id)
-    {
-      continue;
-    }
-
-    // we search were this form is used in the current module
-    int used = 0;
-    const dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
-    if(grp && (grp->type & DT_MASKS_GROUP))
-    {
-      for(GList *pts = grp->points; pts; pts = g_list_next(pts))
-      {
-        const dt_masks_point_group_t *pt = pts->data;
-        if(pt->formid == form->formid)
-        {
-          used = 1;
-          break;
-        }
-      }
-    }
-    if(!used)
-    {
-      if(nb == 0)
-      {
-        dt_bauhaus_combobox_add_section(combo, _("add existing shape"));
-        cids[pos++] = 0; // nothing to do
-      }
-      dt_bauhaus_combobox_add(combo, form->name);
-      cids[pos++] = form->formid;
-      nb++;
-    }
-  }
-
-  // masks from other iops
-  nb = 0;
-  int pos2 = 1;
-  for(GList *modules = darktable.develop->iop;
-      modules;
-      modules = g_list_next(modules))
-  {
-    const dt_iop_module_t *other_mod = modules->data;
-
-    if((other_mod != module)
-       && (other_mod->flags() & IOP_FLAGS_SUPPORTS_BLENDING)
-       && !(other_mod->flags() & IOP_FLAGS_NO_MASKS))
-    {
-      const dt_masks_form_t *grp = _group_from_module(darktable.develop, other_mod);
-      if(grp)
-      {
-        if(nb == 0)
-        {
-          dt_bauhaus_combobox_add_section(combo, _("use same shapes as"));
-          cids[pos++] = 0; // nothing to do
-        }
-        gchar *module_label = dt_history_item_get_name(other_mod);
-        dt_bauhaus_combobox_add(combo, module_label);
-        g_free(module_label);
-        cids[pos++] = -1 * pos2;
-        nb++;
-      }
-    }
-    pos2++;
-  }
-}
-
-void dt_masks_iop_value_changed_callback(GtkWidget *widget,
-                                         dt_iop_module_t *module)
-{
-  // we get the corresponding value
-  const dt_iop_gui_blend_data_t *bd = module->blend_data;
-
-  const int sel = dt_bauhaus_combobox_get(bd->masks_combo);
-  if(sel == 0) return;
-  if(sel == 1)
-  {
-    DT_ENTER_GUI_UPDATE();
-    dt_bauhaus_combobox_set(bd->masks_combo, 0);
-    DT_LEAVE_GUI_UPDATE();
-    return;
-  }
-  if(sel > 0)
-  {
-    int val = bd->masks_combo_ids[sel];
-    if(val == -1000000)
-    {
-      // delete all masks
-      _menu_no_masks(module);
-    }
-    else if(val == -2000001)
-    {
-      // add a circle shape
-      _menu_add_shape(module, DT_MASKS_CIRCLE);
-    }
-    else if(val == -2000002)
-    {
-      // add a path shape
-      _menu_add_shape(module, DT_MASKS_PATH);
-    }
-    else if(val == -2000016)
-    {
-      // add a gradient shape
-      _menu_add_shape(module, DT_MASKS_GRADIENT);
-    }
-    else if(val == -2000032)
-    {
-      // add a gradient shape
-      _menu_add_shape(module, DT_MASKS_ELLIPSE);
-    }
-    else if(val == -2000064)
-    {
-      // add a brush shape
-      _menu_add_shape(module, DT_MASKS_BRUSH);
-    }
-    else if(val < 0)
-    {
-      // use same shapes as another iop
-      val = -1 * val - 1;
-      if(val < g_list_length(module->dev->iop))
-      {
-        dt_iop_module_t *m = g_list_nth_data(module->dev->iop, val);
-        dt_masks_iop_use_same_as(module, m);
-        // and we ensure that we are in edit mode
-        //dt_dev_add_history_item(darktable.develop, module, TRUE);
-        dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-        dt_masks_iop_update(module);
-        dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-      }
-    }
-    else if(val > 0)
-    {
-      // add an existing shape
-      _menu_add_exist(module, val);
-    }
-    else
-      return;
-  }
-  // we update the combo line
-  dt_masks_iop_update(module);
 }
 
 void dt_masks_iop_update(dt_iop_module_t *module)
@@ -2360,6 +2141,49 @@ void dt_masks_form_remove(dt_iop_module_t *module,
     }
   }
   if(form_removed) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+}
+
+dt_masks_remove_target_t dt_masks_remove_shape_target(const dt_iop_module_t *module,
+                                                      dt_masks_form_t **form,
+                                                      dt_mask_id_t *parentid,
+                                                      const gboolean whole)
+{
+  // an AI object is selected as one unit, so removing it by a path removes
+  // the object, unless the user stepped into it. Removing a single path
+  // (inside the object, node by node, or from its row in the panel) edits
+  // the object instead, down to its last path, which takes the object away
+  // like the panel's delete: emptying it would remove it from every module
+  // that links it
+  dt_masks_form_t *object = dt_masks_get_from_id(darktable.develop, *parentid);
+  if(object && (object->type & DT_MASKS_OBJECT) && module && module->blend_params)
+  {
+    const dt_masks_form_gui_t *gui = darktable.develop->form_gui;
+    const gboolean one_path = !whole || (gui && gui->entered_object == object->formid);
+    if(one_path && !g_list_shorter_than(object->points, 2)) return DT_MASKS_REMOVE_PATH;
+    *form = object;
+    *parentid = module->blend_params->mask_id;
+  }
+
+  // a shape of this module's own flexi mask goes the way the panel's delete
+  // takes it: it leaves this module only, even when another module links it,
+  // and emptying its group leaves the group in place
+  if(module && module->blend_data && module->blend_params
+     && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI)
+     && *parentid == module->blend_params->mask_id
+     && !((*form)->type & (DT_MASKS_CLONE | DT_MASKS_NON_CLONE)))
+    return DT_MASKS_REMOVE_ELEMENT;
+  return DT_MASKS_REMOVE_FROM_PARENT;
+}
+
+void dt_masks_remove_shape(dt_iop_module_t *module,
+                           dt_masks_form_t *form,
+                           dt_mask_id_t parentid,
+                           const gboolean whole)
+{
+  if(dt_masks_remove_shape_target(module, &form, &parentid, whole) == DT_MASKS_REMOVE_ELEMENT)
+    dt_iop_gui_blend_delete_element(module, form->formid);
+  else
+    dt_masks_form_remove(module, dt_masks_get_from_id(darktable.develop, parentid), form);
 }
 
 float dt_masks_form_change_opacity(dt_masks_form_t *form,
@@ -2713,10 +2537,16 @@ static void _cleanup_unused_recurs(GList *forms,
   }
 }
 
-// removes from _forms all forms that are not used in history_list up to history_end
+// removes from _forms, the snapshot history item `start` carries, every form
+// no module mask in effect at a position in [start, end) reaches: the items
+// from start on, and the earlier ones no later item of the same module (up
+// to start) has replaced. A replaced item's mask is no longer applied from
+// start on, and the positions before start read an earlier snapshot, so
+// keeping its forms here only resurrects shapes nothing uses.
 static int _masks_cleanup_unused(GList **_forms,
                                  GList *history_list,
-                                 const int history_end)
+                                 const int start,
+                                 const int end)
 {
   int masks_removed = 0;
   GList *forms = *_forms;
@@ -2725,21 +2555,32 @@ static int _masks_cleanup_unused(GList **_forms,
   const guint nbf = g_list_length(forms);
   int *used = calloc(nbf, sizeof(int));
 
-  // check in history if the module has drawn masks and add it to used
-  // array
   int num = 0;
   for(GList *history = history_list;
-      history && num < history_end && used;
-      history = g_list_next(history))
+      history && num < end && used;
+      history = g_list_next(history), num++)
   {
     const dt_dev_history_item_t *hist = history->data;
     const dt_develop_blend_params_t *blend_params = hist->blend_params;
-    if(blend_params)
+    if(!blend_params || !dt_is_valid_maskid(blend_params->mask_id)) continue;
+
+    gboolean replaced = FALSE;
+    if(num < start && hist->module)
     {
-      if(dt_is_valid_maskid(blend_params->mask_id))
-        _cleanup_unused_recurs(forms, blend_params->mask_id, used, nbf);
+      int later = num + 1;
+      for(const GList *l = g_list_next(history);
+          l && later <= start;
+          l = g_list_next(l), later++)
+      {
+        if(((const dt_dev_history_item_t *)l->data)->module == hist->module)
+        {
+          replaced = TRUE;
+          break;
+        }
+      }
     }
-    num++;
+    if(!replaced)
+      _cleanup_unused_recurs(forms, blend_params->mask_id, used, nbf);
   }
 
   // and we delete all unused forms
@@ -2778,30 +2619,30 @@ static int _masks_cleanup_unused(GList **_forms,
   return masks_removed;
 }
 
-// removes all unused form from history if there are multiple
-// hist->forms entries in history it may leave some unused forms we do
-// it like this so the user can go back in history for a more accurate
-// cleanup the user should compress history
+// removes all unused forms from every forms snapshot in history. Each
+// snapshot only has to keep what the positions reading it use, from its own
+// item up to the next snapshot, so going back in history stays exact. Every
+// item carrying forms is a snapshot, not just mask_manager ones: a module's
+// own item carries one whenever its masks were recorded with it (see
+// dt_dev_add_masks_history_item_ext), and history replay reads those too.
+// A snapshot cleaned down to nothing becomes NULL, which replay reads as "no
+// snapshot here", so an older one takes over: shapes only that older one
+// keeps can come back, and only compressing history removes them.
 void dt_masks_cleanup_unused_from_list(GList *history_list)
 {
-  // a mask is used in a given hist->forms entry if it is used up to
-  // the next hist->forms so we are going to remove for each
-  // hist->forms from the top
-  int num = g_list_length(history_list);
-  int history_end = num;
+  int num = g_list_length(history_list) - 1;
+  int end = num + 1;
 
   for(const GList *history = g_list_last(history_list);
       history;
-      history = g_list_previous(history))
+      history = g_list_previous(history), num--)
   {
     dt_dev_history_item_t *hist = history->data;
-    if(hist->forms
-       && strcmp(hist->op_name, "mask_manager") == 0)
+    if(hist->forms)
     {
-      _masks_cleanup_unused(&hist->forms, history_list, history_end);
-      history_end = num - 1;
+      _masks_cleanup_unused(&hist->forms, history_list, num, end);
+      end = num;
     }
-    num--;
   }
 }
 
