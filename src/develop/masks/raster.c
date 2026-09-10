@@ -127,16 +127,30 @@ static void _raster_duplicate_points(dt_develop_t *const dev,
 }
 
 // resolve the form's source (op + instance) to a live module in the pipe
-static dt_iop_module_t *_raster_resolve_source(const dt_iop_module_t *const module,
-                                               const dt_masks_point_raster_t *const p)
+static dt_iop_module_t *_raster_find_source(GList *iop_list,
+                                            const dt_masks_point_raster_t *const p)
 {
-  if(!module || !module->dev || !p->source[0]) return NULL;
-  for(GList *iter = module->dev->iop; iter; iter = g_list_next(iter))
+  if(!p->source[0]) return NULL;
+  for(GList *iter = iop_list; iter; iter = g_list_next(iter))
   {
     dt_iop_module_t *iop = iter->data;
     if(dt_iop_module_is(iop, p->source) && iop->multi_priority == p->instance) return iop;
   }
   return NULL;
+}
+
+static dt_iop_module_t *_raster_resolve_source(const dt_iop_module_t *const module,
+                                               const dt_masks_point_raster_t *const p)
+{
+  if(!module || !module->dev) return NULL;
+  return _raster_find_source(module->dev->iop, p);
+}
+
+dt_iop_module_t *dt_masks_raster_source(const dt_masks_form_t *form)
+{
+  if(!form || !(form->type & DT_MASKS_RASTER) || !form->points || !darktable.develop)
+    return NULL;
+  return _raster_find_source(darktable.develop->iop, form->points->data);
 }
 
 /* An unresolvable raster element renders as all-zero, and reports success.

@@ -721,6 +721,12 @@ typedef struct dt_masks_form_gui_t
   dt_mask_id_t panel_selected_formid;
   dt_mask_id_t canvas_hover_formid;
   GList *solo_formids;
+  // entered_object: the AI object the user stepped into on the canvas
+  //   (double-click on it). Its paths then act one by one instead of as the
+  //   single unit the object otherwise is. INVALID_MASKID = none. It survives
+  //   dt_masks_clear_form_gui, which runs after every edit, and is reset by
+  //   a click outside the object or when the module loses focus
+  dt_mask_id_t entered_object;
 
   // opaque per-type data (e.g. segmentation context for object masks)
   void *scratchpad;
@@ -740,6 +746,9 @@ extern const dt_masks_functions_t dt_masks_functions_gradient;
 extern const dt_masks_functions_t dt_masks_functions_group;
 extern const dt_masks_functions_t dt_masks_functions_parametric;
 extern const dt_masks_functions_t dt_masks_functions_raster;
+/** the darkroom module a raster form reads its mask from, or NULL when it is
+    gone. Resolved by operation and instance, as the form stores them */
+struct dt_iop_module_t *dt_masks_raster_source(const dt_masks_form_t *form);
 /** can this raster form still obtain a mask? TRUE (unresolved) when the source
     module was removed, was never named, is switched off, or writes no raster
     mask at all -- every structural reason dt_dev_get_raster_mask() hands back
@@ -930,6 +939,8 @@ void dt_masks_write_masks_history_item(const dt_imgid_t imgid,
                                        const dt_masks_form_t *form);
 void dt_masks_free_form(dt_masks_form_t *form);
 void dt_masks_cleanup_unused(dt_develop_t *dev);
+/** drop from every forms snapshot in history_list the forms nothing reads */
+void dt_masks_cleanup_unused_from_list(GList *history_list);
 
 /** function used to manipulate forms for masks */
 void dt_masks_change_form_gui(dt_masks_form_t *newform);
@@ -1009,6 +1020,11 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
                                   struct dt_iop_module_t *module,
                                   dt_masks_form_t *form,
                                   dt_masks_form_gui_t *gui);
+/** the same placement, recording no history and touching no selection: for a
+    caller adding several elements and committing once. Returns the new point */
+dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
+                                                    struct dt_iop_module_t *module,
+                                                    dt_masks_form_t *form);
 // assigns `form` the next free "<type label> #<n>" name, exactly like a
 // freshly-created shape/channel gets from dt_masks_gui_form_save_creation
 // (which now calls this too) -- used directly by callers that build forms
@@ -1040,8 +1056,6 @@ dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
  * brush=sum / else=union behavior when unset). */
 dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form);
 
-void dt_masks_iop_value_changed_callback(GtkWidget *widget,
-                                         struct dt_iop_module_t *module);
 dt_masks_edit_mode_t dt_masks_get_edit_mode(void);
 void dt_masks_set_edit_mode(struct dt_iop_module_t *module,
                             const dt_masks_edit_mode_t value);
@@ -1054,8 +1068,6 @@ void dt_masks_set_edit_mode_forms(struct dt_iop_module_t *module,
                                   GList *formids,
                                   const dt_masks_edit_mode_t value);
 void dt_masks_iop_update(struct dt_iop_module_t *module);
-void dt_masks_iop_combo_populate(GtkWidget *w,
-                                 struct dt_iop_module_t **m);
 void dt_masks_iop_use_same_as(struct dt_iop_module_t *module,
                               struct dt_iop_module_t *src);
 dt_hash_t dt_masks_group_hash(dt_hash_t hash, dt_masks_form_t *form);
@@ -1070,6 +1082,43 @@ dt_hash_t dt_masks_group_hash_ext(dt_hash_t hash,
 void dt_masks_form_remove(struct dt_iop_module_t *module,
                           dt_masks_form_t *grp,
                           dt_masks_form_t *form);
+/** delete a shape, from the canvas or the panel alike: for an element of the
+    module's flexi mask, the same as the panel's delete (see
+    dt_iop_gui_blend_delete_element), otherwise removal from `parentid`.
+    `whole` is a gesture on the shape as a whole, which for a path of an AI
+    object takes the object with it unless the user stepped into the object
+    (dt_masks_form_gui_t.entered_object); otherwise just the path goes */
+void dt_masks_remove_shape(struct dt_iop_module_t *module,
+                           dt_masks_form_t *form,
+                           dt_mask_id_t parentid,
+                           const gboolean whole);
+/** what dt_masks_remove_shape takes away, with `form` and `parentid` moved to
+    that target: a path out of its AI object, an element of the module's flexi
+    mask (the panel's delete), or anything else out of its parent */
+typedef enum dt_masks_remove_target_t
+{
+  DT_MASKS_REMOVE_PATH = 0,
+  DT_MASKS_REMOVE_ELEMENT = 1,
+  DT_MASKS_REMOVE_FROM_PARENT = 2
+} dt_masks_remove_target_t;
+dt_masks_remove_target_t dt_masks_remove_shape_target(const struct dt_iop_module_t *module,
+                                                      dt_masks_form_t **form,
+                                                      dt_mask_id_t *parentid,
+                                                      const gboolean whole);
+/** a canvas press in the flat edit group: a double-click on a path of an AI
+    object steps into the object, any other primary click outside it steps out.
+    `hit_object` is the object of the path under the pointer, if any. TRUE when
+    the press was the step in and must do nothing else */
+gboolean dt_masks_gui_step_object(dt_masks_form_gui_t *gui,
+                                  const dt_mask_id_t hit_object,
+                                  const gboolean primary,
+                                  const gboolean double_click);
+/** the AI object a flat edit group's point moves with as one unit, NULL when
+    it is no object's path or the user stepped into its object */
+dt_masks_form_t *dt_masks_bundle_of(const dt_masks_point_group_t *fpt);
+/** add every element of `src_grp` to `grp`, keeping its operator and opacity:
+    shapes are shared, parametric channels copied. No history item */
+void dt_masks_group_add_members_of(dt_masks_form_t *grp, const dt_masks_form_t *src_grp);
 float dt_masks_form_change_opacity(dt_masks_form_t *form,
                                    const dt_imgid_t parentid,
                                    const float amount);
@@ -1078,6 +1127,9 @@ void dt_masks_form_move(dt_masks_form_t *grp,
                         const gboolean up);
 int dt_masks_form_duplicate(dt_develop_t *dev,
                             const dt_mask_id_t formid);
+/** an independent copy of a form under a new id, keeping its name, registered
+    in dev->forms; members included for an AI object. Records no history */
+dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid);
 /* returns a duplicate tof form, including the formid */
 dt_masks_form_t *dt_masks_dup_masks_form(const dt_masks_form_t *form);
 /* duplicate the list of forms, replace item in the list with form with the same formid */
