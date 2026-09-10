@@ -586,14 +586,14 @@ void _reparent_into(GtkWidget *w,
 // paint function, as opposed to plain-text GtkButtons) invisible until an
 // unrelated event forced a redraw, for reasons that didn't resolve after
 // several rounds of instrumentation. Row 1: add-group | shape buttons
-// (masks_shapes_box) | add-raster. Row 2: parametric channel buttons
-// (masks_param_channels_box) | import/reuse. If the panel is made
+// (masks_shapes_box) | import. Row 2: parametric channel buttons
+// (masks_param_channels_box), centered. If the panel is made
 // extremely narrow, a row can clip -- that's preferable to any of the
 // above failure modes.
 static void _masks_toolbar_place_shapes_box(dt_iop_gui_blend_data_t *bd)
 {
   _reparent_into(bd->masks_shapes_box, bd->masks_toolbar_row1, FALSE, FALSE);
-  // slot 2: add-group(0) stretch(1) [shapes_box] stretch(3) raster(4)
+  // slot 2: add-group(0) stretch(1) [shapes_box] stretch(3) import(4)
   gtk_box_reorder_child(GTK_BOX(bd->masks_toolbar_row1), bd->masks_shapes_box, 2);
 }
 
@@ -9517,7 +9517,23 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
 // total number of groups (real operator-runs + empty groups). Used to decide
 // whether a default target exists: with a single group new elements land in it
 // automatically; with several, one must be explicitly selected.
-static int _group_count(dt_iop_module_t *module)
+// the first member of the run starting at `head` that resolves in dev->forms,
+// which is the cid the panel gives the group, or INVALID_MASKID when none does:
+// the panel then drops the whole group header (see _build_masks_list)
+static dt_mask_id_t _run_shown_cid(GList *head)
+{
+  for(GList *m = head; m; m = g_list_next(m))
+  {
+    if(m != head && _starts_group(m)) break;
+    const dt_mask_id_t fid = ((dt_masks_point_group_t *)m->data)->formid;
+    if(dt_masks_get_from_id(darktable.develop, fid)) return fid;
+  }
+  return INVALID_MASKID;
+}
+
+// the groups the panel shows: a run none of whose members resolve has no header,
+// so counting it would make "the only group" ambiguous with nothing to pick
+int _group_count(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -9525,7 +9541,7 @@ static int _group_count(dt_iop_module_t *module)
   GList *l = grp ? grp->points : NULL;
   while(l)
   {
-    n++;
+    if(dt_is_valid_maskid(_run_shown_cid(l))) n++;
     GList *p = g_list_next(l);
     while(p && !_starts_group(p)) p = g_list_next(p);
     l = p;
@@ -9573,15 +9589,7 @@ _restate_tooltip_hint(GtkWidget *w, const gboolean has_target, const char *no_ta
 // sensitivity/tooltips (_update_add_target_sensitivity) and the insertion
 // itself (_recompute_insert_hint). Those derived it separately before, which is
 // exactly how the enabled state and the actual destination drift apart.
-typedef struct dt_masks_add_target_t
-{
-  dt_masks_empty_group_t *empty; // staged (member-less) group, or NULL
-  dt_mask_id_t cid;              // real group's cid, or INVALID_MASKID
-  gboolean valid;
-  gboolean implicit; // resolved from "only one group", not a selection
-} dt_masks_add_target_t;
-
-static dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
+dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -9600,13 +9608,14 @@ static dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
   }
   else if(_group_count(module) == 1)
   {
-    // the sole group is either the one staged group or the one real run, whose
-    // cid is its first point in grp->points order -- the same convention
-    // _build_masks_list uses for group headers (see _group_cid_of_form)
+    // the sole group is either the one staged group or the one shown run, with
+    // the cid its header carries (see _run_shown_cid)
     if(bd->empty_groups)
       t.empty = bd->empty_groups->data;
-    else if(grp && grp->points)
-      t.cid = ((const dt_masks_point_group_t *)grp->points->data)->formid;
+    else
+      for(GList *l = grp ? grp->points : NULL; l && !dt_is_valid_maskid(t.cid);
+          l = g_list_next(l))
+        if(_starts_group(l)) t.cid = _run_shown_cid(l);
     t.valid = t.empty != NULL || dt_is_valid_maskid(t.cid);
     t.implicit = t.valid;
   }
@@ -17885,6 +17894,10 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // *right*.
     _toolbar_pack_stretch(toolbar_row1);
 
+    // "import": row 1, rightmost, after the stretch that follows shapes_box
+    gtk_widget_show(bd->masks_import_btn);
+    dt_gui_box_add(toolbar_row1, bd->masks_import_btn);
+
     // "reset mask": clears every shape and restores the scaffold. Far right.
     bd->masks_reset_mask_btn = dtgtk_button_new(dtgtk_cairo_paint_reset, 0, NULL);
     gtk_widget_set_tooltip_text(bd->masks_reset_mask_btn,
@@ -18034,14 +18047,10 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_param_channels_inner = dt_gui_hbox();
     dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
-
+    // centered on its own row
     _toolbar_pack_stretch(toolbar_row2);
-
-    // "import/reuse shape": row 2, rightmost (see masks_import_btn's own
-    // construction, earlier in this function, for the button itself).
-    gtk_widget_show(bd->masks_import_btn);
-    dt_gui_box_add(toolbar_row2, bd->masks_import_btn);
+    dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
+    _toolbar_pack_stretch(toolbar_row2);
 
     // ---- shapes row (classic two-row toolbar): "show & edit elements" leftmost,
     // then the shapes box. The initial (classic) home; _masks_apply_layout re-homes

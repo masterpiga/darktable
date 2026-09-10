@@ -1407,6 +1407,118 @@ static void test_old_raster_name_follows_its_source(void **state)
 }
 
 // renaming the source changes nothing in this mask but what its row shows
+// ---------------------------------------------------------------------------
+// add target: the add shape / parametric / import buttons are enabled exactly
+// when this resolves
+// ---------------------------------------------------------------------------
+
+static void _no_selection(void)
+{
+  flexi_bd.selected_empty = NULL;
+  flexi_bd.panel_selected_group_cid = INVALID_MASKID;
+}
+
+static void test_add_target_is_the_only_group(void **state)
+{
+  flexi_build("u:1,2");
+  _no_selection();
+
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_true(t.implicit);
+  assert_int_equal(t.cid, 1);
+  assert_null(t.empty);
+}
+
+static void test_add_target_ignores_a_stale_selection_with_one_group(void **state)
+{
+  flexi_build("u:1,2");
+  _no_selection();
+  flexi_bd.panel_selected_group_cid = 9;
+
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_true(t.implicit);
+  assert_int_equal(t.cid, 1);
+}
+
+static void test_add_target_is_ambiguous_with_two_groups(void **state)
+{
+  flexi_build("u:1 | i:2");
+  _no_selection();
+  assert_int_equal(_group_count(&flexi_module), 2);
+  assert_false(_resolve_add_target(&flexi_module).valid);
+
+  flexi_bd.panel_selected_group_cid = 2;
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_false(t.implicit);
+  assert_int_equal(t.cid, 2);
+}
+
+static void test_add_target_counts_a_staged_group(void **state)
+{
+  flexi_build("u:1");
+  _no_selection();
+  dt_masks_empty_group_t *eg = _empty_group_new(DT_MASKS_STATE_UNION, 0, INVALID_MASKID);
+  flexi_bd.empty_groups = g_list_append(flexi_bd.empty_groups, eg);
+  assert_int_equal(_group_count(&flexi_module), 2);
+  assert_false(_resolve_add_target(&flexi_module).valid);
+
+  flexi_bd.selected_empty = eg;
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_false(t.implicit);
+  assert_ptr_equal(t.empty, eg);
+  _no_selection();
+}
+
+// a point whose form is missing from dev->forms, starting its own run
+static void _add_dangling_run(dt_masks_form_t *grp, const gboolean at_bottom)
+{
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = 99;
+  pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+  pt->opacity = 1.0f;
+  if(at_bottom)
+  {
+    // the old bottom point now sits above another one: keep it a run head
+    ((dt_masks_point_group_t *)grp->points->data)->group_start = 1;
+    grp->points = g_list_prepend(grp->points, pt);
+  }
+  else
+  {
+    pt->group_start = 1;
+    grp->points = g_list_append(grp->points, pt);
+  }
+}
+
+// the panel drops a group none of whose members resolve, so it must not make
+// the one group it does show ambiguous
+static void test_add_target_skips_a_group_the_panel_hides(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  _no_selection();
+  _add_dangling_run(grp, FALSE);
+
+  assert_int_equal(_group_count(&flexi_module), 1);
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_int_equal(t.cid, 1);
+}
+
+static void test_add_target_is_the_shown_group_above_a_hidden_one(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  _no_selection();
+  _add_dangling_run(grp, TRUE);
+
+  assert_int_equal(_group_count(&flexi_module), 1);
+  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_true(t.valid);
+  assert_int_equal(t.cid, 1);
+}
+
 static void test_list_signature_follows_source_rename(void **state)
 {
   flexi_conf_init();
@@ -1515,6 +1627,14 @@ int main(void)
                               _teardown_raster),
     cmocka_unit_test_teardown(test_old_raster_name_follows_its_source, _teardown_raster),
     cmocka_unit_test_teardown(test_list_signature_follows_source_rename, _teardown_raster),
+    cmocka_unit_test_teardown(test_add_target_is_the_only_group, _teardown),
+    cmocka_unit_test_teardown(test_add_target_ignores_a_stale_selection_with_one_group,
+                              _teardown),
+    cmocka_unit_test_teardown(test_add_target_is_ambiguous_with_two_groups, _teardown),
+    cmocka_unit_test_teardown(test_add_target_counts_a_staged_group, _teardown),
+    cmocka_unit_test_teardown(test_add_target_skips_a_group_the_panel_hides, _teardown),
+    cmocka_unit_test_teardown(test_add_target_is_the_shown_group_above_a_hidden_one,
+                              _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
