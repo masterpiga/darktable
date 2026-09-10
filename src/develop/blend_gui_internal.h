@@ -68,6 +68,18 @@ typedef struct dt_masks_empty_group_t
   gchar *name;
 } dt_masks_empty_group_t;
 
+// where a newly added element lands (see _resolve_add_target in blend_gui.c)
+typedef struct dt_masks_add_target_t
+{
+  dt_masks_empty_group_t *empty; // staged (member-less) group, or NULL
+  dt_mask_id_t cid;              // real group's cid, or INVALID_MASKID
+  gboolean valid;
+  gboolean implicit; // resolved from "only one group", not a selection
+} dt_masks_add_target_t;
+
+int _group_count(dt_iop_module_t *module);
+dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module);
+
 // ---------------------------------------------------------------------------
 // blend_gui.c -> masks_gui_presets.c
 // ---------------------------------------------------------------------------
