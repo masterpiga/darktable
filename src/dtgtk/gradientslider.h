@@ -154,6 +154,11 @@ gdouble dtgtk_gradient_slider_get_value(GtkDarktableGradientSlider *gslider);
 void dtgtk_gradient_slider_set_value(GtkDarktableGradientSlider *gslider, gdouble value);
 gboolean dtgtk_gradient_slider_is_dragging(GtkDarktableGradientSlider *gslider);
 
+/** distance from the widget's right edge to where the bar ends: css
+ *  padding/border/margin plus the room kept for a handle at 1.0. Valid
+ *  outside of a size request, unlike the margin_right field */
+gint dtgtk_gradient_slider_get_right_inset(GtkDarktableGradientSlider *gslider);
+
 /** Set the slider marker */
 void dtgtk_gradient_slider_set_marker(GtkDarktableGradientSlider *gslider, gint mark);
 
