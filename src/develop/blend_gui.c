@@ -18474,10 +18474,52 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   DT_LEAVE_GUI_UPDATE();
 }
 
+// the mask overlay the previously focused module showed, handed over to the
+// next focused module so masks of different modules can be compared without
+// toggling the overlay on each time
+static dt_dev_pixelpipe_display_mask_t _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+static guint _focus_carry_drop_source = 0;
+
+// focus left the module and went nowhere: the overlay is not handed on
+static gboolean _focus_carry_drop(gpointer user_data)
+{
+  _focus_carry_drop_source = 0;
+  _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+  return G_SOURCE_REMOVE;
+}
+
+static void _carry_mask_display_to(dt_iop_module_t *module)
+{
+  const dt_dev_pixelpipe_display_mask_t carried = _focus_carried_mask_display;
+  _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!carried
+     || !module->enabled
+     || module->hide_enable_button
+     || module->blend_params->mask_mode == DEVELOP_MASK_DISABLED
+     || module->blend_colorspace(module, NULL, NULL) == IOP_CS_RAW
+     || module->request_mask_display != DT_DEV_PIXELPIPE_DISPLAY_NONE)
+    return;
+
+  module->request_mask_display = carried;
+  DT_ENTER_GUI_UPDATE();
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->showmask), TRUE);
+  if(module->mask_indicator)
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(module->mask_indicator), TRUE);
+  DT_LEAVE_GUI_UPDATE();
+  dt_iop_refresh_center(module);
+}
+
 void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module)
 {
-  if(!module || !module->blend_data) return;
+  if(!module || !module->blend_data)
+  {
+    _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+    return;
+  }
   _masks_flexi_relocate(module);
+  _carry_mask_display_to(module);
 }
 
 void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
@@ -18499,6 +18541,20 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
   if((module->flags() & IOP_FLAGS_SUPPORTS_BLENDING) && module->blend_data)
   {
     dt_iop_gui_blend_data_t *bd = module->blend_data;
+
+    // a running hover preview is not the overlay the user asked for;
+    // save_for_leave holds that one. Channel displays are per-module, so
+    // only the plain mask overlay travels. A focus on no module keeps it until
+    // idle: expanding with single_module collapses the old module first, which
+    // focuses NULL just before the new one (see _gui_set_single_expanded)
+    dt_pthread_mutex_lock(&bd->lock);
+    const dt_dev_pixelpipe_display_mask_t shown =
+      bd->hover_preview_active ? bd->save_for_leave : module->request_mask_display;
+    dt_pthread_mutex_unlock(&bd->lock);
+    _focus_carried_mask_display = shown & DT_DEV_PIXELPIPE_DISPLAY_MASK;
+    if(!darktable.develop->gui_module && _focus_carried_mask_display
+       && !_focus_carry_drop_source)
+      _focus_carry_drop_source = g_idle_add(_focus_carry_drop, NULL);
 
     // don't let the flexi masks panel content linger in a shared host once
     // its owning module loses focus
