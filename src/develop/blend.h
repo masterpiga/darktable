@@ -495,17 +495,14 @@ typedef struct dt_iop_gui_blend_data_t
   int param_output_saved;
   GtkWidget *details_slider;
 
-  GtkWidget *masks_combo;
-  // flexi-only: compact button standing in for masks_combo (which, while
-  // collapsed, only ever shows the fixed "import shape" label) so the shared
-  // elements row doesn't permanently reserve a full expanding combo's worth of
-  // width for it. See _masks_apply_layout / _masks_import_btn_clicked.
+  // flexi-only: opens the menu that links or copies elements from other
+  // modules' masks, or adds or uses another module's whole mask. See
+  // _masks_import_btn_press
   GtkWidget *masks_import_btn;
   GtkWidget *masks_shapes[DEVELOP_MASKS_NB_SHAPES];
   int masks_type[DEVELOP_MASKS_NB_SHAPES];
   GtkWidget *masks_edit;
   GtkWidget *masks_polarity;
-  int *masks_combo_ids;
   dt_masks_edit_mode_t masks_shown;
   // what masks_shown was when the masking panel was last folded away (see
   // dt_iop_gui_blend_masks_panel_collapsed): collapsing turns on-canvas
@@ -530,7 +527,6 @@ typedef struct dt_iop_gui_blend_data_t
   // masks_param_channels_inner: the sub-box that actually holds the flat channel
   // buttons (rebuilt per csp); the only child of masks_param_channels_box.
   GtkWidget *masks_param_channels_inner;
-  GtkWidget *masks_raster_add_btn;
   int param_channels_csp;
   // masks_new_op: the "add group" button (flexi-only). Clicking it opens an
   // operator chooser; picking an operator stages a new (empty) group of that
@@ -554,8 +550,8 @@ typedef struct dt_iop_gui_blend_data_t
   // flexi-only "groups" section divider (above the toolbar/list; holds reset).
   GtkWidget *masks_groups_header;
   // shared rows re-homed between the classic two-row toolbar and the compact flexi
-  // layout (see _masks_apply_layout): masks_combo_row = classic combo header
-  // ([combo][invert]); masks_shapes_row = classic shapes row ([edit][shapes_box]).
+  // layout (see _masks_apply_layout): masks_combo_row = classic header
+  // ([invert]); masks_shapes_row = classic shapes row ([edit][shapes_box]).
   // In flexi, "edit" and "invert" move onto masks_groups_header, and
   // masks_shapes_box itself moves into masks_toolbar_row1.
   GtkWidget *masks_combo_row;
@@ -572,9 +568,9 @@ typedef struct dt_iop_gui_blend_data_t
   // reasons that didn't resolve after substantial debugging. A fixed,
   // possibly-clipping-if-the-panel-is-extremely-narrow two-row layout is far
   // more reliable. masks_toolbar_row1: add-group (masks_new_op_box) | shape
-  // buttons (masks_shapes_box) | add-raster (masks_raster_add_btn).
+  // buttons (masks_shapes_box).
   // masks_toolbar_row2: parametric channel buttons
-  // (masks_param_channels_box) | import/reuse (masks_import_btn). Of these,
+  // (masks_param_channels_box) | import (masks_import_btn). Of these,
   // only masks_shapes_box is shared with classic mode (via masks_shapes_row)
   // and needs re-homing on every layout pass; the rest are flexi-only and
   // are inserted here once, at construction (parametric buttons lazily,
@@ -1134,6 +1130,15 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void);
 // stays in sync without a full masks-list rebuild (which would interrupt an
 // in-progress slider drag).
 void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module);
+
+// remove one element from this module's mask, exactly as the panel's delete
+// does: only this module's use of it goes, and an emptied group stays in
+// place. The canvas's delete gestures come here too (see
+// dt_masks_remove_shape), so both behave the same
+void dt_iop_gui_blend_delete_element(dt_iop_module_t *module, const dt_mask_id_t id);
+/** the module's name changed: refresh the mask panels whose raster elements
+    are named after it */
+void dt_iop_gui_blend_module_renamed(dt_iop_module_t *module);
 
 // shape creation just ended for this module, so the flexi panel's pending-row
 // placeholder no longer has anything behind it. Queues the deferred rebuild
