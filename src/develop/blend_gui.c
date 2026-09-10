@@ -967,11 +967,11 @@ typedef struct dt_masks_param_row_editor_t
   GtkWidget *sliders_grid;
   GtkWidget *input_lbl;
   GtkWidget *input_slot;
-  // the bypass "eye" and the fixed-width column it lives in. The two are
-  // separate because they hide on different conditions: the column belongs to
-  // the slider row and goes only when that row does, while the eye inside it
-  // comes and goes with whether the channel has both sub-ranges in play. See
-  // _make_param_bypass_slot for why the column has to stay put.
+  // the bypass "eye" and the fixed-width box it lives in, laid over the right
+  // end of the slider row (input_slot/output_slot are those overlays). The two
+  // are separate because they hide on different conditions: the box goes only
+  // with its row, while the eye inside it comes and goes with whether the
+  // channel has both sub-ranges in play. See _make_param_bypass_slot.
   GtkWidget *input_bypass_btn;
   GtkWidget *input_bypass_slot;
   GtkWidget *output_lbl;
@@ -1023,6 +1023,9 @@ static void _set_form_target_ext(dt_iop_module_t *module,
                                  const dt_mask_id_t id,
                                  const gboolean auto_expand);
 static void _set_form_target(dt_iop_module_t *module, const dt_mask_id_t id);
+static void _element_chevron_clicked(dt_iop_module_t *module,
+                                     const dt_mask_id_t id,
+                                     const gboolean expanded);
 int _op_index_for_state(const int state);
 dt_mask_id_t _group_cid_of_form(dt_masks_form_t *grp, const dt_mask_id_t fid);
 static void _paint_param_inout(cairo_t *cr,
@@ -4556,8 +4559,8 @@ static void _props_row_toggled(GtkWidget *btn, dt_iop_module_t *module)
   // programmatic toggle still needs -- hence a separate, narrower flag.
   const gboolean is_group =
     GPOINTER_TO_INT(g_object_get_data(G_OBJECT(btn), "props-is-group"));
-  if(!bd->masks_suppress_toggle_select && !is_group && bd->panel_selected_formid != key)
-    _set_form_target(module, key);
+  if(!bd->masks_suppress_toggle_select && !is_group)
+    _element_chevron_clicked(module, key, active);
 
   if(!bd->masks_props_expanded)
     bd->masks_props_expanded = g_hash_table_new(g_direct_hash, g_direct_equal);
@@ -4653,6 +4656,28 @@ dt_mask_id_t _model_auto_expand_group_anchor(const dt_iop_gui_blend_data_t *bd)
   if(dt_is_valid_maskid(bd->panel_selected_group_cid))
     return bd->panel_selected_group_cid;
   return bd->masks_last_expanded_group;
+}
+
+// a real click on an element row's chevron decides what is open, not the
+// selection it also makes: expanding makes this row the one open element and
+// collapses the previous one, collapsing it forgets it. Without the option,
+// nothing moves.
+dt_masks_chevron_click_t _model_element_chevron_click(const dt_iop_gui_blend_data_t *bd,
+                                                      const dt_mask_id_t id,
+                                                      const gboolean expanded,
+                                                      const gboolean auto_expand)
+{
+  dt_masks_chevron_click_t c = { INVALID_MASKID, bd->masks_last_expanded_elem };
+  if(!auto_expand) return c;
+  if(expanded)
+  {
+    if(dt_is_valid_maskid(c.last_expanded) && c.last_expanded != id)
+      c.collapse = c.last_expanded;
+    c.last_expanded = id;
+  }
+  else if(c.last_expanded == id)
+    c.last_expanded = INVALID_MASKID;
+  return c;
 }
 
 // build the toggle button + docked editor pair shared by shape rows, raster
@@ -6406,12 +6431,10 @@ static void _masks_param_inout_toggled(GtkWidget *btn, dt_iop_module_t *module)
   dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(!form || !(form->type & DT_MASKS_PARAMETRIC) || !form->points) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  // acting on this row selects it if it wasn't already selected, but never
-  // deselects it -- same select-only rule as every other action control
-  // (see _set_form_target)
-  if(bd->panel_selected_formid != id) _set_form_target(module, id);
-  dt_masks_point_parametric_t *p = form->points->data;
   const uint32_t want = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(btn)) ? 1u : 0u;
+  // selects the row too, if it wasn't (never deselects)
+  _element_chevron_clicked(module, id, want != 0);
+  dt_masks_point_parametric_t *p = form->points->data;
 
   if(p->in_out == want) return;
   p->in_out = want;
@@ -7864,6 +7887,34 @@ static void _set_form_target_ext(dt_iop_module_t *module,
 static void _set_form_target(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   _set_form_target_ext(module, id, TRUE);
+}
+
+// a real click on an element row's chevron, props or parametric in/out alike
+// (shift+click on the row drives the same chevron). It also selects the row,
+// but that selection must not run auto-expand: the option would re-open a row
+// the click just collapsed, before the handler got to act on it.
+static void _element_chevron_clicked(dt_iop_module_t *module,
+                                     const dt_mask_id_t id,
+                                     const gboolean expanded)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const dt_masks_chevron_click_t c =
+    _model_element_chevron_click(bd, id, expanded, _auto_expand_selected());
+  if(dt_is_valid_maskid(c.collapse))
+  {
+    // programmatic: must not read as a click on that row's own chevron (see
+    // _props_row_toggled for the recursion this flag prevents)
+    const gboolean was = bd->masks_suppress_toggle_select;
+    bd->masks_suppress_toggle_select = TRUE;
+    _set_row_expanded(module, c.collapse, FALSE);
+    bd->masks_suppress_toggle_select = was;
+  }
+  bd->masks_last_expanded_elem = c.last_expanded;
+  if(bd->panel_selected_formid != id) _set_form_target_ext(module, id, FALSE);
+  // the release that toggled the chevron goes on to the row's own click
+  // surface, and _row_click_release would toggle an already selected row off
+  bd->masks_skip_group_select_release = TRUE;
+  bd->masks_skip_group_select_release_time = gtk_get_current_event_time();
 }
 
 // select an element by clicking its title. Clicking the title of an already-
@@ -12838,6 +12889,8 @@ dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
   return v;
 }
 
+static void _param_slider_fit_eye(dt_masks_param_row_editor_t *ed);
+
 static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
 {
   const dt_masks_point_parametric_t *p = _param_row_point(ed);
@@ -12857,10 +12910,10 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
   const gboolean show_boost = vis.boost;
   const gboolean show_bypass = vis.bypass;
 
-  // the eye and the column it sits in hide on different conditions: the column
-  // follows its slider row, so an absent row costs no height, while the eye
-  // follows show_bypass. Hiding the column with the eye would let the sliders
-  // reclaim its width and shift sideways (see _make_param_bypass_slot).
+  // the eye and the box it sits in hide on different conditions: the box
+  // follows its slider row, while the eye follows show_bypass. The box keeps
+  // its width either way, which is what the slider's margin is fitted to (see
+  // _param_slider_fit_eye).
   if(ed->input_lbl) gtk_widget_set_visible(ed->input_lbl, show_input);
   if(ed->input_slot) gtk_widget_set_visible(ed->input_slot, show_input);
   if(ed->input_bypass_slot)
@@ -12897,6 +12950,9 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
     gtk_widget_set_visible(ed->opacity_box, vis.opacity);
     gtk_widget_queue_resize(ed->opacity_box);
   }
+
+  // the eye boxes may only just have been shown
+  _param_slider_fit_eye(ed);
 }
 
 // refresh this row's own slider markers/values/labels/boost-slider display from
@@ -14171,6 +14227,42 @@ static void _build_param_row_filter(dt_iop_gui_blendif_filter_t *sl, const int i
   sl->box = NULL;
 }
 
+// the eye floats over the right end of its slider row instead of taking a
+// grid column of its own, and the slider gives back the eye's width less the
+// room its bar keeps for a handle at 1.0: the bar then ends where the eye
+// starts, flush with the header's opacity value above it, whatever the marker
+// shape or font size. The handle at 1.0 reaches under the eye's left margin.
+// Run on style changes, not size-allocate: a resize queued from inside an
+// allocation is dropped, and the margin would wait for some later relayout.
+static void _param_slider_fit_eye(dt_masks_param_row_editor_t *ed)
+{
+  GtkWidget *eyes[2] = { ed->input_bypass_slot, ed->output_bypass_slot };
+  for(int i = 0; i < 2; i++)
+  {
+    GtkWidget *slider = GTK_WIDGET(ed->filter[i].slider);
+    if(!slider || !eyes[i]) continue;
+    gint eye_w = 0;
+    gtk_widget_get_preferred_width(eyes[i], &eye_w, NULL);
+    // no width yet (unstyled, or hidden with its row): the next style change
+    // or _update_param_row_visibility tries again
+    if(eye_w <= 0) continue;
+    const int inset =
+      dtgtk_gradient_slider_get_right_inset(DTGTK_GRADIENT_SLIDER(slider));
+    const int margin = MAX(0, eye_w - inset);
+    if(gtk_widget_get_margin_end(slider) != margin)
+      gtk_widget_set_margin_end(slider, margin);
+  }
+}
+
+// connected with g_signal_connect_object on the editor box, which owns ed
+// (freed with it), so this is disconnected before ed goes away
+static void _param_slider_style_updated(GtkWidget *widget,
+                                        GtkWidget *wrap)
+{
+  dt_masks_param_row_editor_t *ed = g_object_get_data(G_OBJECT(wrap), "param-editor");
+  if(ed) _param_slider_fit_eye(ed);
+}
+
 // the "temporarily disable this channel" eye that sits at the right end of a
 // parametric row's input/output slider
 static GtkWidget *_make_param_bypass_btn(const char *tooltip,
@@ -14190,24 +14282,24 @@ static GtkWidget *_make_param_bypass_btn(const char *tooltip,
   return btn;
 }
 
-// the fixed-width column the eye above lives in.
+// the fixed-width box the eye above lives in, laid over the right end of its
+// slider row (see _param_slider_fit_eye).
 //
 // The eye comes and goes with whether the channel has both sub-ranges in play
-// (see _update_param_row_visibility), and attaching it to the grid directly
-// meant the grid's third column collapsed with it -- so the sliders grew and
-// shrank by the width of an icon as the user edited, which reads as the whole
-// row jumping sideways. The column holds its width whether or not the eye is
-// in it; only the eye itself is ever hidden.
+// (see _update_param_row_visibility); the box keeps its width whether or not
+// the eye is in it, so the slider's margin does not change as the user edits.
 //
 // That width is the row header's expander button, and the editor's right edge
 // is flush with the header's (see .mask-param-row-editor in darktable.css), so
-// the eyes stack directly under the expander instead of forming a second,
-// slightly-offset column of their own.
+// the eyes stack directly under the expander.
 static GtkWidget *_make_param_bypass_slot(GtkWidget *btn)
 {
   GtkWidget *slot = dt_gui_hbox();
   dt_gui_add_class(slot, "mask-param-bypass-slot");
-  dt_gui_box_add(slot, dt_gui_expand(btn));
+  // an overlay child fills the overlay unless told otherwise
+  gtk_widget_set_halign(slot, GTK_ALIGN_END);
+  gtk_widget_set_valign(slot, GTK_ALIGN_CENTER);
+  dt_gui_box_add(slot, btn);
   return slot;
 }
 
@@ -14388,14 +14480,25 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_widget_set_hexpand(input_slot, TRUE);
   gtk_widget_set_valign(GTK_WIDGET(ed->filter[0].slider), GTK_ALIGN_CENTER);
   dt_gui_box_add(input_slot, dt_gui_expand(ed->filter[0].slider));
-  gtk_grid_attach(GTK_GRID(sliders_grid), input_slot, 1, 0, 1, 1);
-  ed->input_slot = input_slot;
 
   GtkWidget *input_bypass_btn =
     _make_param_bypass_btn(_("temporarily disable this input channel"), ed);
   ed->input_bypass_slot = _make_param_bypass_slot(input_bypass_btn);
-  gtk_grid_attach(GTK_GRID(sliders_grid), ed->input_bypass_slot, 2, 0, 1, 1);
   ed->input_bypass_btn = input_bypass_btn;
+
+  // an overlay, not a grid column: the slider is a windowed widget, so the eye
+  // would otherwise be painted over wherever the two share pixels
+  GtkWidget *input_overlay = gtk_overlay_new();
+  // the overlay is no_show_all (below), so nothing else shows what is in it
+  gtk_widget_show_all(input_slot);
+  gtk_container_add(GTK_CONTAINER(input_overlay), input_slot);
+  gtk_overlay_add_overlay(GTK_OVERLAY(input_overlay), ed->input_bypass_slot);
+  // clicks on the eye box's empty space, with the eye hidden, reach the slider
+  gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(input_overlay),
+                                       ed->input_bypass_slot, TRUE);
+  gtk_widget_set_hexpand(input_overlay, TRUE);
+  gtk_grid_attach(GTK_GRID(sliders_grid), input_overlay, 1, 0, 1, 1);
+  ed->input_slot = input_overlay;
 
   GtkWidget *output_lbl = _make_icon_widget(_paint_param_output);
   gtk_widget_set_tooltip_text(output_lbl, _(slider_tooltip[1]));
@@ -14407,14 +14510,25 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   gtk_widget_set_hexpand(output_slot, TRUE);
   gtk_widget_set_valign(GTK_WIDGET(ed->filter[1].slider), GTK_ALIGN_CENTER);
   dt_gui_box_add(output_slot, dt_gui_expand(ed->filter[1].slider));
-  gtk_grid_attach(GTK_GRID(sliders_grid), output_slot, 1, 1, 1, 1);
-  ed->output_slot = output_slot;
 
   GtkWidget *output_bypass_btn =
     _make_param_bypass_btn(_("temporarily disable this output channel"), ed);
   ed->output_bypass_slot = _make_param_bypass_slot(output_bypass_btn);
-  gtk_grid_attach(GTK_GRID(sliders_grid), ed->output_bypass_slot, 2, 1, 1, 1);
   ed->output_bypass_btn = output_bypass_btn;
+
+  // an overlay, not a grid column: the slider is a windowed widget, so the eye
+  // would otherwise be painted over wherever the two share pixels
+  GtkWidget *output_overlay = gtk_overlay_new();
+  // the overlay is no_show_all (below), so nothing else shows what is in it
+  gtk_widget_show_all(output_slot);
+  gtk_container_add(GTK_CONTAINER(output_overlay), output_slot);
+  gtk_overlay_add_overlay(GTK_OVERLAY(output_overlay), ed->output_bypass_slot);
+  // clicks on the eye box's empty space, with the eye hidden, reach the slider
+  gtk_overlay_set_overlay_pass_through(GTK_OVERLAY(output_overlay),
+                                       ed->output_bypass_slot, TRUE);
+  gtk_widget_set_hexpand(output_overlay, TRUE);
+  gtk_grid_attach(GTK_GRID(sliders_grid), output_overlay, 1, 1, 1, 1);
+  ed->output_slot = output_overlay;
 
   ed->sliders_grid = sliders_grid;
 
@@ -14429,6 +14543,12 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
 
   _update_param_row_display(ed);
   g_object_set_data_full(G_OBJECT(wrap), "param-editor", ed, g_free);
+
+  GtkWidget *fit_on_style[] = { GTK_WIDGET(ed->filter[0].slider), ed->input_bypass_slot,
+                                GTK_WIDGET(ed->filter[1].slider), ed->output_bypass_slot };
+  for(int i = 0; i < G_N_ELEMENTS(fit_on_style); i++)
+    g_signal_connect_object(G_OBJECT(fit_on_style[i]), "style-updated",
+                            G_CALLBACK(_param_slider_style_updated), wrap, 0);
 
   gtk_widget_show_all(wrap);
   gtk_widget_set_no_show_all(ed->input_lbl, TRUE);

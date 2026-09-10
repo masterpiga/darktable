@@ -729,6 +729,19 @@ static void _gradient_slider_get_preferred_width(GtkWidget *widget,
   DTGTK_GRADIENT_SLIDER(widget)->margin_right = padding.right + border.right + margin.right + hpad;
 }
 
+gint dtgtk_gradient_slider_get_right_inset(GtkDarktableGradientSlider *gslider)
+{
+  GtkWidget *widget = GTK_WIDGET(gslider);
+  GtkStyleContext *context = gtk_widget_get_style_context(widget);
+  const GtkStateFlags state = gtk_widget_get_state_flags(widget);
+  GtkBorder margin, border, padding;
+  gtk_style_context_get_margin(context, state, &margin);
+  gtk_style_context_get_border(context, state, &border);
+  gtk_style_context_get_padding(context, state, &padding);
+  return padding.right + border.right + margin.right
+    + _marker_h_padding(widget, _marker_shape());
+}
+
 static void _gradient_slider_dispose(GObject *object)
 {
   g_return_if_fail(DTGTK_IS_GRADIENT_SLIDER(object));
