@@ -93,11 +93,6 @@ int position(const dt_lib_module_t *self)
 GtkWidget *gui_tool_box(dt_lib_module_t *self)
 {
   dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
-  if(!d->actions_box)
-  {
-    d->actions_box = GTK_BOX(dt_gui_hbox());
-    darktable.develop->proxy.masks_flexi_host.actions_box = d->actions_box;
-  }
   return GTK_WIDGET(d->actions_box);
 }
 
@@ -163,8 +158,12 @@ void gui_init(dt_lib_module_t *self)
 
   d->content_box = GTK_BOX(dt_gui_vbox());
   gtk_widget_set_name(GTK_WIDGET(d->content_box), "masks-flexi-host-content");
-  d->actions_box = GTK_BOX(dt_gui_hbox());
-  d->toggle_box = GTK_BOX(dt_gui_hbox());
+  // both live in the expander header, which view.c destroys on every view
+  // leave and rebuilds on enter: own them, and take them out of the header
+  // before it goes (see view_leave), or the next darkroom visit packs dead
+  // widgets and the mask's on/off toggle and overlay button vanish with them
+  d->actions_box = GTK_BOX(g_object_ref_sink(dt_gui_hbox()));
+  d->toggle_box = GTK_BOX(g_object_ref_sink(dt_gui_hbox()));
   gtk_widget_set_valign(GTK_WIDGET(d->actions_box), GTK_ALIGN_CENTER);
   gtk_widget_set_valign(GTK_WIDGET(d->toggle_box), GTK_ALIGN_CENTER);
   gtk_widget_show(GTK_WIDGET(d->actions_box));
@@ -286,6 +285,23 @@ void view_enter(dt_lib_module_t *self,
   }
 }
 
+void view_leave(dt_lib_module_t *self,
+                struct dt_view_t *old_view,
+                struct dt_view_t *new_view)
+{
+  dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
+  if(!d) return;
+  GtkWidget *boxes[] = { GTK_WIDGET(d->toggle_box), GTK_WIDGET(d->actions_box) };
+  for(int i = 0; i < G_N_ELEMENTS(boxes); i++)
+  {
+    GtkWidget *parent = boxes[i] ? gtk_widget_get_parent(boxes[i]) : NULL;
+    if(parent) gtk_container_remove(GTK_CONTAINER(parent), boxes[i]);
+  }
+  // they point into the same header; view_enter finds them again in the new one
+  darktable.develop->proxy.masks_flexi_host.header_label = NULL;
+  darktable.develop->proxy.masks_flexi_host.label_evb = NULL;
+}
+
 void gui_cleanup(dt_lib_module_t *self)
 {
   DT_CONTROL_SIGNAL_DISCONNECT(_history_change_callback, self);
@@ -299,6 +315,12 @@ void gui_cleanup(dt_lib_module_t *self)
   darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
   darktable.develop->proxy.masks_flexi_host.reconfigure = NULL;
 
+  dt_lib_masks_flexi_host_t *d = (dt_lib_masks_flexi_host_t *)self->data;
+  if(d)
+  {
+    g_clear_object(&d->actions_box);
+    g_clear_object(&d->toggle_box);
+  }
   g_free(self->data);
   self->data = NULL;
 }
