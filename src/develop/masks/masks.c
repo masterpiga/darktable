@@ -2507,7 +2507,7 @@ dt_hash_t dt_masks_group_hash_ext(dt_hash_t hash,
 }
 
 // adds formid to used array
-// if formid is a group it adds all the forms that belongs to that group
+// if formid is a group or an AI object it adds all the forms that belong to it
 static void _cleanup_unused_recurs(GList *forms,
                                    const dt_mask_id_t formid,
                                    int *used,
@@ -2525,9 +2525,10 @@ static void _cleanup_unused_recurs(GList *forms,
     if(used[i] == formid) break;
   }
 
-  // if the form is a group, we iterate through the sub-forms
+  // if the form is a group or an AI object, we iterate through the sub-forms:
+  // an object's paths are separate forms that only it refers to
   const dt_masks_form_t *form = dt_masks_get_from_id_ext(forms, formid);
-  if(form && (form->type & DT_MASKS_GROUP))
+  if(form && (form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT)))
   {
     for(GList *grpts = form->points; grpts; grpts = g_list_next(grpts))
     {
@@ -2535,6 +2536,53 @@ static void _cleanup_unused_recurs(GList *forms,
       _cleanup_unused_recurs(forms, grpt->formid, used, nb);
     }
   }
+}
+
+static gboolean _object_is_empty(GList *forms, const dt_masks_form_t *obj)
+{
+  for(const GList *p = obj->points; p; p = g_list_next(p))
+    if(dt_masks_get_from_id_ext(forms, ((dt_masks_point_group_t *)p->data)->formid))
+      return FALSE;
+  return TRUE;
+}
+
+int dt_masks_prune_empty_objects(GList **forms)
+{
+  int removed = 0;
+  GList *l = *forms;
+  while(l)
+  {
+    dt_masks_form_t *obj = l->data;
+    l = g_list_next(l);
+    if(!(obj->type & DT_MASKS_OBJECT) || !_object_is_empty(*forms, obj)) continue;
+
+    for(GList *g = *forms; g; g = g_list_next(g))
+    {
+      dt_masks_form_t *grp = g->data;
+      if(!(grp->type & DT_MASKS_GROUP)) continue;
+      GList *p = grp->points;
+      while(p)
+      {
+        GList *next = g_list_next(p);
+        dt_masks_point_group_t *pt = p->data;
+        if(pt->formid == obj->formid)
+        {
+          // members of a run share its operator, so the member above a
+          // removed head only needs the break to keep the run apart
+          if(pt->group_start && next && p->prev)
+            ((dt_masks_point_group_t *)next->data)->group_start = 1;
+          grp->points = g_list_delete_link(grp->points, p);
+          free(pt);
+        }
+        p = next;
+      }
+    }
+    *forms = g_list_remove(*forms, obj);
+    // freed with the rest of the dropped forms, as by the cleanup below
+    darktable.develop->allforms = g_list_append(darktable.develop->allforms, obj);
+    removed++;
+  }
+  return removed;
 }
 
 // removes from _forms, the snapshot history item `start` carries, every form
@@ -2548,7 +2596,7 @@ static int _masks_cleanup_unused(GList **_forms,
                                  const int start,
                                  const int end)
 {
-  int masks_removed = 0;
+  int masks_removed = dt_masks_prune_empty_objects(_forms) ? 1 : 0;
   GList *forms = *_forms;
 
   // we create a table to store the ids of used forms

@@ -1053,6 +1053,11 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, dt_mask_id_t formid);
 // transiently highlight its row, or its cluster's header if that cluster is
 // collapsed. INVALID_MASKID clears the transient highlight. No-op outside flexi.
 void dt_iop_gui_masks_hover_form(dt_iop_module_t *module, dt_mask_id_t formid);
+// the canvas stepped into or out of an AI object: the panel lists the paths
+// of the one stepped into
+void dt_iop_gui_masks_entered_object_changed(dt_iop_module_t *module);
+// a click on empty canvas: nothing is selected in the panel any more
+void dt_iop_gui_masks_clear_selection(dt_iop_module_t *module);
 void dt_iop_gui_cleanup_blending(dt_iop_module_t *module);
 void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module);
 // symmetric counterpart, called when a module gains focus: relocates the

@@ -392,10 +392,6 @@ GList *_model_import_forms(dt_iop_module_t *module,
 /** replace linked form `fid` in `module`'s mask with its own copy, carrying
     the panel's references over. Returns the copy's id. Records no history. */
 dt_mask_id_t _model_unlink_form(dt_iop_module_t *module, const dt_mask_id_t fid);
-/** "break into components": the AI object `id` becomes its paths, in its
-    place in `module`'s mask. A linked object is unlinked first, so the other
-    modules keep it whole. Records no history */
-gboolean _model_break_apart(dt_iop_module_t *module, dt_mask_id_t id);
 /** the name a row shows: the form's own without its type prefix, or for a
     raster element named by its type alone, its source's current name */
 gchar *_form_display_name(const dt_masks_form_t *form);
