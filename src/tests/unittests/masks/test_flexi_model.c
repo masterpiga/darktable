@@ -258,6 +258,95 @@ static void test_drop_emptying_group_leaves_placeholder(void **state)
   assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
 }
 
+// ---------------------------------------------------------------------------
+// members whose form is gone
+// ---------------------------------------------------------------------------
+
+// the form leaves dev->forms' lookup by moving to an id nothing references, so
+// the fixture still owns and frees it
+static void _lose_form(const dt_mask_id_t fid)
+{
+  dt_masks_get_from_id(&flexi_dev, fid)->formid = 999999;
+}
+
+// a group of them has no row to head it, so the panel could show neither it
+// nor the empty groups anchored on it
+static void test_prune_drops_a_group_of_lost_members(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _lose_form(3);
+  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_layout("u:1,2");
+}
+
+// the edit that hid every new group: one lost form, referenced three times
+static void test_prune_drops_every_reference_to_a_lost_form(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  for(int k = 0; k < 2; k++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = 2;
+    pt->state = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_USE;
+    pt->opacity = 1.0f;
+    grp->points = g_list_append(grp->points, pt);
+  }
+  _lose_form(2);
+  assert_int_equal(_model_prune_dangling_members(grp), 3);
+  assert_layout("u:1");
+}
+
+// a lost head leaves the rest of its group, and the groups around it, as they were
+static void test_prune_keeps_the_rest_of_a_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2,3 | d:4");
+  _lose_form(2);
+  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_layout("u:1 | i:3 | d:4");
+}
+
+static void test_prune_without_lost_members_changes_nothing(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  assert_int_equal(_model_prune_dangling_members(grp), 0);
+  assert_layout("u:1,2 | i:3");
+}
+
+// ---------------------------------------------------------------------------
+// the panel always shows a group
+// ---------------------------------------------------------------------------
+
+// a mask of lost members only, as in the edit that hid every group: once they
+// are dropped, one empty group stands in for them
+static void test_lost_members_only_leave_one_empty_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  _lose_form(1);
+  _lose_form(2);
+  _model_prune_dangling_members(grp);
+  assert_true(_model_ensure_a_group(&flexi_bd, grp));
+  assert_null(grp->points);
+  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+  // and only one
+  assert_false(_model_ensure_a_group(&flexi_bd, grp));
+  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+}
+
+static void test_ensure_a_group_leaves_a_populated_mask_alone(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  assert_false(_model_ensure_a_group(&flexi_bd, grp));
+  assert_null(flexi_bd.empty_groups);
+}
+
+// no mask group at all (reset, or never drawn) still gets one
+static void test_ensure_a_group_without_a_mask_group(void **state)
+{
+  flexi_build("u:1");
+  assert_true(_model_ensure_a_group(&flexi_bd, NULL));
+  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+}
+
 static void test_drop_onto_self_is_rejected(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
@@ -1571,6 +1660,13 @@ int main(void)
     cmocka_unit_test_teardown(test_drop_between_same_op_groups_keeps_both, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_bottom_group, _teardown),
     cmocka_unit_test_teardown(test_drop_emptying_group_leaves_placeholder, _teardown),
+    cmocka_unit_test_teardown(test_prune_drops_a_group_of_lost_members, _teardown),
+    cmocka_unit_test_teardown(test_prune_drops_every_reference_to_a_lost_form, _teardown),
+    cmocka_unit_test_teardown(test_prune_keeps_the_rest_of_a_group, _teardown),
+    cmocka_unit_test_teardown(test_prune_without_lost_members_changes_nothing, _teardown),
+    cmocka_unit_test_teardown(test_lost_members_only_leave_one_empty_group, _teardown),
+    cmocka_unit_test_teardown(test_ensure_a_group_leaves_a_populated_mask_alone, _teardown),
+    cmocka_unit_test_teardown(test_ensure_a_group_without_a_mask_group, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_self_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_drop_of_unknown_element_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_drop_keeps_element_selected_in_new_group, _teardown),

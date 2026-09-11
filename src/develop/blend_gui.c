@@ -1499,6 +1499,15 @@ typedef struct dt_masks_props_row_editor_t
 
 static void _refine_scope_combo_rebuild(dt_iop_module_t *module);
 static void _empty_groups_clear(dt_iop_gui_blend_data_t *bd);
+static gboolean _moves_up(dt_iop_module_t *module,
+                          const dt_mask_id_t src,
+                          const struct dt_masks_empty_group_t *eg,
+                          const dt_mask_id_t dst);
+static void _keep_emptied_group(dt_iop_gui_blend_data_t *bd,
+                                dt_masks_form_t *grp,
+                                struct dt_masks_empty_group_t *emptied,
+                                GList *moved,
+                                const gboolean moved_up);
 static void _update_add_target_sensitivity(dt_iop_module_t *module);
 static void _update_refine_sensitivity(dt_iop_module_t *module);
 static void _set_group_target_ext(dt_iop_module_t *module,
@@ -3552,6 +3561,40 @@ static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t c
 {
   const dt_masks_point_group_t *pt = _group_point(grp, cid);
   return (pt && pt->name[0]) ? pt->name : NULL;
+}
+
+// a group has no record of its own: every member carries a copy of its
+// settings (the operator and within-group bits of `state`, name, group
+// opacity, group refinement), and the renderer and the panel read them off
+// its first member. One that moves into a group takes them all from `from`,
+// that group's first member, or the group would take its old group's settings
+// the moment it became the first. Its own element refinement stays, unless the
+// group has a refinement, which overrides members' as it does when set (see
+// _refine_commit_nonglobal)
+static void _join_group(dt_masks_point_group_t *pt, const dt_masks_point_group_t *from)
+{
+  const int group_bits = DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN;
+  pt->state = (pt->state & ~group_bits) | (from->state & group_bits);
+  g_strlcpy(pt->name, from->name, sizeof(pt->name));
+  pt->group_opacity = from->group_opacity;
+  if(from->refinement.enabled == DT_MASKS_REFINE_GROUP)
+    pt->refinement = from->refinement;
+  else if(pt->refinement.enabled == DT_MASKS_REFINE_GROUP)
+    pt->refinement = (dt_masks_refinement_t){ 0 };
+}
+
+// the same for an empty group, from the settings staged on it: union unless it
+// has an operator, fully opaque
+static void _join_empty_group(dt_masks_point_group_t *pt, const dt_masks_empty_group_t *eg)
+{
+  dt_masks_point_group_t from = { 0 };
+  from.state = ((eg->op & DT_MASKS_STATE_OP) ? (eg->op & DT_MASKS_STATE_OP)
+                                              : DT_MASKS_STATE_UNION)
+               | (eg->within & DT_MASKS_STATE_WITHIN);
+  from.group_opacity = 1.0f;
+  from.refinement = eg->refinement;
+  if(eg->name) g_strlcpy(from.name, eg->name, sizeof(from.name));
+  _join_group(pt, &from);
 }
 
 // ===========================================================================
@@ -7583,6 +7626,7 @@ gboolean _model_drop_element_onto_element(dt_iop_module_t *module,
 
   // if this empties src's group, keep it alive as an empty-group placeholder
   struct dt_masks_empty_group_t *emptied = _capture_emptied_group(grp, src);
+  const gboolean up = _moves_up(module, src, NULL, dst);
   // first-class groups: snapshot the partition, then make the dragged shape
   // join the target shape's group (adopt its key + operator). Re-stamping
   // from the key map keeps every OTHER group distinct even when operators
@@ -7591,9 +7635,8 @@ gboolean _model_drop_element_onto_element(dt_iop_module_t *module,
   GHashTable *keys = _group_keys_snapshot(grp);
   const gpointer dkey = g_hash_table_lookup(keys, GINT_TO_POINTER(dst));
   g_hash_table_insert(keys, GINT_TO_POINTER(src), dkey);
-  const dt_masks_point_group_t *dpt = _group_point(grp, dst);
-  if(dpt)
-    spt->state = (spt->state & ~DT_MASKS_STATE_OP) | (dpt->state & DT_MASKS_STATE_OP);
+  const dt_masks_point_group_t *dhead = _group_point(grp, _group_cid_of_form(grp, dst));
+  if(dhead) _join_group(spt, dhead);
 
   grp->points = g_list_remove(grp->points, spt);
   int tgt = 0, idx = 0;
@@ -7608,7 +7651,9 @@ gboolean _model_drop_element_onto_element(dt_iop_module_t *module,
   g_hash_table_destroy(keys);
 
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(emptied) bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+  GList *moved = g_list_prepend(NULL, GINT_TO_POINTER(src));
+  _keep_emptied_group(bd, grp, emptied, moved, up);
+  g_list_free(moved);
   _normalize_group_operators(grp);
   _verify_element_joined(grp, src, dst, "row drop");
 
@@ -7942,9 +7987,9 @@ gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
   const dt_masks_point_group_t *dp = _group_point(grp, dst);
   if(!sp || !dp || already) return FALSE;
 
-  const dt_masks_state_t op = dp->state & DT_MASKS_STATE_OP;
   // if this empties src's group, keep it alive as an empty-group placeholder
   struct dt_masks_empty_group_t *emptied = _capture_emptied_group(grp, src);
+  const gboolean up = _moves_up(module, src, NULL, dst);
   // first-class groups: preserve the partition across the move so the other
   // groups stay distinct even when operators coincide. The moved shape joins
   // the target group (adopts its key + operator).
@@ -7958,14 +8003,16 @@ gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
   const int firstidx = _run_extent(grp, dst_run2, &last);
   int at = (firstidx < 0) ? (int)g_list_length(grp->points) : last + 1;
   if(at < 1) at = 1; // never displace the base shape from the bottom
-  sp->state = (sp->state & ~DT_MASKS_STATE_OP) | op;
+  _join_group(sp, dp);
   grp->points = g_list_insert(grp->points, sp, at);
   g_list_free(dst_run2);
   _group_keys_apply(grp, keys);
   g_hash_table_destroy(keys);
 
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(emptied) bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+  GList *moved = g_list_prepend(NULL, GINT_TO_POINTER(src));
+  _keep_emptied_group(bd, grp, emptied, moved, up);
+  g_list_free(moved);
   _normalize_group_operators(grp);
   _verify_element_joined(grp, src, dst, "group-header drop");
 
@@ -9384,6 +9431,58 @@ static struct dt_masks_empty_group_t *_capture_emptied_group_multi(dt_masks_form
   return eg;
 }
 
+// whether a move of element `src` goes up the panel: to the empty group `eg`,
+// or else to the group element `dst` is in, above src's own group. Asked
+// before the move, of the panel's own order (see _masks_visual_group_order)
+static gboolean _moves_up(dt_iop_module_t *module,
+                          const dt_mask_id_t src,
+                          const struct dt_masks_empty_group_t *eg,
+                          const dt_mask_id_t dst)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const dt_mask_id_t src_cid = _group_cid_of_form(grp, src);
+  const dt_mask_id_t dst_cid = eg ? INVALID_MASKID : _group_cid_of_form(grp, dst);
+  GList *order = _masks_visual_group_order(module);
+  int i = 0, src_at = -1, dst_at = -1;
+  for(GList *l = order; l; l = g_list_next(l), i++)
+  {
+    const _dt_masks_order_item_t *it = l->data;
+    if(!it->is_empty && it->cid == src_cid) src_at = i;
+    if(eg ? (it->is_empty && it->eg == eg) : (!it->is_empty && it->cid == dst_cid))
+      dst_at = i;
+  }
+  g_list_free_full(order, g_free);
+  return dst_at > src_at;
+}
+
+// keep the placeholder of a group a move just emptied (see the two captures
+// above) where that group was, so a move never swaps two groups. It is
+// anchored on what sat below the group before the move. Moved elements that
+// landed right on top of that anchor, or at the very bottom when there was
+// none, took the group's own slot: going down they sit below it, so the
+// placeholder anchors on them; going up they sit above it, which the old
+// anchor already gives. `moved` holds the moved elements' ids, `moved_up` is
+// _moves_up asked before the move
+static void _keep_emptied_group(dt_iop_gui_blend_data_t *bd,
+                                dt_masks_form_t *grp,
+                                struct dt_masks_empty_group_t *emptied,
+                                GList *moved,
+                                const gboolean moved_up)
+{
+  if(!emptied) return;
+  for(GList *l = moved_up ? NULL : grp->points; l; l = g_list_next(l))
+  {
+    const dt_mask_id_t fid = ((dt_masks_point_group_t *)l->data)->formid;
+    if(!g_list_find(moved, GINT_TO_POINTER(fid))) continue;
+    // the lowest moved element, and what it now sits on
+    const dt_mask_id_t under =
+      l->prev ? ((dt_masks_point_group_t *)l->prev->data)->formid : INVALID_MASKID;
+    if(under == emptied->below_fid) emptied->below_fid = fid;
+    break;
+  }
+  bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+}
+
 // move every member of a dragged cluster together, preserving their relative
 // (bottom-up) order, to the position/group a drop indicates -- the same move
 // _masks_row_drag_received / _masks_shape_to_group_drop do for one shape,
@@ -9420,6 +9519,7 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
   if(!ordered) return FALSE;
 
   struct dt_masks_empty_group_t *emptied = _capture_emptied_group_multi(grp, member_ids);
+  const gboolean up = _moves_up(module, GPOINTER_TO_INT(member_ids->data), NULL, dst);
 
   // preserve every OTHER group's partition (same trick as a single-shape move):
   // snapshot every point's group key, then remap every moved member's key to
@@ -9431,9 +9531,7 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
     g_hash_table_insert(
       keys, GINT_TO_POINTER(((dt_masks_point_group_t *)l->data)->formid), dkey);
 
-  const dt_masks_point_group_t *dpt = _group_point(grp, dst);
-  const dt_masks_state_t dst_op =
-    dpt ? (dpt->state & DT_MASKS_STATE_OP) : DT_MASKS_STATE_UNION;
+  const dt_masks_point_group_t *dhead = _group_point(grp, _group_cid_of_form(grp, dst));
 
   for(GList *l = ordered; l; l = g_list_next(l))
     grp->points = g_list_remove(grp->points, l->data);
@@ -9464,14 +9562,14 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
   for(GList *l = ordered; l; l = g_list_next(l), pos++)
   {
     dt_masks_point_group_t *pt = l->data;
-    pt->state = (pt->state & ~DT_MASKS_STATE_OP) | dst_op;
+    if(dhead) _join_group(pt, dhead);
     grp->points = g_list_insert(grp->points, pt, pos);
   }
   g_list_free(ordered);
 
   _group_keys_apply(grp, keys);
   g_hash_table_destroy(keys);
-  if(emptied) bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+  _keep_emptied_group(bd, grp, emptied, member_ids, up);
   _normalize_group_operators(grp);
   return TRUE;
 }
@@ -10509,6 +10607,42 @@ static void _detach_group_members(dt_masks_form_t *grp, GList *fids)
 
   _group_keys_apply(grp, keys);
   g_hash_table_destroy(keys);
+}
+
+// members whose form is gone from dev->forms. They render nothing (see
+// _group_get_mask_roi_flexi), but a run made only of them has no row to head
+// it, so the panel can show neither that group nor the empty groups anchored
+// on it, and they count as members when the last real one is deleted. Dropped
+// like any other detach, once per point: a form can be referenced more than
+// once. Returns how many went
+int _model_prune_dangling_members(dt_masks_form_t *grp)
+{
+  GList *gone = NULL;
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    const dt_mask_id_t fid = ((dt_masks_point_group_t *)l->data)->formid;
+    if(!dt_masks_get_from_id(darktable.develop, fid))
+      gone = g_list_prepend(gone, GINT_TO_POINTER(fid));
+  }
+  const int n = g_list_length(gone);
+  if(gone) _detach_group_members(grp, gone);
+  g_list_free(gone);
+  return n;
+}
+
+// the flexi panel always shows at least one group, possibly empty: with no
+// element and no empty group left, the foundation (union) group comes back as
+// an empty one. That is the whole condition once the members whose form is
+// gone are dropped (see _model_prune_dangling_members): every member left then
+// heads a group or sits in one, and every empty group is packed. Returns
+// whether it had to add one
+gboolean _model_ensure_a_group(dt_iop_gui_blend_data_t *bd, dt_masks_form_t *grp)
+{
+  if((grp && grp->points) || bd->empty_groups) return FALSE;
+  bd->empty_groups = g_list_append(bd->empty_groups,
+                                   _empty_group_new(DT_MASKS_STATE_UNION, 0, INVALID_MASKID));
+  bd->scaffold_seeded = TRUE;
+  return TRUE;
 }
 
 // remove every member shape of a group from the module's mask group. The group
@@ -11811,22 +11945,18 @@ gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
     }
   if(!sp) return FALSE;
 
-  const dt_masks_state_t op = (eg->op & DT_MASKS_STATE_OP)
-                                ? (eg->op & DT_MASKS_STATE_OP)
-                                : DT_MASKS_STATE_UNION;
   // if moving src empties its old group, keep that group alive as a placeholder
   struct dt_masks_empty_group_t *emptied = _capture_emptied_group(grp, src);
+  const gboolean up = _moves_up(module, src, eg, INVALID_MASKID);
   // first-class groups: snapshot the partition so the group the shape leaves
   // stays distinct from its neighbours even when operators coincide. The shape
   // realizes a BRAND-NEW group, so it is forced to its own head below.
   GHashTable *keys = _group_keys_snapshot(grp);
   g_hash_table_insert(keys, GINT_TO_POINTER(src), GINT_TO_POINTER(src));
-  grp->points = g_list_remove(grp->points, sp);
-  sp->state = (sp->state & ~DT_MASKS_STATE_OP) | op;
-  sp->state =
-    (sp->state & ~DT_MASKS_STATE_WITHIN) | (eg->within & DT_MASKS_STATE_WITHIN);
   // position: just above the run anchored below this empty group; a
-  // bottom-anchored empty (below INVALID) puts the shape at the bottom (base)
+  // bottom-anchored empty (below INVALID) puts the shape at the bottom (base).
+  // Found before src leaves, since the anchor may be src itself, then shifted
+  // down if src sat below it
   int at = 0;
   if(dt_is_valid_maskid(eg->below_fid))
   {
@@ -11836,6 +11966,11 @@ gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
     at = (firstidx < 0) ? (int)g_list_length(grp->points) : last + 1;
     g_list_free(run);
   }
+  if(g_list_index(grp->points, sp) < at) at--;
+  grp->points = g_list_remove(grp->points, sp);
+  // its settings, name and refinement included, are the ones staged on the
+  // empty group while it had no members (see dt_masks_empty_group_t)
+  _join_empty_group(sp, eg);
   grp->points = g_list_insert(grp->points, sp, at);
   // re-anchor later siblings sharing this anchor, then drop the empty group
   GList *node = g_list_find(bd->empty_groups, eg);
@@ -11845,9 +11980,6 @@ gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
     if(s->below_fid == eg->below_fid) s->below_fid = src;
   }
   if(bd->selected_empty == eg) bd->selected_empty = NULL;
-  // adopt any refinement staged while the group had no members (see
-  // dt_masks_empty_group_t.refinement); sp is the realized run's sole member
-  if(eg->refinement.enabled) sp->refinement = eg->refinement;
   // and its number, so filling a group by drop does not renumber it
   if(eg->ordinal > 0)
   {
@@ -11856,13 +11988,13 @@ gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
     g_hash_table_insert(bd->group_ordinals, GINT_TO_POINTER(sp->formid),
                         GINT_TO_POINTER(eg->ordinal));
   }
-  // and its custom name, if it was named while still empty
-  if(eg->name) g_strlcpy(sp->name, eg->name, sizeof(sp->name));
   bd->empty_groups = g_list_remove(bd->empty_groups, eg);
   _empty_group_free(eg);
   _group_keys_apply(grp, keys);
   g_hash_table_destroy(keys);
-  if(emptied) bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+  GList *moved = g_list_prepend(NULL, GINT_TO_POINTER(src));
+  _keep_emptied_group(bd, grp, emptied, moved, up);
+  g_list_free(moved);
   // guarantee the realized shape is its own group head (cleared by normalize if
   // it lands at the very bottom, where a break is meaningless)
   sp->group_start = 1;
@@ -11930,12 +12062,10 @@ static void _masks_cluster_to_empty_drop(GtkWidget *w,
     }
     if(grp && ordered)
     {
-      const dt_masks_state_t op = (eg->op & DT_MASKS_STATE_OP)
-                                    ? (eg->op & DT_MASKS_STATE_OP)
-                                    : DT_MASKS_STATE_UNION;
       // if moving the cluster empties its old group, keep that group alive as a
       // placeholder
       struct dt_masks_empty_group_t *emptied = _capture_emptied_group_multi(grp, ids);
+      const gboolean up = _moves_up(module, GPOINTER_TO_INT(ids->data), eg, INVALID_MASKID);
       // the cluster realizes a brand-new group: force every member's key to the
       // block's own (bottom-most) formid so the whole run reads as one distinct group
       const dt_mask_id_t new_head = ((dt_masks_point_group_t *)ordered->data)->formid;
@@ -11945,11 +12075,10 @@ static void _masks_cluster_to_empty_drop(GtkWidget *w,
                             GINT_TO_POINTER(((dt_masks_point_group_t *)l->data)->formid),
                             GINT_TO_POINTER(new_head));
 
-      for(GList *l = ordered; l; l = g_list_next(l))
-        grp->points = g_list_remove(grp->points, l->data);
-
       // position: just above the run anchored below this empty group; a
-      // bottom-anchored empty (below INVALID) puts the block at the bottom (base)
+      // bottom-anchored empty (below INVALID) puts the block at the bottom
+      // (base). Found before the members leave, since the anchor may be one of
+      // them, then shifted down for each that sat below it
       int at = 0;
       if(dt_is_valid_maskid(eg->below_fid))
       {
@@ -11959,13 +12088,16 @@ static void _masks_cluster_to_empty_drop(GtkWidget *w,
         at = (firstidx < 0) ? (int)g_list_length(grp->points) : last + 1;
         g_list_free(run);
       }
+      for(GList *l = ordered; l; l = g_list_next(l))
+      {
+        if(g_list_index(grp->points, l->data) < at) at--;
+        grp->points = g_list_remove(grp->points, l->data);
+      }
       int pos = at;
       for(GList *l = ordered; l; l = g_list_next(l), pos++)
       {
         dt_masks_point_group_t *pt = l->data;
-        pt->state = (pt->state & ~DT_MASKS_STATE_OP) | op;
-        pt->state =
-          (pt->state & ~DT_MASKS_STATE_WITHIN) | (eg->within & DT_MASKS_STATE_WITHIN);
+        _join_empty_group(pt, eg);
         grp->points = g_list_insert(grp->points, pt, pos);
       }
 
@@ -11982,7 +12114,7 @@ static void _masks_cluster_to_empty_drop(GtkWidget *w,
 
       _group_keys_apply(grp, keys);
       g_hash_table_destroy(keys);
-      if(emptied) bd->empty_groups = g_list_append(bd->empty_groups, emptied);
+      _keep_emptied_group(bd, grp, emptied, ids, up);
       // guarantee the realized block's own head starts a new run (cleared by
       // normalize if it lands at the very bottom, where a break is meaningless)
       ((dt_masks_point_group_t *)ordered->data)->group_start = 1;
@@ -16162,14 +16294,19 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
   dt_iop_gui_blend_data_t *bd = module->blend_data;
 
   // an AI object left without paths (by an earlier cleanup, or a path form
-  // lost otherwise) is never shown or edited again: drop it. It renders
+  // lost otherwise) is never shown or edited again: drop it, and any member
+  // whose form is gone (see _model_prune_dangling_members). Both render
   // nothing, so no history item is needed; the next one carries the change
   if(flexi && darktable.develop)
   {
     dt_pthread_mutex_lock(&darktable.develop->history_mutex);
     const int pruned = dt_masks_prune_empty_objects(&darktable.develop->forms);
+    const int dangling = _model_prune_dangling_members(grp);
     dt_pthread_mutex_unlock(&darktable.develop->history_mutex);
     if(pruned) _queue_link_peers_rebuild(module);
+    if(dangling)
+      dt_print(DT_DEBUG_MASKS, "[masks] '%s': dropped %d member(s) whose form is gone",
+               module->op, dangling);
   }
 
   // realize: a shape was just drawn into the selected empty group. Drop the empty
@@ -16268,12 +16405,7 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
   // blend_params.mask_id to NO_MASKID (masks.c); with the latch already set from
   // the first build, nothing was re-seeded and have_content below went FALSE,
   // hiding the entire list until an explicit "add group" brought it back.
-  if(flexi && (!grp || !grp->points) && !bd->empty_groups)
-  {
-    bd->empty_groups = g_list_append(
-      bd->empty_groups, _empty_group_new(DT_MASKS_STATE_UNION, 0, INVALID_MASKID));
-    bd->scaffold_seeded = TRUE;
-  }
+  if(flexi) _model_ensure_a_group(bd, grp);
 
   // group numbers are identities, not positions: forget the ones whose group is
   // gone, then number any group still without one (see _group_ordinal_any). Runs
