@@ -1644,6 +1644,89 @@ static void test_list_signature_follows_source_rename(void **state)
   assert_true(_masks_list_signature(&flexi_module) == named);
 }
 
+// a group marker (DT_MASKS_STATE_GROUP_MARKER) put in front of member `at`
+static dt_masks_point_group_t *_insert_marker(dt_masks_form_t *grp,
+                                              const dt_mask_id_t id,
+                                              const dt_mask_id_t at)
+{
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = id;
+  m->parentid = grp->formid;
+  m->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_INTERSECTION;
+  m->group_opacity = 0.5f;
+  g_strlcpy(m->name, "sky", sizeof(m->name));
+  const int pos = g_list_index(grp->points, _group_point(grp, at));
+  grp->points = g_list_insert(grp->points, m, pos);
+  return m;
+}
+
+// "clean up unused shapes" records the ids it reaches in a table with one slot
+// per form. A marker's id names no form, so storing it took a slot a member
+// needed, and the members it crowded out were deleted as unused
+static void test_cleanup_keeps_every_member_of_a_marked_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  _insert_marker(grp, 5001, 1);
+  _insert_marker(grp, 5002, 2);
+
+  dt_develop_blend_params_t bp = { 0 };
+  bp.mask_id = grp->formid;
+  dt_dev_history_item_t hist = { 0 };
+  hist.blend_params = &bp;
+  hist.forms = g_list_copy(flexi_dev.forms);
+  GList *history = g_list_append(NULL, &hist);
+
+  dt_masks_cleanup_unused_from_list(history);
+
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 1));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 2));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, grp->formid));
+
+  g_list_free(history);
+  g_list_free(hist.forms);
+  g_list_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+}
+
+// a copied group keeps its groups: every marker comes along with its settings,
+// under an id of its own
+static void test_copy_of_a_group_keeps_its_markers(void **state)
+{
+  // copying a shape reads its default size from the preferences
+  flexi_conf_init();
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  _insert_marker(grp, 5001, 2);
+
+  const dt_mask_id_t cid = dt_masks_form_copy(&flexi_dev, grp->formid);
+  dt_masks_form_t *copy = dt_masks_get_from_id(&flexi_dev, cid);
+  assert_non_null(copy);
+  assert_int_equal(g_list_length(copy->points), 3);
+
+  const dt_masks_point_group_t *m = g_list_nth_data(copy->points, 1);
+  assert_true(dt_masks_point_is_marker(m));
+  assert_int_not_equal(m->formid, 5001);
+  assert_null(dt_masks_get_from_id(&flexi_dev, m->formid));
+  assert_int_equal(m->parentid, cid);
+  assert_int_equal(m->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_INTERSECTION);
+  assert_float_equal(m->group_opacity, 0.5f, 1e-6f);
+  assert_string_equal(m->name, "sky");
+
+  // the fixture frees the forms, not a copy's members
+  g_list_free_full(copy->points, free);
+  copy->points = NULL;
+}
+
+// a marker's id resolves to no form by design, which is exactly what the prune
+// looks for in a member whose form is gone
+static void test_prune_spares_markers(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  _insert_marker(grp, 5001, 2);
+
+  assert_int_equal(_model_prune_dangling_members(grp), 0);
+  assert_int_equal(g_list_length(grp->points), 3);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -1752,6 +1835,10 @@ int main(void)
     cmocka_unit_test_teardown(test_add_target_skips_a_group_the_panel_hides, _teardown),
     cmocka_unit_test_teardown(test_add_target_is_the_shown_group_above_a_hidden_one,
                               _teardown),
+    cmocka_unit_test_teardown(test_cleanup_keeps_every_member_of_a_marked_group,
+                              _teardown),
+    cmocka_unit_test_teardown(test_copy_of_a_group_keeps_its_markers, _teardown_linking),
+    cmocka_unit_test_teardown(test_prune_spares_markers, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
