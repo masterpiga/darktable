@@ -364,7 +364,6 @@ typedef struct _flexi_builtin_t
   int n;
 } _flexi_builtin_t;
 
-static const _flexi_group_spec_t _spec_basic[] = { { DT_MASKS_STATE_UNION, NULL } };
 
 static const _flexi_group_spec_t _spec_ops3[] = { { DT_MASKS_STATE_UNION, NULL },
                                                   { DT_MASKS_STATE_DIFFERENCE, NULL },
@@ -386,7 +385,6 @@ static const _flexi_group_spec_t _spec_drawn_parametric[] = {
 };
 
 static const _flexi_builtin_t _flexi_builtins[] = {
-  { N_("basic"), NULL, _spec_basic, G_N_ELEMENTS(_spec_basic) },
   { N_("add + subtract + intersect"), NULL, _spec_ops3, G_N_ELEMENTS(_spec_ops3) },
   { N_("drawn mask"), N_("one group of shapes, combined with each other by screen"),
     _spec_drawn, G_N_ELEMENTS(_spec_drawn) },
