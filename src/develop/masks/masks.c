@@ -311,20 +311,29 @@ void dt_masks_gui_form_test_create(dt_masks_form_t *form,
   }
 }
 
+// does `id` name a form in `forms`, or a group marker in one of them? The two
+// share one id space: a form taking a marker's id would be found wherever the
+// marker's formid is looked up
+static gboolean _id_taken(GList *forms, const dt_mask_id_t id)
+{
+  for(const GList *f = forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *ff = f->data;
+    if(ff->formid == id) return TRUE;
+    if(!(ff->type & DT_MASKS_GROUP)) continue;
+    for(const GList *p = ff->points; p; p = g_list_next(p))
+    {
+      const dt_masks_point_group_t *pt = p->data;
+      if(dt_masks_point_is_marker(pt) && pt->formid == id) return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 static void _check_id(dt_masks_form_t *form)
 {
   dt_mask_id_t nid = 100;
-  for(GList *forms = darktable.develop->forms; forms; )
-  {
-    const dt_masks_form_t *ff = forms->data;
-    if(ff->formid == form->formid)
-    {
-      form->formid = nid++;
-      forms = darktable.develop->forms; // jump back to start of list
-    }
-    else
-      forms = g_list_next(forms); // advance to next form
-  }
+  while(_id_taken(darktable.develop->forms, form->formid)) form->formid = nid++;
 }
 
 static void _set_group_name_from_module(const dt_iop_module_t *module,
@@ -637,6 +646,11 @@ dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid)
     for(GList *l = base->points; l; l = g_list_next(l))
     {
       const dt_masks_point_group_t *pt = l->data;
+      if(dt_masks_point_is_marker(pt))
+      {
+        dt_masks_group_copy_marker(dev, dest, pt);
+        continue;
+      }
       const dt_mask_id_t nid = dt_masks_form_copy(dev, pt->formid);
       if(!dt_is_valid_maskid(nid)) continue;
       dt_masks_point_group_t *npt = malloc(sizeof(dt_masks_point_group_t));
@@ -1110,6 +1124,26 @@ int dt_masks_legacy_params(dt_develop_t *dev,
 }
 
 static dt_mask_id_t form_id = 0;
+
+dt_mask_id_t dt_masks_new_marker_id(dt_develop_t *dev)
+{
+  dt_mask_id_t id = time(NULL) + form_id++;
+  while(_id_taken(dev ? dev->forms : NULL, id)) id = time(NULL) + form_id++;
+  return id;
+}
+
+dt_masks_point_group_t *dt_masks_group_copy_marker(dt_develop_t *dev,
+                                                   dt_masks_form_t *dest,
+                                                   const dt_masks_point_group_t *marker)
+{
+  dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
+  if(!pt) return NULL;
+  memcpy(pt, marker, sizeof(dt_masks_point_group_t));
+  pt->formid = dt_masks_new_marker_id(dev);
+  pt->parentid = dest->formid;
+  dest->points = g_list_append(dest->points, pt);
+  return pt;
+}
 
 dt_masks_form_t *dt_masks_create(const dt_masks_type_t type)
 {
@@ -1978,6 +2012,11 @@ void dt_masks_group_add_members_of(dt_masks_form_t *grp, const dt_masks_form_t *
   for(GList *points = src_grp->points; points; points = g_list_next(points))
   {
     const dt_masks_point_group_t *pt = points->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      dt_masks_group_copy_marker(darktable.develop, grp, pt);
+      continue;
+    }
     const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
     // shapes are shared with the source, but a parametric channel is copied:
     // two modules hardly want the same range, and a shared one would move both
@@ -2470,6 +2509,15 @@ dt_hash_t dt_masks_group_hash_ext(dt_hash_t hash,
     if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
     {
       const dt_masks_point_group_t *grpt = forms->data;
+      // a marker refers to no form, but holds the settings its group renders
+      // with. Its name is left out: renaming a group changes no pixel
+      if(dt_masks_point_is_marker(grpt))
+      {
+        hash = dt_hash(hash, &grpt->state, sizeof(int));
+        hash = dt_hash(hash, &grpt->group_opacity, sizeof(float));
+        hash = dt_hash(hash, &grpt->refinement, sizeof(dt_masks_refinement_t));
+        continue;
+      }
       dt_masks_form_t *f = dt_masks_get_from_id_ext(forms_list, grpt->formid);
       if(f)
       {
@@ -2533,6 +2581,8 @@ static void _cleanup_unused_recurs(GList *forms,
     for(GList *grpts = form->points; grpts; grpts = g_list_next(grpts))
     {
       const dt_masks_point_group_t *grpt = grpts->data;
+      // a marker's id names no form, and `used` has room for one id per form
+      if(dt_masks_point_is_marker(grpt)) continue;
       _cleanup_unused_recurs(forms, grpt->formid, used, nb);
     }
   }

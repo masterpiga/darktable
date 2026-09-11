@@ -296,6 +296,53 @@ static void test_clearing_a_group_break_invalidates(void **state)
 }
 
 // ---------------------------------------------------------------------------
+// group markers
+// ---------------------------------------------------------------------------
+
+// a group marker (DT_MASKS_STATE_GROUP_MARKER) put in front of member `at`. It
+// refers to no form, so the hash cannot reach its settings through a form
+// lookup the way it reaches a member's
+static dt_masks_point_group_t *_insert_marker(dt_masks_form_t *grp, const dt_mask_id_t at)
+{
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = 5000 + at;
+  m->parentid = grp->formid;
+  m->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_UNION;
+  m->group_opacity = 1.0f;
+  const int pos = g_list_index(grp->points, _group_point(grp, at));
+  grp->points = g_list_insert(grp->points, m, pos);
+  return m;
+}
+
+static void test_marker_settings_invalidate(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  dt_masks_point_group_t *m = _insert_marker(grp, 3);
+  assert_invalidates("changing a group's operator on its marker",
+                     m->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_DIFFERENCE);
+  assert_invalidates("changing a group's opacity on its marker",
+                     m->group_opacity = 0.5f);
+  assert_invalidates("setting a group's refinement on its marker", ({
+    m->refinement.enabled = DT_MASKS_REFINE_GROUP;
+    m->refinement.blur_radius = 2.0f;
+  }));
+}
+
+static void test_adding_a_marker_invalidates(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2,3");
+  assert_invalidates("starting a new group with a marker", _insert_marker(grp, 2));
+}
+
+static void test_renaming_a_marker_does_not_invalidate(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_masks_point_group_t *m = _insert_marker(grp, 1);
+  assert_preserves("renaming a group on its marker",
+                   g_strlcpy(m->name, "sky", sizeof(m->name)));
+}
+
+// ---------------------------------------------------------------------------
 // cosmetic changes must NOT invalidate
 // ---------------------------------------------------------------------------
 
@@ -423,6 +470,9 @@ int main(void)
     cmocka_unit_test_teardown(test_group_opacity_invalidates, _teardown),
     cmocka_unit_test_teardown(test_setting_a_group_break_invalidates, _teardown),
     cmocka_unit_test_teardown(test_clearing_a_group_break_invalidates, _teardown),
+    cmocka_unit_test_teardown(test_marker_settings_invalidate, _teardown),
+    cmocka_unit_test_teardown(test_adding_a_marker_invalidates, _teardown),
+    cmocka_unit_test_teardown(test_renaming_a_marker_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_renaming_a_group_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_solo_edit_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_selection_does_not_invalidate, _teardown),

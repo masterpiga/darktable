@@ -1283,10 +1283,15 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   GList *fpts = form->points;
   while(fpts)
   {
-    // skip hidden/absent shapes; the first usable one starts a new group
+    // a marker starts a group and holds its settings. Without one (edits made
+    // before markers) the first usable member starts the group and carries
+    // them, so hidden and absent members are skipped until one is found
     dt_masks_point_group_t *const head = fpts->data;
-    if((head->state & DT_MASKS_STATE_HIDDEN)
-       || !dt_masks_get_from_id_ext(piece->pipe->forms, head->formid))
+    const gboolean marked = dt_masks_point_is_marker(head);
+    if(marked)
+      fpts = g_list_next(fpts);
+    else if((head->state & DT_MASKS_STATE_HIDDEN)
+            || !dt_masks_get_from_id_ext(piece->pipe->forms, head->formid))
     {
       fpts = g_list_next(fpts);
       continue;
@@ -1332,17 +1337,20 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     while(fpts)
     {
       dt_masks_point_group_t *const m = fpts->data;
+      // the next marker starts the next group
+      if(dt_masks_point_is_marker(m)) break;
       if(m->state & DT_MASKS_STATE_HIDDEN)
       {
         fpts = g_list_next(fpts);
         continue;
       }
-      // a different operator -- or a group_start marker on a same-operator head
-      // (first-class groups) -- ends this group and starts the next one. The
-      // run-boundary test counts every member seen, not just the ones that
-      // rendered: a bypassed group renders none of them, and even in a live
-      // group an unrenderable head must not let the next group's head slip in.
-      if(nb_seen > 0 && dt_masks_point_breaks_run(m, group_op))
+      // without a marker, a different operator -- or group_start on a
+      // same-operator head (first-class groups) -- ends this group and starts
+      // the next one. The run-boundary test counts every member seen, not just
+      // the ones that rendered: a bypassed group renders none of them, and even
+      // in a live group an unrenderable head must not let the next group's head
+      // slip in.
+      if(!marked && nb_seen > 0 && dt_masks_point_breaks_run(m, group_op))
         break;
       nb_seen++;
       if(bypassed || (m->state & DT_MASKS_STATE_DISABLE)) // nothing to render, just walk
@@ -1673,6 +1681,11 @@ void dt_masks_group_duplicate_points(dt_develop_t *const dev,
   for(GList *pts = base->points; pts; pts = g_list_next(pts))
   {
     dt_masks_point_group_t *pt = pts->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      dt_masks_group_copy_marker(dev, dest, pt);
+      continue;
+    }
     dt_masks_point_group_t *npt = calloc(1, sizeof(dt_masks_point_group_t));
 
     npt->formid = dt_masks_form_duplicate(dev, pt->formid);

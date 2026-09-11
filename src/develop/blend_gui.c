@@ -10620,9 +10620,11 @@ int _model_prune_dangling_members(dt_masks_form_t *grp)
   GList *gone = NULL;
   for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
   {
-    const dt_mask_id_t fid = ((dt_masks_point_group_t *)l->data)->formid;
-    if(!dt_masks_get_from_id(darktable.develop, fid))
-      gone = g_list_prepend(gone, GINT_TO_POINTER(fid));
+    const dt_masks_point_group_t *pt = l->data;
+    // a group marker refers to no form by design
+    if(dt_masks_point_is_marker(pt)) continue;
+    if(!dt_masks_get_from_id(darktable.develop, pt->formid))
+      gone = g_list_prepend(gone, GINT_TO_POINTER(pt->formid));
   }
   const int n = g_list_length(gone);
   if(gone) _detach_group_members(grp, gone);

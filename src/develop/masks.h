@@ -155,6 +155,11 @@ typedef enum dt_masks_state_t
   // disabled (element-level): this element is skipped by the group fold,
   // contributing nothing to the group's mask. Defaults off.
   DT_MASKS_STATE_DISABLE = 1 << 17,
+  // a flexi group's own record in its module's point list: it refers to no
+  // form (its formid is an id of its own, see dt_masks_new_marker_id) and
+  // holds the group's settings once, followed by the group's members up to
+  // the next marker. See dt_masks_point_is_marker below
+  DT_MASKS_STATE_GROUP_MARKER = 1 << 18,
   // the between-group combining operators: exactly one of these is set on a
   // group's members (disable/invert are modifiers on top, not one of these)
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
@@ -197,6 +202,10 @@ _Static_assert((DT_MASKS_STATE_GROUP_BREAK
                 & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
                "the historic GROUP_BREAK bit has been reused by a live flag;"
                " pre-v10 edits would be misread by the v9->v10 migration");
+_Static_assert((DT_MASKS_STATE_GROUP_MARKER
+                & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN | DT_MASKS_STATE_GROUP_BREAK))
+                 == 0,
+               "the group marker bit overlaps a group setting a marker carries");
 
 // A group member's effective between-group operator. A member carrying no
 // combine bit at all is what classic's dt_masks_group_add_form() gives a
@@ -450,6 +459,15 @@ static inline gboolean dt_masks_point_breaks_run(const dt_masks_point_group_t *p
                                                  const dt_masks_state_t run_op)
 {
   return pt->group_start || dt_masks_eff_group_op(pt->state) != run_op;
+}
+
+// Is `pt` a group's marker rather than a member? A marker's formid resolves to
+// no form, so code that looks a member's form up and skips what does not
+// resolve is already safe. What has to ask is code that counts members, copies
+// them, or keys something on a member's formid as if it were a form's
+static inline gboolean dt_masks_point_is_marker(const dt_masks_point_group_t *pt)
+{
+  return (pt->state & DT_MASKS_STATE_GROUP_MARKER) != 0;
 }
 
 /** structure used to store pointers to the functions implementing operations on a mask shape */
@@ -1052,6 +1070,12 @@ void dt_masks_group_isolate_state(dt_masks_form_t *grp,
                                   const dt_masks_state_t bits);
 void dt_masks_group_ungroup(dt_masks_form_t *dest_grp, dt_masks_form_t *grp);
 void dt_masks_group_update_name(dt_iop_module_t *module);
+/** a fresh id for a group marker, used by no form and no marker in dev->forms */
+dt_mask_id_t dt_masks_new_marker_id(dt_develop_t *dev);
+/** append a copy of group marker `marker` to `dest` under a fresh id */
+dt_masks_point_group_t *dt_masks_group_copy_marker(dt_develop_t *dev,
+                                                   dt_masks_form_t *dest,
+                                                   const dt_masks_point_group_t *marker);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form);
 /** returns the composition operator state to assign to a newly added form,

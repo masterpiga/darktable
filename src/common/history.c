@@ -303,6 +303,8 @@ static void _fill_used_forms(GList *forms_list,
     for(GList *grpts = form->points; grpts; grpts = g_list_next(grpts))
     {
       dt_masks_point_group_t *grpt = grpts->data;
+      // a marker's id names no form, and `used` has room for one id per form
+      if(dt_masks_point_is_marker(grpt)) continue;
       _fill_used_forms(forms_list, grpt->formid, used, nb);
     }
   }
