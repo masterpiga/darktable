@@ -222,8 +222,27 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
   const gboolean stepped_in =
     dt_masks_gui_step_object(gui, hit_object ? hit_object->formid : INVALID_MASKID,
                              which == GDK_BUTTON_PRIMARY, type == GDK_2BUTTON_PRESS);
-  if(gui->entered_object != was_entered) dt_control_queue_redraw_center();
+  if(gui->entered_object != was_entered)
+  {
+    dt_control_queue_redraw_center();
+    dt_iop_gui_masks_entered_object_changed(module);
+  }
   if(stepped_in) return 1;
+
+  // stepping out on empty canvas leaves the object selected, as one unit
+  // again, rather than nothing (the click itself just cleared the selection,
+  // see dt_masks_events_button_pressed)
+  if(dt_is_valid_maskid(was_entered) && !dt_is_valid_maskid(gui->entered_object)
+     && gui->group_selected < 0)
+  {
+    const dt_masks_form_t *object = dt_masks_get_from_id(darktable.develop, was_entered);
+    if(object) dt_masks_select_form(module, object);
+  }
+  // outside any object, a plain click on empty canvas selects nothing, group
+  // included
+  else if(!dt_is_valid_maskid(was_entered) && gui->group_selected < 0
+          && which == GDK_BUTTON_PRIMARY && type == GDK_BUTTON_PRESS)
+    dt_iop_gui_masks_clear_selection(module);
 
   if(gui->group_edited != gui->group_selected)
   {
@@ -695,17 +714,22 @@ void dt_group_events_post_expose(cairo_t *cr,
       // this one call, the same way group_selected is, so nothing outside the
       // draw sees a hover the pointer never made.
       gboolean bold = FALSE;
+      // inside the object stepped into, its paths are highlighted one by one:
+      // being soloed or selected as a whole no longer lights them all up, or
+      // the one under the cursor could not be told apart
+      const dt_mask_id_t unit =
+        fpt->parentid == gui->entered_object ? INVALID_MASKID : fpt->parentid;
       if(_panel_hovered(gui, fpt->formid, fpt->parentid))
       {
         eff = pos;
         bold = TRUE;
       }
-      else if(_panel_soloed(gui, fpt->formid, fpt->parentid))
+      else if(_panel_soloed(gui, fpt->formid, unit))
         eff = pos;
       else if(!any_list_hover && base_sel < 0
               && dt_is_valid_maskid(gui->panel_selected_formid)
               && (fpt->formid == gui->panel_selected_formid
-                  || fpt->parentid == gui->panel_selected_formid))
+                  || unit == gui->panel_selected_formid))
         eff = pos;
       else if(dt_is_valid_maskid(base_sel_bundle) && fpt->parentid == base_sel_bundle)
         eff = pos;

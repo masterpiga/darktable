@@ -956,6 +956,22 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.06);
 }
 
+/* the caption above a stepped-into AI object's paths: quieter than a section
+   label, since it sits among the object's own properties */
+.mask-object-paths-caption
+{
+  font-size: 0.85em;
+  opacity: 0.6;
+  margin-top: 4px;
+}
+
+/* a path in a stepped-into AI object's "paths" section, hovered in the panel
+   or on the canvas */
+.mask-object-path-row.mask-list-row-hover
+{
+  background-color: rgba(255, 255, 255, 0.10);
+}
+
 /* persistent solo / solo-edit wash: driven by state (bd->solo_formid /
    soloedit_formid / solo_cluster_key) rather than the pointer, so it survives
    hovering elsewhere in the panel or canvas (see _update_shape_row_state /

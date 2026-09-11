@@ -991,9 +991,8 @@ static gchar *_masks_import_group_label(dt_iop_module_t *src,
 // "link shapes" or "copy shapes": every shape and AI object that another
 // module's mask uses, or that no mask does, and that this module's mask does
 // not use yet, reachable by the module it comes from and by its kind. Added
-// to `menu` as one section, under `caption`. Returns how many there are
+// to `menu` as one section. Returns how many there are
 static int _masks_import_fill_shapes(GMenu *menu,
-                                     const char *caption,
                                      dt_iop_module_t *module,
                                      GPtrArray *mods,
                                      const gboolean copy)
@@ -1091,7 +1090,7 @@ static int _masks_import_fill_shapes(GMenu *menu,
     GMenu *sec = g_menu_new();
     g_menu_append_submenu(sec, _("by source module"), G_MENU_MODEL(by_module));
     g_menu_append_submenu(sec, _("by type"), G_MENU_MODEL(by_type));
-    g_menu_append_section(menu, caption, G_MENU_MODEL(sec));
+    g_menu_append_section(menu, NULL, G_MENU_MODEL(sec));
     g_object_unref(sec);
   }
   g_object_unref(by_module);
@@ -1274,22 +1273,31 @@ _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *mod
 
   GMenu *link_menu = g_menu_new();
   GMenu *copy_menu = g_menu_new();
-  const int n_shapes = _masks_import_fill_shapes(
-    link_menu, _("shared: editing one changes it everywhere"), module, mods, FALSE);
-  _masks_import_fill_shapes(copy_menu, _("independent copies"), module, mods, TRUE);
+  const int n_shapes = _masks_import_fill_shapes(link_menu, module, mods, FALSE);
+  _masks_import_fill_shapes(copy_menu, module, mods, TRUE);
   GMenu *param_menu = g_menu_new();
   const int n_param =
     bd->blendif_support ? _masks_import_fill_parametric(param_menu, module, mods) : 0;
-  GMenu *sec_elements = g_menu_new();
+  // the captions sit on the top level, so the difference between linking and
+  // copying is read before either submenu is opened
   if(n_shapes)
   {
-    g_menu_append_submenu(sec_elements, _("link shapes"), G_MENU_MODEL(link_menu));
-    g_menu_append_submenu(sec_elements, _("copy shapes"), G_MENU_MODEL(copy_menu));
+    GMenu *sec_link = g_menu_new();
+    g_menu_append_submenu(sec_link, _("link shapes"), G_MENU_MODEL(link_menu));
+    g_menu_append_section(menu, _("shared: editing one changes it everywhere"),
+                          G_MENU_MODEL(sec_link));
+    g_object_unref(sec_link);
   }
-  if(n_param)
-    g_menu_append_submenu(sec_elements, _("copy parametric channel"), G_MENU_MODEL(param_menu));
-  g_menu_append_section(menu, NULL, G_MENU_MODEL(sec_elements));
-  g_object_unref(sec_elements);
+  if(n_shapes || n_param)
+  {
+    GMenu *sec_copy = g_menu_new();
+    if(n_shapes)
+      g_menu_append_submenu(sec_copy, _("copy shapes"), G_MENU_MODEL(copy_menu));
+    if(n_param)
+      g_menu_append_submenu(sec_copy, _("copy parametric channel"), G_MENU_MODEL(param_menu));
+    g_menu_append_section(menu, _("independent copies"), G_MENU_MODEL(sec_copy));
+    g_object_unref(sec_copy);
+  }
   g_object_unref(link_menu);
   g_object_unref(copy_menu);
   g_object_unref(param_menu);
@@ -1493,6 +1501,10 @@ static void _refine_scope_combo_rebuild(dt_iop_module_t *module);
 static void _empty_groups_clear(dt_iop_gui_blend_data_t *bd);
 static void _update_add_target_sensitivity(dt_iop_module_t *module);
 static void _update_refine_sensitivity(dt_iop_module_t *module);
+static void _set_group_target_ext(dt_iop_module_t *module,
+                                  const dt_mask_id_t cid,
+                                  dt_masks_empty_group_t *eg,
+                                  const dt_mask_id_t keep_entered);
 static void _set_group_target(dt_iop_module_t *module, const dt_mask_id_t cid);
 static void _set_form_target_ext(dt_iop_module_t *module,
                                  const dt_mask_id_t id,
@@ -6731,12 +6743,27 @@ static void _soloedit_follow_selection(dt_iop_gui_blend_data_t *bd)
   const dt_mask_id_t want = _model_soloedit_target(bd);
   if(bd->soloedit_formid == want) return;
 
+  // the same canvas rebuild clears the panel selection being isolated, which
+  // would leave its row unhighlighted: put it back afterwards
+  const dt_mask_id_t sel_formid = bd->panel_selected_formid;
+  const dt_mask_id_t sel_group = bd->panel_selected_group_cid;
+  // and the canvas one, which the rebuild drops through dt_masks_clear_form_gui
+  const dt_mask_id_t canvas_sel = darktable.develop->mask_form_selected_id;
+
   applying = TRUE;
   // _toggle_soloedit is a toggle, so "off" means feeding it back the id that is
   // currently isolated
   _toggle_soloedit(bd->module,
                    dt_is_valid_maskid(want) ? want : bd->soloedit_formid);
   applying = FALSE;
+  darktable.develop->mask_form_selected_id = canvas_sel;
+
+  if(bd->panel_selected_formid != sel_formid || bd->panel_selected_group_cid != sel_group)
+  {
+    bd->panel_selected_formid = sel_formid;
+    bd->panel_selected_group_cid = sel_group;
+    _update_row_selection(bd);
+  }
 }
 
 // the solo-edit mode toggle, and the <blending> action bound to it. Global like
@@ -6829,9 +6856,8 @@ static GtkWidget *_find_collapsed_cluster_header(GtkWidget *w, const dt_mask_id_
 }
 
 // canvas -> list selection sync: when a shape is selected on the canvas (click),
-// highlight its row in the flexi mask list. An invalid id clears the selection
-// (e.g. clicking empty canvas, or toggling the selected shape off). No-op when
-// there is no list (classic mode / no masks).
+// highlight its row in the flexi mask list. No-op when there is no list
+// (classic mode / no masks).
 // a path of an AI object the canvas stepped into is selected through its
 // object: the panel has no row of its own for it
 dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t formid)
@@ -6854,7 +6880,12 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t fo
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd || !bd->masks_list_box) return;
   const dt_mask_id_t id = _model_panel_formid_for(module, formid);
-  if(bd->panel_selected_formid == id) return;
+  // a canvas with nothing selected leaves the panel's selection alone: the
+  // canvas drops its own on every rebuild (dt_masks_clear_form_gui), undo's
+  // included (libs/history.c _pop_undo), while the user's deselects reach the
+  // panel on their own (an empty-canvas click, dt_iop_gui_masks_clear_selection;
+  // a delete, _clear_stale_formid_refs)
+  if(!dt_is_valid_maskid(id) || bd->panel_selected_formid == id) return;
   bd->panel_selected_formid = id;
 
   // mirror the group the shape belongs to, same as a list click (_select_form),
@@ -6885,6 +6916,29 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t fo
   _auto_expand_selected_row(module, id);
 }
 
+static void _sync_object_paths(GtkWidget *w, const dt_mask_id_t entered);
+
+// the AI object the canvas is stepped into, or INVALID_MASKID
+static dt_mask_id_t _entered_object(void)
+{
+  const dt_masks_form_gui_t *gui = darktable.develop ? darktable.develop->form_gui : NULL;
+  return gui ? gui->entered_object : INVALID_MASKID;
+}
+
+// the row of path `pid` in an AI object's "paths" section, under `w`
+static GtkWidget *_find_object_path_row(GtkWidget *w, const dt_mask_id_t pid)
+{
+  if(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "object-path-formid")) == pid)
+    return w;
+  if(!GTK_IS_CONTAINER(w)) return NULL;
+  GtkWidget *found = NULL;
+  GList *children = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *c = children; c && !found; c = g_list_next(c))
+    found = _find_object_path_row(c->data, pid);
+  g_list_free(children);
+  return found;
+}
+
 // canvas -> list hover sync: transiently highlight the row matching the shape
 // under the cursor, or its group's header as a fallback. An invalid id just
 // clears the hover wash.
@@ -6899,8 +6953,55 @@ void dt_iop_gui_masks_hover_form(dt_iop_module_t *module, const dt_mask_id_t for
   // prefer the shape's own (nested) row; fall back to the group header that contains
   // it
   GtkWidget *target = _masks_row_widget(bd, formid);
+  if(!target)
+  {
+    // a path of an AI object: its own row in the object's "paths" section while
+    // the object is stepped into, else the object's row
+    const dt_mask_id_t row_fid = _model_panel_formid_for(module, formid);
+    GtkWidget *object_row = row_fid != formid ? _masks_row_widget(bd, row_fid) : NULL;
+    if(object_row && _entered_object() == row_fid)
+      target = _find_object_path_row(object_row, formid);
+    if(!target) target = object_row;
+  }
   if(!target) target = _find_collapsed_cluster_header(box, formid);
   if(target) dt_gui_add_class(target, "mask-list-row-hover");
+}
+
+void dt_iop_gui_masks_entered_object_changed(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!bd || !bd->masks_list_box) return;
+  _sync_object_paths(GTK_WIDGET(bd->masks_list_box), _entered_object());
+}
+
+// the panel's single way to step the canvas into AI object `id`, or out of the
+// one it is in with INVALID_MASKID: the same step as a double-click on the
+// object and a click outside it (see masks/group.c), with the redraw and the
+// "paths" section brought along
+static void _step_object(dt_iop_module_t *module, const dt_mask_id_t id)
+{
+  dt_masks_form_gui_t *gui = darktable.develop ? darktable.develop->form_gui : NULL;
+  if(!gui || gui->entered_object == id) return;
+  dt_masks_gui_step_object(gui, id, TRUE, dt_is_valid_maskid(id));
+  dt_control_queue_redraw_center();
+  dt_iop_gui_masks_entered_object_changed(module);
+}
+
+// the whole panel selection, groups included: unlike the element selection
+// dt_iop_gui_masks_select_form mirrors, which leaves the group alone because
+// canvas rebuilds pass through it too, this is only ever the user's click
+void dt_iop_gui_masks_clear_selection(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!bd || !bd->masks_list_box) return;
+  if(!dt_is_valid_maskid(bd->panel_selected_formid)
+     && !dt_is_valid_maskid(bd->panel_selected_group_cid) && !bd->selected_empty)
+    return;
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = INVALID_MASKID;
+  bd->selected_empty = NULL;
+  _update_row_selection(bd);
+  _update_add_target_sensitivity(module);
 }
 
 // icon for the parametric mask's "show output" toggle: a chevron pointing down
@@ -7292,6 +7393,9 @@ static void _toggle_solo_form(dt_iop_module_t *module, const dt_mask_id_t id)
   // instead of rebuilding the whole list (see _update_shape_row_state).
   _refresh_all_shape_rows(module);
   _sync_solo_canvas_highlight(module);
+  // solo-edit stood down while this was soloed: taking the solo off isolates
+  // the selection again (see _model_soloedit_target)
+  _soloedit_follow_selection(module->blend_data);
 }
 
 // the badge only shows a click-to-clear affordance while it is actually
@@ -8381,7 +8485,7 @@ static void _set_form_target_ext(dt_iop_module_t *module,
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
-  _set_group_target(module, _group_cid_of_form(grp, id));
+  _set_group_target_ext(module, _group_cid_of_form(grp, id), NULL, id);
   bd->panel_selected_formid = id;
   if(dt_is_valid_maskid(id))
   {
@@ -8675,6 +8779,11 @@ _start_rename_element(GtkWidget *evbox, dt_iop_module_t *module, const dt_mask_i
   // .mask-rename-entry in darktable.css) keeps the row's height stable.
   gtk_entry_set_has_frame(GTK_ENTRY(entry), FALSE);
   dt_gui_add_class(entry, "mask-rename-entry");
+  // and wider: a stock entry asks for about 20 characters, where the label it
+  // replaces asks for one (see gtk_label_set_max_width_chars in
+  // _make_shape_row). It still fills the width the row gives it
+  gtk_entry_set_width_chars(GTK_ENTRY(entry), 1);
+  gtk_entry_set_max_width_chars(GTK_ENTRY(entry), 1);
   dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
   if(form)
   {
@@ -8772,95 +8881,6 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
 void dt_iop_gui_blend_delete_element(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   if(module && module->blend_data) _delete_single_shape(module, id);
-}
-
-#ifdef HAVE_AI
-// "break into components": re-parent an AI-mask bundle's own children (see
-// _register_vectorized_forms/object.c) as direct members of the containing
-// module group, in the bundle's own place, preserving each child's own
-// union/difference state; then drop the now-empty DT_MASKS_OBJECT wrapper.
-// After this the former bundle members are ordinary independent shapes the
-// user rearranges/edits by hand -- shared by the "break into components"
-// entry in the row's actions menu (_build_shape_actions_menu).
-static void _break_apart_ai_bundle(dt_iop_module_t *module, const dt_mask_id_t id)
-{
-  const dt_masks_form_t *bundle = dt_masks_get_from_id(darktable.develop, id);
-  if(!bundle || !(bundle->type & DT_MASKS_OBJECT) || !bundle->points) return;
-
-  dt_masks_clear_form_gui(darktable.develop);
-  const gboolean linked = _model_form_is_linked(bundle);
-  if(!_model_break_apart(module, id)) return;
-  if(linked) _queue_link_peers_rebuild(module);
-
-  dt_print(DT_DEBUG_MASKS, "[masks] AI mask %d broken into components", id);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
-  _queue_masks_list_rebuild(module);
-  _refresh_canvas_edit(module);
-}
-#endif
-
-gboolean _model_break_apart(dt_iop_module_t *module, dt_mask_id_t id)
-{
-  dt_masks_form_t *grp = _module_mask_group(module);
-  dt_masks_form_t *bundle = dt_masks_get_from_id(darktable.develop, id);
-  if(!grp || !bundle || !(bundle->type & DT_MASKS_OBJECT) || !bundle->points) return FALSE;
-
-  // other modules linked to this object keep it whole: this module breaks
-  // its own copy of it
-  if(_model_form_is_linked(bundle))
-  {
-    id = _model_unlink_form(module, id);
-    bundle = dt_masks_get_from_id(darktable.develop, id);
-    if(!bundle) return FALSE;
-  }
-
-  // build the replacement points, one per child, in the bundle's own order
-  GList *replacement = NULL;
-  gboolean first = TRUE;
-  for(GList *l = bundle->points; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *bpt = l->data;
-    dt_masks_point_group_t *npt = calloc(1, sizeof(dt_masks_point_group_t));
-    npt->formid = bpt->formid;
-    npt->parentid = grp->formid;
-    npt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE
-                 | (bpt->state & DT_MASKS_STATE_DIFFERENCE ? DT_MASKS_STATE_DIFFERENCE
-                                                           : DT_MASKS_STATE_UNION);
-    npt->opacity = 1.0f;
-    npt->group_opacity = 1.0f;
-    // the whole run takes over the bundle's own former group-boundary marker
-    // (only the first child continues it; the rest stay inside the same run)
-    npt->group_start = first ? 1 : 0;
-    first = FALSE;
-    replacement = g_list_append(replacement, npt);
-  }
-
-  // splice `replacement` into grp->points where the bundle's own point was
-  GList *pos = NULL;
-  for(GList *l = grp->points; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *pt = l->data;
-    if(pt->formid == id)
-    {
-      pos = l;
-      break;
-    }
-  }
-  if(pos)
-  {
-    for(GList *r = replacement; r; r = g_list_next(r))
-      grp->points = g_list_insert_before(grp->points, pos, r->data);
-    dt_masks_point_group_t *old_pt = pos->data;
-    grp->points = g_list_remove(grp->points, old_pt);
-    free(old_pt);
-  }
-  g_list_free(replacement);
-
-  // drop the now-empty wrapper (its children are not touched -- they are
-  // independent forms in dev->forms, now referenced directly by `grp`)
-  darktable.develop->forms = g_list_remove(darktable.develop->forms, bundle);
-  dt_masks_free_form(bundle);
-  return TRUE;
 }
 
 // forward declared here (defined much further down, near _build_shape_actions_menu's
@@ -9112,7 +9132,11 @@ static gboolean _row_crossing(GtkWidget *w, GdkEventCrossing *ev, dt_iop_module_
   // clear every hover class first, then (re)apply it to the current target.
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd && bd->masks_list_box) _clear_hover_classes(GTK_WIDGET(bd->masks_list_box));
-  GtkWidget *target = _row_widget_for_hover(w);
+  // a path row in an AI object's "paths" section is its own target: it sits
+  // inside the object's row, not next to a row widget of its own
+  GtkWidget *target = g_object_get_data(G_OBJECT(w), "object-path-formid")
+                        ? w
+                        : _row_widget_for_hover(w);
   if(target && entering) dt_gui_add_class(target, "mask-list-row-hover");
   dt_control_queue_redraw_center();
   return FALSE;
@@ -10330,14 +10354,9 @@ static void _select_empty_group(dt_iop_module_t *module, dt_masks_empty_group_t 
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   // any open parametric editor stays open across a group-target change (see
-  // _select_group); _build_masks_list re-docks it under its row itself.
-  const gboolean deselect = (bd->selected_empty == eg);
-  bd->panel_selected_formid = INVALID_MASKID;
-  bd->panel_selected_group_cid = INVALID_MASKID;
-  bd->selected_empty = deselect ? NULL : eg;
-  bd->masks_shown = DT_MASKS_EDIT_FULL;
-  dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-  _build_masks_list(module);
+  // _select_group)
+  _set_group_target_ext(module, INVALID_MASKID, bd->selected_empty == eg ? NULL : eg,
+                        INVALID_MASKID);
 }
 
 // select a real group by its header. The selected group is where the next drawn
@@ -10355,17 +10374,24 @@ _select_group(dt_iop_module_t *module, const dt_mask_id_t cid, const int op_stat
 }
 
 // core of group selection: point the panel's "where do new elements go" target
-// at cid (INVALID to clear it), then update the header/row highlight and the
-// dependent controls (add-element sensitivity, refinement scope combo) in place
-// -- no list rebuild, so this never disturbs the GTK focus chain and never
-// triggers the containing scrolled viewport to auto-scroll to a re-created
-// widget (see _select_group / _select_form / _param_enter_edit, all of which
-// funnel group selection through here instead of _build_masks_list).
-static void _set_group_target(dt_iop_module_t *module, const dt_mask_id_t cid)
+// at the group cid or the empty group eg (neither, to clear it), then update the
+// header/row highlight and the dependent controls (add-element sensitivity,
+// refinement scope combo) in place -- no list rebuild, so this never disturbs
+// the GTK focus chain and never triggers the containing scrolled viewport to
+// auto-scroll to a re-created widget (see _select_group / _select_form /
+// _select_empty_group / _param_enter_edit, all of which funnel group selection
+// through here instead of _build_masks_list).
+// Selecting anything but the AI object stepped into steps out of it, as a click
+// outside it on the canvas does; keep_entered is the element an element
+// selection is on its way to, which may be that object.
+static void _set_group_target_ext(dt_iop_module_t *module,
+                                  const dt_mask_id_t cid,
+                                  dt_masks_empty_group_t *eg,
+                                  const dt_mask_id_t keep_entered)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   bd->panel_selected_formid = INVALID_MASKID;
-  bd->selected_empty = NULL;
+  bd->selected_empty = eg;
   bd->panel_selected_group_cid = cid;
   bd->masks_shown = DT_MASKS_EDIT_FULL;
   dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
@@ -10386,6 +10412,12 @@ static void _set_group_target(dt_iop_module_t *module, const dt_mask_id_t cid)
   // selection makes on its way to _set_form_target -- so this is the single
   // place the group half of "auto-expand selected" has to act
   _auto_expand_selected_group(module, cid);
+  if(_entered_object() != keep_entered) _step_object(module, INVALID_MASKID);
+}
+
+static void _set_group_target(dt_iop_module_t *module, const dt_mask_id_t cid)
+{
+  _set_group_target_ext(module, cid, NULL, INVALID_MASKID);
 }
 
 // flexi only: keep the insertion hint (where the next drawn shape lands) in step
@@ -10691,6 +10723,10 @@ static void _start_group_rename(GtkWidget *lbl_box,
   GtkWidget *entry = gtk_entry_new();
   gtk_entry_set_has_frame(GTK_ENTRY(entry), FALSE);
   dt_gui_add_class(entry, "mask-rename-entry");
+  // as narrow a request as the title label it replaces (see
+  // _start_rename_element)
+  gtk_entry_set_width_chars(GTK_ENTRY(entry), 1);
+  gtk_entry_set_max_width_chars(GTK_ENTRY(entry), 1);
   if(custom) gtk_entry_set_text(GTK_ENTRY(entry), custom);
   g_object_set_data(G_OBJECT(entry), "group-cid", GINT_TO_POINTER(cid));
   g_object_set_data(G_OBJECT(entry), "eg", eg);
@@ -10739,15 +10775,22 @@ _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   // resolve it either. Dropped rather than keep chasing it: a group can
   // still be soloed via its "solo" menu item (see _build_group_op_menu) or
   // the solo badge itself once active (see _solo_badge_group_press).
-  if(e->type == GDK_BUTTON_PRESS && e->button == GDK_BUTTON_PRIMARY
-     && dt_modifier_is(e->state, GDK_CONTROL_MASK))
+  // rename and the actions menu select the group first, as they do an element
+  // (see _row_click_press), so the highlight shows what they act on
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const dt_mask_id_t cid =
+    (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "group-key"));
+  const gboolean rename = e->type == GDK_BUTTON_PRESS && e->button == GDK_BUTTON_PRIMARY
+                          && dt_modifier_is(e->state, GDK_CONTROL_MASK);
+  const gboolean menu = e->button == GDK_BUTTON_SECONDARY;
+  if((rename || menu) && bd->panel_selected_group_cid != cid)
+    _set_group_target(module, cid);
+  if(rename)
   {
-    _start_group_rename(g_object_get_data(G_OBJECT(w), "title-label-box"), module,
-                        GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "group-key")),
-                        NULL);
+    _start_group_rename(g_object_get_data(G_OBJECT(w), "title-label-box"), module, cid, NULL);
     return TRUE;
   }
-  if(e->button == GDK_BUTTON_SECONDARY)
+  if(menu)
   {
     const gboolean is_base = g_object_get_data(G_OBJECT(w), "is-base-group") != NULL;
     GList *formids = g_object_get_data(G_OBJECT(w), "group-formids");
@@ -10758,7 +10801,6 @@ _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
     gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
     return TRUE;
   }
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
   bd->masks_skip_group_select_release = FALSE;
   return FALSE; // let the drag source arm; selection happens on release
 }
@@ -10887,6 +10929,8 @@ static void _toggle_solo_group(dt_iop_module_t *module, const guint key, GList *
   // a full rebuild, which would destroy the widget mid-event).
   _refresh_all_shape_rows(module);
   _sync_solo_canvas_highlight(module);
+  // same as _toggle_solo_form
+  _soloedit_follow_selection(module->blend_data);
 }
 
 // same idea as _solo_badge_form_press: the group badge only shows solo (never
@@ -11753,14 +11797,18 @@ _empty_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(w), "eg");
   if(!eg || !g_list_find(bd->empty_groups, eg)) return FALSE;
-  if(e->type == GDK_BUTTON_PRESS && e->button == GDK_BUTTON_PRIMARY
-     && dt_modifier_is(e->state, GDK_CONTROL_MASK))
+  // selected first, like a populated group's header (_group_header_press)
+  const gboolean rename = e->type == GDK_BUTTON_PRESS && e->button == GDK_BUTTON_PRIMARY
+                          && dt_modifier_is(e->state, GDK_CONTROL_MASK);
+  const gboolean menu = e->button == GDK_BUTTON_SECONDARY;
+  if((rename || menu) && bd->selected_empty != eg) _select_empty_group(module, eg);
+  if(rename)
   {
     _start_group_rename(g_object_get_data(G_OBJECT(w), "title-label-box"), module,
                         INVALID_MASKID, eg);
     return TRUE;
   }
-  if(e->button == GDK_BUTTON_SECONDARY)
+  if(menu)
   {
     GtkWidget *lbl_box = g_object_get_data(G_OBJECT(w), "title-label-box");
     _build_empty_group_actions_menu(w, module, eg, lbl_box);
@@ -13172,17 +13220,23 @@ static void _shape_act_rename(GSimpleAction *action, GVariant *param, gpointer u
   if(evbox && module) _start_rename_element(evbox, module, id);
 }
 
-#ifdef HAVE_AI
-static void _shape_act_break_apart(GSimpleAction *action, GVariant *param, gpointer u)
+// the panel's way into an AI object's paths and back out (see _step_object)
+static void _shape_act_edit_paths(GSimpleAction *action, GVariant *param, gpointer u)
 {
   GtkWidget *anchor = GTK_WIDGET(u);
   dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
   if(darktable.gui->active_popover_menu)
     gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(module) _break_apart_ai_bundle(module, id);
+  if(!module) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const gboolean inside = _entered_object() == id;
+  // the paths are picked on the canvas, so going in turns editing on there
+  if(!inside && bd && bd->masks_edit
+     && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit)))
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), TRUE);
+  _step_object(module, inside ? INVALID_MASKID : id);
 }
-#endif
 
 // give this module its own copy of a linked shape or AI object: the other
 // modules keep the original
@@ -13287,9 +13341,7 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
     { "rename",      _shape_act_rename,      NULL, NULL },
     { "edit_source", _shape_act_edit_source, NULL, NULL },
     { "unlink",      _shape_act_unlink,      NULL, NULL },
-#ifdef HAVE_AI
-    { "break_apart", _shape_act_break_apart, NULL, NULL },
-#endif
+    { "edit_paths",  _shape_act_edit_paths,  NULL, NULL },
     { "delete",      _shape_act_delete,      NULL, NULL },
   };
   g_action_map_add_action_entries(map, action_entries, G_N_ELEMENTS(action_entries), anchor);
@@ -13339,21 +13391,19 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
     g_menu_append_item(sec_edit, it);
     g_object_unref(it);
   }
-#ifdef HAVE_AI
-  const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
-  if(form && (form->type & DT_MASKS_OBJECT) && g_list_length(form->points) > 1)
+  // a single-path object already acts as that one path
+  if(elem && (elem->type & DT_MASKS_OBJECT) && !g_list_shorter_than(elem->points, 2))
   {
-    GMenuItem *it = g_menu_item_new(_("break into components"), "masks_shape_act.break_apart");
+    const gboolean inside = _entered_object() == id;
+    GMenuItem *it = g_menu_item_new(inside ?_("stop editing individual paths")
+                                           : _("edit individual paths"),
+                                    "masks_shape_act.edit_paths");
     g_menu_item_set_attribute(it, "tooltip", "s",
-      linked
-        ? _("convert this AI mask's paths into ordinary, independently editable shapes in this group\n"
-            "it is linked with other modules: this module gets its own copy first, and theirs"
-            " stays whole")
-        : _("convert this AI mask's paths into ordinary, independently editable shapes in this group"));
+      _("edit and remove the AI object's paths one by one on the canvas,"
+        " like double-clicking it there"));
     g_menu_append_item(sec_edit, it);
     g_object_unref(it);
   }
-#endif
   g_menu_append(sec_edit, _("delete"), "masks_shape_act.delete");
   g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
   g_object_unref(sec_edit);
@@ -15381,12 +15431,52 @@ static void _object_path_remove_clicked(GtkButton *button, dt_iop_module_t *modu
   _refresh_canvas_edit(module);
 }
 
+// the "paths" section is built with the row but shown only while its object is
+// stepped into on the canvas, so stepping in and out just toggles it (see
+// dt_iop_gui_masks_entered_object_changed) instead of rebuilding the panel
+static void _sync_object_paths(GtkWidget *w, const dt_mask_id_t entered)
+{
+  const dt_mask_id_t of = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "object-paths-of"));
+  if(dt_is_valid_maskid(of))
+  {
+    gtk_widget_set_visible(w, of == entered);
+    return;
+  }
+  if(!GTK_IS_CONTAINER(w)) return;
+  GList *children = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *c = children; c; c = g_list_next(c)) _sync_object_paths(c->data, entered);
+  g_list_free(children);
+}
+
+// a click on a path's row stays there: the row sits inside the object's own
+// properties, whose click surface would otherwise toggle the object's
+// selection (see _wire_element_click_surface). The remove button handles its
+// own clicks before they get here. ctrl+click renames the path, as on any row
+static gboolean _object_path_row_click(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
+{
+  if(ev->type == GDK_BUTTON_PRESS && ev->button == GDK_BUTTON_PRIMARY
+     && dt_modifier_is(ev->state, GDK_CONTROL_MASK))
+    _start_rename_element(g_object_get_data(G_OBJECT(w), "name-evbox"), module,
+                          GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "object-path-formid")));
+  return TRUE;
+}
+
 static void _append_object_path_rows(dt_iop_module_t *module,
                                      const dt_masks_form_t *object,
-                                     GtkWidget *box)
+                                     GtkWidget *parent)
 {
-  GtkWidget *caption = dt_ui_section_label_new(_("paths"));
-  gtk_widget_show_all(caption);
+  GtkWidget *box = dt_gui_vbox();
+  g_object_set_data(G_OBJECT(box), "object-paths-of", GINT_TO_POINTER(object->formid));
+  gtk_widget_set_no_show_all(box, TRUE);
+  dt_gui_box_add(parent, box);
+  gtk_widget_set_visible(box, _entered_object() == object->formid);
+
+  // a quiet caption, not a section header: it sits among the object's own
+  // properties and should not compete with them
+  GtkWidget *caption = gtk_label_new(_("paths"));
+  gtk_label_set_xalign(GTK_LABEL(caption), 0.0f);
+  dt_gui_add_class(caption, "mask-object-paths-caption");
+  gtk_widget_show(caption);
   dt_gui_box_add(box, caption);
   for(const GList *l = object->points; l; l = g_list_next(l))
   {
@@ -15399,6 +15489,10 @@ static void _append_object_path_rows(dt_iop_module_t *module,
     g_free(name);
     gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
     gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_MIDDLE);
+    // the rename entry takes the label's place in here (see _start_rename_element)
+    GtkWidget *name_evbox = gtk_event_box_new();
+    gtk_event_box_set_visible_window(GTK_EVENT_BOX(name_evbox), FALSE);
+    gtk_container_add(GTK_CONTAINER(name_evbox), label);
     GtkWidget *remove = dtgtk_button_new(dtgtk_cairo_paint_remove, 0, NULL);
     gtk_widget_set_tooltip_text(remove, _("remove this path from the AI object"));
     g_object_set_data(G_OBJECT(remove), "formid", GINT_TO_POINTER(pid));
@@ -15406,7 +15500,7 @@ static void _append_object_path_rows(dt_iop_module_t *module,
     g_signal_connect(G_OBJECT(remove), "clicked", G_CALLBACK(_object_path_remove_clicked),
                      module);
     GtkWidget *row = dt_gui_hbox(_make_icon_widget(_kind_icon_paint(_form_kind(path))),
-                                 dt_gui_expand(label), remove);
+                                 dt_gui_expand(name_evbox), remove);
 
     // a windowed box, like the element rows', so hovering it highlights just
     // this path on the canvas (see _row_crossing)
@@ -15416,6 +15510,16 @@ static void _append_object_path_rows(dt_iop_module_t *module,
     g_object_set_data_full(G_OBJECT(evbox), "hover-formids",
                            g_list_prepend(NULL, GINT_TO_POINTER(pid)),
                            (GDestroyNotify)g_list_free);
+    // found by the canvas hover (see dt_iop_gui_masks_hover_form), and styled
+    // when hovered either way
+    g_object_set_data(G_OBJECT(evbox), "object-path-formid", GINT_TO_POINTER(pid));
+    g_object_set_data(G_OBJECT(evbox), "name-evbox", name_evbox);
+    dt_gui_add_class(evbox, "mask-object-path-row");
+    gtk_widget_add_events(evbox, GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK);
+    g_signal_connect(G_OBJECT(evbox), "button-press-event",
+                     G_CALLBACK(_object_path_row_click), module);
+    g_signal_connect(G_OBJECT(evbox), "button-release-event",
+                     G_CALLBACK(_object_path_row_click), module);
     gtk_widget_add_events(evbox, GDK_ENTER_NOTIFY_MASK | GDK_LEAVE_NOTIFY_MASK);
     g_signal_connect(G_OBJECT(evbox), "enter-notify-event", G_CALLBACK(_row_crossing), module);
     g_signal_connect(G_OBJECT(evbox), "leave-notify-event", G_CALLBACK(_row_crossing), module);
@@ -15894,6 +15998,8 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // the toggle that shows/hides it).
   if(props_editor_box)
   {
+    // the paths are edited one by one only inside the object (double-click on
+    // the canvas), so their section shows only then (see _append_object_path_rows)
     if(form->type & DT_MASKS_OBJECT) _append_object_path_rows(module, form, props_editor_box);
     // indent/inset entirely via CSS (.mask-props-row-editor's margin-left/
     // margin-right in darktable.css), not hardcoded here
@@ -16133,6 +16239,17 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
                                        const gboolean flexi)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
+
+  // an AI object left without paths (by an earlier cleanup, or a path form
+  // lost otherwise) is never shown or edited again: drop it. It renders
+  // nothing, so no history item is needed; the next one carries the change
+  if(flexi && darktable.develop)
+  {
+    dt_pthread_mutex_lock(&darktable.develop->history_mutex);
+    const int pruned = dt_masks_prune_empty_objects(&darktable.develop->forms);
+    dt_pthread_mutex_unlock(&darktable.develop->history_mutex);
+    if(pruned) _queue_link_peers_rebuild(module);
+  }
 
   // realize: a shape was just drawn into the selected empty group. Drop the empty
   // group, re-anchor the empties that sat above it onto the new run, and select
@@ -18483,18 +18600,53 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   DT_LEAVE_GUI_UPDATE();
 }
 
-// the mask overlay the previously focused module showed, handed over to the
-// next focused module so masks of different modules can be compared without
-// toggling the overlay on each time
+// the mask overlay and "edit on canvas" mode the previously focused module had,
+// handed over to the next focused module so masks of different modules can be
+// compared and edited without switching them on each time
 static dt_dev_pixelpipe_display_mask_t _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+static dt_masks_edit_mode_t _focus_carried_edit = DT_MASKS_EDIT_OFF;
 static guint _focus_carry_drop_source = 0;
 
-// focus left the module and went nowhere: the overlay is not handed on
+// focus left the module and went nowhere: nothing is handed on
 static gboolean _focus_carry_drop(gpointer user_data)
 {
   _focus_carry_drop_source = 0;
   _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+  _focus_carried_edit = DT_MASKS_EDIT_OFF;
   return G_SOURCE_REMOVE;
+}
+
+// a masked module without shapes has nothing to edit on canvas, so it holds the
+// edit mode for the next module instead of dropping it (see
+// dt_iop_gui_blending_lose_focus)
+static dt_iop_module_t *_focus_edit_holder = NULL;
+
+static void _carry_edit_to(dt_iop_module_t *module)
+{
+  const dt_masks_edit_mode_t carried = _focus_carried_edit;
+  _focus_carried_edit = DT_MASKS_EDIT_OFF;
+  _focus_edit_holder = NULL;
+
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(carried == DT_MASKS_EDIT_OFF
+     || !bd->masks_support
+     || !bd->masks_edit
+     || module->blend_params->mask_mode == DEVELOP_MASK_DISABLED
+     || gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit)))
+    return;
+
+  if(!_module_has_drawn_shapes(module))
+  {
+    _focus_carried_edit = carried;
+    _focus_edit_holder = module;
+    return;
+  }
+
+  bd->masks_shown = carried;
+  DT_ENTER_GUI_UPDATE();
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), TRUE);
+  DT_LEAVE_GUI_UPDATE();
+  dt_masks_set_edit_mode(module, carried);
 }
 
 static void _carry_mask_display_to(dt_iop_module_t *module)
@@ -18525,10 +18677,12 @@ void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module)
   if(!module || !module->blend_data)
   {
     _focus_carried_mask_display = DT_DEV_PIXELPIPE_DISPLAY_NONE;
+    _focus_carried_edit = DT_MASKS_EDIT_OFF;
     return;
   }
   _masks_flexi_relocate(module);
   _carry_mask_display_to(module);
+  _carry_edit_to(module);
 }
 
 void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
@@ -18538,8 +18692,7 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
 
   // stepping into an AI object (see dt_masks_form_gui_t.entered_object) is
   // part of editing this module's mask on the canvas: it ends with it
-  if(darktable.develop->form_gui)
-    darktable.develop->form_gui->entered_object = INVALID_MASKID;
+  _step_object(module, INVALID_MASKID);
 
   const gboolean has_mask_display =
     module->request_mask_display
@@ -18561,7 +18714,16 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
       bd->hover_preview_active ? bd->save_for_leave : module->request_mask_display;
     dt_pthread_mutex_unlock(&bd->lock);
     _focus_carried_mask_display = shown & DT_DEV_PIXELPIPE_DISPLAY_MASK;
-    if(!darktable.develop->gui_module && _focus_carried_mask_display
+    const gboolean editing =
+      bd->masks_support && bd->masks_edit
+      && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit));
+    if(editing)
+      _focus_carried_edit = bd->masks_shown;
+    else if(module != _focus_edit_holder)
+      _focus_carried_edit = DT_MASKS_EDIT_OFF;
+    _focus_edit_holder = NULL;
+    if(!darktable.develop->gui_module
+       && (_focus_carried_mask_display || _focus_carried_edit)
        && !_focus_carry_drop_source)
       _focus_carry_drop_source = g_idle_add(_focus_carry_drop, NULL);
 

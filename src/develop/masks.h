@@ -941,6 +941,9 @@ void dt_masks_free_form(dt_masks_form_t *form);
 void dt_masks_cleanup_unused(dt_develop_t *dev);
 /** drop from every forms snapshot in history_list the forms nothing reads */
 void dt_masks_cleanup_unused_from_list(GList *history_list);
+/** drop every AI object none of whose paths is in `forms`, from `forms` and
+    from every group in it. Returns how many were dropped */
+int dt_masks_prune_empty_objects(GList **forms);
 
 /** function used to manipulate forms for masks */
 void dt_masks_change_form_gui(dt_masks_form_t *newform);

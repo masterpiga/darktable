@@ -31,6 +31,7 @@
 // trust than it earns. They stay a manual checklist; see README.md.
 
 #include "flexi_fixture.h"
+#include "develop/develop.h"
 
 #include <setjmp.h>
 #include <stdarg.h>
@@ -1036,6 +1037,60 @@ static void test_double_click_on_plain_shape_does_nothing(void **state)
 
 // hover, drag, scroll and rotate move an object's paths together, except
 // inside the object the user stepped into
+// "clean up unused shapes": an object's paths are only reached through the
+// object, so they are used whenever the object is
+static void test_cleanup_keeps_the_paths_of_a_used_object(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+
+  dt_develop_blend_params_t bp = { 0 };
+  bp.mask_id = grp->formid;
+  dt_dev_history_item_t hist = { 0 };
+  hist.blend_params = &bp;
+  hist.forms = g_list_copy(flexi_dev.forms);
+  GList *history = g_list_append(NULL, &hist);
+
+  dt_masks_cleanup_unused_from_list(history);
+
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 5));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 21));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 22));
+
+  g_list_free(history);
+  g_list_free(hist.forms);
+  // removed forms are only moved there; the fixture owns them
+  g_list_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+}
+
+// an object none of whose paths exists is dropped from the group and the
+// forms, and the member above it keeps its own group
+static void test_empty_object_is_removed(void **state)
+{
+  flexi_build("u:1 | u:5,6");
+  dt_masks_form_t *obj = _make_object(5, 21, 0);
+
+  assert_int_equal(dt_masks_prune_empty_objects(&flexi_dev.forms), 1);
+  assert_layout("u:1 | u:6");
+  assert_null(dt_masks_get_from_id(&flexi_dev, 5));
+
+  // back to the fixture, which frees it
+  g_list_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+  flexi_dev.forms = g_list_append(flexi_dev.forms, obj);
+}
+
+static void test_object_with_a_path_is_kept(void **state)
+{
+  flexi_build("u:1 | u:5,6");
+  _make_object(5, 21, 1);
+
+  assert_int_equal(dt_masks_prune_empty_objects(&flexi_dev.forms), 0);
+  assert_layout("u:1 | u:5,6");
+  assert_non_null(dt_masks_get_from_id(&flexi_dev, 5));
+}
+
 static void test_object_paths_act_as_one_until_stepped_in(void **state)
 {
   flexi_conf_init();
@@ -1163,40 +1218,6 @@ static void test_canvas_path_selects_its_object_row(void **state)
   assert_int_equal(_model_panel_formid_for(&flexi_module, 1), 1);
   assert_int_equal(_model_panel_formid_for(&flexi_module, 77), 77);
   assert_int_equal(_model_panel_formid_for(&flexi_module, INVALID_MASKID), INVALID_MASKID);
-}
-
-// breaking a linked object breaks this module's copy: the others keep it whole
-static void test_break_apart_of_linked_object_leaves_the_link_whole(void **state)
-{
-  flexi_conf_init();
-  flexi_build("u:1 | u:5");
-  dt_masks_form_t *obj = _make_object(5, 21, 2);
-  const dt_mask_id_t other[] = { 5 };
-  _other_module(other, 1);
-
-  assert_true(_model_break_apart(&flexi_module, 5));
-  assert_non_null(_group_point(_other_grp, 5));
-  assert_int_equal(g_list_length(obj->points), 2);
-  assert_int_equal(_users(5), 1);
-  assert_null(_group_point(flexi_group(), 5));
-  assert_null(_group_point(flexi_group(), 21));
-  assert_null(_group_point(flexi_group(), 22));
-  assert_int_equal(g_list_length(flexi_group()->points), 3);
-  for(const GList *l = flexi_group()->points->next; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *pt = l->data;
-    assert_true(dt_masks_get_from_id(&flexi_dev, pt->formid)->type & DT_MASKS_PATH);
-  }
-}
-
-static void test_break_apart_puts_the_paths_in_the_object_place(void **state)
-{
-  flexi_conf_init();
-  flexi_build("u:1 | u:5");
-  _make_object(5, 21, 2);
-  assert_true(_model_break_apart(&flexi_module, 5));
-  assert_layout("u:1 | u:21,22");
-  assert_null(dt_masks_get_from_id(&flexi_dev, 5));
 }
 
 // ---------------------------------------------------------------------------
@@ -1609,10 +1630,6 @@ int main(void)
     cmocka_unit_test_teardown(test_canvas_delete_of_shape_is_the_panel_delete,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_canvas_path_selects_its_object_row, _teardown_objects),
-    cmocka_unit_test_teardown(test_break_apart_of_linked_object_leaves_the_link_whole,
-                              _teardown_objects),
-    cmocka_unit_test_teardown(test_break_apart_puts_the_paths_in_the_object_place,
-                              _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_of_removed_element_falls_back_to_its_group,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_with_nothing_left_is_the_whole_mask,
@@ -1627,6 +1644,10 @@ int main(void)
                               _teardown_raster),
     cmocka_unit_test_teardown(test_old_raster_name_follows_its_source, _teardown_raster),
     cmocka_unit_test_teardown(test_list_signature_follows_source_rename, _teardown_raster),
+    cmocka_unit_test_teardown(test_cleanup_keeps_the_paths_of_a_used_object,
+                              _teardown_objects),
+    cmocka_unit_test_teardown(test_empty_object_is_removed, _teardown_objects),
+    cmocka_unit_test_teardown(test_object_with_a_path_is_kept, _teardown_objects),
     cmocka_unit_test_teardown(test_add_target_is_the_only_group, _teardown),
     cmocka_unit_test_teardown(test_add_target_ignores_a_stale_selection_with_one_group,
                               _teardown),

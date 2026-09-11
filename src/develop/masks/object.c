@@ -932,6 +932,32 @@ static void _save_raster_mask(const float *mask,
   g_free(outpath);
 }
 
+// "path #N" for a path, standalone or in an object, "AI object #N" for a
+// multi-path object: numbered along with the forms of the same type, as
+// dt_masks_assign_unique_name does for hand-drawn ones
+static void _name_uniquely(const dt_develop_t *dev,
+                           dt_masks_form_t *f,
+                           const gboolean object)
+{
+  const dt_masks_type_t type = object ? DT_MASKS_OBJECT : DT_MASKS_PATH;
+  guint nb = 0;
+  for(const GList *l = dev->forms; l; l = g_list_next(l))
+    if(((const dt_masks_form_t *)l->data)->type == type) nb++;
+
+  gboolean exist;
+  do
+  {
+    exist = FALSE;
+    nb++;
+    if(object)
+      snprintf(f->name, sizeof(f->name), _("AI object #%d"), (int)nb);
+    else
+      snprintf(f->name, sizeof(f->name), _("path #%d"), (int)nb);
+    for(const GList *l = dev->forms; l && !exist; l = g_list_next(l))
+      exist = !strcmp(((const dt_masks_form_t *)l->data)->name, f->name);
+  } while(exist);
+}
+
 // transform mask-space forms to input-normalized coords and register them,
 // takes ownership of `forms` and `signs` lists (forms are appended to dev->forms)
 static dt_masks_form_t *
@@ -1017,16 +1043,7 @@ _register_vectorized_forms(dt_iop_module_t *module,
   if(nbform == 1)
   {
     dt_masks_form_t *f = forms->data;
-
-    const char *path_prefix = _("ai object");
-    guint path_nb = 1;
-    for(GList *l = dev->forms; l; l = g_list_next(l))
-    {
-      const dt_masks_form_t *ff = l->data;
-      if(strncmp(ff->name, path_prefix, strlen(path_prefix)) == 0) path_nb++;
-    }
-    snprintf(f->name, sizeof(f->name), "%s #%d", path_prefix, (int)path_nb);
-
+    _name_uniquely(dev, f, FALSE);
     dev->forms = g_list_append(dev->forms, f);
 
     g_list_free(forms);
@@ -1040,37 +1057,17 @@ _register_vectorized_forms(dt_iop_module_t *module,
   // as one coordinated DT_MASKS_OBJECT unit -- see _object_bundle_modify_property
   // for how feather/size/rotation stay coordinated across the bundle.
 
-  // count existing AI masks/paths for numbering
-  const char *bundle_prefix = _("ai mask");
-  const char *path_prefix = _("ai object");
-
-  guint bundle_nb = 0;
-  guint path_nb = 0;
-  for(GList *l = dev->forms; l; l = g_list_next(l))
-  {
-    const dt_masks_form_t *f = l->data;
-    if(strncmp(f->name, bundle_prefix, strlen(bundle_prefix)) == 0) bundle_nb++;
-    if(strncmp(f->name, path_prefix, strlen(path_prefix)) == 0)
-      path_nb++;
-  }
-  bundle_nb++;
-  path_nb++;
+  // register all path forms so they exist in dev->forms, each named once the
+  // ones before it are there, so every path gets its own number
   for(GList *l = forms; l; l = g_list_next(l))
   {
     dt_masks_form_t *f = l->data;
-    snprintf(f->name, sizeof(f->name),
-             "%s #%d", path_prefix, (int)path_nb++);
+    _name_uniquely(dev, f, FALSE);
+    dev->forms = g_list_append(dev->forms, f);
   }
 
   dt_masks_form_t *bundle = dt_masks_create(DT_MASKS_OBJECT);
-  snprintf(bundle->name, sizeof(bundle->name), "%s #%d", bundle_prefix, (int)bundle_nb);
-
-  // register all path forms so they exist in dev->forms
-  for(GList *l = forms; l; l = g_list_next(l))
-  {
-    dt_masks_form_t *f = l->data;
-    dev->forms = g_list_append(dev->forms, f);
-  }
+  _name_uniquely(dev, bundle, TRUE);
 
   // add each path as a member of the bundle by hand: dt_masks_group_add_form
   // gates its first argument on DT_MASKS_GROUP, deliberately, so a shape
@@ -1863,7 +1860,7 @@ static GSList *_object_setup_mouse_actions
 static void _object_set_form_name(dt_masks_form_t *const form,
                                   const size_t nb)
 {
-  snprintf(form->name, sizeof(form->name), _("object #%d"), (int)nb);
+  snprintf(form->name, sizeof(form->name), _("AI object #%d"), (int)nb);
 }
 
 // coordinated feather/size/rotation across a multi-path AI-mask bundle
