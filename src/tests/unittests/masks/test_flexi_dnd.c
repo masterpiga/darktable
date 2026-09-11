@@ -178,6 +178,132 @@ static void test_realizing_unanchored_empty_lands_at_the_bottom(void **state)
   assert_int_equal(((dt_masks_point_group_t *)grp->points->data)->formid, 3);
 }
 
+// the sole member of the bottom group dropped onto the empty group below it:
+// it fills that group, and the group it leaves stays empty where it was, above
+// it. Its placeholder must not take the bottom slot back, which looked as if
+// the element had not moved at all
+static void test_realizing_below_the_emptied_group_keeps_their_order(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_DIFFERENCE, INVALID_MASKID);
+  assert_order("[d] | u:1 | i:2");
+
+  assert_true(_model_drop_element_onto_empty(&flexi_module, grp, 1, eg));
+  assert_order("d:1 | [u] | i:2");
+}
+
+// the same move upwards: the sole member of the bottom group dropped onto the
+// empty group above it. The element goes up with it, and the group it leaves
+// stays at the bottom
+static void test_realizing_above_the_emptied_group_keeps_their_order(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_DIFFERENCE, 1);
+  assert_order("u:1 | [d]");
+
+  assert_true(_model_drop_element_onto_empty(&flexi_module, grp, 1, eg));
+  assert_order("[u] | d:1");
+}
+
+// ...with a group above both: the element lands in the empty group's own slot,
+// not past the group above it, although the empty group was anchored on the
+// element that moves
+static void test_realizing_an_empty_anchored_on_the_moved_element(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_DIFFERENCE, 1);
+  assert_order("u:1 | [d] | i:2");
+
+  assert_true(_model_drop_element_onto_empty(&flexi_module, grp, 1, eg));
+  assert_order("[u] | d:1 | i:2");
+}
+
+static void _name_group(dt_masks_form_t *grp, const char *name, const dt_mask_id_t first,
+                        const dt_mask_id_t last)
+{
+  for(dt_mask_id_t id = first; id <= last; id++)
+    g_strlcpy(_group_point(grp, id)->name, name, sizeof(_group_point(grp, id)->name));
+}
+
+// a group's name lives on its members: one that moves into an unnamed empty
+// group must not bring its old group's name along, and the group it leaves
+// keeps that name
+static void test_realizing_an_unnamed_empty_does_not_carry_the_old_name(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
+  _name_group(grp, "sky", 1, 1);
+  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_DIFFERENCE, 2);
+
+  assert_true(_model_drop_element_onto_empty(&flexi_module, grp, 1, eg));
+  assert_string_equal(_group_point(grp, 1)->name, "");
+  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+  assert_string_equal(((dt_masks_empty_group_t *)flexi_bd.empty_groups->data)->name, "sky");
+}
+
+// one that joins a named group takes that group's name, not its own
+static void test_joining_a_group_takes_its_name(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
+  _name_group(grp, "sky", 1, 1);
+  _name_group(grp, "trees", 2, 3);
+
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
+  assert_string_equal(_group_point(grp, 1)->name, "trees");
+}
+
+// ...and every other setting of the group, which it reads off its first
+// member: landing under 2, the moved element becomes that member
+static void test_joining_a_group_takes_all_its_settings(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
+  dt_masks_point_group_t *moved = _group_point(grp, 1);
+  moved->group_opacity = 0.8f;
+  moved->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
+                                               .blur_radius = 9.0f };
+  for(dt_mask_id_t id = 2; id <= 3; id++)
+  {
+    dt_masks_point_group_t *pt = _group_point(grp, id);
+    pt->state |= DT_MASKS_STATE_SCREEN;
+    pt->group_opacity = 0.5f;
+    pt->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
+                                              .blur_radius = 3.0f };
+  }
+
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
+  assert_int_equal(_group_cid_of_form(grp, 1), 1);
+  assert_true(moved->state & DT_MASKS_STATE_SCREEN);
+  assert_float_equal(moved->group_opacity, 0.5f, 1e-6);
+  assert_int_equal(moved->refinement.enabled, DT_MASKS_REFINE_GROUP);
+  assert_float_equal(moved->refinement.blur_radius, 3.0f, 1e-6);
+}
+
+// its own element refinement is its own: it survives a move into a group that
+// has no refinement of its own, while a copy of its old group's does not
+static void test_joining_keeps_the_elements_own_refinement(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,4 | i:2,3");
+  _group_point(grp, 1)->refinement = (dt_masks_refinement_t){
+    .enabled = DT_MASKS_REFINE_ELEMENT, .blur_radius = 7.0f };
+  _group_point(grp, 4)->refinement = (dt_masks_refinement_t){
+    .enabled = DT_MASKS_REFINE_GROUP, .blur_radius = 2.0f };
+
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE));
+  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
+  assert_float_equal(_group_point(grp, 1)->refinement.blur_radius, 7.0f, 1e-6);
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 4, 2, TRUE));
+  assert_int_equal(_group_point(grp, 4)->refinement.enabled, 0);
+}
+
+// a row drop moving the bottom group's sole member up, under the first element
+// of the group above: that group keeps its place, as does the one emptied
+static void test_row_drop_up_from_a_sole_member_keeps_group_order(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
+
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
+  assert_order("[u] | i:1,2,3");
+}
+
 // dropping onto a placeholder the panel does not own must be refused rather
 // than realising a group that is not in the list
 static void test_realizing_an_unregistered_empty_is_rejected(void **state)
@@ -392,6 +518,14 @@ int main(void)
     cmocka_unit_test_teardown(test_realizing_preserves_the_staged_name, _teardown),
     cmocka_unit_test_teardown(test_realizing_adopts_staged_refinement, _teardown),
     cmocka_unit_test_teardown(test_realizing_unanchored_empty_lands_at_the_bottom, _teardown),
+    cmocka_unit_test_teardown(test_realizing_below_the_emptied_group_keeps_their_order, _teardown),
+    cmocka_unit_test_teardown(test_realizing_above_the_emptied_group_keeps_their_order, _teardown),
+    cmocka_unit_test_teardown(test_realizing_an_empty_anchored_on_the_moved_element, _teardown),
+    cmocka_unit_test_teardown(test_row_drop_up_from_a_sole_member_keeps_group_order, _teardown),
+    cmocka_unit_test_teardown(test_realizing_an_unnamed_empty_does_not_carry_the_old_name, _teardown),
+    cmocka_unit_test_teardown(test_joining_a_group_takes_its_name, _teardown),
+    cmocka_unit_test_teardown(test_joining_a_group_takes_all_its_settings, _teardown),
+    cmocka_unit_test_teardown(test_joining_keeps_the_elements_own_refinement, _teardown),
     cmocka_unit_test_teardown(test_realizing_an_unregistered_empty_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_cluster_onto_group_header, _teardown),
     cmocka_unit_test_teardown(test_cluster_onto_element_row, _teardown),

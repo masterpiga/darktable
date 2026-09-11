@@ -188,6 +188,10 @@ gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
                                         dt_masks_form_t *grp,
                                         const dt_mask_id_t src,
                                         dt_masks_empty_group_t *eg);
+/** drop every member whose form is gone from dev->forms; how many went */
+int _model_prune_dangling_members(dt_masks_form_t *grp);
+/** keep at least one group, empty if need be; whether one was added */
+gboolean _model_ensure_a_group(dt_iop_gui_blend_data_t *bd, dt_masks_form_t *grp);
 /** move a whole same-kind cluster onto an element row or a group header */
 gboolean _masks_cluster_move(dt_iop_module_t *module,
                              GList *member_ids,

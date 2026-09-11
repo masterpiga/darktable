@@ -7910,6 +7910,49 @@ static void _popover_menu_set_tooltips(GtkWidget *popover, GMenuModel *model)
     g_list_free(pages);
   }
 }
+
+// GTK3 workaround: its popover slides submenus in as pages of one stack, named
+// after their labels (see gtk_menu_section_box_insert_func in
+// gtkmenusectionbox.c), and a menu model has no other name to give them. Two
+// submenus with the same label then open the same page, whichever was meant.
+// A repeated label gets zero-width spaces appended: it looks the same and
+// names a page of its own. GTK4's nested popovers attach each submenu to its
+// own button, so the GTK4 port drops this
+static void _popover_menu_unique_submenu_labels(GMenuModel *model, GHashTable *seen)
+{
+  if(!G_IS_MENU(model)) return;
+  const int n_items = g_menu_model_get_n_items(model);
+  for(int i = 0; i < n_items; i++)
+  {
+    GMenuModel *section = g_menu_model_get_item_link(model, i, G_MENU_LINK_SECTION);
+    if(section)
+    {
+      _popover_menu_unique_submenu_labels(section, seen);
+      g_object_unref(section);
+      continue;
+    }
+    GMenuModel *submenu = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
+    if(!submenu) continue;
+    gchar *label = NULL;
+    if(g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_LABEL, "s", &label))
+    {
+      GString *unique = g_string_new(label);
+      while(g_hash_table_contains(seen, unique->str)) g_string_append(unique, "\xe2\x80\x8b"); // U+200B
+      if(strcmp(unique->str, label))
+      {
+        GMenuItem *item = g_menu_item_new_from_model(model, i);
+        g_menu_item_set_label(item, unique->str);
+        g_menu_remove(G_MENU(model), i);
+        g_menu_insert_item(G_MENU(model), i, item);
+        g_object_unref(item);
+      }
+      g_hash_table_add(seen, g_string_free(unique, FALSE));
+      g_free(label);
+    }
+    _popover_menu_unique_submenu_labels(submenu, seen);
+    g_object_unref(submenu);
+  }
+}
 #endif
 
 GtkWidget *dt_gui_popover_menu_from_model(GtkWidget *parent, GMenu *menu)
@@ -7917,6 +7960,11 @@ GtkWidget *dt_gui_popover_menu_from_model(GtkWidget *parent, GMenu *menu)
   GtkWidget *popover_menu;
 
 #if !GTK_CHECK_VERSION(4, 0, 0)
+  GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, NULL);
+  // the popover's own top page
+  g_hash_table_add(seen, g_strdup("main"));
+  _popover_menu_unique_submenu_labels(G_MENU_MODEL(menu), seen);
+  g_hash_table_destroy(seen);
   popover_menu = gtk_popover_new_from_model(parent, G_MENU_MODEL(menu));
   _popover_menu_reveal_icons(popover_menu);
   _popover_menu_set_tooltips(popover_menu, G_MENU_MODEL(menu));
