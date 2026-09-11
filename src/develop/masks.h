@@ -1110,9 +1110,11 @@ dt_masks_remove_target_t dt_masks_remove_shape_target(const struct dt_iop_module
                                                       const gboolean whole);
 /** a canvas press in the flat edit group: a double-click on a path of an AI
     object steps into the object, any other primary click outside it steps out.
-    `hit_object` is the object of the path under the pointer, if any. TRUE when
+    `hit_object` is the object of the path under the pointer, if any. A step
+    either way redraws the canvas and updates `module`'s mask panel. TRUE when
     the press was the step in and must do nothing else */
-gboolean dt_masks_gui_step_object(dt_masks_form_gui_t *gui,
+gboolean dt_masks_gui_step_object(dt_iop_module_t *module,
+                                  dt_masks_form_gui_t *gui,
                                   const dt_mask_id_t hit_object,
                                   const gboolean primary,
                                   const gboolean double_click);
