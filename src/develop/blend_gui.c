@@ -5802,53 +5802,97 @@ void _normalize_group_operators(dt_masks_form_t *grp)
 // above darktable's own theme provider (USER+1) so the border is not overridden.
 // rows tagged "mask-row" may be nested inside cluster expanders, so the row
 // lookups below walk the whole subtree under masks_list_box.
-static void _apply_row_selection(GtkWidget *w, const dt_mask_id_t sel)
+// the mask list's rows and headers carry a tag (object data such as "mask-row"
+// or "mask-header") and sit nested in expanders and boxes at varying depths:
+// these two walk the subtree under `w`, `w` excluded, to reach them.
+// _foreach_tagged calls `fn` on each tagged widget and does not look inside it
+static void _foreach_tagged(GtkWidget *w,
+                            const char *tag,
+                            void (*fn)(GtkWidget *tagged, gpointer data),
+                            gpointer data)
 {
   if(!GTK_IS_CONTAINER(w)) return;
   GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
   for(GList *c = kids; c; c = g_list_next(c))
   {
     GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-row"))
-    {
-      const dt_mask_id_t fid =
-        GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child), "formid"));
-      if(dt_is_valid_maskid(sel) && fid == sel)
-        dt_gui_add_class(child, "mask-list-row-selected");
-      else
-        dt_gui_remove_class(child, "mask-list-row-selected");
-    }
+    if(g_object_get_data(G_OBJECT(child), tag))
+      fn(child, data);
     else
-      _apply_row_selection(child, sel); // recurse into expanders / boxes
+      _foreach_tagged(child, tag, fn, data);
   }
   g_list_free(kids);
+}
+
+// the first tagged widget `match` accepts, or NULL
+static GtkWidget *_find_tagged(GtkWidget *w,
+                               const char *tag,
+                               gboolean (*match)(GtkWidget *tagged, gconstpointer data),
+                               gconstpointer data)
+{
+  if(!GTK_IS_CONTAINER(w)) return NULL;
+  GtkWidget *found = NULL;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *c = kids; c && !found; c = g_list_next(c))
+  {
+    GtkWidget *child = c->data;
+    if(g_object_get_data(G_OBJECT(child), tag) && match(child, data))
+      found = child;
+    else
+      found = _find_tagged(child, tag, match, data);
+  }
+  g_list_free(kids);
+  return found;
+}
+
+// the id a tagged widget carries under `key`
+static inline dt_mask_id_t _widget_id(GtkWidget *w, const char *key)
+{
+  return GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), key));
+}
+
+// a group header's cid (see the header build in _build_masks_list)
+static inline dt_mask_id_t _header_cid(GtkWidget *header)
+{
+  return (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(header), "group-key"));
+}
+
+static gboolean _header_has_cid(GtkWidget *header, gconstpointer cid)
+{
+  return _header_cid(header) == GPOINTER_TO_INT(cid);
+}
+
+static void _paint_row_selection(GtkWidget *row, gpointer sel)
+{
+  const dt_mask_id_t id = GPOINTER_TO_INT(sel);
+  if(dt_is_valid_maskid(id) && _widget_id(row, "formid") == id)
+    dt_gui_add_class(row, "mask-list-row-selected");
+  else
+    dt_gui_remove_class(row, "mask-list-row-selected");
+}
+
+static void _apply_row_selection(GtkWidget *w, const dt_mask_id_t sel)
+{
+  _foreach_tagged(w, "mask-row", _paint_row_selection, GINT_TO_POINTER(sel));
 }
 
 // same idea as _apply_row_selection, but for a group's header (tagged "mask-header"
 // at construction, with "group-key" holding its cid and "header-widget" the inner
 // box the CSS class actually goes on -- see the header build in _build_masks_list).
+static void _paint_group_selection(GtkWidget *header, gpointer sel)
+{
+  GtkWidget *target = g_object_get_data(G_OBJECT(header), "header-widget");
+  if(!target) target = header;
+  const dt_mask_id_t cid = GPOINTER_TO_INT(sel);
+  if(dt_is_valid_maskid(cid) && _header_cid(header) == cid)
+    dt_gui_add_class(target, "mask-list-row-selected");
+  else
+    dt_gui_remove_class(target, "mask-list-row-selected");
+}
+
 static void _apply_group_selection(GtkWidget *w, const dt_mask_id_t sel)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const dt_mask_id_t cid =
-        (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      GtkWidget *target = g_object_get_data(G_OBJECT(child), "header-widget");
-      if(!target) target = child;
-      if(dt_is_valid_maskid(sel) && cid == sel)
-        dt_gui_add_class(target, "mask-list-row-selected");
-      else
-        dt_gui_remove_class(target, "mask-list-row-selected");
-    }
-    else
-      _apply_group_selection(child, sel); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _foreach_tagged(w, "mask-header", _paint_group_selection, GINT_TO_POINTER(sel));
 }
 
 // same idea as _apply_group_selection, but toggles a group header's own solo
@@ -5857,29 +5901,21 @@ static void _apply_group_selection(GtkWidget *w, const dt_mask_id_t sel)
 // rows in place (_refresh_all_shape_rows) -- without this, clearing a group
 // solo by soloing one of its own elements left that group's badge stuck on
 // screen even though bd->solo_group_key had already gone back to 0.
+static void _paint_group_solo_badge(GtkWidget *header, gpointer solo_key)
+{
+  const guint key = GPOINTER_TO_UINT(solo_key);
+  GtkWidget *badge = g_object_get_data(G_OBJECT(header), "solo-badge");
+  const gboolean bypassed = g_object_get_data(G_OBJECT(header), "group-bypassed") != NULL;
+  if(badge)
+    _set_solo_status_badge(badge, bypassed ? MASK_SOLO_BADGE_DISABLE
+                                  : (key != 0 && key == (guint)_header_cid(header))
+                                    ? MASK_SOLO_BADGE_SOLO
+                                    : MASK_SOLO_BADGE_NONE);
+}
+
 static void _apply_group_solo_badges(GtkWidget *w, const guint solo_key)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const guint cid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      GtkWidget *badge = g_object_get_data(G_OBJECT(child), "solo-badge");
-      const gboolean bypassed =
-        g_object_get_data(G_OBJECT(child), "group-bypassed") != NULL;
-      if(badge)
-        _set_solo_status_badge(badge, bypassed ? MASK_SOLO_BADGE_DISABLE
-                                      : (solo_key != 0 && solo_key == cid)
-                                        ? MASK_SOLO_BADGE_SOLO
-                                        : MASK_SOLO_BADGE_NONE);
-    }
-    else
-      _apply_group_solo_badges(child, solo_key); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _foreach_tagged(w, "mask-header", _paint_group_solo_badge, GUINT_TO_POINTER(solo_key));
 }
 
 // same idea as _apply_group_selection, but dims an empty group's header (tagged
@@ -5888,30 +5924,23 @@ static void _apply_group_solo_badges(GtkWidget *w, const guint solo_key)
 // exactly like a real group whose every member is solo-hidden. Needed for the
 // same reason as _apply_group_solo_badges: soloing an element only refreshes
 // element rows in place, never headers.
+static void _dim_empty_group_header(GtkWidget *header, gpointer solo_active)
+{
+  // "group-header-widget" (-> hdr specifically), not "header-widget" (->
+  // the whole block, used for selection shading -- see
+  // _pack_empty_group_header/_apply_empty_selection): dimming must stay
+  // on the header row alone, same split a real group's own header uses
+  // (see _apply_group_header_dimming's own comment) -- dimming the whole
+  // block would also dim a pending-shape placeholder row sitting under an
+  // empty group's header, which is not a solo-suppression target.
+  GtkWidget *target = g_object_get_data(G_OBJECT(header), "group-header-widget");
+  if(!target) target = header;
+  gtk_widget_set_opacity(target, GPOINTER_TO_INT(solo_active) ? 0.45 : 1.0);
+}
+
 static void _apply_empty_group_dimming(GtkWidget *w, const gboolean solo_active)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "eg-header"))
-    {
-      // "group-header-widget" (-> hdr specifically), not "header-widget" (->
-      // the whole block, used for selection shading -- see
-      // _pack_empty_group_header/_apply_empty_selection): dimming must stay
-      // on the header row alone, same split a real group's own header uses
-      // (see _apply_group_header_dimming's own comment) -- dimming the whole
-      // block would also dim a pending-shape placeholder row sitting under an
-      // empty group's header, which is not a solo-suppression target.
-      GtkWidget *target = g_object_get_data(G_OBJECT(child), "group-header-widget");
-      if(!target) target = child;
-      gtk_widget_set_opacity(target, solo_active ? 0.45 : 1.0);
-    }
-    else
-      _apply_empty_group_dimming(child, solo_active); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _foreach_tagged(w, "eg-header", _dim_empty_group_header, GINT_TO_POINTER(solo_active));
 }
 
 // same idea as _apply_group_solo_badges, but dims a *real* group/cluster
@@ -5921,66 +5950,62 @@ static void _apply_empty_group_dimming(GtkWidget *w, const gboolean solo_active)
 // group's own header fully lit even though every shape inside it was
 // solo-suppressed. The group that is itself the solo target (cid ==
 // solo_group_key) must stay fully lit, not dim itself.
+typedef struct _header_dimming_t
+{
+  gboolean solo_active;
+  guint solo_group_key;
+} _header_dimming_t;
+
+static void _dim_group_header(GtkWidget *header, gpointer data)
+{
+  const _header_dimming_t *d = data;
+  const guint cid = (guint)_header_cid(header);
+  GtkWidget *target = g_object_get_data(G_OBJECT(header), "group-header-widget");
+  GtkWidget *within_sel = g_object_get_data(G_OBJECT(header), "within-sel-widget");
+  GtkWidget *opacity_slider = g_object_get_data(G_OBJECT(header), "group-opacity-widget");
+  const gboolean suppressed = d->solo_active && cid != d->solo_group_key;
+  const gboolean bypassed = g_object_get_data(G_OBJECT(header), "group-bypassed") != NULL;
+  if(target)
+  {
+    if(bypassed)
+    {
+      GtkWidget *ghandle = g_object_get_data(G_OBJECT(header), "ghandle-widget");
+      GtkWidget *lbl_box = g_object_get_data(G_OBJECT(header), "title-label-box");
+      GtkWidget *labevt = lbl_box ? gtk_widget_get_parent(lbl_box) : NULL;
+      GtkWidget *opacity_inner = opacity_slider ? gtk_widget_get_parent(opacity_slider) : NULL;
+      if(ghandle) gtk_widget_set_opacity(ghandle, 0.45);
+      if(labevt) gtk_widget_set_opacity(labevt, 0.45);
+      if(opacity_inner) gtk_widget_set_opacity(opacity_inner, 0.45);
+      if(within_sel) gtk_widget_set_opacity(within_sel, 0.45);
+      gtk_widget_set_opacity(target, 1.0);
+    }
+    else
+    {
+      gtk_widget_set_opacity(target, suppressed ? 0.45 : 1.0);
+    }
+  }
+  if(within_sel) gtk_widget_set_sensitive(within_sel, !suppressed && !bypassed);
+  if(opacity_slider) gtk_widget_set_sensitive(opacity_slider, !suppressed && !bypassed);
+  // tag the *soloed* group's whole block so its own cluster headers stay lit
+  // (they dim by default under .mask-solo-active -- see darktable.css); a
+  // group is being shown in full, so nothing inside it should read as
+  // suppressed. Other groups' blocks keep the tag off, so their clusters dim.
+  GtkWidget *block = g_object_get_data(G_OBJECT(header), "header-widget");
+  if(block)
+  {
+    if(d->solo_group_key != 0 && cid == d->solo_group_key)
+      dt_gui_add_class(block, "mask-group-soloed");
+    else
+      dt_gui_remove_class(block, "mask-group-soloed");
+  }
+}
+
 static void _apply_group_header_dimming(GtkWidget *w,
                                         const gboolean solo_active,
                                         const guint solo_group_key)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const guint cid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      GtkWidget *target = g_object_get_data(G_OBJECT(child), "group-header-widget");
-      GtkWidget *within_sel = g_object_get_data(G_OBJECT(child), "within-sel-widget");
-      GtkWidget *opacity_slider =
-        g_object_get_data(G_OBJECT(child), "group-opacity-widget");
-      const gboolean suppressed = solo_active && cid != solo_group_key;
-      const gboolean bypassed =
-        g_object_get_data(G_OBJECT(child), "group-bypassed") != NULL;
-      if(target)
-      {
-        if(bypassed)
-        {
-          GtkWidget *ghandle = g_object_get_data(G_OBJECT(child), "ghandle-widget");
-          GtkWidget *lbl_box = g_object_get_data(G_OBJECT(child), "title-label-box");
-          GtkWidget *labevt = lbl_box ? gtk_widget_get_parent(lbl_box) : NULL;
-          GtkWidget *opacity_inner =
-            opacity_slider ? gtk_widget_get_parent(opacity_slider) : NULL;
-          if(ghandle) gtk_widget_set_opacity(ghandle, 0.45);
-          if(labevt) gtk_widget_set_opacity(labevt, 0.45);
-          if(opacity_inner) gtk_widget_set_opacity(opacity_inner, 0.45);
-          if(within_sel) gtk_widget_set_opacity(within_sel, 0.45);
-          gtk_widget_set_opacity(target, 1.0);
-        }
-        else
-        {
-          gtk_widget_set_opacity(target, suppressed ? 0.45 : 1.0);
-        }
-      }
-      if(within_sel) gtk_widget_set_sensitive(within_sel, !suppressed && !bypassed);
-      if(opacity_slider)
-        gtk_widget_set_sensitive(opacity_slider, !suppressed && !bypassed);
-      // tag the *soloed* group's whole block so its own cluster headers stay lit
-      // (they dim by default under .mask-solo-active -- see darktable.css); a
-      // group is being shown in full, so nothing inside it should read as
-      // suppressed. Other groups' blocks keep the tag off, so their clusters dim.
-      GtkWidget *block = g_object_get_data(G_OBJECT(child), "header-widget");
-      if(block)
-      {
-        if(solo_group_key != 0 && cid == solo_group_key)
-          dt_gui_add_class(block, "mask-group-soloed");
-        else
-          dt_gui_remove_class(block, "mask-group-soloed");
-      }
-    }
-    else
-      _apply_group_header_dimming(child, solo_active,
-                                  solo_group_key); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _header_dimming_t d = { solo_active, solo_group_key };
+  _foreach_tagged(w, "mask-header", _dim_group_header, &d);
 }
 
 // same tree-walk idea as _apply_group_header_dimming, but toggles one specific
@@ -5992,33 +6017,14 @@ static void _apply_group_header_dimming(GtkWidget *w,
 static void
 _apply_group_output_invert_icon(GtkWidget *w, const guint cid, const gboolean inverted)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const guint this_cid =
-        GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      if(this_cid == cid)
-      {
-        GtkWidget *ghandle = g_object_get_data(G_OBJECT(child), "ghandle-widget");
-        if(ghandle)
-        {
-          if(inverted)
-            dt_gui_add_class(ghandle, "mask-list-handle-inverted");
-          else
-            dt_gui_remove_class(ghandle, "mask-list-handle-inverted");
-          gtk_widget_queue_draw(ghandle);
-        }
-      }
-    }
-    else
-      _apply_group_output_invert_icon(child, cid,
-                                      inverted); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  GtkWidget *header = _find_tagged(w, "mask-header", _header_has_cid, GUINT_TO_POINTER(cid));
+  GtkWidget *ghandle = header ? g_object_get_data(G_OBJECT(header), "ghandle-widget") : NULL;
+  if(!ghandle) return;
+  if(inverted)
+    dt_gui_add_class(ghandle, "mask-list-handle-inverted");
+  else
+    dt_gui_remove_class(ghandle, "mask-list-handle-inverted");
+  gtk_widget_queue_draw(ghandle);
 }
 
 // same idea as _apply_group_selection, but for empty-group headers (tagged
@@ -6028,45 +6034,29 @@ _apply_group_output_invert_icon(GtkWidget *w, const guint cid, const gboolean in
 // path (_set_group_target) clears bd->selected_empty in the data model but,
 // without this, never removed the stale highlight left on a previously-
 // selected empty group's header widget.
+static void _paint_empty_selection(GtkWidget *header, gpointer sel)
+{
+  GtkWidget *target = g_object_get_data(G_OBJECT(header), "header-widget");
+  if(!target) target = header;
+  if(g_object_get_data(G_OBJECT(header), "eg") == sel)
+    dt_gui_add_class(target, "mask-list-row-selected");
+  else
+    dt_gui_remove_class(target, "mask-list-row-selected");
+}
+
 static void _apply_empty_selection(GtkWidget *w, const struct dt_masks_empty_group_t *sel)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "eg-header"))
-    {
-      const struct dt_masks_empty_group_t *eg = g_object_get_data(G_OBJECT(child), "eg");
-      GtkWidget *target = g_object_get_data(G_OBJECT(child), "header-widget");
-      if(!target) target = child;
-      if(eg == sel)
-        dt_gui_add_class(target, "mask-list-row-selected");
-      else
-        dt_gui_remove_class(target, "mask-list-row-selected");
-    }
-    else
-      _apply_empty_selection(child, sel); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _foreach_tagged(w, "eg-header", _paint_empty_selection, (gpointer)sel);
+}
+
+static gboolean _row_has_formid(GtkWidget *row, gconstpointer formid)
+{
+  return _widget_id(row, "formid") == GPOINTER_TO_INT(formid);
 }
 
 static GtkWidget *_find_row_by_formid(GtkWidget *w, const dt_mask_id_t formid)
 {
-  if(!GTK_IS_CONTAINER(w)) return NULL;
-  GtkWidget *found = NULL;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c && !found; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-row")
-       && GPOINTER_TO_INT(g_object_get_data(G_OBJECT(child), "formid")) == formid)
-      found = child;
-    else
-      found = _find_row_by_formid(child, formid);
-  }
-  g_list_free(kids);
-  return found;
+  return _find_tagged(w, "mask-row", _row_has_formid, GINT_TO_POINTER(formid));
 }
 
 // O(1) shape-row lookup by form id via the masks_row_map index (see blend.h),
@@ -6570,25 +6560,17 @@ static float _group_own_opacity(dt_masks_form_t *grp, const dt_mask_id_t cid)
 // refresh every group header's low-opacity badge, in place. Headers are not in
 // bd->masks_row_map (that indexes element rows only), so they are found by the
 // same recursive walk _apply_group_solo_badges uses.
+static void _paint_group_lowop_badge(GtkWidget *header, gpointer grp)
+{
+  GtkWidget *badge = g_object_get_data(G_OBJECT(header), "lowop-badge");
+  if(badge)
+    _update_lowop_badge(badge, _group_own_opacity(grp, _header_cid(header)), TRUE,
+                        FALSE, NULL);
+}
+
 static void _apply_group_lowop_badges(GtkWidget *w, dt_masks_form_t *grp)
 {
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const guint cid = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      GtkWidget *badge = g_object_get_data(G_OBJECT(child), "lowop-badge");
-      if(badge)
-        _update_lowop_badge(badge, _group_own_opacity(grp, (dt_mask_id_t)cid), TRUE,
-                            FALSE, NULL);
-    }
-    else
-      _apply_group_lowop_badges(child, grp); // recurse into expanders / boxes
-  }
-  g_list_free(kids);
+  _foreach_tagged(w, "mask-header", _paint_group_lowop_badge, grp);
 }
 
 // refresh every low-opacity badge in the panel (element rows and group headers)
@@ -6732,22 +6714,18 @@ dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
 
 static void _soloedit_follow_selection(dt_iop_gui_blend_data_t *bd)
 {
-  // narrowing the canvas edit scope tears down and rebuilds form_visible, which
-  // can clear the canvas selection (dt_masks_change_form_gui -> masks.c's
-  // dt_masks_select_form(NULL, NULL)) and land straight back here through
-  // dt_iop_gui_masks_select_form -- with an invalid selection, undoing the
-  // isolation we are in the middle of applying. One gesture, one decision.
+  // _toggle_soloedit repaints the rows (_refresh_all_shape_rows), whose
+  // _update_row_selection lands straight back here in the middle of the toggle.
+  // One gesture, one decision
   static gboolean applying = FALSE;
   if(applying) return;
 
   const dt_mask_id_t want = _model_soloedit_target(bd);
   if(bd->soloedit_formid == want) return;
 
-  // the same canvas rebuild clears the panel selection being isolated, which
-  // would leave its row unhighlighted: put it back afterwards
-  const dt_mask_id_t sel_formid = bd->panel_selected_formid;
-  const dt_mask_id_t sel_group = bd->panel_selected_group_cid;
-  // and the canvas one, which the rebuild drops through dt_masks_clear_form_gui
+  // narrowing the canvas edit scope tears down and rebuilds form_visible, which
+  // drops the canvas selection (dt_masks_clear_form_gui): put it back
+  // afterwards. The panel keeps its own (see dt_iop_gui_masks_select_form)
   const dt_mask_id_t canvas_sel = darktable.develop->mask_form_selected_id;
 
   applying = TRUE;
@@ -6757,13 +6735,6 @@ static void _soloedit_follow_selection(dt_iop_gui_blend_data_t *bd)
                    dt_is_valid_maskid(want) ? want : bd->soloedit_formid);
   applying = FALSE;
   darktable.develop->mask_form_selected_id = canvas_sel;
-
-  if(bd->panel_selected_formid != sel_formid || bd->panel_selected_group_cid != sel_group)
-  {
-    bd->panel_selected_formid = sel_formid;
-    bd->panel_selected_group_cid = sel_group;
-    _update_row_selection(bd);
-  }
 }
 
 // the solo-edit mode toggle, and the <blending> action bound to it. Global like
@@ -6831,28 +6802,15 @@ static void _clear_hover_classes(GtkWidget *w)
 // their member ids in "group-formids"). Used as the fallback below when a
 // shape's own nested row cannot be found directly, so its group header is
 // highlighted instead.
+static gboolean _header_has_member(GtkWidget *header, gconstpointer formid)
+{
+  GList *members = g_object_get_data(G_OBJECT(header), "group-formids");
+  return g_list_find(members, formid) != NULL;
+}
+
 static GtkWidget *_find_collapsed_cluster_header(GtkWidget *w, const dt_mask_id_t formid)
 {
-  if(!GTK_IS_CONTAINER(w)) return NULL;
-  GtkWidget *found = NULL;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c && !found; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    // group headers carry their member ids; when a shape's own row cannot be
-    // located directly, fall back to highlighting its enclosing group header.
-    GList *members = g_object_get_data(G_OBJECT(child), "group-formids");
-    if(members)
-      for(GList *m = members; m; m = g_list_next(m))
-        if(GPOINTER_TO_INT(m->data) == formid)
-        {
-          found = child;
-          break;
-        }
-    if(!found) found = _find_collapsed_cluster_header(child, formid);
-  }
-  g_list_free(kids);
-  return found;
+  return _find_tagged(w, "group-formids", _header_has_member, GINT_TO_POINTER(formid));
 }
 
 // canvas -> list selection sync: when a shape is selected on the canvas (click),
@@ -6916,8 +6874,6 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t fo
   _auto_expand_selected_row(module, id);
 }
 
-static void _sync_object_paths(GtkWidget *w, const dt_mask_id_t entered);
-
 // the AI object the canvas is stepped into, or INVALID_MASKID
 static dt_mask_id_t _entered_object(void)
 {
@@ -6925,18 +6881,28 @@ static dt_mask_id_t _entered_object(void)
   return gui ? gui->entered_object : INVALID_MASKID;
 }
 
+static gboolean _path_row_is(GtkWidget *row, gconstpointer pid)
+{
+  return _widget_id(row, "object-path-formid") == GPOINTER_TO_INT(pid);
+}
+
 // the row of path `pid` in an AI object's "paths" section, under `w`
 static GtkWidget *_find_object_path_row(GtkWidget *w, const dt_mask_id_t pid)
 {
-  if(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "object-path-formid")) == pid)
-    return w;
-  if(!GTK_IS_CONTAINER(w)) return NULL;
-  GtkWidget *found = NULL;
-  GList *children = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = children; c && !found; c = g_list_next(c))
-    found = _find_object_path_row(c->data, pid);
-  g_list_free(children);
-  return found;
+  return _find_tagged(w, "object-path-formid", _path_row_is, GINT_TO_POINTER(pid));
+}
+
+static void _show_paths_if_entered(GtkWidget *paths, gpointer entered)
+{
+  gtk_widget_set_visible(paths, _widget_id(paths, "object-paths-of") == GPOINTER_TO_INT(entered));
+}
+
+// the "paths" section is built with the row but shown only while its object is
+// stepped into on the canvas, so stepping in and out just toggles it (see
+// dt_iop_gui_masks_entered_object_changed) instead of rebuilding the panel
+static void _sync_object_paths(GtkWidget *w, const dt_mask_id_t entered)
+{
+  _foreach_tagged(w, "object-paths-of", _show_paths_if_entered, GINT_TO_POINTER(entered));
 }
 
 // canvas -> list hover sync: transiently highlight the row matching the shape
@@ -6974,17 +6940,13 @@ void dt_iop_gui_masks_entered_object_changed(dt_iop_module_t *module)
   _sync_object_paths(GTK_WIDGET(bd->masks_list_box), _entered_object());
 }
 
-// the panel's single way to step the canvas into AI object `id`, or out of the
-// one it is in with INVALID_MASKID: the same step as a double-click on the
-// object and a click outside it (see masks/group.c), with the redraw and the
-// "paths" section brought along
+// the panel's way to step the canvas into AI object `id`, or out of the one it
+// is in with INVALID_MASKID: the step a double-click on the object and a click
+// outside it take on the canvas
 static void _step_object(dt_iop_module_t *module, const dt_mask_id_t id)
 {
-  dt_masks_form_gui_t *gui = darktable.develop ? darktable.develop->form_gui : NULL;
-  if(!gui || gui->entered_object == id) return;
-  dt_masks_gui_step_object(gui, id, TRUE, dt_is_valid_maskid(id));
-  dt_control_queue_redraw_center();
-  dt_iop_gui_masks_entered_object_changed(module);
+  dt_masks_gui_step_object(module, darktable.develop ? darktable.develop->form_gui : NULL,
+                           id, TRUE, dt_is_valid_maskid(id));
 }
 
 // the whole panel selection, groups included: unlike the element selection
@@ -8185,24 +8147,8 @@ static void _element_row_drag_received(GtkWidget *w,
 // hold their own toggle under "group-expand-toggle" (see the header build).
 static GtkWidget *_find_group_expand_toggle(GtkWidget *w, const dt_mask_id_t gcid)
 {
-  if(!GTK_IS_CONTAINER(w)) return NULL;
-  GtkWidget *found = NULL;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = kids; c && !found; c = g_list_next(c))
-  {
-    GtkWidget *child = c->data;
-    if(g_object_get_data(G_OBJECT(child), "mask-header"))
-    {
-      const dt_mask_id_t cid =
-        (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(child), "group-key"));
-      if(cid == gcid)
-        found = g_object_get_data(G_OBJECT(child), "group-expand-toggle");
-    }
-    else
-      found = _find_group_expand_toggle(child, gcid);
-  }
-  g_list_free(kids);
-  return found;
+  GtkWidget *header = _find_tagged(w, "mask-header", _header_has_cid, GINT_TO_POINTER(gcid));
+  return header ? g_object_get_data(G_OBJECT(header), "group-expand-toggle") : NULL;
 }
 
 static void _reveal_group_header(GtkWidget *w, const dt_mask_id_t gcid)
@@ -15429,23 +15375,6 @@ static void _object_path_remove_clicked(GtkButton *button, dt_iop_module_t *modu
   dt_masks_remove_shape(module, form, object, FALSE);
   _queue_masks_list_rebuild(module);
   _refresh_canvas_edit(module);
-}
-
-// the "paths" section is built with the row but shown only while its object is
-// stepped into on the canvas, so stepping in and out just toggles it (see
-// dt_iop_gui_masks_entered_object_changed) instead of rebuilding the panel
-static void _sync_object_paths(GtkWidget *w, const dt_mask_id_t entered)
-{
-  const dt_mask_id_t of = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "object-paths-of"));
-  if(dt_is_valid_maskid(of))
-  {
-    gtk_widget_set_visible(w, of == entered);
-    return;
-  }
-  if(!GTK_IS_CONTAINER(w)) return;
-  GList *children = gtk_container_get_children(GTK_CONTAINER(w));
-  for(GList *c = children; c; c = g_list_next(c)) _sync_object_paths(c->data, entered);
-  g_list_free(children);
 }
 
 // a click on a path's row stays there: the row sits inside the object's own
