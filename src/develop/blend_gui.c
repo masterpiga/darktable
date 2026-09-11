@@ -4227,7 +4227,6 @@ static GtkWidget *_make_icon_widget(DTGTKCairoPaintIconFunc paint)
 // the refinement section caption mirrors the row being refined:
 // Expander header shows "(element|group|whole mask) refinement",
 // and when expanded, inner header row shows <icon> <label> <actions>.
-static const char *_form_type_prefix(const dt_masks_form_t *form);
 static void _refine_update_header(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
@@ -4262,15 +4261,8 @@ static void _refine_update_header(dt_iop_module_t *module)
       dt_masks_get_from_id(darktable.develop, bd->masks_refine_scope_formid);
     if(form)
     {
-      if(form->type & DT_MASKS_RASTER)
-      {
-        // a raster element's own name can be its source's, see _form_display_name
-        gchar *shown = _form_display_name(form);
-        name = g_strdup_printf("%s %s", _form_type_prefix(form), shown);
-        g_free(shown);
-      }
-      else
-        name = g_strdup(form->name);
+      // the name as its row shows it: the icon below already says the type
+      name = _form_display_name(form);
       if(form->type & DT_MASKS_PARAMETRIC)
       {
         const gchar *code = dt_masks_parametric_type_label(form);
