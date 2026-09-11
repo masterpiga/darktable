@@ -968,7 +968,7 @@ static void test_double_click_on_object_steps_in(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(INVALID_MASKID);
-  assert_true(dt_masks_gui_step_object(&_gui, 5, TRUE, TRUE));
+  assert_true(dt_masks_gui_step_object(NULL, &_gui, 5, TRUE, TRUE));
   assert_int_equal(_gui.entered_object, 5);
 }
 
@@ -978,7 +978,7 @@ static void test_double_click_inside_object_is_ordinary(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(5);
-  assert_false(dt_masks_gui_step_object(&_gui, 5, TRUE, TRUE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, 5, TRUE, TRUE));
   assert_int_equal(_gui.entered_object, 5);
 }
 
@@ -987,7 +987,7 @@ static void test_click_inside_object_stays_in(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(5);
-  assert_false(dt_masks_gui_step_object(&_gui, 5, TRUE, FALSE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, 5, TRUE, FALSE));
   assert_int_equal(_gui.entered_object, 5);
 }
 
@@ -997,10 +997,10 @@ static void test_click_outside_object_steps_out(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(5);
-  assert_false(dt_masks_gui_step_object(&_gui, INVALID_MASKID, TRUE, FALSE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, INVALID_MASKID, TRUE, FALSE));
   assert_int_equal(_gui.entered_object, INVALID_MASKID);
   _with_gui(5);
-  assert_false(dt_masks_gui_step_object(&_gui, 6, TRUE, FALSE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, 6, TRUE, FALSE));
   assert_int_equal(_gui.entered_object, INVALID_MASKID);
 }
 
@@ -1009,7 +1009,7 @@ static void test_double_click_on_other_object_moves_into_it(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(5);
-  assert_true(dt_masks_gui_step_object(&_gui, 6, TRUE, TRUE));
+  assert_true(dt_masks_gui_step_object(NULL, &_gui, 6, TRUE, TRUE));
   assert_int_equal(_gui.entered_object, 6);
 }
 
@@ -1019,10 +1019,10 @@ static void test_secondary_button_never_steps(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(5);
-  assert_false(dt_masks_gui_step_object(&_gui, INVALID_MASKID, FALSE, FALSE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, INVALID_MASKID, FALSE, FALSE));
   assert_int_equal(_gui.entered_object, 5);
   _with_gui(INVALID_MASKID);
-  assert_false(dt_masks_gui_step_object(&_gui, 6, FALSE, TRUE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, 6, FALSE, TRUE));
   assert_int_equal(_gui.entered_object, INVALID_MASKID);
 }
 
@@ -1031,7 +1031,7 @@ static void test_double_click_on_plain_shape_does_nothing(void **state)
   flexi_conf_init();
   flexi_build("u:1");
   _with_gui(INVALID_MASKID);
-  assert_false(dt_masks_gui_step_object(&_gui, INVALID_MASKID, TRUE, TRUE));
+  assert_false(dt_masks_gui_step_object(NULL, &_gui, INVALID_MASKID, TRUE, TRUE));
   assert_int_equal(_gui.entered_object, INVALID_MASKID);
 }
 

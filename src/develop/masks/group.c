@@ -47,20 +47,25 @@ dt_masks_form_t *dt_masks_bundle_of(const dt_masks_point_group_t *fpt)
   return (object && gui && gui->entered_object == object->formid) ? NULL : object;
 }
 
-gboolean dt_masks_gui_step_object(dt_masks_form_gui_t *gui,
+gboolean dt_masks_gui_step_object(dt_iop_module_t *module,
+                                  dt_masks_form_gui_t *gui,
                                   const dt_mask_id_t hit_object,
                                   const gboolean primary,
                                   const gboolean double_click)
 {
   if(!gui || !primary) return FALSE;
+  const dt_mask_id_t was_entered = gui->entered_object;
   if(dt_is_valid_maskid(gui->entered_object) && hit_object != gui->entered_object)
     gui->entered_object = INVALID_MASKID;
-  if(double_click && dt_is_valid_maskid(hit_object) && gui->entered_object != hit_object)
+  const gboolean step_in = double_click && dt_is_valid_maskid(hit_object)
+                           && gui->entered_object != hit_object;
+  if(step_in) gui->entered_object = hit_object;
+  if(gui->entered_object != was_entered)
   {
-    gui->entered_object = hit_object;
-    return TRUE;
+    dt_control_queue_redraw_center();
+    dt_iop_gui_masks_entered_object_changed(module);
   }
-  return FALSE;
+  return step_in;
 }
 
 // after a bundle-wide edit (coordinated resize/drag) has mutated every
@@ -220,13 +225,9 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
   const dt_masks_form_t *hit_object = hit ? _object_of(hit) : NULL;
   const dt_mask_id_t was_entered = gui->entered_object;
   const gboolean stepped_in =
-    dt_masks_gui_step_object(gui, hit_object ? hit_object->formid : INVALID_MASKID,
+    dt_masks_gui_step_object(module, gui,
+                             hit_object ? hit_object->formid : INVALID_MASKID,
                              which == GDK_BUTTON_PRIMARY, type == GDK_2BUTTON_PRESS);
-  if(gui->entered_object != was_entered)
-  {
-    dt_control_queue_redraw_center();
-    dt_iop_gui_masks_entered_object_changed(module);
-  }
   if(stepped_in) return 1;
 
   // stepping out on empty canvas leaves the object selected, as one unit
