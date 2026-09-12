@@ -308,15 +308,35 @@ static void test_ensure_a_group_on_an_empty_list(void **state)
   assert_false(_model_ensure_a_group(NULL));
 }
 
-// a list stored before markers gets one per run, where the fold found them
-static void test_ensure_a_group_marks_the_runs_of_an_old_list(void **state)
+// a list stored before markers gets one union marker at the bottom: the one
+// group the fold reads such a list as
+static void test_ensure_a_group_gives_an_old_list_one_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
   assert_true(_model_ensure_a_group(grp));
+  assert_layout("u:1,2,3,4");
+  assert_false(_model_ensure_a_group(grp));
+}
+
+// the classic migration gives a classic list one group per run: at an
+// operator change, and at group_start, which old data can carry
+static void test_classic_marking_gives_each_run_a_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
+  assert_true(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE));
+  assert_layout("u:1,2 | i:3 | i:4");
+  assert_false(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE));
+}
+
+// ...and with the split, a group to every member with a non-union operator
+static void test_classic_marking_splits_nonunion_members(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3,4");
+  assert_true(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, TRUE));
   assert_layout("u:1,2 | i:3 | i:4");
 }
 
-// ...holding the settings the fold read off each run's first member
+// ...holding the settings each run's first member carries
 static void test_marking_carries_the_group_settings(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2,3");
@@ -326,7 +346,7 @@ static void test_marking_carries_the_group_settings(void **state)
   g_strlcpy(head->name, "sky", sizeof(head->name));
   head->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
                                               .blur_radius = 2.0f };
-  _model_ensure_a_group(grp);
+  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
 
   const dt_masks_point_group_t *marker = _group_point(grp, _group_cid_of_form(grp, 3));
   assert_true(dt_masks_point_is_marker(marker));
@@ -335,6 +355,15 @@ static void test_marking_carries_the_group_settings(void **state)
   assert_float_equal(marker->group_opacity, 0.5f, 1e-6f);
   assert_string_equal(marker->name, "sky");
   assert_int_equal(marker->refinement.enabled, DT_MASKS_REFINE_GROUP);
+
+  // ...and the member keeps none of them: it is a plain union element
+  const dt_masks_point_group_t *member = _group_point(grp, 2);
+  assert_int_equal(member->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_UNION);
+  assert_int_equal(member->state & DT_MASKS_STATE_WITHIN, 0);
+  assert_float_equal(member->group_opacity, 1.0f, 1e-6f);
+  assert_string_equal(member->name, "");
+  assert_int_equal(member->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(member->group_start, 0);
 }
 
 // the same run marked twice -- say in two history snapshots -- gets the same
@@ -342,12 +371,12 @@ static void test_marking_carries_the_group_settings(void **state)
 static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
-  _model_ensure_a_group(grp);
+  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
   const dt_mask_id_t first = _group_cid_of_form(grp, 2);
   flexi_teardown();
 
   grp = flexi_build_classic("u:1 | i:2");
-  _model_ensure_a_group(grp);
+  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
   assert_int_equal(_group_cid_of_form(grp, 2), first);
 }
 
@@ -1683,7 +1712,9 @@ int main(void)
     cmocka_unit_test_teardown(test_prune_without_lost_members_changes_nothing, _teardown),
     cmocka_unit_test_teardown(test_lost_members_leave_their_groups, _teardown),
     cmocka_unit_test_teardown(test_ensure_a_group_on_an_empty_list, _teardown),
-    cmocka_unit_test_teardown(test_ensure_a_group_marks_the_runs_of_an_old_list, _teardown),
+    cmocka_unit_test_teardown(test_ensure_a_group_gives_an_old_list_one_group, _teardown),
+    cmocka_unit_test_teardown(test_classic_marking_gives_each_run_a_group, _teardown),
+    cmocka_unit_test_teardown(test_classic_marking_splits_nonunion_members, _teardown),
     cmocka_unit_test_teardown(test_marking_carries_the_group_settings, _teardown),
     cmocka_unit_test_teardown(test_marking_the_same_run_twice_gives_the_same_id, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_self_is_rejected, _teardown),

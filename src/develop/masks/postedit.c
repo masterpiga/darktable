@@ -168,11 +168,10 @@ static const dt_masks_refinement_t _refine_probe =
 
 /* Apply one poke to the member index range [first, last] of `points`.
 
-   A run-level poke is broadcast across the whole range. In a marked group the
-   range starts at the group's marker, which is the record the fold reads; the
-   members' copies only matter to the classic fold. In an unmarked list the
-   fold reads it back from the run's head. An element-level poke is passed
-   first == last. */
+   A run-level poke is broadcast across the whole range, which starts at the
+   group's marker, the record the fold reads; the members' copies only matter
+   to the classic fold. An element-level poke is passed first == last. A group
+   break is no poke: it inserts a marker (_break_before). */
 void _apply_poke(GList *points, const poke_t k,
                  const int first, const int last)
 {
@@ -235,7 +234,6 @@ void _apply_poke(GList *points, const poke_t k,
         pt->refinement = _refine_probe;
         pt->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
         break;
-      case POKE_ELEM_BREAK:   pt->group_start = 1;                 break;
 
       default: break;
     }
@@ -466,27 +464,23 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
   }
 }
 
-/* A group break in a marked group: a copy of the enclosing group's marker
-   before member `idx`, which is what group_start is to an unmarked list. The
-   new group keeps the settings its members were folded with, as the run a
-   break split off does. Returns FALSE for an unmarked list, which breaks by
-   group_start instead. */
-static gboolean _break_before(dt_develop_t *dev, dt_masks_form_t *grp,
-                              const int idx)
+/* A group break: a copy of the enclosing group's marker before member `idx`,
+   so the new group keeps the settings its members were folded with. Nothing
+   happens where `idx` already heads its group, or is in none */
+static void _break_before(dt_develop_t *dev, dt_masks_form_t *grp,
+                          const int idx)
 {
   GList *node = g_list_nth(grp->points, idx);
-  if(!node || dt_masks_point_is_marker(node->data)) return FALSE;
+  if(!node || dt_masks_point_is_marker(node->data)) return;
   GList *m = node->prev;
   while(m && !dt_masks_point_is_marker(m->data)) m = m->prev;
-  if(!m) return FALSE;
-  if(m == node->prev) return TRUE; // already heads its group
+  if(!m || m == node->prev) return;
 
   dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
-  if(!pt) return TRUE;
+  if(!pt) return;
   memcpy(pt, m->data, sizeof(dt_masks_point_group_t));
   pt->formid = dt_masks_new_marker_id(dev ? dev->forms : NULL);
   grp->points = g_list_insert_before(grp->points, node, pt);
-  return TRUE;
 }
 
 void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
@@ -496,8 +490,10 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 
   if(st->kind == STEP_POKE)
   {
-    if(st->k == POKE_ELEM_BREAK && _break_before(dev, grp, first)) return;
-    _apply_poke(grp->points, st->k, first, last);
+    if(st->k == POKE_ELEM_BREAK)
+      _break_before(dev, grp, first);
+    else
+      _apply_poke(grp->points, st->k, first, last);
     return;
   }
 
@@ -561,7 +557,6 @@ typedef struct
   int state;
   float opacity;
   float group_opacity;
-  int group_start;
   dt_masks_refinement_t refinement;
 } pt_snap_t;
 
@@ -596,7 +591,6 @@ static void _snap_all(GList *groups, pt_snap_t *out)
       out[i].state = pt->state;
       out[i].opacity = pt->opacity;
       out[i].group_opacity = pt->group_opacity;
-      out[i].group_start = pt->group_start;
       out[i].refinement = pt->refinement;
     }
 }
@@ -611,7 +605,6 @@ static void _restore_all(GList *groups, const pt_snap_t *in)
       pt->state = in[i].state;
       pt->opacity = in[i].opacity;
       pt->group_opacity = in[i].group_opacity;
-      pt->group_start = in[i].group_start;
       pt->refinement = in[i].refinement;
     }
 }
@@ -866,8 +859,8 @@ static void _postedit_edit(JsonObject *edit, postedit_report_t *rep)
 
   /* Every run in every group, under whatever state is loaded when this is
      called. Computed on the canon side and used for both -- _starts_group()
-     reads the effective operator, which normalization only writes out rather
-     than changes, so the partition is identical either way. Addressing both
+     reads the markers, which normalization does not change, so the partition
+     is identical either way. Addressing both
      sides by the same member indices is what makes the comparison
      apples-to-apples: the only thing left that can differ is how the renderer
      reads what was written. */
@@ -906,8 +899,8 @@ static void _postedit_edit(JsonObject *edit, postedit_report_t *rep)
 
   /* --- phase B: run controls on a run that only exists after a break -------
 
-     Phase A addresses runs from the un-poked partition, so a run created by
-     DT_MASKS_STATE's group_start marker is never the target of a run-level
+     Phase A addresses runs from the un-poked partition, so a group created by
+     a break, which inserts a marker, is never the target of a run-level
      control there -- and a run-level control read from a run head is exactly
      the shape of the bug this whole check exists for. Break at each position
      in turn, re-derive the partition with the break in place, and sweep the

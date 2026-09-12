@@ -86,10 +86,11 @@ typedef struct
 
 static bench_t B;
 
-/* The prune reads exactly six things: module->dev, the source's users table,
-   the sink's op and multi_priority (through dt_iop_module_is), the sink's
-   raster_mask.sink.source, the pieces in pipe->nodes with their ->enabled and
-   ->blendop_data, and dev->forms. Everything else on these structs stays
+/* The prune reads exactly five things: module->dev, the source's users table,
+   the source's op and multi_priority (through dt_iop_module_is), the pieces in
+   pipe->nodes with their ->enabled and ->blendop_data, and dev->forms. It does
+   not read the sink's raster_mask.sink, which another pipe's history replay
+   clears. Everything else on these structs stays
    zeroed on purpose -- a field this needed but did not set would show up as a
    crash, not as a quietly wrong answer. */
 static void _bench_init(void)
@@ -110,8 +111,9 @@ static void _bench_init(void)
   B.sink.dev = &B.dev;
   B.source.raster_mask.source.users = g_hash_table_new(NULL, NULL);
 
-  /* Zeroed, then set per case. The prune reads exactly two fields of these
-     params -- mask_mode and mask_id -- so a real default set would only add
+  /* Zeroed, then set per case. The prune reads only mask_mode, mask_id and the
+     raster source (raster_mask_source/instance) of these params, so a real
+     default set would only add
      noise, and leaving the rest at zero means a field it started reading would
      surface as a wrong answer here rather than being papered over. */
   memset(&B.sink_bp, 0, sizeof(B.sink_bp));
@@ -171,6 +173,10 @@ static void _make_classic_sink(void)
 {
   B.sink_bp.mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_RASTER;
   B.sink_bp.mask_id = NO_MASKID;
+  // the piece's params name the source, as dt_iop_commit_blend_params reads them
+  g_strlcpy(B.sink_bp.raster_mask_source, SOURCE_OP, sizeof(B.sink_bp.raster_mask_source));
+  B.sink_bp.raster_mask_instance = 0;
+  B.sink_bp.raster_mask_id = RASTER_ID;
   B.sink.raster_mask.sink.source = &B.source;
   B.sink.raster_mask.sink.id = RASTER_ID;
 }
@@ -300,9 +306,11 @@ static void test_module_state_does_not_override_the_piece(void **state)
   _bench_init();
   _make_classic_sink();
   _register_user();
-  // what an export pipe looks like: the piece says yes, the module says no
+  // what an export pipe looks like: the piece says yes, the module says no.
+  // Another pipe's history replay also clears the module's raster sink
   B.sink.enabled = FALSE;
   B.sink.blend_params = &stale;
+  B.sink.raster_mask.sink.source = NULL;
   _prune();
   assert_true(_still_a_user());
   _bench_cleanup();
@@ -334,7 +342,8 @@ static void test_a_desynced_consumer_is_dropped(void **state)
   _bench_init();
   _make_classic_sink();
   _register_user();
-  B.sink.raster_mask.sink.source = NULL;    // repointed at another module
+  // repointed at another module: the piece's params name it
+  g_strlcpy(B.sink_bp.raster_mask_source, "colorin", sizeof(B.sink_bp.raster_mask_source));
   _prune();
   assert_false(_still_a_user());
   _bench_cleanup();

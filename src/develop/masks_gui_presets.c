@@ -126,7 +126,7 @@ _flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries
     g_strlcpy(marker->name, entries[i].name, sizeof(marker->name));
     grp->points = g_list_append(grp->points, marker);
   }
-  dt_masks_group_mark_runs(darktable.develop->forms, grp);
+  dt_masks_group_ensure_marker(darktable.develop->forms, grp);
   // give the panel an immediate, unambiguous starting point -- with more than
   // one group, nothing would otherwise be selected until the user clicks one.
   // Index 0 is the bottom (foundation) group
