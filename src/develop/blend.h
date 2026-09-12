@@ -629,50 +629,22 @@ typedef struct dt_iop_gui_blend_data_t
   // panel_selected_formid: the mask-list row currently selected (highlighted
   // with a border). Drawn shape or parametric form being edited; INVALID = none.
   dt_mask_id_t panel_selected_formid;
-  // panel_selected_group_cid: the group (operator run) currently selected by
-  // clicking its header. Identified by its first member's formid (the group
-  // id). A selected group is where the next drawn shape lands and what the
-  // refinement controls target. INVALID = no group selected.
+  // panel_selected_group_cid: the group currently selected by clicking its
+  // header, identified by its marker's id (see DT_MASKS_STATE_GROUP_MARKER). A
+  // selected group is where the next drawn shape lands and what the refinement
+  // controls target. INVALID = no group selected.
   dt_mask_id_t panel_selected_group_cid;
-  // empty (staged) groups: groups with an operator but no members yet, shown as
-  // headers in the list until a shape is drawn into them. They are UI-side state
-  // (an empty group carries nothing to serialize) kept in render order. Each entry
-  // is a dt_masks_empty_group_t (private to blend_gui.c). selected_empty points at
-  // the one that is the active draw target (or NULL). scaffold_seeded guards the
-  // one-shot "virgin mask shows add/intersect/subtract" seeding.
-  GList *empty_groups;
-  void *selected_empty;
-  gboolean scaffold_seeded;
   // one-shot: default-select the sole group so the panel opens ready to add
   // elements without an extra click, without forcing reselection on every
   // rebuild (which would make the sole group impossible to deselect). Reset
-  // alongside scaffold_seeded wherever the mask/selection state is wiped.
+  // wherever the mask/selection state is wiped.
   gboolean masks_selection_seeded;
-  // insertion hint read by dt_masks_gui_form_save_creation (flexi only): when a
-  // group is the active target, the next drawn shape is inserted right above the
-  // member insert_after_fid (INVALID = on top) with operator insert_op (0 = use
-  // the default_operator pref) and the insert_within in-group combine bits
-  // (DT_MASKS_STATE_WITHIN subset: SCREEN/ISECT/0=union). insert_active gates the
-  // whole thing; classic drawing never sets it, so it stays untouched.
+  // insertion hint read by dt_masks_group_insert_point (flexi only): when a
+  // group is the active target, the next element is inserted right after the
+  // point insert_after_fid, the group's top member or, for an empty group, its
+  // marker. insert_active gates the whole thing; classic drawing never sets it.
   gboolean insert_active;
   dt_mask_id_t insert_after_fid;
-  int insert_op;
-  int insert_within;
-  // opacity a shape realizing an empty group should start at (see
-  // dt_masks_empty_group_t::opacity in blend_gui.c); meaningless unless
-  // insert_realize_empty is set. 1.0 for every ordinary new group; a group
-  // restored from a saved layout preset carries its own remembered value.
-  float insert_opacity;
-  // insert_realize_empty: the active target is an empty group, so the next drawn
-  // shape realizes it. save_creation writes the new form id into insert_realized_fid
-  // so the panel can drop the empty group and select the new run on the next rebuild.
-  gboolean insert_realize_empty;
-  dt_mask_id_t insert_realized_fid;
-  // insert_empty: the empty group an insertion realizes when there is no explicit
-  // selection (the bottom/foundation group is the default target). It drives the
-  // same realize cleanup as selected_empty but without changing the selection.
-  // Type is dt_masks_empty_group_t* (private to blend_gui.c).
-  void *insert_empty;
   // masks_cluster_expanded: remembers the expanded/collapsed state of each
   // kind-cluster expander (runs of adjacent same-kind shapes within a single
   // group, a purely visual sub-grouping distinct from the group/operator-run
@@ -802,9 +774,7 @@ typedef struct dt_iop_gui_blend_data_t
   GHashTable *masks_refine_expanded;
   // transient (non-serialized, flexi-only) refinement bypass set: which
   // refinement passes the user is previewing "off". Keyed by
-  // dt_masks_refine_key_*() below, except for a staged (member-less) group,
-  // which is keyed by its own dt_masks_empty_group_t pointer -- it has no
-  // members, so it never reaches the renderer. Owned and mutated on the GTK
+  // dt_masks_refine_key_*() below. Owned and mutated on the GTK
   // thread only; the pixelpipe reads the snapshot taken at commit time
   // (dt_dev_refine_bypass_t, see dt_masks_refine_bypass_commit) instead.
   GHashTable *masks_refine_bypassed;

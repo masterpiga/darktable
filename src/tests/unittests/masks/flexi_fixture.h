@@ -22,12 +22,11 @@
 //
 // The panel's group model -- which shapes form which groups, what each group's
 // operator is, what is selected -- is a pure structure: a dt_masks_form_t of
-// type DT_MASKS_GROUP whose `points` list holds one dt_masks_point_group_t per
-// element, ordered bottom-up, partitioned into groups by the `group_start`
-// flag (see _starts_group in blend_gui.c). No GTK widget is involved in any of
-// it. The only global the model reaches for is darktable.develop, and only to
-// resolve a formid to a form via dt_masks_get_from_id -- which just walks
-// dev->forms.
+// type DT_MASKS_GROUP whose `points` list holds, bottom-up, one marker per
+// group (see DT_MASKS_STATE_GROUP_MARKER) followed by that group's elements.
+// No GTK widget is involved in any of it. The only global the model reaches
+// for is darktable.develop, and only to resolve a formid to a form via
+// dt_masks_get_from_id -- which just walks dev->forms.
 //
 // So the whole mock is: a dt_develop_t holding a forms list, an iop module
 // pointing at it, and a blend_data for the panel's own scratch state. No
@@ -39,24 +38,24 @@
 // written as layout strings that mirror what the panel shows, bottom group
 // first:
 //
-//     "u:1,2 | i:3"
+//     "u:1,2 | [d] | i:3"
 //
-// is a union group holding elements 1 and 2 (1 at the bottom), then an
-// intersection group holding element 3 above it. Operator letters are
-// u(nion), i(ntersection), d(ifference), x = e(x)clusion, s(um).
+// is a union group holding elements 1 and 2 (1 at the bottom), an empty
+// difference group above it, then an intersection group holding element 3.
+// Operator letters are u(nion), i(ntersection), d(ifference), x = e(x)clusion,
+// s(um).
 //
-// flexi_build() turns such a string into a live group; flexi_layout()
-// serialises a live group back into one. A test is then a round trip through
-// the model:
+// flexi_build() turns such a string into a live group, giving group n of the
+// string the id FLEXI_GID(n); flexi_layout() serialises a live group back into
+// one. A test is then a round trip through the model:
 //
 //     flexi_build("u:1,2 | i:3");
 //     _model_drop_element_onto_element(mod, grp, 1, 3, TRUE);
 //     assert_layout("u:2 | i:3,1");
 //
-// Serialising through _starts_group (rather than reading group_start
-// directly) is deliberate: it is the same partition function the panel and
-// the renderer use, so a layout assertion tests what the user will actually
-// see, not what the flags happen to say.
+// Serialising through _starts_group (rather than reading the marker bit
+// directly) is deliberate: it is the same partition function the panel uses,
+// so a layout assertion tests what the user will actually see.
 
 #include "common/darktable.h"
 #include "develop/blend.h"
@@ -65,6 +64,9 @@
 #include "develop/masks.h"
 
 #include <glib.h>
+
+// the id flexi_build() gives the n-th group of its layout string, bottom-up
+#define FLEXI_GID(n) ((dt_mask_id_t)(900 + (n)))
 
 // the fixture's live objects, valid between flexi_build() and flexi_teardown()
 extern dt_develop_t flexi_dev;
@@ -75,27 +77,21 @@ extern dt_develop_blend_params_t flexi_bp;
 /** build a mask group from a layout string; returns the group. */
 dt_masks_form_t *flexi_build(const char *layout);
 
+/** the same group the way a classic edit, or a flexi one stored before group
+    markers, holds it: no markers, each member carrying its group's operator,
+    and a later group's first member its group_start */
+dt_masks_form_t *flexi_build_classic(const char *layout);
+
 /** the group built by the last flexi_build() */
 dt_masks_form_t *flexi_group(void);
 
 /** serialise the current group back to a layout string. Caller frees. */
 char *flexi_layout(void);
 
-/** stage an empty (member-less) group anchored above the run containing
-    `below_fid` (INVALID_MASKID = unanchored, i.e. bottom of the list), and
-    register it on the fixture's blend_data. Returns it; owned by the fixture. */
-dt_masks_empty_group_t *flexi_add_empty(const dt_masks_state_t op,
-                                        const dt_mask_id_t below_fid);
+/** the between-group operator of the group element `fid` is in */
+dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid);
 
-/** serialise the visual group order -- real runs and staged empties together,
-    bottom-up -- as e.g. "u:1,2 | [i] | d:3". Caller frees. */
-char *flexi_visual_order(void);
-
-/** cmocka assertion on flexi_visual_order(). */
-void flexi_assert_order_(const char *expect, const char *file, const int line);
-#define assert_order(expect) flexi_assert_order_((expect), __FILE__, __LINE__)
-
-/** remember `ord` as the displayed number of the group headed by `cid` */
+/** remember `ord` as the displayed number of group `cid` */
 void flexi_set_ordinal(const dt_mask_id_t cid, const int ord);
 /** the remembered number for `cid`, or 0 */
 int flexi_get_ordinal(const dt_mask_id_t cid);

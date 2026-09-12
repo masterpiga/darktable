@@ -49,7 +49,7 @@ static int _teardown(void **state)
 // a module carrying a classic blend_params with `mode` set, ready to migrate
 static void _classic(const uint32_t mode)
 {
-  flexi_build("u:1,2");           // gives us a real group at FLEXI_GROUP_ID
+  flexi_build_classic("u:1,2");   // gives us a real group at FLEXI_GROUP_ID
   g_strlcpy(flexi_module.op, "exposure", sizeof(flexi_module.op)); // logs only
   flexi_bp.mask_mode = mode;
   flexi_bp.blendif = 0;
@@ -212,15 +212,16 @@ static void test_classic_head_without_an_operator_keeps_its_group(void **state)
 
   // as classic left it: USE|SHOW on the bottom member, no operator at all
   dt_masks_point_group_t *head = grp->points->data;
+  const dt_masks_point_group_t *above = grp->points->next->data;
   head->state &= ~(int)DT_MASKS_STATE_OP;
 
   assert_true(_migrate());
 
-  // the fold's boundary test (dt_masks_point_breaks_run, masks.h) and the
-  // panel's (_starts_group, blend_gui.c) both keep the member above in the run
-  const dt_masks_point_group_t *above = grp->points->next->data;
+  // the fold's boundary test (dt_masks_point_breaks_run, masks.h) keeps the
+  // member above in the run, and so does the group the migration marks
   assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
-  assert_false(_starts_group(grp->points->next));
+  assert_int_equal(_group_cid_of_form(grp, head->formid),
+                   _group_cid_of_form(grp, above->formid));
 }
 
 // ... and it still has to read as union once the group is bypassed or its
@@ -247,7 +248,8 @@ static void test_a_modifier_is_not_an_operator(void **state)
     head->state |= modifiers[m];
     above->state |= modifiers[m];
     assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
-    assert_false(_starts_group(grp->points->next));
+    assert_int_equal(_group_cid_of_form(grp, head->formid),
+                     _group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
     above->state &= ~modifiers[m];
   }
@@ -306,15 +308,27 @@ static void test_every_history_snapshot_is_normalized(void **state)
   flexi_dev.history = g_list_append(flexi_dev.history, &newer);
   flexi_dev.history_end = 2;
 
-  // clear the markers the inline pass already wrote, so the assertions below
-  // can only pass if this call put them back on BOTH snapshots
+  // clear what the inline pass already wrote -- the run breaks, and the group
+  // markers made from them -- so the assertions below can only pass if this
+  // call put them back on BOTH snapshots
   for(GList *h = flexi_dev.history; h; h = g_list_next(h))
   {
     const dt_dev_history_item_t *it = h->data;
     dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
     assert_non_null(g);
-    for(GList *p = g->points; p; p = g_list_next(p))
-      ((dt_masks_point_group_t *)p->data)->group_start = 0;
+    GList *p = g->points;
+    while(p)
+    {
+      GList *next = g_list_next(p);
+      dt_masks_point_group_t *pt = p->data;
+      pt->group_start = 0;
+      if(dt_masks_point_is_marker(pt))
+      {
+        free(pt);
+        g->points = g_list_delete_link(g->points, p);
+      }
+      p = next;
+    }
   }
 
   flexi_dev.pending_flexi_group_splits =
@@ -327,9 +341,10 @@ static void test_every_history_snapshot_is_normalized(void **state)
     dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
     assert_non_null(g);
     assert_true((g->type & DT_MASKS_GROUP) != 0);
-    assert_int_equal(2, g_list_length(g->points));
-    const dt_masks_point_group_t *m = g->points->next->data;
-    assert_int_equal(1, m->group_start);
+    // two groups, each its marker and its member
+    assert_int_equal(4, g_list_length(g->points));
+    assert_true(dt_is_valid_maskid(_group_cid_of_form(g, 1)));
+    assert_int_not_equal(_group_cid_of_form(g, 1), _group_cid_of_form(g, 2));
   }
 
   g_list_free_full(older.forms, (void (*)(void *))dt_masks_free_form);

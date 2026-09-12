@@ -53,7 +53,7 @@ static int _teardown(void **state)
 // edit saved at `version`: everything appended after that version zero-filled.
 static dt_masks_form_t *_build_legacy(const char *layout, const int version)
 {
-  dt_masks_form_t *grp = flexi_build(layout);
+  dt_masks_form_t *grp = flexi_build_classic(layout);
   grp->version = version;
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
@@ -65,6 +65,14 @@ static dt_masks_form_t *_build_legacy(const char *layout, const int version)
   }
   return grp;
 }
+
+// the groups an old list's runs make: the list is marked the way the panel or
+// the classic migration marks it, then read like any other
+#define assert_runs(grp, expect)                                               \
+  do {                                                                         \
+    dt_masks_group_mark_runs(flexi_dev.forms, (grp));                          \
+    assert_layout(expect);                                                     \
+  } while(0)
 
 static void _migrate(dt_masks_form_t *grp)
 {
@@ -148,7 +156,7 @@ static void test_v10_carries_break_bit_into_group_start(void **state)
   // and the stale bit is cleared, so nothing reads it from `state` later
   assert_int_equal(_group_point(grp, 3)->state & DT_MASKS_STATE_GROUP_BREAK, 0);
   // the partition the user saved is the partition they get back
-  assert_layout("u:1,2 | u:3,4");
+  assert_runs(grp, "u:1,2 | u:3,4");
 }
 
 // the inverse: no break bit anywhere means one run, not several
@@ -156,12 +164,12 @@ static void test_v10_without_break_bit_yields_one_group(void **state)
 {
   dt_masks_form_t *grp = _build_legacy("u:1,2,3", 9);
   _migrate(grp);
-  assert_layout("u:1,2,3");
+  assert_runs(grp, "u:1,2,3");
 }
 
 // pre-v10 edits could not have two adjacent same-operator groups (there was no
 // way to express it), so operator changes alone must still partition them --
-// this is the back-compat path in _starts_group
+// this is the operator half of dt_masks_point_breaks_run
 static void test_v10_operator_change_still_partitions_old_edits(void **state)
 {
   dt_masks_form_t *grp = _build_legacy("u:1,2 | i:3", 9);
@@ -169,7 +177,7 @@ static void test_v10_operator_change_still_partitions_old_edits(void **state)
     ((dt_masks_point_group_t *)l->data)->group_start = 0;
 
   _migrate(grp);
-  assert_layout("u:1,2 | i:3");
+  assert_runs(grp, "u:1,2 | i:3");
 }
 
 // ---------------------------------------------------------------------------
@@ -211,7 +219,7 @@ static void test_migration_preserves_membership(void **state)
   const guint before = g_list_length(grp->points);
   _migrate(grp);
   assert_int_equal(g_list_length(grp->points), before);
-  assert_layout("u:1,2 | i:3,4 | d:5");
+  assert_runs(grp, "u:1,2 | i:3,4 | d:5");
 }
 
 // refinement is zero-filled for pre-v7 edits, and zero means disabled -- an old

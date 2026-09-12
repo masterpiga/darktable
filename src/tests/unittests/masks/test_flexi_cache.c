@@ -218,21 +218,15 @@ static void test_shape_refinement_blur_invalidates(void **state)
   }));
 }
 
-// group-level refinement is broadcast onto every member of the run, so setting
-// it must move the hash exactly as a per-shape one does
+// a group's refinement is held by its marker, and setting it must move the
+// hash exactly as a per-shape one does
 static void test_group_refinement_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   assert_invalidates("group-level refinement", ({
-    for(GList *l = grp->points; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = l->data;
-      if(pt->formid == 3 || pt->formid == 4)
-      {
-        pt->refinement.enabled = 1;
-        pt->refinement.contrast = 0.4f;
-      }
-    }
+    dt_masks_point_group_t *marker = _group_point(grp, FLEXI_GID(1));
+    marker->refinement.enabled = DT_MASKS_REFINE_GROUP;
+    marker->refinement.contrast = 0.4f;
   }));
 }
 
@@ -255,44 +249,8 @@ static void test_refinement_disable_invalidates(void **state)
 static void test_group_opacity_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  assert_invalidates("changing a group's opacity", ({
-    // broadcast onto the run, the way the panel stores it
-    _group_point(grp, 1)->group_opacity = 0.5f;
-    _group_point(grp, 2)->group_opacity = 0.5f;
-  }));
-}
-
-// ---------------------------------------------------------------------------
-// the group boundary
-// ---------------------------------------------------------------------------
-
-/* group_start is the first-class group boundary (masks v10), and the fold
-   partitions the point list into runs with it -- so two trees differing only
-   in a break render differently, and setting one has to move the hash.
-
-   It did not. The field was added without being folded in, which made setting
-   or clearing a group break invisible on canvas until an unrelated edit forced
-   a reprocess. Exactly the symptom group_opacity and refinement each had
-   before them; this is the third time, which is why the pair below pins both
-   directions rather than just the one that was broken.
-
-   Poked directly rather than through the panel: what is under test is the hash
-   over the stored field, and going through a panel gesture would also move the
-   operator bits, which invalidate on their own. */
-static void test_setting_a_group_break_invalidates(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2,3");
-  assert_invalidates("marking an element as starting a new group",
-                     _group_point(grp, 2)->group_start = 1);
-}
-
-static void test_clearing_a_group_break_invalidates(void **state)
-{
-  // two runs with the SAME operator, so the break is the only thing that
-  // separates them and clearing it genuinely merges them
-  dt_masks_form_t *grp = flexi_build("u:1,2 | u:3");
-  assert_invalidates("clearing a group break",
-                     _group_point(grp, 3)->group_start = 0);
+  assert_invalidates("changing a group's opacity",
+                     _group_point(grp, FLEXI_GID(0))->group_opacity = 0.5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -361,10 +319,9 @@ static void test_renaming_a_marker_does_not_invalidate(void **state)
 static void test_renaming_a_group_does_not_invalidate(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  assert_preserves("renaming a group", ({
-    g_strlcpy(_group_point(grp, 1)->name, "sky", sizeof(_group_point(grp, 1)->name));
-    g_strlcpy(_group_point(grp, 2)->name, "sky", sizeof(_group_point(grp, 2)->name));
-  }));
+  dt_masks_point_group_t *marker = _group_point(grp, FLEXI_GID(0));
+  assert_preserves("renaming a group",
+                   g_strlcpy(marker->name, "sky", sizeof(marker->name)));
 }
 
 // Solo-EDIT narrows which shapes are editable on canvas. That is an editing
@@ -435,19 +392,6 @@ static void test_edit_mode_does_not_invalidate(void **state)
                    flexi_bd.masks_shown = DT_MASKS_EDIT_OFF);
 }
 
-// an empty group is a placeholder with no members -- it renders nothing, so
-// creating or dropping one must not disturb the cache
-static void test_empty_group_placeholder_does_not_invalidate(void **state)
-{
-  flexi_build("u:1,2");
-  assert_preserves("staging an empty group", ({
-    dt_masks_empty_group_t *eg = calloc(1, sizeof(dt_masks_empty_group_t));
-    eg->op = DT_MASKS_STATE_INTERSECTION;
-    eg->opacity = 1.0f;
-    flexi_bd.empty_groups = g_list_append(flexi_bd.empty_groups, eg);
-  }));
-}
-
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -468,8 +412,6 @@ int main(void)
     cmocka_unit_test_teardown(test_group_refinement_invalidates, _teardown),
     cmocka_unit_test_teardown(test_refinement_disable_invalidates, _teardown),
     cmocka_unit_test_teardown(test_group_opacity_invalidates, _teardown),
-    cmocka_unit_test_teardown(test_setting_a_group_break_invalidates, _teardown),
-    cmocka_unit_test_teardown(test_clearing_a_group_break_invalidates, _teardown),
     cmocka_unit_test_teardown(test_marker_settings_invalidate, _teardown),
     cmocka_unit_test_teardown(test_adding_a_marker_invalidates, _teardown),
     cmocka_unit_test_teardown(test_renaming_a_marker_does_not_invalidate, _teardown),
@@ -479,7 +421,6 @@ int main(void)
     cmocka_unit_test_teardown(test_collapse_expand_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_solo_bookkeeping_alone_does_not_invalidate, _teardown),
     cmocka_unit_test_teardown(test_edit_mode_does_not_invalidate, _teardown),
-    cmocka_unit_test_teardown(test_empty_group_placeholder_does_not_invalidate, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
