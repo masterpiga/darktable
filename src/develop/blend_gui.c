@@ -3534,7 +3534,7 @@ dt_masks_form_t *_module_flexi_group(dt_iop_module_t *module, dt_mask_id_t *cid)
   if(!grp && module && darktable.develop)
     grp = dt_masks_module_group_create(darktable.develop, module);
   if(!grp) return NULL;
-  dt_masks_group_mark_runs(darktable.develop->forms, grp);
+  dt_masks_group_ensure_marker(darktable.develop->forms, grp);
   if(cid && !dt_is_valid_maskid(*cid) && grp->points)
     *cid = ((dt_masks_point_group_t *)grp->points->data)->formid;
   return grp;
@@ -6475,9 +6475,8 @@ void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
   _refresh_lowop_badges(module);
 }
 
-// is cid the base (bottom-most) group? grp->points is ordered bottom-up (see
-// _starts_group), so the very first point is always a run head and is the
-// base group's own cid.
+// is cid the base (bottom-most) group? grp->points is ordered bottom-up and
+// starts with the base group's marker, whose id is the group's cid.
 static gboolean _group_is_base(dt_masks_form_t *grp, const dt_mask_id_t cid)
 {
   return grp && grp->points
@@ -7293,7 +7292,7 @@ void _masks_reset_mask_core(dt_iop_module_t *module)
     // module's mask with it (see _detach_group_members)
     g_list_free_full(grp->points, free);
     grp->points = NULL;
-    dt_masks_group_mark_runs(darktable.develop->forms, grp);
+    dt_masks_group_ensure_marker(darktable.develop->forms, grp);
     dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   }
   bd->masks_selection_seeded = FALSE;
@@ -8713,7 +8712,7 @@ static gboolean _row_crossing(GtkWidget *w, GdkEventCrossing *ev, dt_iop_module_
 }
 
 // --- group headers -----------------------------------------------------------
-// Every maximal run of consecutive same-operator points (a "group") gets its own
+// Every group (a marker and its members) gets its own
 // header in the list (see _starts_group / _build_masks_list); same-kind runs
 // within one group are separately folded into a collapsible kind-cluster
 // expander to keep the list manageable when there are many (e.g. tens of)
@@ -9502,8 +9501,7 @@ int _model_prune_dangling_members(dt_masks_form_t *grp)
 
 gboolean _model_ensure_a_group(dt_masks_form_t *grp)
 {
-  return grp && dt_masks_group_mark_runs(darktable.develop ? darktable.develop->forms : NULL,
-                                         grp);
+  return dt_masks_group_ensure_marker(darktable.develop ? darktable.develop->forms : NULL, grp);
 }
 
 // remove elements from the module's mask; their groups stay, even emptied
@@ -14119,7 +14117,6 @@ dt_hash_t _masks_list_signature(dt_iop_module_t *module)
     const dt_masks_point_group_t *pt = p->data;
     sig = dt_hash(sig, &pt->formid, sizeof(pt->formid));
     sig = dt_hash(sig, &pt->state, sizeof(pt->state));
-    sig = dt_hash(sig, &pt->group_start, sizeof(pt->group_start));
     sig = dt_hash(sig, &pt->group_opacity, sizeof(pt->group_opacity));
     sig = dt_hash(sig, &pt->opacity, sizeof(pt->opacity));
     sig = dt_hash(sig, &pt->refinement, sizeof(pt->refinement));
@@ -14194,10 +14191,10 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
 
   // an AI object left without paths (by an earlier cleanup, or a path form
   // lost otherwise) is never shown or edited again: drop it, and any member
-  // whose form is gone (see _model_prune_dangling_members). A group without
-  // markers gets them: one stored before them, or one left with no points
-  // (see dt_masks_group_mark_runs). All of it renders as before, so no
-  // history item is needed; the next one carries the change
+  // whose form is gone (see _model_prune_dangling_members). A list that does
+  // not start with a marker gets one (see dt_masks_group_ensure_marker). All
+  // of it renders as before, so no history item is needed; the next one
+  // carries the change
   if(flexi && darktable.develop)
   {
     dt_pthread_mutex_lock(&darktable.develop->history_mutex);

@@ -119,8 +119,8 @@ typedef enum dt_masks_state_t
   // it is set alongside the group's real between-group operator (which stays
   // in the state untouched), so re-enabling restores exactly the operator the
   // group had. It is part of DT_MASKS_STATE_OP so that a disabled group and an
-  // adjacent same-operator live one still read as two distinct runs (see
-  // _eff_group_op / _starts_group in blend_gui.c). Use
+  // adjacent same-operator live one still read as two distinct runs where runs
+  // are inferred (see dt_masks_group_mark_classic_runs). Use
   // DT_MASKS_STATE_OP_COMBINE wherever the *combining* operator alone is
   // wanted. Additive new bit, 0 in every pre-existing edit.
   DT_MASKS_STATE_OP_DISABLE = 1 << 14,
@@ -212,15 +212,11 @@ _Static_assert((DT_MASKS_STATE_GROUP_MARKER
 // group's *first* shape, so every group inherited from a classic edit has one
 // at the bottom; in that position it means "union onto what is not there yet".
 //
-// The fold and the panel must resolve it the same way. They partition the same
-// point list into the same runs -- the panel to draw a group's rows and its
-// controls, the fold to render it -- and a member whose operator one of them
-// reads as union while the other reads as "no operator" lands in a different
-// run on each side. The panel then shows one group whose within-group mode,
-// group opacity, refinement and invert-output all read from a head the fold
-// never treats as one, and every one of those controls silently does nothing.
-// See _group_get_mask_roi_flexi() in masks/group.c and _starts_group() in
-// blend_gui.c.
+// The classic to flexi migration partitions a classic list into groups with
+// it (dt_masks_group_mark_classic_runs), so it has to resolve a missing
+// operator the way the flexi fold does. When the panel and the fold resolved
+// it differently, every group-level control on a migrated group silently did
+// nothing (#21905).
 static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
 {
   // cast: masks.h is included from C++ too (common/exif.cc), where the masked
@@ -435,33 +431,15 @@ typedef struct dt_masks_point_group_t
   // by the version migration instead of relying on zero-fill (see
   // dt_masks_legacy_params_v8_to_v9 in masks/masks.c).
   float group_opacity;
-  // since masks v10: first-class group-boundary marker, replacing the
-  // DT_MASKS_STATE_GROUP_BREAK bit historically borrowed from `state` (see
-  // that enum value's own comment). 1 = this point starts a new group even
-  // if its effective operator (_eff_group_op) matches the point below it;
-  // 0 = continues that run (or is the bottom/foundation point, where a
-  // break would be meaningless). Unlike group_opacity above, zero-fill IS
-  // neutral here: "field absent" and "bit not set" both mean "no explicit
-  // break," so pre-v10 edits need no non-zero backfill -- the version
-  // migration (dt_masks_legacy_params_v9_to_v10 in masks/masks.c) only has
-  // to carry forward the 1s that already existed in the old bit.
+  // since masks v10, historic: 1 = this point started a new group even if
+  // its operator matched the point below it, in a list without group
+  // markers. It carries the DT_MASKS_STATE_GROUP_BREAK bit pre-v10 blobs
+  // hold (dt_masks_legacy_params_v9_to_v10 in masks/masks.c). Only the
+  // classic to flexi migration reads it, from old data, and clears it
+  // (dt_masks_group_mark_classic_runs); a group marker is the boundary
+  // everywhere else. Zero-fill is neutral: no break
   int group_start;
 } dt_masks_point_group_t;
-
-// In a list without group markers (a flexi edit stored before them), does `pt`
-// end the run whose head's effective operator is `run_op`, and start the next
-// one? The single place such a boundary is decided: the fold
-// (_group_get_mask_roi_flexi() in masks/group.c) and the marking that turns
-// the runs into groups (dt_masks_group_mark_runs() in masks/masks.c) both go
-// through it, so they cannot partition the same point list differently. The
-// fold and the panel once could, and a group inherited from a classic edit --
-// whose bottom member carries no combine bit -- landed on the wrong side of
-// exactly that disagreement (#21905).
-static inline gboolean dt_masks_point_breaks_run(const dt_masks_point_group_t *pt,
-                                                 const dt_masks_state_t run_op)
-{
-  return pt->group_start || dt_masks_eff_group_op(pt->state) != run_op;
-}
 
 // Is `pt` a group's marker rather than a member? A marker's formid resolves to
 // no form, so code that looks a member's form up and skips what does not
@@ -1087,11 +1065,21 @@ dt_masks_point_group_t *dt_masks_marker_new(GList *forms,
 dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
                                                    dt_masks_form_t *dest,
                                                    const dt_masks_point_group_t *marker);
-/** give a flexi group, and the groups nested in it, their markers: one in
-    front of each run of a list that has none, holding the settings the flexi
-    fold reads for that run, or a single union marker for a list with no points.
-    The members are left as they are. TRUE if anything changed */
-gboolean dt_masks_group_mark_runs(GList *forms, dt_masks_form_t *grp);
+/** make a flexi list start with a group marker: give a list with no points,
+    or one whose first record is a member, a union marker at the bottom. The
+    members before the list's first marker are what the flexi fold reads as
+    one plain union group. TRUE if anything changed */
+gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp);
+/** give a classic group, and the groups nested in it, their markers: one in
+    front of each run, holding the settings its first shown, resolving member
+    carries. A run ends at an operator change and at a member with
+    group_start, and with `split_nonunion` every member with a non-union
+    operator is a run of its own. A marked list is left as it is. The
+    group's settings leave the members, which become plain union elements:
+    the classic fold cannot read the result. TRUE if anything changed */
+gboolean dt_masks_group_mark_classic_runs(GList *forms,
+                                          dt_masks_form_t *grp,
+                                          const gboolean split_nonunion);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form);
 /** returns the composition operator state to assign to a newly added form,

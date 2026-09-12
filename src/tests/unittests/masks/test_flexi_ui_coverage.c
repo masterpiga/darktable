@@ -144,11 +144,10 @@ static const struct
 static void _poke_coverage(int *bits,
                            gboolean *opacity,
                            gboolean *group_opacity,
-                           gboolean *refinement,
-                           gboolean *group_start)
+                           gboolean *refinement)
 {
   *bits = 0;
-  *opacity = *group_opacity = *refinement = *group_start = FALSE;
+  *opacity = *group_opacity = *refinement = FALSE;
 
   for(poke_t k = 0; k < POKE_N; k++)
   {
@@ -169,7 +168,6 @@ static void _poke_coverage(int *bits,
     if(pt.opacity != before.opacity) *opacity = TRUE;
     if(pt.group_opacity != before.group_opacity) *group_opacity = TRUE;
     if(pt.refinement.enabled != before.refinement.enabled) *refinement = TRUE;
-    if(pt.group_start != before.group_start) *group_start = TRUE;
   }
 }
 
@@ -180,8 +178,8 @@ static void _poke_coverage(int *bits,
 static void test_every_panel_state_bit_is_swept_or_exempt(void **state)
 {
   int covered = 0;
-  gboolean op, gop, ref, gst;
-  _poke_coverage(&covered, &op, &gop, &ref, &gst);
+  gboolean op, gop, ref;
+  _poke_coverage(&covered, &op, &gop, &ref);
 
   for(int i = 0; i < PANEL_BITS_N; i++)
   {
@@ -199,8 +197,8 @@ static void test_every_panel_state_bit_is_swept_or_exempt(void **state)
 static void test_exempt_bits_are_not_quietly_swept(void **state)
 {
   int covered = 0;
-  gboolean op, gop, ref, gst;
-  _poke_coverage(&covered, &op, &gop, &ref, &gst);
+  gboolean op, gop, ref;
+  _poke_coverage(&covered, &op, &gop, &ref);
 
   for(int i = 0; i < PANEL_BITS_N; i++)
   {
@@ -213,19 +211,18 @@ static void test_exempt_bits_are_not_quietly_swept(void **state)
 }
 
 /* The non-state fields the panel writes: per-shape opacity (blend_gui.c:3926),
-   group opacity (10187), refinement (3523/3533/3540/14714) and the group
-   break (3134/3170/5031/7763). `name` is deliberately absent -- it is a label
-   the renderer never reads. */
+   group opacity (10187) and refinement (3523/3533/3540/14714). `name` is
+   deliberately absent -- it is a label the renderer never reads. A group
+   break writes no field: it inserts a marker. */
 static void test_every_panel_written_field_is_swept(void **state)
 {
   int covered = 0;
-  gboolean op, gop, ref, gst;
-  _poke_coverage(&covered, &op, &gop, &ref, &gst);
+  gboolean op, gop, ref;
+  _poke_coverage(&covered, &op, &gop, &ref);
 
   assert_true(op);   // blend_gui.c:3926
   assert_true(gop);  // blend_gui.c:10187
   assert_true(ref);  // blend_gui.c:3523
-  assert_true(gst);  // blend_gui.c:3134
 }
 
 /* The tripwire.
