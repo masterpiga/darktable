@@ -126,7 +126,7 @@ static gchar *_snapshot(dt_develop_t *dev)
     So each load is also checked against the invariant the fix exists to
     establish: the flexi fold applies a run's operator once per run, classic
     applies it once per member, and they agree only when every non-union member
-    heads its own run (see _split_nonunion_runs in migrate_legacy.c). Checking
+    heads its own group (see _normalize_group in migrate_legacy.c). Checking
     it on both loads means a normalization that failed to run is caught even
     when it fails identically twice.
 
@@ -142,20 +142,27 @@ static gchar *_check_group_runs(dt_develop_t *dev,
   const int non_union = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_DIFFERENCE
                       | DT_MASKS_STATE_SUM | DT_MASKS_STATE_EXCLUSION;
 
-  // in a marked group the operator is read off the marker and a member's own
-  // copy of it renders nothing, so only nested groups are left to check
-  gboolean marked = FALSE;
-  for(GList *p = grp->points; p && !marked; p = g_list_next(p))
-    marked = dt_masks_point_is_marker(p->data);
+  // the flexi fold reads a list with no marker as one union group
+  if(grp->points && !dt_masks_point_is_marker(grp->points->data))
+    return g_strdup_printf("group %d does not start with a group marker", grp->formid);
 
+  const dt_masks_point_group_t *marker = NULL;
+  int members = 0;
   for(GList *p = grp->points; p; p = g_list_next(p))
   {
     const dt_masks_point_group_t *pt = p->data;
-    if(dt_masks_point_is_marker(pt)) continue;
-    if(!marked && (pt->state & non_union) && !pt->group_start)
-      return g_strdup_printf("group %d member %d has a non-union operator"
-                             " (state=%d) but does not start a run",
-                             grp->formid, pt->formid, pt->state);
+    if(dt_masks_point_is_marker(pt))
+    {
+      marker = pt;
+      members = 0;
+      continue;
+    }
+    // classic applies a non-union operator once per member, so each such
+    // member has a group of its own
+    if((marker->state & non_union) && ++members > 1)
+      return g_strdup_printf("group %d: the group of marker %d has a non-union"
+                             " operator (state=%d) and more than one member",
+                             grp->formid, marker->formid, marker->state);
     gchar *deeper = _check_group_runs(dev, pt->formid, depth + 1);
     if(deeper) return deeper;
   }

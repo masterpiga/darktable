@@ -3979,9 +3979,10 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
   float *raster_mask = NULL;
   dt_iop_roi_t *final_roi = &piece->processed_roi_out;
 
-  // judge the source by its piece: the module's blend params are rewritten
-  // with the defaults while another pipe replays history, and a source read
-  // as not writing loses its stored mask here
+  // the source piece's own blend params, never the module's: another pipe's
+  // synch_all commits every module's defaults while it replays history, and a
+  // source judged from the module in that window read as writing no mask,
+  // which deleted the one it had stored and emptied its consumers' masks
   const dt_develop_blend_params_t *const sbp = source_piece->blendop_data;
   const dt_develop_mask_mode_t maskmode =
     source_piece->enabled && sbp ? sbp->mask_mode : DEVELOP_MASK_DISABLED;

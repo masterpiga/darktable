@@ -4725,9 +4725,24 @@ static void _flexi_overlay_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer
   _flexi_report_occlusion(darktable.gui->ui);
 }
 
+// the header's inset is set once the allocation is over, not during it: a
+// margin changed inside an allocation queues a resize GTK does not act on until
+// something else lays the panel out again, so the docked header kept its
+// toggle at the edge until the pointer first crossed it. The allocations the
+// outer child is picked from are only final afterwards, too
+static guint _flexi_header_pad_idle = 0;
+
+static gboolean _flexi_header_pad_idle_cb(gpointer data)
+{
+  _flexi_header_pad_idle = 0;
+  _flexi_sync_header_scrollbar_pad(darktable.gui->ui);
+  return G_SOURCE_REMOVE;
+}
+
 static void _flexi_content_row_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer d)
 {
-  _flexi_sync_header_scrollbar_pad(darktable.gui->ui);
+  if(!_flexi_header_pad_idle)
+    _flexi_header_pad_idle = g_idle_add(_flexi_header_pad_idle_cb, NULL);
 }
 
 static void _flexi_slivers_update(dt_ui_t *ui, const gboolean show)

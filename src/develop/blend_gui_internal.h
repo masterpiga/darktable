@@ -161,8 +161,9 @@ gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
                                         const dt_mask_id_t dst);
 /** drop every member whose form is gone from dev->forms; how many went */
 int _model_prune_dangling_members(dt_masks_form_t *grp);
-/** give the group its markers if it has none (see dt_masks_group_mark_runs),
-    so it shows at least one group; whether anything changed */
+/** start the list with a group marker if it does not (see
+    dt_masks_group_ensure_marker), so it shows at least one group; whether
+    anything changed */
 gboolean _model_ensure_a_group(dt_masks_form_t *grp);
 /** move a whole same-kind cluster onto an element row or a group header */
 gboolean _masks_cluster_move(dt_iop_module_t *module,

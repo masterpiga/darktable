@@ -1279,52 +1279,46 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   // Never read blend_data directly from this thread.
   const dt_dev_refine_bypass_t *const bypass = &piece->refine_bypass;
 
+  // the members a list holds before its first marker fold as one plain union
+  // group. Only a flexi edit stored before markers has them: the panel and
+  // the migration give every list a marker first (dt_masks_group_ensure_marker)
+  static const dt_masks_point_group_t unmarked = { .state = DT_MASKS_STATE_UNION,
+                                                   .group_opacity = 1.0f };
+
   int nb_groups = 0; // how many groups have composited into `buffer`
   GList *fpts = form->points;
   while(fpts)
   {
-    // a marker starts a group and holds its settings. Without one (edits made
-    // before markers) the first usable member starts the group and carries
-    // them, so hidden and absent members are skipped until one is found
-    dt_masks_point_group_t *const head = fpts->data;
-    const gboolean marked = dt_masks_point_is_marker(head);
-    if(marked)
-      fpts = g_list_next(fpts);
-    else if((head->state & DT_MASKS_STATE_HIDDEN)
-            || !dt_masks_get_from_id_ext(piece->pipe->forms, head->formid))
+    // a marker starts a group and holds its settings, up to the next marker
+    const dt_masks_point_group_t *head = &unmarked;
+    if(dt_masks_point_is_marker(fpts->data))
     {
+      head = fpts->data;
       fpts = g_list_next(fpts);
-      continue;
     }
 
     const guint group_op = dt_masks_eff_group_op(head->state);
     // a bypassed group is skipped whole: its members are still walked (so the
-    // run boundary is found and the next group starts in the right place) but
-    // none of their masks are rendered and nothing is composited, exactly as
-    // if the group were not there. Its real operator is still in `group_op`,
-    // untouched, so un-bypassing restores it.
+    // next group starts in the right place) but none of their masks are
+    // rendered and nothing is composited, exactly as if the group were not
+    // there. Its real operator is still in `group_op`, untouched, so
+    // un-bypassing restores it.
     const gboolean bypassed = (group_op & DT_MASKS_STATE_OP_BYPASS) != 0;
     // within-group combine mode (how members fold together): union (default),
     // screen (soft union), intersect (min), or multiply (true per-pixel
-    // product). Read from the run head, which carries the broadcast flag.
+    // product)
     const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
     const gboolean isect = (head->state & DT_MASKS_STATE_ISECT) != 0;
     const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
-    // per-group refinement is broadcast onto every member, so the head carries a
-    // copy. Only a GROUP-scoped one applies to the whole group -- an ELEMENT one
-    // belongs to that member alone and is applied to its own mask in the fold
-    // below. Reading the head unconditionally (as this used to) meant the head's
-    // element refinement leaked over the entire group while every other member's
-    // was dropped, and soloing a member made its own refinement work only because
-    // hiding the rest promoted it to head.
+    // the group's own refinement. A member's ELEMENT one belongs to that
+    // member alone and is applied to its own mask in the fold below
     dt_masks_refinement_t group_refine = { 0 };
     if(head->refinement.enabled == DT_MASKS_REFINE_GROUP) group_refine = head->refinement;
 
-    // build the group sub-mask by folding all consecutive visible members that
-    // share this operator. Intersect and multiply seed at 1.0 (everything,
-    // then min/multiply each member in); union/screen seed at 0.0 (nothing,
-    // then max/soft-union in). (a bypassed group folds nothing into `grp`, so
-    // it needs no seed either)
+    // build the group sub-mask by folding its visible members. Intersect and
+    // multiply seed at 1.0 (everything, then min/multiply each member in);
+    // union/screen seed at 0.0 (nothing, then max/soft-union in). (a bypassed
+    // group folds nothing into `grp`, so it needs no seed either)
     if(!bypassed)
     {
       if(isect || within_multiply)
@@ -1333,7 +1327,6 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         memset(grp, 0, npixels * sizeof(float));
     }
     int nb_members = 0; // members whose mask actually folded into `grp`
-    int nb_seen = 0;    // members belonging to this run, renderable or not
     while(fpts)
     {
       dt_masks_point_group_t *const m = fpts->data;
@@ -1344,17 +1337,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         fpts = g_list_next(fpts);
         continue;
       }
-      // without a marker, a different operator -- or group_start on a
-      // same-operator head (first-class groups) -- ends this group and starts
-      // the next one. The run-boundary test counts every member seen, not just
-      // the ones that rendered: a bypassed group renders none of them, and even
-      // in a live group an unrenderable head must not let the next group's head
-      // slip in.
-      if(!marked && nb_seen > 0 && dt_masks_point_breaks_run(m, group_op))
-        break;
-      nb_seen++;
       if(bypassed || (m->state & DT_MASKS_STATE_DISABLE)) // nothing to render, just walk
-                                                          // to the end of the run
+                                                          // to the next marker
       {
         fpts = g_list_next(fpts);
         continue;
@@ -1427,7 +1411,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
 
     // per-group refinement, applied once to the finished sub-mask (skipped
     // while this group is bypassed for preview). A group is keyed by its
-    // bottom member, which is this run's head.
+    // marker.
     const gboolean group_bypassed =
       dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_group(head->formid));
     if(group_refine.enabled && !group_bypassed)
@@ -1447,8 +1431,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // persistent, multiplicative gain on this run's own finished sub-mask,
     // applied on top of -- not instead of -- each member's own independent
     // opacity (already folded into `grp` above; the two multiply together).
-    // Read from the head, same convention as every other broadcast run-level
-    // field (state/refinement/name). Applied after invert-output, for the
+    // Applied after invert-output, for the
     // same reason element opacity multiplies a shape's already-inverted mask
     // in _combine_masks_union et al: it scales the run's actual finished
     // contribution, whatever its state, not some pre-invert intermediate.

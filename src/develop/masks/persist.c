@@ -124,10 +124,9 @@ static const seq_t _sequences[] =
   { "boundary:exclusion then refine", "a run boundary implied by an operator is not stored",
     2, { { POKE_OP_EXCLUSION, SCOPE_RUN }, { POKE_GROUP_REFINE, SCOPE_RUN } } },
 
-  // ---- the same, but with the boundary made explicitly. group_start is the
-  // one field with no other representation: an operator can be re-derived from
-  // the state bits, a break cannot, so if anything is going to be dropped by
-  // the writer it is this.
+  // ---- the same, but with the boundary made explicitly. A break inserts a
+  // marker, a record the edit did not have before, so if anything is going to
+  // be dropped by the writer it is this.
   { "break:then within", "an explicit group break is not stored",
     2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_WITHIN_MULTIPLY, SCOPE_RUN } } },
   { "break:then opacity", "an explicit group break is not stored",
@@ -136,9 +135,9 @@ static const seq_t _sequences[] =
     2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
 
   // ---- migration's own output, built on. The first step changes nothing
-  // structural, so the second is applied to a group whose boundaries and
-  // disable bits came from _split_nonunion_runs() and
-  // _repair_base_case_overwrite() and have now been through storage once.
+  // structural, so the second is applied to a group whose markers and
+  // disable bits came from the migration (_normalize_group() in
+  // migrate_legacy.c) and have now been through storage once.
   { "migrated:opacity then refine", "migration's markers are lost by a save that did not touch them",
     2, { { POKE_ELEM_OPACITY, SCOPE_FIRST }, { POKE_GROUP_REFINE, SCOPE_RUN } } },
   { "migrated:disable then within", "the base-case repair's disable bits are lost by a save",
@@ -292,39 +291,6 @@ static dt_masks_form_t *_group_at(dt_develop_t *dev,
   dt_masks_form_t *grp = g_list_nth_data(all, index);
   g_list_free(all);
   return grp;
-}
-
-/** Every group member's classic-visible marker state, as a comparable string.
-
-    Only the two fields migration writes into a reused classic tree: the state
-    bits (of which DT_MASKS_STATE_DISABLE is the one the classic fold reads)
-    and group_start. Members are keyed by formid and sorted, so a difference
-    here is a difference in markers and not in list order. */
-static gint _digest_cmp(gconstpointer a, gconstpointer b)
-{
-  return strcmp(a, b);
-}
-
-static gchar *_marker_digest(GList *forms)
-{
-  GList *rows = NULL;
-  for(GList *f = forms; f; f = g_list_next(f))
-  {
-    const dt_masks_form_t *form = f->data;
-    if(!(form->type & DT_MASKS_GROUP)) continue;
-    for(GList *p = form->points; p; p = g_list_next(p))
-    {
-      const dt_masks_point_group_t *pt = p->data;
-      rows = g_list_prepend(rows, g_strdup_printf("%d:%d:%d:%d;", form->formid,
-                                                  pt->formid, pt->state,
-                                                  pt->group_start));
-    }
-  }
-  rows = g_list_sort(rows, _digest_cmp);
-  GString *g = g_string_new(NULL);
-  for(GList *l = rows; l; l = g_list_next(l)) g_string_append(g, l->data);
-  g_list_free_full(rows, g_free);
-  return g_string_free(g, FALSE);
 }
 
 /** Read the scratch image back through the real history reader.
@@ -516,24 +482,6 @@ typedef struct
   int worst_seq;        // index into _sequences[], or -1
   double worst_diff;
 
-  /* The classic fold, over what came back out of the database.
-
-     --verify-masks asks the same question of the forms as migration left them
-     in *memory* (see edit_report_t.restore_* there, and the argument for why
-     the markers are render-neutral for classic). This asks it of the forms as
-     *storage* returned them, which is the half that check cannot reach: it
-     proves not only that the markers are safe for a classic reader but that
-     they survive the write in a shape a classic reader can still make sense
-     of. Both readers are real -- a migration that fails closed after
-     _queue_group_split() has already marked the tree, and an older darktable
-     opening the same masks_history rows.
-
-     `db_marked` says whether the round trip actually brought markers back,
-     i.e. whether the comparison is evidence or a tautology. */
-  gboolean db_ran;
-  gboolean db_marked;
-  double db_max_diff;
-
   // how many groups the module renders through: 1 for a flat mask, more when
   // the top group has nested ones. Reported so a run says how much of the
   // nested surface it actually reached.
@@ -621,47 +569,6 @@ static void _persist_edit(JsonObject *edit,
   }
 
   const size_t npix = (size_t)w * h;
-
-  /* --- the classic fold, over what storage returned ------------------------
-
-     Render the edit exactly as authored -- classic blend_params, classic forms,
-     nothing migrated -- and then again with the forms the database handed back
-     after migration wrote its markers into them, still through the classic
-     blend_params. If storage carries the markers in a shape a classic reader
-     can still make sense of, those two masks are the same.
-
-     Done before the sequence sweep and on its own renders, so it is answered
-     even for an edit the sweep later has to skip. */
-  {
-    _install_state(&r, &classic_bp, dt_masks_dup_forms_deep(classic_forms, NULL));
-    float *classic_authored = _render_mask(&r, NULL);
-    gchar *authored_digest = _marker_digest(r.dev.forms);
-
-    dt_develop_blend_params_t stored_bp;
-    GList *stored_forms = NULL;
-    char obuf[128] = { 0 };
-    if(classic_authored && _read_state(&stored_bp, &stored_forms, obuf, sizeof(obuf)))
-    {
-      gchar *stored_digest = _marker_digest(stored_forms);
-      rep->db_marked = strcmp(authored_digest, stored_digest) != 0;
-      g_free(stored_digest);
-
-      /* the stored forms, read through the *classic* params: mask_id is the
-         same group either way -- a drawn-only migration reuses it verbatim,
-         and a drawn+parametric one leaves the original drawn group in place
-         under its own id and points the new top group elsewhere. */
-      _install_state(&r, &classic_bp, stored_forms);
-      float *classic_stored = _render_mask(&r, NULL);
-      if(classic_stored)
-      {
-        rep->db_ran = TRUE;
-        rep->db_max_diff = _max_abs_diff(classic_authored, classic_stored, npix);
-        dt_free_align(classic_stored);
-      }
-    }
-    g_free(authored_digest);
-    dt_free_align(classic_authored);
-  }
 
   // the baseline: the migrated mask as the first open leaves it in memory,
   // with nothing poked. Used only to tell a sequence that genuinely changed
@@ -871,10 +778,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
 
   int total = 0, identical = 0, different = 0, skipped = 0, errors = 0;
   int compared = 0, disagreed = 0, live = 0, vacuous = 0;
-  int db_compared = 0, db_marked = 0, db_different = 0;
   int nested_edits = 0, groups_swept = 0;
-  double db_worst = 0.0;
-  int db_worst_index = -1;
 
   for(guint i = 0; i < n; i++)
   {
@@ -897,12 +801,6 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
       disagreed += cached->disagreed;
       live += cached->live;
       if(cached->compared == 0 && cached->result == PERSIST_OK) vacuous++;
-      if(cached->db_ran)
-      {
-        db_compared++;
-        if(cached->db_marked) db_marked++;
-        if(cached->db_max_diff > PERSIST_EPS) db_different++;
-      }
       if(rf)
       {
         fprintf(rf, "%s\n    {\"index\": %u, \"result\": \"%s\","
@@ -941,24 +839,6 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
        zero here would be indistinguishable from 24 sequences agreeing. */
     if(rep.compared == 0 && rep.result != PERSIST_ERROR) vacuous++;
 
-    if(rep.db_ran)
-    {
-      db_compared++;
-      if(rep.db_marked) db_marked++;
-      if(rep.db_max_diff > PERSIST_EPS)
-      {
-        db_different++;
-        printf("[persist] CLASSIC CHANGED at edit %u (%s): the stored forms"
-               " render differently through classic blend params, by %.6f\n",
-               i, _obj_str(edit, "operation", "?"), rep.db_max_diff);
-        if(rep.db_max_diff > db_worst)
-        {
-          db_worst = rep.db_max_diff;
-          db_worst_index = (int)i;
-        }
-      }
-    }
-
     if(rep.result == PERSIST_OK) identical++;
     else if(rep.result == PERSIST_DIFFERENT)
     {
@@ -980,10 +860,6 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
                   " \"compared\": %d, \"disagreed\": %d, \"live\": %d",
               first_report ? "" : ",", i, _obj_str(edit, "operation", "?"),
               _result_name(rep.result), rep.compared, rep.disagreed, rep.live);
-      if(rep.db_ran)
-        fprintf(rf, ", \"classic_over_stored_marked\": %s,"
-                    " \"classic_over_stored_diff\": %.9g",
-                rep.db_marked ? "true" : "false", rep.db_max_diff);
       if(worst)
         fprintf(rf, ", \"worst_sequence\": \"%s\", \"seam\": \"%s\","
                     " \"worst_diff\": %.9f",
@@ -1007,11 +883,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
   g_object_unref(parser);
   g_hash_table_destroy(seen);
 
-  /* A stored tree the classic fold makes a different mask of is a failure of
-     the run, not a footnote: the markers are persisted now, so a fail-closed
-     migration or an older darktable reads exactly that. */
-  const gboolean passed = different == 0 && errors == 0 && vacuous == 0
-                          && db_different == 0;
+  const gboolean passed = different == 0 && errors == 0 && vacuous == 0;
 
   if(rf)
   {
@@ -1031,10 +903,6 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"swept_nothing\": %d,\n", vacuous);
     fprintf(rf, "    \"groups_swept\": %d,\n", groups_swept);
     fprintf(rf, "    \"edits_with_nested_group\": %d,\n", nested_edits);
-    fprintf(rf, "    \"classic_over_stored_compared\": %d,\n", db_compared);
-    fprintf(rf, "    \"classic_over_stored_marked\": %d,\n", db_marked);
-    fprintf(rf, "    \"classic_over_stored_different\": %d,\n", db_different);
-    fprintf(rf, "    \"classic_over_stored_worst_diff\": %.9g,\n", db_worst);
     fputs("    \"per_sequence\": [", rf);
     for(int q = 0; q < SEQ_N; q++)
       fprintf(rf, "%s\n      {\"name\": \"%s\", \"seam\": \"%s\","
@@ -1054,14 +922,6 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
   printf("[persist]   errors          : %d\n", errors);
   printf("[persist]   swept NOTHING   : %d  (no sequence could be compared;"
          " would pass vacuously)\n", vacuous);
-  printf("[persist]\n");
-  printf("[persist] the classic fold, over the forms storage returned:\n");
-  printf("[persist]   re-rendered     : %d\n", db_compared);
-  printf("[persist]   of those, the round trip brought markers back : %d"
-         "  (the rest prove nothing)\n", db_marked);
-  printf("[persist]   CLASSIC CHANGED : %d", db_different);
-  if(db_different) printf("   worst %.6f at edit %d", db_worst, db_worst_index);
-  printf("\n");
   printf("[persist]\n");
   printf("[persist] groups swept       : %d  (%d edits had a nested group)\n",
          groups_swept, nested_edits);

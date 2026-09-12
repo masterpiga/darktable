@@ -93,13 +93,6 @@ typedef struct
   double worst_mean_diff;
   int worst_differing_pixels;
 
-  /* the classic fold over the marked tree (see edit_report_t.restore_*) */
-  int restore_compared;          // edits where the classic re-render succeeded
-  int restore_marked;            // ... of those, edits migration actually marked
-  int restore_different;         // ... of those, edits where classic changed
-  double worst_restore_diff;
-  int worst_restore_index;
-
   int gpu_compared;              // edits where both GPU renders succeeded
   double worst_gpu_diff;         // GPU: worst classic-vs-migrated
   int worst_gpu_index;
@@ -1078,60 +1071,7 @@ typedef struct
   gboolean nopost_ran;
   double dev_diff_after_nopost;
 
-  /* Does the classic renderer still make the same mask of the form tree after
-     migration has written its markers into it?
-
-     Migration mutates the *shared* form tree in place: _repair_base_case_
-     overwrite() sets DT_MASKS_STATE_DISABLE on members a non-bottom
-     operator-less member would overwrite, and _split_nonunion_runs() sets
-     group_start on run heads (both in migrate_legacy.c, applied by
-     _queue_group_split before anything can fail). Since those markers are now
-     persisted, whoever reads that tree back through the *classic* fold has to
-     make the same mask of it as before -- and there are two such readers:
-
-       - a migration that fails closed. _queue_group_split() runs early and
-         unconditionally, but a later allocation failure leaves blend_params on
-         its original classic mask_mode (see the fail-closed rule at the top of
-         migrate_legacy.c), so the module keeps rendering the marked tree
-         through the classic path
-       - an older darktable, or this one with the edit rolled back, reading the
-         same masks_history rows
-
-     group_start is inert for classic -- it does not read the field. The
-     DISABLE bits are not: the classic fold skips a disabled member outright
-     (group.c:1414). The claim they are safe is that classic discarded exactly
-     those members anyway, by overwriting the accumulator when it reached the
-     operator-less member below them; disabling them only skips work whose
-     result was about to be thrown away. `restore_marked` says whether
-     migration actually wrote a marker on this edit, i.e. whether the number
-     below is evidence or a tautology. */
-  gboolean restore_ran;
-  gboolean restore_marked;
-  double restore_max_diff;
 } edit_report_t;
-
-/** Every group member's classic-visible marker state, as a comparable string.
-
-    Only the two fields migration writes into the shared form tree: the state
-    bits (of which DISABLE is the one the classic fold reads) and group_start.
-    Used to tell an edit where migration marked something from one where it did
-    not, so that "the classic render is unchanged" is reported as evidence only
-    where there was something to change. */
-static gchar *_marker_digest(dt_develop_t *dev)
-{
-  GString *g = g_string_new(NULL);
-  for(GList *f = dev->forms; f; f = g_list_next(f))
-  {
-    const dt_masks_form_t *form = f->data;
-    if(!(form->type & DT_MASKS_GROUP)) continue;
-    for(GList *p = form->points; p; p = g_list_next(p))
-    {
-      const dt_masks_point_group_t *pt = p->data;
-      g_string_append_printf(g, "%d:%d:%d;", pt->formid, pt->state, pt->group_start);
-    }
-  }
-  return g_string_free(g, FALSE);
-}
 
 static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 {
@@ -1208,12 +1148,10 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   float *before_cl = _render_mask_cl(&r, &before_cl_img);
 
   // --- migrate ----------------------------------------------------------
-  gchar *markers_before = _marker_digest(&r.dev);
   if(!dt_masks_migrate_classic_to_flexi(&r.module, r.module.blend_params, -1))
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "migration declined";
-    g_free(markers_before);
     dt_free_align(before);
     dt_free_align(before_cl);
     dt_free_align(before_img);
@@ -1228,7 +1166,6 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "flexi render produced no mask";
-    g_free(markers_before);
     dt_free_align(before);
     dt_free_align(before_cl);
     dt_free_align(before_img);
@@ -1238,30 +1175,6 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   }
 
   float *after_cl = _render_mask_cl(&r, &after_cl_img);
-
-  /* --- the classic fold, over the tree migration has now marked -----------
-     The forms are the migrated ones; only blend_params goes back to what it
-     was, which is exactly the state a fail-closed migration leaves behind and
-     the state an older darktable reads. Rendered last, and the flexi params
-     put straight back, so nothing above or below sees this. */
-  {
-    gchar *markers_after = _marker_digest(&r.dev);
-    rep->restore_marked = strcmp(markers_before, markers_after) != 0;
-    g_free(markers_after);
-
-    const dt_develop_blend_params_t flexi = *r.module.blend_params;
-    memcpy(r.module.blend_params, &bp, sizeof(dt_develop_blend_params_t));
-    float *restored = _render_mask(&r, NULL);
-    memcpy(r.module.blend_params, &flexi, sizeof(dt_develop_blend_params_t));
-
-    if(restored)
-    {
-      rep->restore_ran = TRUE;
-      rep->restore_max_diff = _max_abs_diff(before, restored, npix);
-      dt_free_align(restored);
-    }
-  }
-  g_free(markers_before);
 
   // Only meaningful when *both* GPU renders succeeded. If one side rendered
   // and the other did not, that asymmetry is itself worth reporting rather
@@ -1621,20 +1534,6 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
           st.worst_gpu_image_index = (int)i;
         }
       }
-      if(rep.restore_ran)
-      {
-        st.restore_compared++;
-        if(rep.restore_marked) st.restore_marked++;
-        if(rep.restore_max_diff > VERIFY_EPS_IDENTICAL)
-        {
-          st.restore_different++;
-          if(rep.restore_max_diff > st.worst_restore_diff)
-          {
-            st.worst_restore_diff = rep.restore_max_diff;
-            st.worst_restore_index = (int)i;
-          }
-        }
-      }
       if(rep.gpu_ran)
       {
         st.gpu_compared++;
@@ -1704,12 +1603,7 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
 
   g_object_unref(parser);
 
-  /* A classic render that changed is a failure of the run, not a footnote: the
-     markers are persisted now, so a fail-closed migration or a rollback reads
-     them, and if the classic fold makes a different mask of them the user's
-     image silently changed. */
-  const gboolean passed = st.different == 0 && st.error == 0
-                          && st.restore_different == 0;
+  const gboolean passed = st.different == 0 && st.error == 0;
 
   // Every number the summary below prints also goes into the report, so the
   // file is self-contained: reading a run must not require having kept the
@@ -1730,10 +1624,6 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
     fprintf(rf, "    \"live_identical\": %d,\n", st.live_identical);
     fprintf(rf, "    \"live_equivalent\": %d,\n", st.live_equivalent);
     fprintf(rf, "    \"live_different\": %d,\n", st.live_different);
-    fprintf(rf, "    \"classic_restore_compared\": %d,\n", st.restore_compared);
-    fprintf(rf, "    \"classic_restore_marked\": %d,\n", st.restore_marked);
-    fprintf(rf, "    \"classic_restore_different\": %d,\n", st.restore_different);
-    fprintf(rf, "    \"classic_restore_worst_diff\": %.9g,\n", st.worst_restore_diff);
     fprintf(rf, "    \"inert\": %d,\n", st.inert_before);
     fprintf(rf, "    \"worst_cpu_diff\": %.9g,\n", st.worst_max_diff);
     fprintf(rf, "    \"worst_cpu_diff_index\": %d,\n", st.worst_index);
@@ -1796,16 +1686,6 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
            st.worst_image_diff, st.worst_image_index,
            st.worst_image_mean_diff, st.worst_image_differing_pixels);
 
-  printf("[verify]\n");
-  printf("[verify] the classic fold, re-run over the tree migration marked"
-         " (fail-closed and rollback readers):\n");
-  printf("[verify]   re-rendered      : %d\n", st.restore_compared);
-  printf("[verify]   of those, migration actually marked something : %d"
-         "  (the rest prove nothing)\n", st.restore_marked);
-  printf("[verify]   CLASSIC CHANGED  : %d", st.restore_different);
-  if(st.restore_different)
-    printf("   worst %.9g at edit %d", st.worst_restore_diff, st.worst_restore_index);
-  printf("\n");
 
   if(st.gpu_compared)
   {

@@ -4249,6 +4249,35 @@ gboolean dt_iop_is_raster_mask_used(const dt_iop_module_t *module, const dt_mask
   return used;
 }
 
+// does an enabled module downstream of `piece` in its own pipe hold a raster
+// element reading mask `id` from piece's module? Judged from the pipe's nodes
+// and its forms snapshot, which dt_dev_pixelpipe_process() refreshed before
+// this run
+static gboolean _pipe_has_raster_form_consumer(const dt_dev_pixelpipe_iop_t *piece,
+                                               const dt_mask_id_t id)
+{
+  const GList *self = g_list_find(piece->pipe->nodes, piece);
+  for(const GList *n = self ? g_list_next(self) : NULL; n; n = g_list_next(n))
+  {
+    const dt_dev_pixelpipe_iop_t *sink = n->data;
+    const dt_develop_blend_params_t *bp = sink->blendop_data;
+    if(!sink->enabled || !bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) continue;
+    const dt_masks_form_t *grp = dt_masks_get_from_id_ext(piece->pipe->forms, bp->mask_id);
+    if(!grp || !(grp->type & DT_MASKS_GROUP)) continue;
+    for(const GList *l = grp->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      const dt_masks_form_t *f = dt_masks_get_from_id_ext(piece->pipe->forms, pt->formid);
+      if(!f || !(f->type & DT_MASKS_RASTER) || !f->points) continue;
+      const dt_masks_point_raster_t *rp = f->points->data;
+      if(rp->id == id && dt_iop_module_is(piece->module, rp->source)
+         && piece->module->multi_priority == rp->instance)
+        return TRUE;
+    }
+  }
+  return FALSE;
+}
+
 /** checks if we should store the mask for export or use in subsequent modules.
     The pipe->store_all_raster_masks is true if export has mask exporting so we
     want the mask data.
@@ -4260,7 +4289,13 @@ gboolean dt_iop_is_raster_mask_stored(const dt_dev_pixelpipe_iop_t *piece, const
   if(piece->pipe->store_all_raster_masks)
     return TRUE;
 
-  return dt_iop_is_raster_mask_used(piece->module, id);
+  if(dt_iop_is_raster_mask_used(piece->module, id)) return TRUE;
+  // the users table is shared by every pipe, and another pipe's synch_all
+  // takes a raster element's module out of it while it replays history from
+  // the defaults (_reconcile_raster_form_users). A source processing in the
+  // meantime dropped the mask its consumer was about to read, and the
+  // consumer's mask came out empty
+  return _pipe_has_raster_form_consumer(piece, id);
 }
 
 void dt_iop_piece_set_raster(dt_dev_pixelpipe_iop_t *piece,

@@ -490,9 +490,9 @@ dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
   if(module->blend_params->mask_mode & DEVELOP_MASK_FLEXI)
   {
     // a flexi element takes its group's settings from the group's marker, and
-    // a flexi list starts with one (see dt_masks_group_mark_runs). Its own
+    // a flexi list starts with one (see dt_masks_group_ensure_marker). Its own
     // operator is only what the classic fold would read
-    dt_masks_group_mark_runs(dev->forms, grp);
+    dt_masks_group_ensure_marker(dev->forms, grp);
     grpt->state |= DT_MASKS_STATE_UNION;
     // the panel's target group: on top of it, which for an empty group is
     // right after its marker. Without one the element lands in the top group
@@ -1130,19 +1130,35 @@ dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
   return pt;
 }
 
-// does the point at node `l` of an unmarked list start a new run? The
-// partition the flexi fold and the panel read off such a list before markers
-static gboolean _unmarked_run_starts(GList *l)
+gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || (grp->type & DT_MASKS_CLONE)) return FALSE;
+  if(grp->points && dt_masks_point_is_marker(grp->points->data)) return FALSE;
+  dt_masks_point_group_t *m = dt_masks_marker_new(forms, grp, DT_MASKS_STATE_UNION);
+  if(!m) return FALSE;
+  grp->points = g_list_prepend(grp->points, m);
+  return TRUE;
+}
+
+// does the point at node `l` of a classic list start a new run? The
+// non-union operators are the ones classic applies once per member, see
+// _normalize_group in migrate_legacy.c for why `split_nonunion` exists
+static gboolean _classic_run_starts(GList *l, const gboolean split_nonunion)
 {
   if(!l->prev) return TRUE;
+  const dt_masks_point_group_t *pt = l->data;
   const dt_masks_point_group_t *below = l->prev->data;
-  return dt_masks_point_breaks_run(l->data, dt_masks_eff_group_op(below->state));
+  // MULTIPLY is absent: no classic shape carries it, see _normalize_group
+  const int non_union = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_DIFFERENCE
+                        | DT_MASKS_STATE_SUM | DT_MASKS_STATE_EXCLUSION;
+  return pt->group_start
+         || (split_nonunion && (pt->state & non_union))
+         || dt_masks_eff_group_op(pt->state) != dt_masks_eff_group_op(below->state);
 }
 
 // the marker id of the run headed by `head` in group `grp`: derived from the
-// two, so the same run marked in two history snapshots, or marked again after
-// an undo brought the unmarked list back, gets the same id. The panel keys a
-// group's selection, number and expanded state on it
+// two, so the same run marked in two history snapshots gets the same id. The
+// panel keys a group's selection, number and expanded state on it
 static dt_mask_id_t _run_marker_id(GList *forms, const dt_mask_id_t grp, const dt_mask_id_t head)
 {
   const gint64 key = ((gint64)grp << 32) | (guint32)head;
@@ -1152,7 +1168,10 @@ static dt_mask_id_t _run_marker_id(GList *forms, const dt_mask_id_t grp, const d
   return id;
 }
 
-static gboolean _mark_runs(GList *forms, dt_masks_form_t *grp, const int depth)
+static gboolean _mark_runs(GList *forms,
+                           dt_masks_form_t *grp,
+                           const gboolean split_nonunion,
+                           const int depth)
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP) || (grp->type & DT_MASKS_CLONE)) return FALSE;
   // a malformed or cyclic tree must not spin here; nesting is shallow
@@ -1174,7 +1193,7 @@ static gboolean _mark_runs(GList *forms, dt_masks_form_t *grp, const int depth)
     while(l)
     {
       GList *end = g_list_next(l);
-      while(end && !_unmarked_run_starts(end)) end = g_list_next(end);
+      while(end && !_classic_run_starts(end, split_nonunion)) end = g_list_next(end);
 
       // the settings are the ones the flexi fold reads for this run: off its
       // first member that is shown and resolves (_group_get_mask_roi_flexi)
@@ -1199,8 +1218,19 @@ static gboolean _mark_runs(GList *forms, dt_masks_form_t *grp, const int depth)
       marker->group_opacity = src->group_opacity;
       if(src->refinement.enabled == DT_MASKS_REFINE_GROUP) marker->refinement = src->refinement;
 
-      // the members keep their copies of the settings: the classic fold reads
-      // their operators, and a migration that fails closed renders through it
+      // the group's settings are the marker's now. A member keeps only what is
+      // its own and joins as a plain union element, like any flexi element
+      for(GList *m = l; m != end; m = g_list_next(m))
+      {
+        dt_masks_point_group_t *pt = m->data;
+        pt->state = (pt->state & ~(DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN))
+                    | DT_MASKS_STATE_UNION;
+        pt->name[0] = '\0';
+        pt->group_opacity = 1.0f;
+        pt->group_start = 0;
+        if(pt->refinement.enabled == DT_MASKS_REFINE_GROUP)
+          memset(&pt->refinement, 0, sizeof(pt->refinement));
+      }
       grp->points = g_list_insert_before(grp->points, l, marker);
       l = end;
     }
@@ -1214,14 +1244,16 @@ static gboolean _mark_runs(GList *forms, dt_masks_form_t *grp, const int depth)
     if(dt_masks_point_is_marker(pt)) continue;
     dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
     if(child && child != grp && (child->type & DT_MASKS_GROUP))
-      changed |= _mark_runs(forms, child, depth + 1);
+      changed |= _mark_runs(forms, child, split_nonunion, depth + 1);
   }
   return changed;
 }
 
-gboolean dt_masks_group_mark_runs(GList *forms, dt_masks_form_t *grp)
+gboolean dt_masks_group_mark_classic_runs(GList *forms,
+                                          dt_masks_form_t *grp,
+                                          const gboolean split_nonunion)
 {
-  return _mark_runs(forms, grp, 0);
+  return _mark_runs(forms, grp, split_nonunion, 0);
 }
 
 dt_masks_form_t *dt_masks_create(const dt_masks_type_t type)
@@ -2614,14 +2646,6 @@ dt_hash_t dt_masks_group_hash_ext(dt_hash_t hash,
         // by the group renderer, so it must feed the pixelpipe cache hash too;
         // zero-filled for legacy blobs, so this is neutral for old edits.
         hash = dt_hash(hash, &grpt->refinement, sizeof(dt_masks_refinement_t));
-        // the first-class group boundary (masks v10) decides how the fold
-        // partitions this point list into runs, so two trees that differ only
-        // in it render differently -- the same argument as group_opacity and
-        // refinement above, and the same symptom when it is left out: setting
-        // or clearing a group break changed nothing on screen until an
-        // unrelated edit forced a reprocess. Zero-filled on pre-v10 blobs, so
-        // neutral for old edits.
-        hash = dt_hash(hash, &grpt->group_start, sizeof(int));
         hash = dt_masks_group_hash_ext(hash, f, forms_list);
       }
     }
@@ -2696,10 +2720,6 @@ int dt_masks_prune_empty_objects(GList **forms)
         dt_masks_point_group_t *pt = p->data;
         if(pt->formid == obj->formid)
         {
-          // members of a run share its operator, so the member above a
-          // removed head only needs the break to keep the run apart
-          if(pt->group_start && next && p->prev)
-            ((dt_masks_point_group_t *)next->data)->group_start = 1;
           grp->points = g_list_delete_link(grp->points, p);
           free(pt);
         }

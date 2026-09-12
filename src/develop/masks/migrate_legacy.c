@@ -90,69 +90,6 @@
 // construction helpers
 // ---------------------------------------------------------------------------
 
-/* Classic applies a shape's combine operator once per SHAPE; the flexi fold
- * applies it once per RUN.
- *
- * The flexi fold (_group_get_mask_roi_flexi in group.c) partitions grp->points
- * into maximal same-operator runs, folds each run's members together with the
- * run's *within-group* mode (SCREEN/ISECT/WITHIN_MULTIPLY; none set = union,
- * i.e. max) and composites the finished sub-mask onto the accumulator with the
- * run's between-group operator -- once. The classic sequential fold instead
- * walks the list applying each member's own operator to the accumulator
- * directly. Same operators (DT_MASKS_STATE_OP_COMBINE is exactly the classic
- * set), applied a different number of times.
- *
- * That is invisible for union, because max is idempotent as well as
- * associative: max'ing a run together and then max'ing it in once equals
- * max'ing each member in individually. It is very visible for the others --
- * SUM (a+b) compounds per application, and INTERSECTION is min(acc, max(e1,e2))
- * one way and min(acc, e1, e2) the other. A real 48-brush mask at 0.1 opacity
- * reached 0.6202 under classic and 0.1723 after migration.
- *
- * Giving every non-union member its own run restores per-member application
- * exactly (verified: the 27 edits in the harvested corpus that diverged all
- * became identical, worst residual 2.98e-08). Consecutive union members are
- * deliberately left merged -- they are already equivalent, and splitting them
- * would turn a 48-stroke mask into 48 one-shape groups in the panel for no
- * behavioural gain.
- *
- * Idempotent: re-marking a member that already starts a run changes nothing,
- * which is what lets this run on every load and also on a group that has since
- * been written back to the database in split form. */
-static void _split_nonunion_runs(GList *forms,
-                                 dt_masks_form_t *grp,
-                                 const int depth)
-{
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
-  // a malformed/cyclic tree must not spin here; classic nesting is shallow
-  if(depth > 8) return;
-
-  // MULTIPLY is deliberately absent: no classic drawn shape carries it (it is
-  // the operator migration itself attaches to a synthesized parametric run),
-  // and that run is built already-correct by _migrate_drawn_and_parametric.
-  const int non_union = DT_MASKS_STATE_INTERSECTION
-                      | DT_MASKS_STATE_DIFFERENCE
-                      | DT_MASKS_STATE_SUM
-                      | DT_MASKS_STATE_EXCLUSION;
-
-  for(GList *l = grp->points; l; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = l->data;
-    // a marked list has its runs already
-    if(dt_masks_point_is_marker(pt)) continue;
-    if(pt->state & non_union) pt->group_start = 1;
-
-    // A member can itself be a group, and rendering one recurses back into
-    // dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
-    // now flexi, so the nested group is folded by the run algebra too and needs
-    // the same treatment. Missing this left 4 of the 27 corpus divergences
-    // unfixed when the split was applied only to the top-level group.
-    dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
-    if(child && (child->type & DT_MASKS_GROUP))
-      _split_nonunion_runs(forms, child, depth + 1);
-  }
-}
-
 /* Repair a group whose member list violates classic's own well-formedness rule.
  *
  * Upstream's invariant is that only the BOTTOM member of a group carries no
@@ -203,7 +140,7 @@ static void _repair_base_case_overwrite(GList *forms,
                                         const int depth)
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
-  // same bound as _split_nonunion_runs: a malformed/cyclic tree must not spin
+  // a malformed/cyclic tree must not spin here; classic nesting is shallow
   if(depth > 8) return;
 
   // the last live member with no operator -- the one whose base case wins
@@ -246,14 +183,49 @@ static void _repair_base_case_overwrite(GList *forms,
   }
 }
 
-// the whole normalization of a reused classic group, in order: the repair
-// decides which members are live, the split marks run boundaries among exactly
-// those, and the markers turn those boundaries into groups of their own
+/* Classic applies a shape's combine operator once per SHAPE; the flexi fold
+ * applies it once per RUN.
+ *
+ * Migration makes a group of each maximal same-operator run of a classic list
+ * (dt_masks_group_mark_classic_runs in masks.c). The flexi fold
+ * (_group_get_mask_roi_flexi in group.c) folds a group's members together with
+ * its *within-group* mode (SCREEN/ISECT/WITHIN_MULTIPLY; none set = union,
+ * i.e. max) and composites the finished sub-mask onto the accumulator with the
+ * group's between-group operator -- once. The classic sequential fold instead
+ * walks the list applying each member's own operator to the accumulator
+ * directly. Same operators (DT_MASKS_STATE_OP_COMBINE is exactly the classic
+ * set), applied a different number of times.
+ *
+ * That is invisible for union, because max is idempotent as well as
+ * associative: max'ing a run together and then max'ing it in once equals
+ * max'ing each member in individually. It is very visible for the others --
+ * SUM (a+b) compounds per application, and INTERSECTION is min(acc, max(e1,e2))
+ * one way and min(acc, e1, e2) the other. A real 48-brush mask at 0.1 opacity
+ * reached 0.6202 under classic and 0.1723 after migration.
+ *
+ * Giving every non-union member its own run restores per-member application
+ * exactly (verified: the 27 edits in the harvested corpus that diverged all
+ * became identical, worst residual 2.98e-08). Consecutive union members are
+ * deliberately left merged -- they are already equivalent, and splitting them
+ * would turn a 48-stroke mask into 48 one-shape groups in the panel for no
+ * behavioural gain.
+ *
+ * MULTIPLY is deliberately not split: no classic drawn shape carries it (it is
+ * the operator migration itself attaches to a synthesized parametric run),
+ * and that run is built already-correct by _migrate_drawn_and_parametric.
+ *
+ * A member can itself be a group, and rendering one recurses back into
+ * dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
+ * now flexi, so the nested group is folded by the run algebra too and needs
+ * the same treatment. Missing this left 4 of the 27 corpus divergences
+ * unfixed when the split was applied only to the top-level group.
+ *
+ * The repair runs first, since it decides which members are live. Idempotent:
+ * a marked list is left as it is, which is what lets this run on every load. */
 static void _normalize_group(GList *forms, dt_masks_form_t *grp)
 {
   _repair_base_case_overwrite(forms, grp, 0);
-  _split_nonunion_runs(forms, grp, 0);
-  dt_masks_group_mark_runs(forms, grp);
+  dt_masks_group_mark_classic_runs(forms, grp, TRUE);
 }
 
 /* Queue a reused classic drawn group for the normalization above, and do it
@@ -695,7 +667,7 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
-  dt_masks_group_mark_runs(module->dev->forms, grp);
+  dt_masks_group_mark_classic_runs(module->dev->forms, grp, FALSE);
   _persist_form(module, grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -795,7 +767,7 @@ static gboolean _migrate_raster(dt_iop_module_t *module,
   }
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
-  dt_masks_group_mark_runs(module->dev->forms, grp);
+  dt_masks_group_mark_classic_runs(module->dev->forms, grp, FALSE);
 
   _persist_form(module, raster_form, history_num);
   _persist_form(module, grp, history_num);
@@ -1021,13 +993,6 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   drawn_pt->parentid = top_grp->formid;
   top_grp->points = g_list_append(top_grp->points, drawn_pt);
 
-  // drawn_pt references the *original* classic drawn group, which is rendered
-  // by recursing back into dt_masks_group_get_mask_roi() -- and that recursion
-  // reads the module's (now flexi) blend_params, so the inner group is folded
-  // by the flexi run algebra too. It therefore needs the same run-boundary
-  // normalization as the drawn-only case above.
-  _queue_group_split(module, o->mask_id);
-
   // the channel elements form their own run, separate from drawn_pt's (a
   // different operator always starts a new run, see the run-boundary test
   // in _group_get_mask_roi_flexi) -- DT_MASKS_STATE_MULTIPLY is that run's
@@ -1043,10 +1008,20 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
     return FALSE;
   }
 
+  // drawn_pt references the *original* classic drawn group, which is rendered
+  // by recursing back into dt_masks_group_get_mask_roi() -- and that recursion
+  // reads the module's (now flexi) blend_params, so the inner group is folded
+  // by the flexi run algebra too. It therefore needs the same run-boundary
+  // normalization as the drawn-only case above. Only past the last point that
+  // can fail: normalizing moves the group's settings off its members, and a
+  // migration that fails keeps rendering the group through the classic fold,
+  // which reads them there
+  _queue_group_split(module, o->mask_id);
+
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
-  dt_masks_group_mark_runs(module->dev->forms, top_grp);
+  dt_masks_group_mark_classic_runs(module->dev->forms, top_grp, FALSE);
   _persist_form(module, top_grp, history_num);
 
   _clear_toplevel_blendif(n);

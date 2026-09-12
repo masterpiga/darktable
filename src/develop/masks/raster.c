@@ -195,6 +195,7 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
   // for the darkroom can read as off there, and vice versa), so a piece-less
   // check would answer for the wrong pipe.
   gboolean enabled = source->enabled;
+  const dt_develop_blend_params_t *sbp = source->blend_params;
   if(piece && piece->pipe)
   {
     const dt_dev_pixelpipe_iop_t *source_piece = NULL;
@@ -210,6 +211,9 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
     // in this pipe the module does not exist at all
     if(!source_piece) return TRUE;
     enabled = source_piece->enabled;
+    // the same goes for its blend params: the module's are rewritten with the
+    // defaults while another pipe replays history
+    sbp = source_piece->blendop_data;
   }
   if(!enabled) return TRUE;
 
@@ -217,8 +221,7 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
   // own and no IOP_FLAGS_WRITE_RASTER never puts a mask in the table, so this
   // element has nothing to read however healthy the reference looks. Same test
   // dt_dev_get_raster_mask() makes before it gives up (pixelpipe_hb.c).
-  const dt_develop_mask_mode_t mask_mode =
-    source->blend_params ? source->blend_params->mask_mode : DEVELOP_MASK_DISABLED;
+  const dt_develop_mask_mode_t mask_mode = sbp ? sbp->mask_mode : DEVELOP_MASK_DISABLED;
   const gboolean writes_masks = (mask_mode > DEVELOP_MASK_ENABLED)
                              || (source->flags() & IOP_FLAGS_WRITE_RASTER);
   return !writes_masks;

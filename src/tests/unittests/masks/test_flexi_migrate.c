@@ -217,9 +217,7 @@ static void test_classic_head_without_an_operator_keeps_its_group(void **state)
 
   assert_true(_migrate());
 
-  // the fold's boundary test (dt_masks_point_breaks_run, masks.h) keeps the
-  // member above in the run, and so does the group the migration marks
-  assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
+  // the group the migration marks keeps the member above in the head's group
   assert_int_equal(_group_cid_of_form(grp, head->formid),
                    _group_cid_of_form(grp, above->formid));
 }
@@ -247,7 +245,19 @@ static void test_a_modifier_is_not_an_operator(void **state)
     // ends carry it -- which is exactly when the two readings can disagree
     head->state |= modifiers[m];
     above->state |= modifiers[m];
-    assert_false(dt_masks_point_breaks_run(above, dt_masks_eff_group_op(head->state)));
+    // marked again from scratch, the two still make one group
+    GList *p = grp->points;
+    while(p)
+    {
+      GList *next = g_list_next(p);
+      if(dt_masks_point_is_marker(p->data))
+      {
+        free(p->data);
+        grp->points = g_list_delete_link(grp->points, p);
+      }
+      p = next;
+    }
+    dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, TRUE);
     assert_int_equal(_group_cid_of_form(grp, head->formid),
                      _group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
@@ -279,9 +289,6 @@ static void test_every_history_snapshot_is_normalized(void **state)
   dt_masks_point_group_t *above = grp->points->next->data;
   above->state = (above->state & ~(int)DT_MASKS_STATE_OP_COMBINE)
                  | (int)DT_MASKS_STATE_DIFFERENCE;
-  above->group_start = 0;
-
-  assert_true(_migrate());
 
   /* The fixture hand-builds its group, so it has no ->functions; a real one
      gets dt_masks_functions_group from dt_masks_create(). That matters here
@@ -295,8 +302,9 @@ static void test_every_history_snapshot_is_normalized(void **state)
     if(form->type & DT_MASKS_GROUP) form->functions = &dt_masks_functions_group;
   }
 
-  // two items, older first, each with its own copy of the tree -- as
-  // dt_dev_add_masks_history_item_ext() would have left them
+  // two items, older first, each with its own copy of the tree as stored:
+  // classic, before migration -- so the assertions below can only pass if
+  // the call below marks BOTH snapshots
   dt_dev_history_item_t older = { 0 }, newer = { 0 };
   older.num = 0;
   newer.num = 1;
@@ -304,32 +312,12 @@ static void test_every_history_snapshot_is_normalized(void **state)
   newer.forms = dt_masks_dup_forms_deep(flexi_dev.forms, NULL);
   older.blend_params = &flexi_bp;
   newer.blend_params = &flexi_bp;
+
+  assert_true(_migrate());
+
   flexi_dev.history = g_list_append(NULL, &older);
   flexi_dev.history = g_list_append(flexi_dev.history, &newer);
   flexi_dev.history_end = 2;
-
-  // clear what the inline pass already wrote -- the run breaks, and the group
-  // markers made from them -- so the assertions below can only pass if this
-  // call put them back on BOTH snapshots
-  for(GList *h = flexi_dev.history; h; h = g_list_next(h))
-  {
-    const dt_dev_history_item_t *it = h->data;
-    dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
-    assert_non_null(g);
-    GList *p = g->points;
-    while(p)
-    {
-      GList *next = g_list_next(p);
-      dt_masks_point_group_t *pt = p->data;
-      pt->group_start = 0;
-      if(dt_masks_point_is_marker(pt))
-      {
-        free(pt);
-        g->points = g_list_delete_link(g->points, p);
-      }
-      p = next;
-    }
-  }
 
   flexi_dev.pending_flexi_group_splits =
     g_list_append(NULL, GINT_TO_POINTER(flexi_bp.mask_id));

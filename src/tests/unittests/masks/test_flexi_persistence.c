@@ -66,11 +66,11 @@ static dt_masks_form_t *_build_legacy(const char *layout, const int version)
   return grp;
 }
 
-// the groups an old list's runs make: the list is marked the way the panel or
-// the classic migration marks it, then read like any other
+// the groups an old list's runs make: the list is marked the way the classic
+// migration marks it, then read like any other
 #define assert_runs(grp, expect)                                               \
   do {                                                                         \
-    dt_masks_group_mark_runs(flexi_dev.forms, (grp));                          \
+    dt_masks_group_mark_classic_runs(flexi_dev.forms, (grp), FALSE);           \
     assert_layout(expect);                                                     \
   } while(0)
 
@@ -169,7 +169,7 @@ static void test_v10_without_break_bit_yields_one_group(void **state)
 
 // pre-v10 edits could not have two adjacent same-operator groups (there was no
 // way to express it), so operator changes alone must still partition them --
-// this is the operator half of dt_masks_point_breaks_run
+// this is the operator half of dt_masks_group_mark_classic_runs
 static void test_v10_operator_change_still_partitions_old_edits(void **state)
 {
   dt_masks_form_t *grp = _build_legacy("u:1,2 | i:3", 9);
