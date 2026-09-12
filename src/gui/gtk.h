@@ -468,6 +468,10 @@ GtkWidget *dt_ui_flexi_panel_header(struct dt_ui_t *ui);
 /** \brief flexi masks panel: box to reparent flexi masks content into
     (see develop/blend_gui.c, plugins/darkroom/blend/masks_panel_position) */
 GtkWidget *dt_ui_flexi_panel_content(struct dt_ui_t *ui);
+/** \brief flexi masks panel: mark its module-like frame active (the mask it
+    shows is on) or not, as dt_module_active marks an enabled module, so themes
+    style the panel's header the way they style an enabled module's */
+void dt_ui_flexi_panel_set_active(struct dt_ui_t *ui, const gboolean active);
 /** \brief move the flexi masks panel to the left (FALSE) or right (TRUE)
     side of the main window, live (no view reopen needed) */
 void dt_ui_flexi_panel_set_side(struct dt_ui_t *ui, const gboolean right);

@@ -168,11 +168,11 @@ static const dt_masks_refinement_t _refine_probe =
 
 /* Apply one poke to the member index range [first, last] of `points`.
 
-   A run-level poke is broadcast across the whole range because that is what
-   the panel does with it -- the fold reads it back from the run's head, but
-   every member carries a copy so that any one of them can represent the group
-   (see dt_masks_point_group_t's own comments on name/refinement/group_opacity).
-   An element-level poke is passed first == last. */
+   A run-level poke is broadcast across the whole range. In a marked group the
+   range starts at the group's marker, which is the record the fold reads; the
+   members' copies only matter to the classic fold. In an unmarked list the
+   fold reads it back from the run's head. An element-level poke is passed
+   first == last. */
 void _apply_poke(GList *points, const poke_t k,
                  const int first, const int last)
 {
@@ -422,6 +422,21 @@ gboolean _apply_geom(dt_masks_form_t *form, const geom_t g)
 // steps: one panel action, addressed to part of a group
 // ---------------------------------------------------------------------------
 
+// the index of the bottom or top member, skipping markers: an element step
+// addressed to a marker would edit no element, and removing or moving one
+// would merge or reorder groups instead
+static int _member_index(dt_masks_form_t *grp, const gboolean top)
+{
+  int i = 0, found = -1;
+  for(GList *l = grp->points; l; l = g_list_next(l), i++)
+    if(!dt_masks_point_is_marker(l->data))
+    {
+      found = i;
+      if(!top) break;
+    }
+  return found;
+}
+
 gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
                         int *first, int *last)
 {
@@ -430,8 +445,10 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
 
   switch(s)
   {
-    case SCOPE_FIRST: *first = *last = 0;     return TRUE;
-    case SCOPE_LAST:  *first = *last = n - 1; return TRUE;
+    case SCOPE_FIRST:
+    case SCOPE_LAST:
+      *first = *last = _member_index(grp, s == SCOPE_LAST);
+      return *first >= 0;
     case SCOPE_RUN:
     default:
       // the run the first member belongs to, which ends at the next member
@@ -449,6 +466,29 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
   }
 }
 
+/* A group break in a marked group: a copy of the enclosing group's marker
+   before member `idx`, which is what group_start is to an unmarked list. The
+   new group keeps the settings its members were folded with, as the run a
+   break split off does. Returns FALSE for an unmarked list, which breaks by
+   group_start instead. */
+static gboolean _break_before(dt_develop_t *dev, dt_masks_form_t *grp,
+                              const int idx)
+{
+  GList *node = g_list_nth(grp->points, idx);
+  if(!node || dt_masks_point_is_marker(node->data)) return FALSE;
+  GList *m = node->prev;
+  while(m && !dt_masks_point_is_marker(m->data)) m = m->prev;
+  if(!m) return FALSE;
+  if(m == node->prev) return TRUE; // already heads its group
+
+  dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
+  if(!pt) return TRUE;
+  memcpy(pt, m->data, sizeof(dt_masks_point_group_t));
+  pt->formid = dt_masks_new_marker_id(dev ? dev->forms : NULL);
+  grp->points = g_list_insert_before(grp->points, node, pt);
+  return TRUE;
+}
+
 void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 {
   int first = 0, last = 0;
@@ -456,6 +496,7 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 
   if(st->kind == STEP_POKE)
   {
+    if(st->k == POKE_ELEM_BREAK && _break_before(dev, grp, first)) return;
     _apply_poke(grp->points, st->k, first, last);
     return;
   }
@@ -485,10 +526,13 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
     free(node->data);
     grp->points = g_list_delete_link(grp->points, node);
   }
-  else if(st->kind == STEP_MOVE_UP && node->prev)
+  else if(st->kind == STEP_MOVE_UP && node->prev
+          && !(dt_masks_point_is_marker(node->prev->data) && !node->prev->prev))
   {
     // swapping the payloads reorders the run without disturbing the list
-    // nodes, which is all the fold reads
+    // nodes, which is all the fold reads. Past a marker it moves the member
+    // into the group below; the bottom group has none, and a member before
+    // the first marker would sit in no group at all
     gpointer tmp = node->data;
     node->data = node->prev->data;
     node->prev->data = tmp;
@@ -802,11 +846,10 @@ static void _postedit_edit(JsonObject *edit, postedit_report_t *rep)
   }
 
   _snap_all(groups, orig);
-  // canon: the panel's own normalization, applied to every group including the
-  // nested ones. This is the group a user building the same shapes from
-  // scratch in the panel would have.
-  for(GList *g = groups; g; g = g_list_next(g))
-    _normalize_group_operators(g->data);
+  // canon: the group a user building the same shapes from scratch in the panel
+  // would have. Once migration writes group markers the panel normalizes
+  // nothing, so it is the migrated group itself, and every edit reports
+  // "already normalized": the partition the two could disagree on is explicit
   _snap_all(groups, canon);
   _restore_all(groups, orig);
 

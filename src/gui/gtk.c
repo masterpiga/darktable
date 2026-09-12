@@ -141,6 +141,7 @@ typedef struct dt_ui_t
      dt_ui_flexi_panel_set_side). */
   GtkWidget *flexi_panel_overlay;  // outer overlay (body + resize handle), packed into centerrow
   GtkWidget *flexi_panel_body;     // vertical box: header + scroll (flexi_content)
+  GtkWidget *flexi_frame;          // #iop-expander: header + content row, styled like a module
   GtkWidget *flexi_header;         // where blend_gui.c reparents flexi masks header into (sticky above scroll)
   GtkWidget *flexi_content;        // where blend_gui.c reparents flexi masks content into
   GtkWidget *flexi_handle;         // resize-handle drawing area, side toggled with the panel
@@ -4115,14 +4116,23 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // their clicks are consumed before they ever reach this.
   GtkWidget *hdr_evb = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evb), FALSE);
+  // the panel is framed and headed the way a module is, an #iop-expander
+  // holding a #module-header, in the states of a module showing its mask. So
+  // whatever a theme, its options or user.css do to modules reaches the panel
+  // too: header color, rounded corners, borders. dt_ui_flexi_panel_set_active
+  // follows the mask the way dt_module_active follows a module's power button
+  GtkWidget *frame = ui->flexi_frame = dt_gui_vbox();
+  gtk_widget_set_name(frame, "iop-expander");
+  dt_gui_add_class(frame, "dt_module_expanded");
+  dt_gui_add_class(frame, "dt_module_focus");
   ui->flexi_header = dt_gui_vbox();
-  gtk_widget_set_name(ui->flexi_header, "flexi-panel-header-host");
+  gtk_widget_set_name(ui->flexi_header, "module-header");
   gtk_container_add(GTK_CONTAINER(hdr_evb), ui->flexi_header);
   // the gesture is invisible, so the header has to say it is there. The buttons
   // sitting in the header keep their own tooltips over their own area.
   gtk_widget_set_tooltip_text(hdr_evb, _("double-click to hide the mask panel"));
   dt_gui_connect_click(hdr_evb, _flexi_header_pressed, NULL, NULL);
-  dt_gui_box_add(widget, hdr_evb);
+  dt_gui_box_add(frame, hdr_evb);
   gtk_widget_show_all(hdr_evb);
 
   // scrolled window: gives vertical overflow scrolling like the LEFT/RIGHT
@@ -4154,7 +4164,10 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   gtk_widget_set_vexpand(scroll, TRUE);
   dt_gui_box_add(content_row, dt_gui_expand(scroll));
   gtk_widget_set_vexpand(content_row, TRUE);
-  dt_gui_box_add(widget, dt_gui_expand(content_row));
+  dt_gui_box_add(frame, dt_gui_expand(content_row));
+  gtk_widget_set_vexpand(frame, TRUE);
+  dt_gui_box_add(widget, dt_gui_expand(frame));
+  gtk_widget_show(frame);
 
   ui->flexi_content = dt_gui_vbox();
   gtk_container_add(GTK_CONTAINER(scroll), ui->flexi_content);
@@ -4746,6 +4759,15 @@ GtkWidget *dt_ui_flexi_panel_header(dt_ui_t *ui)
 GtkWidget *dt_ui_flexi_panel_content(dt_ui_t *ui)
 {
   return ui ? ui->flexi_content : NULL;
+}
+
+void dt_ui_flexi_panel_set_active(dt_ui_t *ui, const gboolean active)
+{
+  if(!ui || !ui->flexi_frame) return;
+  if(active)
+    dt_gui_add_class(ui->flexi_frame, "dt_module_active");
+  else
+    dt_gui_remove_class(ui->flexi_frame, "dt_module_active");
 }
 
 // which edge the panel is docked against, as a CSS class, so a theme can style

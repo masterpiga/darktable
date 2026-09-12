@@ -985,6 +985,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 
   if(pos == MASKS_PANEL_POS_CANVAS)
   {
+    dt_ui_flexi_panel_set_active(darktable.gui->ui, mask_active);
     GtkWidget *hdr_target = dt_ui_flexi_panel_header(darktable.gui->ui);
     GtkWidget *cnt_target = dt_ui_flexi_panel_content(darktable.gui->ui);
     if(hdr_target && bd->masks_blend_header)

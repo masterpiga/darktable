@@ -101,10 +101,10 @@ static void test_solo_group_hides_other_groups(void **state)
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(g_list_append(NULL, GINT_TO_POINTER(3)),
                                  GINT_TO_POINTER(4));
-  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
-  assert_int_equal(flexi_bd.solo_group_key, 3);
+  assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
   assert_true(_hidden(1));
   assert_true(_hidden(2));
   assert_false(_hidden(3));
@@ -119,20 +119,20 @@ static void test_group_solo_cancels_element_solo(void **state)
   assert_int_equal(flexi_bd.solo_formid, 1);
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   assert_int_equal(flexi_bd.solo_formid, INVALID_MASKID);
-  assert_int_equal(flexi_bd.solo_group_key, 3);
+  assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
 }
 
 static void test_element_solo_cancels_group_solo(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
-  assert_int_equal(flexi_bd.solo_group_key, 3);
+  assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
 
   _model_toggle_solo_form(&flexi_module, grp, 1);
   assert_int_equal(flexi_bd.solo_group_key, 0);
@@ -174,7 +174,7 @@ static void test_solo_edit_cancels_group_solo_and_unhides(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
   assert_true(_any_hidden());
 
@@ -204,7 +204,7 @@ static void test_group_solo_cancels_solo_edit(void **state)
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
   const dt_masks_solo_canvas_t c =
-    _model_toggle_solo_group(&flexi_module, grp, 3, members);
+    _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
@@ -309,7 +309,7 @@ static void test_soloedit_mode_stands_down_while_a_group_is_soloed(void **state)
   _soloedit_mode(TRUE);
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, 3, members);
+  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   flexi_bd.panel_selected_formid = 1;
@@ -388,7 +388,7 @@ static void test_at_most_one_isolation_mode_is_ever_active(void **state)
           _assert_one_isolation_mode("solo element");
           break;
         case 1:
-          _model_toggle_solo_group(&flexi_module, grp, 3, members);
+          _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
           _assert_one_isolation_mode("solo group");
           break;
         default:
@@ -445,8 +445,9 @@ static void test_disable_is_independent_of_solo(void **state)
 
 static void test_group_bypass_is_independent_of_disable(void **state)
 {
+  // bypass is the group's, on its marker; disable an element's own
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  dt_masks_point_group_t *pt = _group_point(grp, 3);
+  dt_masks_point_group_t *pt = _group_point(grp, FLEXI_GID(1));
   pt->state |= DT_MASKS_STATE_OP_BYPASS;
   pt->state |= DT_MASKS_STATE_DISABLE;
 
@@ -463,9 +464,9 @@ static void test_group_bypass_is_independent_of_disable(void **state)
 static void test_ordinal_max_is_per_operator(void **state)
 {
   flexi_build("u:1,2 | i:3 | u:4");
-  flexi_set_ordinal(1, 1); // union 1
-  flexi_set_ordinal(4, 2); // union 2
-  flexi_set_ordinal(3, 1); // intersection 1
+  flexi_set_ordinal(FLEXI_GID(0), 1); // union 1
+  flexi_set_ordinal(FLEXI_GID(2), 2); // union 2
+  flexi_set_ordinal(FLEXI_GID(1), 1); // intersection 1
 
   const int uop = _op_index_for_state(DT_MASKS_STATE_UNION);
   const int iop = _op_index_for_state(DT_MASKS_STATE_INTERSECTION);
@@ -473,13 +474,12 @@ static void test_ordinal_max_is_per_operator(void **state)
   assert_int_equal(_group_ord_max_for_op(&flexi_module, iop), 1);
 }
 
-// a staged group holds a number too, so a new group must not reuse it
-static void test_ordinal_max_counts_staged_groups(void **state)
+// an empty group holds a number too, so a new group must not reuse it
+static void test_ordinal_max_counts_empty_groups(void **state)
 {
-  flexi_build("u:1,2");
-  flexi_set_ordinal(1, 1);
-  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_UNION, 1);
-  eg->ordinal = 5;
+  flexi_build("u:1,2 | [u]");
+  flexi_set_ordinal(FLEXI_GID(0), 1);
+  flexi_set_ordinal(FLEXI_GID(1), 5);
 
   const int uop = _op_index_for_state(DT_MASKS_STATE_UNION);
   assert_int_equal(_group_ord_max_for_op(&flexi_module, uop), 5);
@@ -488,8 +488,8 @@ static void test_ordinal_max_counts_staged_groups(void **state)
 static void test_ordinal_of_cid_reads_back(void **state)
 {
   flexi_build("u:1,2 | i:3");
-  flexi_set_ordinal(3, 7);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 3), 7);
+  flexi_set_ordinal(FLEXI_GID(1), 7);
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(1)), 7);
 }
 
 // numbers whose group no longer exists are dropped, so a series can restart at
@@ -497,20 +497,15 @@ static void test_ordinal_of_cid_reads_back(void **state)
 static void test_pruning_drops_numbers_of_vanished_groups(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  flexi_set_ordinal(1, 1);
-  flexi_set_ordinal(3, 1);
+  flexi_set_ordinal(FLEXI_GID(0), 1);
+  flexi_set_ordinal(FLEXI_GID(1), 1);
+  flexi_set_ordinal(99, 4); // never a group
 
-  // dissolve the intersection group by moving its only member into the union
-  _model_drop_element_onto_group(&flexi_module, grp, 3, 1);
-  // the placeholder left behind keeps the group alive, so drop it too
-  flexi_teardown();
-
-  flexi_build("u:1,2");
-  flexi_set_ordinal(1, 1);
-  flexi_set_ordinal(99, 4); // a group that no longer exists
+  g_list_free(_model_delete_group(grp, FLEXI_GID(1)));
   _prune_group_ordinals(&flexi_module);
 
-  assert_int_equal(flexi_get_ordinal(1), 1);
+  assert_int_equal(flexi_get_ordinal(FLEXI_GID(0)), 1);
+  assert_int_equal(flexi_get_ordinal(FLEXI_GID(1)), 0);
   assert_int_equal(flexi_get_ordinal(99), 0);
 }
 
@@ -528,17 +523,17 @@ static void test_pruning_clears_stale_group_solo(void **state)
 static void test_pruning_keeps_a_live_group_solo(void **state)
 {
   flexi_build("u:1,2 | i:3");
-  flexi_bd.solo_group_key = 3; // 3 heads a real run
+  flexi_bd.solo_group_key = FLEXI_GID(1); // a real group
 
   _prune_stale_solo(&flexi_module);
-  assert_int_equal(flexi_bd.solo_group_key, 3);
+  assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
 }
 
-// a group solo keyed on a member that is not its run's head is stale too
+// a group solo keyed on an element, not a group, is stale too
 static void test_pruning_clears_solo_keyed_on_non_head(void **state)
 {
   flexi_build("u:1,2 | i:3");
-  flexi_bd.solo_group_key = 2; // 2 is a member, not a head
+  flexi_bd.solo_group_key = 2; // 2 is an element
 
   _prune_stale_solo(&flexi_module);
   assert_int_equal(flexi_bd.solo_group_key, 0);
@@ -710,22 +705,6 @@ static void test_bypass_snapshot_is_searchable_at_scale(void **state)
   }
 }
 
-// staged groups are keyed in the GUI table by their own pointer, which must
-// never be mistaken for a mask id and copied into the snapshot
-static void test_bypass_snapshot_excludes_staged_group_keys(void **state)
-{
-  flexi_build("u:1,2");
-  dt_masks_empty_group_t *eg = flexi_add_empty(DT_MASKS_STATE_INTERSECTION, 1);
-  _bypass(GPOINTER_TO_UINT(eg));
-  _bypass(dt_masks_refine_key_element(1));
-  _commit();
-
-  // only the real element key made it across
-  assert_int_equal(_piece->refine_bypass.nkeys, 1);
-  assert_true(dt_masks_refine_bypass_lookup(&_piece->refine_bypass,
-                                            dt_masks_refine_key_element(1)));
-}
-
 static void test_bypass_lookup_on_an_empty_snapshot(void **state)
 {
   flexi_build("u:1,2");
@@ -824,7 +803,7 @@ int main(void)
     cmocka_unit_test_teardown(test_disable_is_independent_of_solo, _teardown),
     cmocka_unit_test_teardown(test_group_bypass_is_independent_of_disable, _teardown),
     cmocka_unit_test_teardown(test_ordinal_max_is_per_operator, _teardown),
-    cmocka_unit_test_teardown(test_ordinal_max_counts_staged_groups, _teardown),
+    cmocka_unit_test_teardown(test_ordinal_max_counts_empty_groups, _teardown),
     cmocka_unit_test_teardown(test_ordinal_of_cid_reads_back, _teardown),
     cmocka_unit_test_teardown(test_pruning_drops_numbers_of_vanished_groups, _teardown),
     cmocka_unit_test_teardown(test_pruning_clears_stale_group_solo, _teardown),
@@ -837,7 +816,6 @@ int main(void)
     cmocka_unit_test_teardown(test_element_refinement_follows_a_move, _teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_finds_every_committed_key, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_is_searchable_at_scale, _bypass_teardown),
-    cmocka_unit_test_teardown(test_bypass_snapshot_excludes_staged_group_keys, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_lookup_on_an_empty_snapshot, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_is_flexi_only, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_hash_is_canonical, _bypass_teardown),

@@ -55,6 +55,7 @@ static void test_layout_roundtrip(void **state)
     "u:1,2,3",
     "u:1,2 | i:3",
     "u:1 | i:2 | d:3 | x:4 | s:5",
+    "[u] | i:1 | [d] | [x]",
     NULL,
   };
   for(int i = 0; cases[i]; i++)
@@ -65,10 +66,10 @@ static void test_layout_roundtrip(void **state)
   }
 }
 
-// Two adjacent groups sharing one operator must stay two groups. This is the
-// entire reason group_start exists as a stored field: before it, the partition
-// was inferred from operator changes alone, so same-op neighbours silently
-// merged.
+// Two adjacent groups sharing one operator must stay two groups: each has its
+// own marker. Before group markers the partition was inferred, from operator
+// changes and then from group_start, and same-op neighbours merged whenever
+// that inference slipped.
 static void test_adjacent_same_op_groups_stay_separate(void **state)
 {
   flexi_build("u:1,2 | u:3");
@@ -76,8 +77,8 @@ static void test_adjacent_same_op_groups_stay_separate(void **state)
 
   GList *heads = _group_partition_heads(flexi_group());
   assert_int_equal(g_list_length(heads), 2);
-  assert_int_equal(GPOINTER_TO_INT(heads->data), 1);
-  assert_int_equal(GPOINTER_TO_INT(heads->next->data), 3);
+  assert_int_equal(GPOINTER_TO_INT(heads->data), FLEXI_GID(0));
+  assert_int_equal(GPOINTER_TO_INT(heads->next->data), FLEXI_GID(1));
   g_list_free(heads);
 }
 
@@ -85,15 +86,17 @@ static void test_adjacent_same_op_groups_stay_separate(void **state)
 // group membership queries
 // ---------------------------------------------------------------------------
 
-static void test_cid_of_form_is_run_head(void **state)
+// a group's id is its marker's, and a marker is in its own group
+static void test_cid_of_form_is_the_groups_marker(void **state)
 {
-  flexi_build("u:1,2 | i:3,4");
+  flexi_build("u:1,2 | i:3,4 | [d]");
   dt_masks_form_t *grp = flexi_group();
 
-  assert_int_equal(_group_cid_of_form(grp, 1), 1);
-  assert_int_equal(_group_cid_of_form(grp, 2), 1);
-  assert_int_equal(_group_cid_of_form(grp, 3), 3);
-  assert_int_equal(_group_cid_of_form(grp, 4), 3);
+  assert_int_equal(_group_cid_of_form(grp, 1), FLEXI_GID(0));
+  assert_int_equal(_group_cid_of_form(grp, 2), FLEXI_GID(0));
+  assert_int_equal(_group_cid_of_form(grp, 3), FLEXI_GID(1));
+  assert_int_equal(_group_cid_of_form(grp, 4), FLEXI_GID(1));
+  assert_int_equal(_group_cid_of_form(grp, FLEXI_GID(2)), FLEXI_GID(2));
   assert_int_equal(_group_cid_of_form(grp, 99), INVALID_MASKID);
 }
 
@@ -107,45 +110,18 @@ static void test_selected_group_formids(void **state)
   run = _selected_group_formids(flexi_group(), 1);
   assert_int_equal(g_list_length(run), 2);
   g_list_free(run);
+
+  // by the group's own id too, and the marker is no member
+  run = _selected_group_formids(flexi_group(), FLEXI_GID(1));
+  assert_int_equal(g_list_length(run), 3);
+  assert_int_equal(GPOINTER_TO_INT(run->data), 5);
+  g_list_free(run);
 }
 
-// ---------------------------------------------------------------------------
-// the key snapshot/apply pair -- the mechanism every reorder relies on
-// ---------------------------------------------------------------------------
-
-// Reordering points must not repartition them. Snapshot, move a point within
-// its own group, re-stamp: same groups, new order.
-static void test_keys_survive_intra_group_reorder(void **state)
+static void test_empty_group_has_no_members(void **state)
 {
-  dt_masks_form_t *grp = flexi_build("u:1,2,3 | i:4");
-
-  GHashTable *keys = _group_keys_snapshot(grp);
-  dt_masks_point_group_t *pt = _group_point(grp, 1);
-  grp->points = g_list_remove(grp->points, pt);
-  grp->points = g_list_insert(grp->points, pt, 2);
-  _group_keys_apply(grp, keys);
-  g_hash_table_destroy(keys);
-
-  assert_layout("u:2,3,1 | i:4");
-}
-
-// A member absent from the key map inherits the key of the point below it, so
-// a newly added shape merges into the group it sits on top of rather than
-// starting a group of its own.
-static void test_keys_absent_member_joins_group_below(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-
-  GHashTable *keys = _group_keys_snapshot(grp);
-  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
-  pt->formid = 9;
-  pt->state = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_USE;
-  pt->opacity = 1.0f;
-  grp->points = g_list_append(grp->points, pt); // on top of the whole list
-  _group_keys_apply(grp, keys);
-  g_hash_table_destroy(keys);
-
-  assert_layout("u:1,2 | i:3,9");
+  flexi_build("u:1 | [i]");
+  assert_null(_selected_group_formids(flexi_group(), FLEXI_GID(1)));
 }
 
 // ---------------------------------------------------------------------------
@@ -169,15 +145,13 @@ static void test_drop_element_below_target(void **state)
   assert_layout("u:2 | i:1,3,4");
 }
 
-// The dragged element adopts its new group's operator -- otherwise it would
-// keep its old one and split the group it just joined in two.
+// the dragged element is in its new group, whose operator is its marker's
 static void test_drop_adopts_target_operator(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | d:3");
 
   _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
-  const dt_masks_point_group_t *moved = _group_point(grp, 1);
-  assert_int_equal(_eff_group_op(moved->state), DT_MASKS_STATE_DIFFERENCE);
+  assert_int_equal(flexi_group_op_of(1), DT_MASKS_STATE_DIFFERENCE);
   assert_layout("u:2 | d:3,1");
 }
 
@@ -218,8 +192,7 @@ static void test_drop_between_groups_never_creates_a_third(void **state)
   assert_layout("u:2 | i:1,3,4");
 }
 
-// ...including when the two groups share an operator, where the partition is
-// carried entirely by group_start and a lost key would merge or split them.
+// ...including when the two groups share an operator.
 static void test_drop_between_same_op_groups_keeps_both(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | u:3,4");
@@ -246,16 +219,13 @@ static void test_drop_onto_bottom_group(void **state)
   g_list_free(heads);
 }
 
-// Emptying a group leaves an empty-group placeholder behind, so the group does
-// not silently vanish when its last member is dragged out.
-static void test_drop_emptying_group_leaves_placeholder(void **state)
+// Emptying a group leaves it where it was, so it does not silently vanish when
+// its last member is dragged out.
+static void test_drop_emptying_group_keeps_it(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
-
-  assert_int_equal(g_list_length(flexi_bd.empty_groups), 0);
   _model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE);
-  assert_layout("i:2,1,3");
-  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+  assert_layout("[u] | i:2,1,3");
 }
 
 // ---------------------------------------------------------------------------
@@ -269,14 +239,13 @@ static void _lose_form(const dt_mask_id_t fid)
   dt_masks_get_from_id(&flexi_dev, fid)->formid = 999999;
 }
 
-// a group of them has no row to head it, so the panel could show neither it
-// nor the empty groups anchored on it
-static void test_prune_drops_a_group_of_lost_members(void **state)
+// they render nothing and have no row; the group they were in stays
+static void test_prune_drops_lost_members_and_keeps_their_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   _lose_form(3);
   assert_int_equal(_model_prune_dangling_members(grp), 1);
-  assert_layout("u:1,2");
+  assert_layout("u:1,2 | [i]");
 }
 
 // the edit that hid every new group: one lost form, referenced three times
@@ -293,7 +262,7 @@ static void test_prune_drops_every_reference_to_a_lost_form(void **state)
   }
   _lose_form(2);
   assert_int_equal(_model_prune_dangling_members(grp), 3);
-  assert_layout("u:1");
+  assert_layout("u:1 | [i]");
 }
 
 // a lost head leaves the rest of its group, and the groups around it, as they were
@@ -313,38 +282,73 @@ static void test_prune_without_lost_members_changes_nothing(void **state)
 }
 
 // ---------------------------------------------------------------------------
-// the panel always shows a group
+// the panel always shows a group: markers, on lists that have none
 // ---------------------------------------------------------------------------
 
-// a mask of lost members only, as in the edit that hid every group: once they
-// are dropped, one empty group stands in for them
-static void test_lost_members_only_leave_one_empty_group(void **state)
+// members lost from every group leave the groups, empty
+static void test_lost_members_leave_their_groups(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
   _lose_form(1);
   _lose_form(2);
   _model_prune_dangling_members(grp);
-  assert_true(_model_ensure_a_group(&flexi_bd, grp));
-  assert_null(grp->points);
-  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
-  // and only one
-  assert_false(_model_ensure_a_group(&flexi_bd, grp));
-  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+  assert_layout("[u] | [i]");
+  assert_false(_model_ensure_a_group(grp));
 }
 
-static void test_ensure_a_group_leaves_a_populated_mask_alone(void **state)
+// a list with no points at all gets the foundation group
+static void test_ensure_a_group_on_an_empty_list(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1");
-  assert_false(_model_ensure_a_group(&flexi_bd, grp));
-  assert_null(flexi_bd.empty_groups);
+  g_list_free_full(grp->points, free);
+  grp->points = NULL;
+  assert_true(_model_ensure_a_group(grp));
+  assert_layout("[u]");
+  assert_false(_model_ensure_a_group(grp));
+  assert_false(_model_ensure_a_group(NULL));
 }
 
-// no mask group at all (reset, or never drawn) still gets one
-static void test_ensure_a_group_without_a_mask_group(void **state)
+// a list stored before markers gets one per run, where the fold found them
+static void test_ensure_a_group_marks_the_runs_of_an_old_list(void **state)
 {
-  flexi_build("u:1");
-  assert_true(_model_ensure_a_group(&flexi_bd, NULL));
-  assert_int_equal(g_list_length(flexi_bd.empty_groups), 1);
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
+  assert_true(_model_ensure_a_group(grp));
+  assert_layout("u:1,2 | i:3 | i:4");
+}
+
+// ...holding the settings the fold read off each run's first member
+static void test_marking_carries_the_group_settings(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2,3");
+  dt_masks_point_group_t *head = _group_point(grp, 2);
+  head->state |= DT_MASKS_STATE_SCREEN;
+  head->group_opacity = 0.5f;
+  g_strlcpy(head->name, "sky", sizeof(head->name));
+  head->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
+                                              .blur_radius = 2.0f };
+  _model_ensure_a_group(grp);
+
+  const dt_masks_point_group_t *marker = _group_point(grp, _group_cid_of_form(grp, 3));
+  assert_true(dt_masks_point_is_marker(marker));
+  assert_int_equal(marker->state & DT_MASKS_STATE_OP_COMBINE, DT_MASKS_STATE_INTERSECTION);
+  assert_true(marker->state & DT_MASKS_STATE_SCREEN);
+  assert_float_equal(marker->group_opacity, 0.5f, 1e-6f);
+  assert_string_equal(marker->name, "sky");
+  assert_int_equal(marker->refinement.enabled, DT_MASKS_REFINE_GROUP);
+}
+
+// the same run marked twice -- say in two history snapshots -- gets the same
+// id, which the panel keys selection and numbering on
+static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
+  _model_ensure_a_group(grp);
+  const dt_mask_id_t first = _group_cid_of_form(grp, 2);
+  flexi_teardown();
+
+  grp = flexi_build_classic("u:1 | i:2");
+  _model_ensure_a_group(grp);
+  assert_int_equal(_group_cid_of_form(grp, 2), first);
 }
 
 static void test_drop_onto_self_is_rejected(void **state)
@@ -376,7 +380,7 @@ static void test_drop_keeps_element_selected_in_new_group(void **state)
   _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   assert_int_equal(flexi_bd.panel_selected_formid, 1);
   assert_int_equal(flexi_bd.panel_selected_group_cid, _group_cid_of_form(grp, 1));
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 3);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -407,16 +411,16 @@ static void _click_group(const dt_mask_id_t cid)
 static void test_click_group_selects_it(void **state)
 {
   flexi_build("u:1,2 | i:3");
-  _click_group(1);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 1);
+  _click_group(FLEXI_GID(0));
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
 }
 
 static void test_click_selected_group_clears_selection(void **state)
 {
   flexi_build("u:1,2 | i:3");
-  _click_group(1);
-  _click_group(1);
+  _click_group(FLEXI_GID(0));
+  _click_group(FLEXI_GID(0));
   assert_int_equal(flexi_bd.panel_selected_group_cid, INVALID_MASKID);
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
 }
@@ -428,7 +432,7 @@ static void test_click_element_selects_element_and_its_group(void **state)
   flexi_build("u:1,2 | i:3,4");
   _click_element(4);
   assert_int_equal(flexi_bd.panel_selected_formid, 4);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 3);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
 // the case that motivated the change: deselecting an element must leave its
@@ -439,7 +443,7 @@ static void test_click_selected_element_falls_back_to_its_group(void **state)
   _click_element(4);
   _click_element(4);
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 3);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
 // ...and one more click on that group then clears everything
@@ -447,8 +451,8 @@ static void test_element_then_group_reaches_empty_selection(void **state)
 {
   flexi_build("u:1,2 | i:3,4");
   _click_element(4);
-  _click_element(4);      // -> group 3
-  _click_group(3);        // -> nothing
+  _click_element(4);      // -> its group
+  _click_group(FLEXI_GID(1));        // -> nothing
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
   assert_int_equal(flexi_bd.panel_selected_group_cid, INVALID_MASKID);
 }
@@ -459,15 +463,15 @@ static void test_click_other_element_switches_directly(void **state)
   _click_element(4);
   _click_element(1); // a different group's element, in one click
   assert_int_equal(flexi_bd.panel_selected_formid, 1);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 1);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
 }
 
 static void test_click_other_group_switches_directly(void **state)
 {
   flexi_build("u:1,2 | i:3,4");
-  _click_group(1);
-  _click_group(3);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 3);
+  _click_group(FLEXI_GID(0));
+  _click_group(FLEXI_GID(1));
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -528,51 +532,6 @@ static void test_chevron_without_auto_expand_moves_nothing(void **state)
     _model_element_chevron_click(&flexi_bd, 1, TRUE, FALSE);
   assert_int_equal(c.collapse, INVALID_MASKID);
   assert_int_equal(c.last_expanded, 2);
-}
-
-// ---------------------------------------------------------------------------
-// operator normalisation
-// ---------------------------------------------------------------------------
-
-// the base (bottom) point has nothing below it, so a break marker there is
-// meaningless -- one arriving via a reorder must be cleared, or the partition
-// reads wrong from the bottom up
-static void test_normalize_clears_break_on_base_point(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2");
-  ((dt_masks_point_group_t *)grp->points->data)->group_start = 1;
-  _normalize_group_operators(grp);
-  assert_int_equal(((dt_masks_point_group_t *)grp->points->data)->group_start, 0);
-}
-
-// back-compat: a point carrying no operator bit at all reads as union
-static void test_normalize_defaults_missing_operator_to_union(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2");
-  dt_masks_point_group_t *pt = _group_point(grp, 2);
-  pt->state &= ~DT_MASKS_STATE_OP;
-  _normalize_group_operators(grp);
-  assert_int_equal(_eff_group_op(pt->state), DT_MASKS_STATE_UNION);
-}
-
-// bypass is a modifier layered on an operator, not an operator -- a bypassed
-// group must keep the operator it goes back to
-static void test_normalize_keeps_operator_under_bypass(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2 | d:3");
-  dt_masks_point_group_t *pt = _group_point(grp, 3);
-  pt->state |= DT_MASKS_STATE_OP_BYPASS;
-  _normalize_group_operators(grp);
-  assert_int_equal(pt->state & DT_MASKS_STATE_OP_COMBINE, DT_MASKS_STATE_DIFFERENCE);
-}
-
-// normalising must not repartition: it reads each point's neighbour state, so
-// mutating operators inside the same loop can misdetect a run boundary
-static void test_normalize_preserves_partition(void **state)
-{
-  flexi_build("u:1,2 | u:3,4 | i:5");
-  _normalize_group_operators(flexi_group());
-  assert_layout("u:1,2 | u:3,4 | i:5");
 }
 
 // ---------------------------------------------------------------------------
@@ -665,13 +624,20 @@ static dt_masks_form_t *_new_form(const dt_mask_id_t fid, const dt_masks_type_t 
   return f;
 }
 
-// give the second module a mask: one union group holding `fids` bottom-up,
+// give the second module a mask: one union group, id OTHER_GROUP_ID + 1,
+// holding `fids` bottom-up,
 // each a circle unless it already exists. Both modules make up the pipe
 static void _other_module(const dt_mask_id_t *fids, const int n)
 {
   memset(&_other, 0, sizeof(_other));
   memset(&_other_bp, 0, sizeof(_other_bp));
   _other_grp = _new_form(OTHER_GROUP_ID, DT_MASKS_GROUP);
+  dt_masks_point_group_t *marker = calloc(1, sizeof(dt_masks_point_group_t));
+  marker->formid = OTHER_GROUP_ID + 1;
+  marker->parentid = OTHER_GROUP_ID;
+  marker->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_UNION;
+  marker->group_opacity = 1.0f;
+  _other_grp->points = g_list_append(_other_grp->points, marker);
   for(int k = 0; k < n; k++)
   {
     if(!dt_masks_get_from_id(&flexi_dev, fids[k])) _new_form(fids[k], DT_MASKS_CIRCLE);
@@ -689,14 +655,11 @@ static void _other_module(const dt_mask_id_t *fids, const int n)
 }
 
 // what the panel does when a group is selected: new elements land on top of
-// the group whose top member is `top`, taking its operator
-static void _aim_at(const dt_mask_id_t top, const dt_masks_state_t op)
+// the group whose top member is `top`
+static void _aim_at(const dt_mask_id_t top)
 {
   flexi_bd.insert_active = TRUE;
-  flexi_bd.insert_op = op;
-  flexi_bd.insert_within = 0;
   flexi_bd.insert_after_fid = top;
-  flexi_bd.insert_realize_empty = FALSE;
 }
 
 static int _users(const dt_mask_id_t fid)
@@ -728,7 +691,7 @@ static void test_link_lands_in_target_group_in_order(void **state)
   flexi_build("u:1,2 | i:3");
   const dt_mask_id_t other[] = { 11, 12 };
   _other_module(other, 2);
-  _aim_at(3, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(3);
 
   GList *fids = _model_module_shapes(&_other, INVALID_MASKID);
   GList *added = _model_import_forms(&flexi_module, &_other, fids, FALSE);
@@ -747,29 +710,28 @@ static void test_link_skips_what_the_mask_already_uses(void **state)
   flexi_build("u:1,2 | i:3");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  _aim_at(3, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
   g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
-  _aim_at(11, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(11);
   assert_null(_model_import_forms(&flexi_module, &_other, fids, FALSE));
   assert_null(_model_import_forms(&flexi_module, &_other, fids, TRUE));
   assert_layout("u:1,2 | i:3,11");
   g_list_free(fids);
 }
 
-// the element looks as it does where it comes from; only the operator is the
-// target group's
+// the element looks as it does where it comes from; it is in the target group
 static void test_link_keeps_the_source_look(void **state)
 {
   flexi_conf_init();
   flexi_build("u:1 | i:3");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  dt_masks_point_group_t *spt = _other_grp->points->data;
+  dt_masks_point_group_t *spt = _group_point(_other_grp, 11);
   spt->opacity = 0.4f;
   spt->state |= DT_MASKS_STATE_INVERSE;
-  _aim_at(3, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
   g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
@@ -779,7 +741,7 @@ static void test_link_keeps_the_source_look(void **state)
   assert_non_null(pt);
   assert_float_equal(pt->opacity, 0.4f, 1e-6f);
   assert_true(pt->state & DT_MASKS_STATE_INVERSE);
-  assert_int_equal(pt->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_INTERSECTION);
+  assert_int_equal(flexi_group_op_of(11), DT_MASKS_STATE_INTERSECTION);
 }
 
 static void test_copy_is_a_new_independent_form(void **state)
@@ -788,7 +750,7 @@ static void test_copy_is_a_new_independent_form(void **state)
   flexi_build("u:1 | i:3");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  _aim_at(3, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
   GList *added = _model_import_forms(&flexi_module, &_other, fids, TRUE);
@@ -799,7 +761,7 @@ static void test_copy_is_a_new_independent_form(void **state)
 
   assert_int_not_equal(nid, 11);
   assert_null(_group_point(flexi_group(), 11));
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), 3);
+  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
   assert_int_equal(_users(11), 1);
   assert_int_equal(_users(nid), 1);
   assert_string_equal(dt_masks_get_from_id(&flexi_dev, nid)->name, "form #11");
@@ -823,7 +785,7 @@ static void test_copy_of_object_copies_its_paths(void **state)
     mpt->parentid = 11;
     obj->points = g_list_append(obj->points, mpt);
   }
-  _aim_at(1, DT_MASKS_STATE_UNION);
+  _aim_at(1);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
   GList *added = _model_import_forms(&flexi_module, &_other, fids, TRUE);
@@ -853,10 +815,12 @@ static void test_module_shapes_follow_groups_and_skip_other_kinds(void **state)
   const dt_mask_id_t other[] = { 11, 12, 13 };
   _other_module(other, 3);
   dt_masks_get_from_id(&flexi_dev, 12)->type = DT_MASKS_PARAMETRIC;
-  // 13 heads a second group
-  dt_masks_point_group_t *head = g_list_nth_data(_other_grp->points, 2);
-  head->group_start = 1;
-  head->state = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_USE;
+  // 13 is in a second group
+  dt_masks_point_group_t *second_marker = calloc(1, sizeof(dt_masks_point_group_t));
+  second_marker->formid = OTHER_GROUP_ID + 2;
+  second_marker->parentid = OTHER_GROUP_ID;
+  second_marker->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_INTERSECTION;
+  _other_grp->points = g_list_insert(_other_grp->points, second_marker, 3);
 
   GList *all = _model_module_shapes(&_other, INVALID_MASKID);
   assert_int_equal(g_list_length(all), 2);
@@ -864,7 +828,7 @@ static void test_module_shapes_follow_groups_and_skip_other_kinds(void **state)
   assert_int_equal(GPOINTER_TO_INT(all->next->data), 13);
   g_list_free(all);
 
-  GList *second = _model_module_shapes(&_other, 13);
+  GList *second = _model_module_shapes(&_other, OTHER_GROUP_ID + 2);
   assert_int_equal(g_list_length(second), 1);
   assert_int_equal(GPOINTER_TO_INT(second->data), 13);
   g_list_free(second);
@@ -876,7 +840,7 @@ static void test_unlink_gives_this_module_its_own_copy(void **state)
   flexi_build("u:1 | i:3");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  _aim_at(3, DT_MASKS_STATE_INTERSECTION);
+  _aim_at(3);
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
   g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
   g_list_free(fids);
@@ -886,26 +850,27 @@ static void test_unlink_gives_this_module_its_own_copy(void **state)
   assert_true(dt_is_valid_maskid(nid));
   assert_int_not_equal(nid, 11);
   assert_null(_group_point(flexi_group(), 11));
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), 3);
+  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
   assert_non_null(_group_point(_other_grp, 11));
   assert_int_equal(_users(11), 1);
   assert_int_equal(flexi_bd.panel_selected_formid, nid);
 }
 
-// a group is known by its head's id: unlinking the head must not renumber it
-static void test_unlink_of_group_head_keeps_its_number(void **state)
+// a group is known by its marker's id: unlinking its only element leaves the
+// group, its number and its selection alone
+static void test_unlink_leaves_the_group_alone(void **state)
 {
   flexi_conf_init();
   flexi_build("u:1 | i:11");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  flexi_set_ordinal(11, 2);
-  flexi_bd.panel_selected_group_cid = 11;
+  flexi_set_ordinal(FLEXI_GID(1), 2);
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
 
   const dt_mask_id_t nid = _model_unlink_form(&flexi_module, 11);
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), nid);
-  assert_int_equal(flexi_get_ordinal(nid), 2);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, nid);
+  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
+  assert_int_equal(flexi_get_ordinal(FLEXI_GID(1)), 2);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
 // the link indicator: the chain icon and the "unlink" entry show together
@@ -985,15 +950,17 @@ static void test_duplicate_shares_shapes_and_copies_channels(void **state)
   const dt_mask_id_t other[] = { 11, 12 };
   _other_module(other, 2);
   dt_masks_get_from_id(&flexi_dev, 12)->type = DT_MASKS_PARAMETRIC;
-  dt_masks_point_group_t *spt = g_list_nth_data(_other_grp->points, 1);
+  dt_masks_point_group_t *spt = g_list_nth_data(_other_grp->points, 2);
   spt->opacity = 0.3f;
   spt->state = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_USE;
 
   dt_masks_form_t *dup = _new_form(8000, DT_MASKS_GROUP);
   dt_masks_group_add_members_of(dup, _other_grp);
-  assert_int_equal(g_list_length(dup->points), 2);
-  const dt_masks_point_group_t *shape = dup->points->data;
-  const dt_masks_point_group_t *channel = dup->points->next->data;
+  // the group's marker comes along, then the shape and the channel
+  assert_int_equal(g_list_length(dup->points), 3);
+  assert_true(dt_masks_point_is_marker(dup->points->data));
+  const dt_masks_point_group_t *shape = dup->points->next->data;
+  const dt_masks_point_group_t *channel = dup->points->next->next->data;
   assert_int_equal(shape->formid, 11);
   assert_int_not_equal(channel->formid, 12);
   assert_true(dt_masks_get_from_id(&flexi_dev, channel->formid)->type & DT_MASKS_PARAMETRIC);
@@ -1327,14 +1294,14 @@ static void test_refine_scope_of_removed_element_falls_back_to_its_group(void **
   flexi_build("u:1,2 | i:3");
   _scope(REFINE_SCOPE_ELEMENT, 9);
   flexi_bd.panel_selected_formid = 9;
-  flexi_bd.panel_selected_group_cid = 3;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
 
   assert_true(_model_refine_scope_prune(&flexi_module));
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 3);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
   _model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GROUP);
-  assert_int_equal(flexi_bd.masks_refine_scope_formid, 3);
+  assert_int_equal(flexi_bd.masks_refine_scope_formid, FLEXI_GID(1));
 }
 
 static void test_refine_scope_with_nothing_left_is_the_whole_mask(void **state)
@@ -1357,11 +1324,11 @@ static void test_refine_scope_of_present_element_is_kept(void **state)
   flexi_build("u:1,2");
   _scope(REFINE_SCOPE_ELEMENT, 2);
   flexi_bd.panel_selected_formid = 2;
-  flexi_bd.panel_selected_group_cid = 1;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
 
   assert_false(_model_refine_scope_prune(&flexi_module));
   assert_int_equal(flexi_bd.panel_selected_formid, 2);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, 1);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
   _scope(REFINE_SCOPE_GLOBAL, INVALID_MASKID);
   assert_false(_model_refine_scope_prune(&flexi_module));
 }
@@ -1369,18 +1336,19 @@ static void test_refine_scope_of_present_element_is_kept(void **state)
 static void test_refine_scope_follows_the_selection(void **state)
 {
   flexi_conf_init();
-  flexi_build("u:1,2 | i:3");
+  flexi_build("u:1,2 | [i]");
   flexi_bd.panel_selected_formid = 2;
-  flexi_bd.panel_selected_group_cid = 1;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
   _model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_ELEMENT);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, 2);
 
+  // an empty group is a group: its refinement is its marker's
   flexi_bd.panel_selected_formid = INVALID_MASKID;
-  flexi_bd.panel_selected_group_cid = INVALID_MASKID;
-  flexi_bd.selected_empty = flexi_add_empty(DT_MASKS_STATE_UNION, INVALID_MASKID);
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
   _model_refine_scope_from_selection(&flexi_module);
-  assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_EMPTY_GROUP);
+  assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GROUP);
+  assert_int_equal(flexi_bd.masks_refine_scope_formid, FLEXI_GID(1));
 }
 
 // ---------------------------------------------------------------------------
@@ -1524,7 +1492,6 @@ static void test_old_raster_name_follows_its_source(void **state)
 
 static void _no_selection(void)
 {
-  flexi_bd.selected_empty = NULL;
   flexi_bd.panel_selected_group_cid = INVALID_MASKID;
 }
 
@@ -1536,8 +1503,7 @@ static void test_add_target_is_the_only_group(void **state)
   const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_true(t.implicit);
-  assert_int_equal(t.cid, 1);
-  assert_null(t.empty);
+  assert_int_equal(t.cid, FLEXI_GID(0));
 }
 
 static void test_add_target_ignores_a_stale_selection_with_one_group(void **state)
@@ -1549,7 +1515,7 @@ static void test_add_target_ignores_a_stale_selection_with_one_group(void **stat
   const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_true(t.implicit);
-  assert_int_equal(t.cid, 1);
+  assert_int_equal(t.cid, FLEXI_GID(0));
 }
 
 static void test_add_target_is_ambiguous_with_two_groups(void **state)
@@ -1559,74 +1525,43 @@ static void test_add_target_is_ambiguous_with_two_groups(void **state)
   assert_int_equal(_group_count(&flexi_module), 2);
   assert_false(_resolve_add_target(&flexi_module).valid);
 
-  flexi_bd.panel_selected_group_cid = 2;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
   const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_false(t.implicit);
-  assert_int_equal(t.cid, 2);
+  assert_int_equal(t.cid, FLEXI_GID(1));
 }
 
-static void test_add_target_counts_a_staged_group(void **state)
+// an empty group is a group: it counts, and can be the target
+static void test_add_target_counts_an_empty_group(void **state)
 {
-  flexi_build("u:1");
+  flexi_build("u:1 | [i]");
   _no_selection();
-  dt_masks_empty_group_t *eg = _empty_group_new(DT_MASKS_STATE_UNION, 0, INVALID_MASKID);
-  flexi_bd.empty_groups = g_list_append(flexi_bd.empty_groups, eg);
   assert_int_equal(_group_count(&flexi_module), 2);
   assert_false(_resolve_add_target(&flexi_module).valid);
 
-  flexi_bd.selected_empty = eg;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
   const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_false(t.implicit);
-  assert_ptr_equal(t.empty, eg);
-  _no_selection();
+  assert_int_equal(t.cid, FLEXI_GID(1));
 }
 
-// a point whose form is missing from dev->forms, starting its own run
-static void _add_dangling_run(dt_masks_form_t *grp, const gboolean at_bottom)
+// a member whose form is gone makes no group of its own
+static void test_add_target_ignores_a_lost_member(void **state)
 {
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  _no_selection();
   dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
   pt->formid = 99;
   pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
   pt->opacity = 1.0f;
-  if(at_bottom)
-  {
-    // the old bottom point now sits above another one: keep it a run head
-    ((dt_masks_point_group_t *)grp->points->data)->group_start = 1;
-    grp->points = g_list_prepend(grp->points, pt);
-  }
-  else
-  {
-    pt->group_start = 1;
-    grp->points = g_list_append(grp->points, pt);
-  }
-}
-
-// the panel drops a group none of whose members resolve, so it must not make
-// the one group it does show ambiguous
-static void test_add_target_skips_a_group_the_panel_hides(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2");
-  _no_selection();
-  _add_dangling_run(grp, FALSE);
+  grp->points = g_list_append(grp->points, pt);
 
   assert_int_equal(_group_count(&flexi_module), 1);
   const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
   assert_true(t.valid);
-  assert_int_equal(t.cid, 1);
-}
-
-static void test_add_target_is_the_shown_group_above_a_hidden_one(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1,2");
-  _no_selection();
-  _add_dangling_run(grp, TRUE);
-
-  assert_int_equal(_group_count(&flexi_module), 1);
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
-  assert_true(t.valid);
-  assert_int_equal(t.cid, 1);
+  assert_int_equal(t.cid, FLEXI_GID(0));
 }
 
 static void test_list_signature_follows_source_rename(void **state)
@@ -1695,16 +1630,18 @@ static void test_copy_of_a_group_keeps_its_markers(void **state)
   // copying a shape reads its default size from the preferences
   flexi_conf_init();
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  _insert_marker(grp, 5001, 2);
+  dt_masks_point_group_t *src = _group_point(grp, FLEXI_GID(1));
+  src->group_opacity = 0.5f;
+  g_strlcpy(src->name, "sky", sizeof(src->name));
 
   const dt_mask_id_t cid = dt_masks_form_copy(&flexi_dev, grp->formid);
   dt_masks_form_t *copy = dt_masks_get_from_id(&flexi_dev, cid);
   assert_non_null(copy);
-  assert_int_equal(g_list_length(copy->points), 3);
+  assert_int_equal(g_list_length(copy->points), 4);
 
-  const dt_masks_point_group_t *m = g_list_nth_data(copy->points, 1);
+  const dt_masks_point_group_t *m = g_list_nth_data(copy->points, 2);
   assert_true(dt_masks_point_is_marker(m));
-  assert_int_not_equal(m->formid, 5001);
+  assert_int_not_equal(m->formid, FLEXI_GID(1));
   assert_null(dt_masks_get_from_id(&flexi_dev, m->formid));
   assert_int_equal(m->parentid, cid);
   assert_int_equal(m->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_INTERSECTION);
@@ -1720,9 +1657,7 @@ static void test_copy_of_a_group_keeps_its_markers(void **state)
 // looks for in a member whose form is gone
 static void test_prune_spares_markers(void **state)
 {
-  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  _insert_marker(grp, 5001, 2);
-
+  dt_masks_form_t *grp = flexi_build("u:1 | [i]");
   assert_int_equal(_model_prune_dangling_members(grp), 0);
   assert_int_equal(g_list_length(grp->points), 3);
 }
@@ -1732,24 +1667,25 @@ int main(void)
   const struct CMUnitTest tests[] = {
     cmocka_unit_test_teardown(test_layout_roundtrip, _teardown),
     cmocka_unit_test_teardown(test_adjacent_same_op_groups_stay_separate, _teardown),
-    cmocka_unit_test_teardown(test_cid_of_form_is_run_head, _teardown),
+    cmocka_unit_test_teardown(test_cid_of_form_is_the_groups_marker, _teardown),
+    cmocka_unit_test_teardown(test_empty_group_has_no_members, _teardown),
     cmocka_unit_test_teardown(test_selected_group_formids, _teardown),
-    cmocka_unit_test_teardown(test_keys_survive_intra_group_reorder, _teardown),
-    cmocka_unit_test_teardown(test_keys_absent_member_joins_group_below, _teardown),
     cmocka_unit_test_teardown(test_drop_element_into_other_group, _teardown),
     cmocka_unit_test_teardown(test_drop_element_below_target, _teardown),
     cmocka_unit_test_teardown(test_drop_adopts_target_operator, _teardown),
     cmocka_unit_test_teardown(test_drop_between_groups_never_creates_a_third, _teardown),
     cmocka_unit_test_teardown(test_drop_between_same_op_groups_keeps_both, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_bottom_group, _teardown),
-    cmocka_unit_test_teardown(test_drop_emptying_group_leaves_placeholder, _teardown),
-    cmocka_unit_test_teardown(test_prune_drops_a_group_of_lost_members, _teardown),
+    cmocka_unit_test_teardown(test_drop_emptying_group_keeps_it, _teardown),
+    cmocka_unit_test_teardown(test_prune_drops_lost_members_and_keeps_their_group, _teardown),
     cmocka_unit_test_teardown(test_prune_drops_every_reference_to_a_lost_form, _teardown),
     cmocka_unit_test_teardown(test_prune_keeps_the_rest_of_a_group, _teardown),
     cmocka_unit_test_teardown(test_prune_without_lost_members_changes_nothing, _teardown),
-    cmocka_unit_test_teardown(test_lost_members_only_leave_one_empty_group, _teardown),
-    cmocka_unit_test_teardown(test_ensure_a_group_leaves_a_populated_mask_alone, _teardown),
-    cmocka_unit_test_teardown(test_ensure_a_group_without_a_mask_group, _teardown),
+    cmocka_unit_test_teardown(test_lost_members_leave_their_groups, _teardown),
+    cmocka_unit_test_teardown(test_ensure_a_group_on_an_empty_list, _teardown),
+    cmocka_unit_test_teardown(test_ensure_a_group_marks_the_runs_of_an_old_list, _teardown),
+    cmocka_unit_test_teardown(test_marking_carries_the_group_settings, _teardown),
+    cmocka_unit_test_teardown(test_marking_the_same_run_twice_gives_the_same_id, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_self_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_drop_of_unknown_element_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_drop_keeps_element_selected_in_new_group, _teardown),
@@ -1765,10 +1701,6 @@ int main(void)
     cmocka_unit_test_teardown(test_chevron_collapse_of_other_row_keeps_the_open_one, _teardown),
     cmocka_unit_test_teardown(test_chevron_reexpand_open_row_collapses_nothing, _teardown),
     cmocka_unit_test_teardown(test_chevron_without_auto_expand_moves_nothing, _teardown),
-    cmocka_unit_test_teardown(test_normalize_clears_break_on_base_point, _teardown),
-    cmocka_unit_test_teardown(test_normalize_defaults_missing_operator_to_union, _teardown),
-    cmocka_unit_test_teardown(test_normalize_keeps_operator_under_bypass, _teardown),
-    cmocka_unit_test_teardown(test_normalize_preserves_partition, _teardown),
     cmocka_unit_test_teardown(test_isolate_state_hides_everything_else, _teardown),
     cmocka_unit_test_teardown(test_isolate_state_null_list_clears_everywhere, _teardown),
     cmocka_unit_test_teardown(test_isolate_state_soloing_a_whole_group, _teardown),
@@ -1781,7 +1713,7 @@ int main(void)
     cmocka_unit_test_teardown(test_module_shapes_follow_groups_and_skip_other_kinds,
                               _teardown_linking),
     cmocka_unit_test_teardown(test_unlink_gives_this_module_its_own_copy, _teardown_linking),
-    cmocka_unit_test_teardown(test_unlink_of_group_head_keeps_its_number, _teardown_linking),
+    cmocka_unit_test_teardown(test_unlink_leaves_the_group_alone, _teardown_linking),
     cmocka_unit_test_teardown(test_link_shows_only_for_shared_elements_but_raster,
                               _teardown_linking),
     cmocka_unit_test_teardown(test_shared_parametric_channel_shows_the_link, _teardown_linking),
@@ -1831,10 +1763,8 @@ int main(void)
     cmocka_unit_test_teardown(test_add_target_ignores_a_stale_selection_with_one_group,
                               _teardown),
     cmocka_unit_test_teardown(test_add_target_is_ambiguous_with_two_groups, _teardown),
-    cmocka_unit_test_teardown(test_add_target_counts_a_staged_group, _teardown),
-    cmocka_unit_test_teardown(test_add_target_skips_a_group_the_panel_hides, _teardown),
-    cmocka_unit_test_teardown(test_add_target_is_the_shown_group_above_a_hidden_one,
-                              _teardown),
+    cmocka_unit_test_teardown(test_add_target_counts_an_empty_group, _teardown),
+    cmocka_unit_test_teardown(test_add_target_ignores_a_lost_member, _teardown),
     cmocka_unit_test_teardown(test_cleanup_keeps_every_member_of_a_marked_group,
                               _teardown),
     cmocka_unit_test_teardown(test_copy_of_a_group_keeps_its_markers, _teardown_linking),

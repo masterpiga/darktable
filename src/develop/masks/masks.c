@@ -356,6 +356,11 @@ static dt_masks_form_t *_group_create(dt_develop_t *dev,
   return grp;
 }
 
+dt_masks_form_t *dt_masks_module_group_create(dt_develop_t *dev, dt_iop_module_t *module)
+{
+  return _group_create(dev, module, DT_MASKS_GROUP);
+}
+
 static dt_masks_form_t *_group_from_module(const dt_develop_t *dev,
                                            const dt_iop_module_t *module)
 {
@@ -480,60 +485,24 @@ dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
   grpt->parentid = grp->formid;
   grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
   grpt->opacity = _new_shape_default_opacity(form->type);
-  // the group-level opacity (see dt_masks_point_group_t.group_opacity) is
-  // only ever read from a run's head, but every member carries its own
-  // broadcast copy so any of them can serve as head after a reorder --
-  // 1.0 (no effect) is the correct starting point for a freshly added one.
   grpt->group_opacity = 1.0f;
 
-  // flexi: when a group is the active draw target, the new shape lands inside
-  // that group (adopting its operator and in-group screen flag) instead of being
-  // appended on top with the default operator. Gated on the flexi insertion hint,
-  // which classic drawing never sets -> classic path stays byte-identical.
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  const gboolean flexi_insert =
-    bd && (module->blend_params->mask_mode & DEVELOP_MASK_FLEXI) && bd->insert_active;
-  if(flexi_insert)
+  if(module->blend_params->mask_mode & DEVELOP_MASK_FLEXI)
   {
-    grpt->state |= (dt_masks_state_t)bd->insert_op; // 0 = the base add group
-    grpt->state |= (dt_masks_state_t)bd->insert_within & DT_MASKS_STATE_WITHIN;
-    if(dt_is_valid_maskid(bd->insert_after_fid))
-    {
-      // land directly above the anchor member (its run)
-      int pos = -1, k = 0;
-      for(GList *l = grp->points; l; l = g_list_next(l), k++)
-        if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid)
-        {
-          pos = k;
-          break;
-        }
-      if(pos >= 0)
-        grp->points = g_list_insert(grp->points, grpt, pos + 1);
-      else
-        grp->points = g_list_append(grp->points, grpt);
-    }
-    else
-    {
-      // a bottom-anchored group (e.g. the base "add"): the new shape becomes the
-      // bottom of the list
-      grp->points = g_list_prepend(grp->points, grpt);
-    }
-    // tell the panel which form realized the (selected) empty group
-    if(bd->insert_realize_empty)
-    {
-      bd->insert_realized_fid = form->formid;
-      // first-class groups: a realized empty group is a brand-new group, so mark
-      // its (single) member as a group head -- this keeps it distinct even when
-      // its operator matches the group below (normalize clears it if it lands at
-      // the very bottom). See dt_masks_point_group_t.group_start.
-      grpt->group_start = 1;
-      // a brand-new group always starts fully opaque (1.0 unless the empty
-      // group being realized carries a saved layout preset's remembered
-      // opacity) -- the remembered "last used" opacity above is for
-      // successive shapes within the same group, and carrying it over to a
-      // new group is surprising.
-      grpt->opacity = bd->insert_opacity;
-    }
+    // a flexi element takes its group's settings from the group's marker, and
+    // a flexi list starts with one (see dt_masks_group_mark_runs). Its own
+    // operator is only what the classic fold would read
+    dt_masks_group_mark_runs(dev->forms, grp);
+    grpt->state |= DT_MASKS_STATE_UNION;
+    // the panel's target group: on top of it, which for an empty group is
+    // right after its marker. Without one the element lands in the top group
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    GList *after = NULL;
+    if(bd && bd->insert_active && dt_is_valid_maskid(bd->insert_after_fid))
+      for(GList *l = grp->points; l && !after; l = g_list_next(l))
+        if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid) after = l;
+    grp->points = after ? g_list_insert_before(grp->points, after->next, grpt)
+                        : g_list_append(grp->points, grpt);
   }
   else
   {
@@ -648,7 +617,7 @@ dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid)
       const dt_masks_point_group_t *pt = l->data;
       if(dt_masks_point_is_marker(pt))
       {
-        dt_masks_group_copy_marker(dev, dest, pt);
+        dt_masks_group_copy_marker(dev->forms, dest, pt);
         continue;
       }
       const dt_mask_id_t nid = dt_masks_form_copy(dev, pt->formid);
@@ -1125,24 +1094,134 @@ int dt_masks_legacy_params(dt_develop_t *dev,
 
 static dt_mask_id_t form_id = 0;
 
-dt_mask_id_t dt_masks_new_marker_id(dt_develop_t *dev)
+dt_mask_id_t dt_masks_new_marker_id(GList *forms)
 {
   dt_mask_id_t id = time(NULL) + form_id++;
-  while(_id_taken(dev ? dev->forms : NULL, id)) id = time(NULL) + form_id++;
+  while(_id_taken(forms, id)) id = time(NULL) + form_id++;
   return id;
 }
 
-dt_masks_point_group_t *dt_masks_group_copy_marker(dt_develop_t *dev,
+dt_masks_point_group_t *dt_masks_marker_new(GList *forms,
+                                            const dt_masks_form_t *grp,
+                                            const int state)
+{
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  if(!m) return NULL;
+  m->formid = dt_masks_new_marker_id(forms);
+  m->parentid = grp ? grp->formid : NO_MASKID;
+  m->state = DT_MASKS_STATE_GROUP_MARKER
+             | (state & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN));
+  if(!(m->state & DT_MASKS_STATE_OP_COMBINE)) m->state |= DT_MASKS_STATE_UNION;
+  m->opacity = 1.0f;
+  m->group_opacity = 1.0f;
+  return m;
+}
+
+dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
                                                    dt_masks_form_t *dest,
                                                    const dt_masks_point_group_t *marker)
 {
   dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
   if(!pt) return NULL;
   memcpy(pt, marker, sizeof(dt_masks_point_group_t));
-  pt->formid = dt_masks_new_marker_id(dev);
+  pt->formid = dt_masks_new_marker_id(forms);
   pt->parentid = dest->formid;
   dest->points = g_list_append(dest->points, pt);
   return pt;
+}
+
+// does the point at node `l` of an unmarked list start a new run? The
+// partition the flexi fold and the panel read off such a list before markers
+static gboolean _unmarked_run_starts(GList *l)
+{
+  if(!l->prev) return TRUE;
+  const dt_masks_point_group_t *below = l->prev->data;
+  return dt_masks_point_breaks_run(l->data, dt_masks_eff_group_op(below->state));
+}
+
+// the marker id of the run headed by `head` in group `grp`: derived from the
+// two, so the same run marked in two history snapshots, or marked again after
+// an undo brought the unmarked list back, gets the same id. The panel keys a
+// group's selection, number and expanded state on it
+static dt_mask_id_t _run_marker_id(GList *forms, const dt_mask_id_t grp, const dt_mask_id_t head)
+{
+  const gint64 key = ((gint64)grp << 32) | (guint32)head;
+  // positive, and above the small ids _check_id hands out on a collision
+  dt_mask_id_t id = (dt_mask_id_t)((g_int64_hash(&key) & 0x3fffffffu) | 0x40000000u);
+  while(_id_taken(forms, id)) id = (dt_mask_id_t)(((guint32)id + 1u) | 0x40000000u);
+  return id;
+}
+
+static gboolean _mark_runs(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || (grp->type & DT_MASKS_CLONE)) return FALSE;
+  // a malformed or cyclic tree must not spin here; nesting is shallow
+  if(depth > 8) return FALSE;
+
+  gboolean changed = FALSE;
+  gboolean marked = FALSE;
+  for(GList *l = grp->points; l && !marked; l = g_list_next(l))
+    marked = dt_masks_point_is_marker(l->data);
+
+  if(!grp->points)
+  {
+    grp->points = g_list_append(NULL, dt_masks_marker_new(forms, grp, DT_MASKS_STATE_UNION));
+    changed = TRUE;
+  }
+  else if(!marked)
+  {
+    GList *l = grp->points;
+    while(l)
+    {
+      GList *end = g_list_next(l);
+      while(end && !_unmarked_run_starts(end)) end = g_list_next(end);
+
+      // the settings are the ones the flexi fold reads for this run: off its
+      // first member that is shown and resolves (_group_get_mask_roi_flexi)
+      const dt_masks_point_group_t *src = l->data;
+      for(GList *m = l; m != end; m = g_list_next(m))
+      {
+        const dt_masks_point_group_t *pt = m->data;
+        if(!(pt->state & DT_MASKS_STATE_HIDDEN) && dt_masks_get_from_id_ext(forms, pt->formid))
+        {
+          src = pt;
+          break;
+        }
+      }
+
+      dt_masks_point_group_t *marker =
+        dt_masks_marker_new(forms, grp,
+                            dt_masks_eff_group_op(src->state)
+                              | (src->state & DT_MASKS_STATE_WITHIN));
+      marker->formid =
+        _run_marker_id(forms, grp->formid, ((dt_masks_point_group_t *)l->data)->formid);
+      g_strlcpy(marker->name, src->name, sizeof(marker->name));
+      marker->group_opacity = src->group_opacity;
+      if(src->refinement.enabled == DT_MASKS_REFINE_GROUP) marker->refinement = src->refinement;
+
+      // the members keep their copies of the settings: the classic fold reads
+      // their operators, and a migration that fails closed renders through it
+      grp->points = g_list_insert_before(grp->points, l, marker);
+      l = end;
+    }
+    changed = TRUE;
+  }
+
+  // a member can itself be a group, folded by the same algebra
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+    if(child && child != grp && (child->type & DT_MASKS_GROUP))
+      changed |= _mark_runs(forms, child, depth + 1);
+  }
+  return changed;
+}
+
+gboolean dt_masks_group_mark_runs(GList *forms, dt_masks_form_t *grp)
+{
+  return _mark_runs(forms, grp, 0);
 }
 
 dt_masks_form_t *dt_masks_create(const dt_masks_type_t type)
@@ -2014,7 +2093,7 @@ void dt_masks_group_add_members_of(dt_masks_form_t *grp, const dt_masks_form_t *
     const dt_masks_point_group_t *pt = points->data;
     if(dt_masks_point_is_marker(pt))
     {
-      dt_masks_group_copy_marker(darktable.develop, grp, pt);
+      dt_masks_group_copy_marker(darktable.develop->forms, grp, pt);
       continue;
     }
     const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);

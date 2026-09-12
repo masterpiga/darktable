@@ -371,10 +371,9 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   if(!g_hash_table_size(bd->masks_refine_bypassed)) return;
 
   GHashTable *const set = bd->masks_refine_bypassed;
-  // Query the keys the renderer can actually use rather than iterating the
-  // table: it also holds entries for staged (member-less) groups, keyed by
-  // their dt_masks_empty_group_t pointer, which must never be mistaken for a
-  // mask id (see the field comment in blend.h).
+  // Query the keys this mask can use rather than copying the whole table: it
+  // holds entries for what the user bypassed in any mask. A group's key is
+  // its marker's id, which the loop below meets like a member's.
   dt_masks_form_t *const grp =
     dt_masks_get_from_id(darktable.develop, bp->mask_id);
   const int nmembers = (grp && (grp->type & DT_MASKS_GROUP))

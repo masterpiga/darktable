@@ -95,21 +95,30 @@ dt_masks_form_t *flexi_build(const char *layout)
   _grp->formid = FLEXI_GROUP_ID;
   _grp->type = DT_MASKS_GROUP;
 
-  gboolean first_group = TRUE;
+  int g = 0;
   gchar **groups = g_strsplit(layout, "|", -1);
-  for(int g = 0; groups[g]; g++)
+  for(int k = 0; groups[k]; k++)
   {
-    gchar *spec = g_strstrip(g_strdup(groups[g]));
+    gchar *spec = g_strstrip(g_strdup(groups[k]));
     if(!*spec)
     {
       g_free(spec);
       continue;
     }
-    assert_true(spec[1] == ':');
-    const dt_masks_state_t op = _op_from_letter(spec[0]);
+    // "[x]" is an empty group, "x:ids" one with elements
+    const gboolean empty = spec[0] == '[';
+    const dt_masks_state_t op = _op_from_letter(empty ? spec[1] : spec[0]);
+    if(!empty) assert_true(spec[1] == ':');
 
-    gboolean first_member = TRUE;
-    gchar **ids = g_strsplit(spec + 2, ",", -1);
+    dt_masks_point_group_t *marker = calloc(1, sizeof(dt_masks_point_group_t));
+    marker->formid = FLEXI_GID(g++);
+    marker->parentid = FLEXI_GROUP_ID;
+    marker->state = DT_MASKS_STATE_GROUP_MARKER | op;
+    marker->opacity = 1.0f;
+    marker->group_opacity = 1.0f;
+    _grp->points = g_list_append(_grp->points, marker);
+
+    gchar **ids = g_strsplit(empty ? "" : spec + 2, ",", -1);
     for(int m = 0; ids[m]; m++)
     {
       gchar *idstr = g_strstrip(g_strdup(ids[m]));
@@ -124,19 +133,14 @@ dt_masks_form_t *flexi_build(const char *layout)
       dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
       pt->formid = fid;
       pt->parentid = FLEXI_GROUP_ID;
-      pt->state = op | DT_MASKS_STATE_USE;
+      pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
       pt->opacity = 1.0f;
-      // the bottom-most point of the whole list cannot carry a break -- it
-      // starts a group by virtue of being first (see _starts_group)
-      pt->group_start = (first_member && !first_group) ? 1 : 0;
-
+      pt->group_opacity = 1.0f;
       _grp->points = g_list_append(_grp->points, pt);
       _add_form(fid);
-      first_member = FALSE;
     }
     g_strfreev(ids);
     g_free(spec);
-    first_group = FALSE;
   }
   g_strfreev(groups);
 
@@ -161,6 +165,35 @@ dt_masks_form_t *flexi_build(const char *layout)
   return _grp;
 }
 
+dt_masks_form_t *flexi_build_classic(const char *layout)
+{
+  dt_masks_form_t *grp = flexi_build(layout);
+  dt_masks_state_t op = DT_MASKS_STATE_UNION;
+  gboolean first_member = FALSE;
+  GList *l = grp->points;
+  while(l)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      op = pt->state & DT_MASKS_STATE_OP;
+      // the bottom point of the whole list cannot carry a break
+      first_member = l != grp->points;
+      free(pt);
+      grp->points = g_list_delete_link(grp->points, l);
+    }
+    else
+    {
+      pt->state = (pt->state & ~DT_MASKS_STATE_OP) | op;
+      pt->group_start = first_member ? 1 : 0;
+      first_member = FALSE;
+    }
+    l = next;
+  }
+  return grp;
+}
+
 dt_masks_form_t *flexi_group(void)
 {
   return _grp;
@@ -169,74 +202,37 @@ dt_masks_form_t *flexi_group(void)
 char *flexi_layout(void)
 {
   GString *s = g_string_new(NULL);
+  gboolean open_group = FALSE; // a group whose "x:" is written, with members
+  char pending = 0;            // a group whose marker is read, with none yet
   for(GList *l = _grp ? _grp->points : NULL; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
-    // partition through the same predicate the panel and renderer use, not
-    // through pt->group_start directly -- see the header comment
+    // partition through the same predicate the panel uses -- see the header
     if(_starts_group(l))
     {
-      if(s->len) g_string_append(s, " | ");
-      g_string_append_printf(s, "%c:", _letter_from_op(_eff_group_op(pt->state)));
+      if(pending) g_string_append_printf(s, "%s[%c]", s->len ? " | " : "", pending);
+      pending = _letter_from_op(_eff_group_op(pt->state) & DT_MASKS_STATE_OP_COMBINE);
+      open_group = FALSE;
+      continue;
     }
-    else
+    if(pending)
+    {
+      g_string_append_printf(s, "%s%c:", s->len ? " | " : "", pending);
+      pending = 0;
+      open_group = TRUE;
+    }
+    else if(open_group)
       g_string_append_c(s, ',');
     g_string_append_printf(s, "%d", (int)pt->formid);
   }
+  if(pending) g_string_append_printf(s, "%s[%c]", s->len ? " | " : "", pending);
   return g_string_free(s, FALSE);
 }
 
-dt_masks_empty_group_t *flexi_add_empty(const dt_masks_state_t op,
-                                        const dt_mask_id_t below_fid)
+dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid)
 {
-  dt_masks_empty_group_t *eg = _empty_group_new(op, DT_MASKS_STATE_NONE, below_fid);
-  flexi_bd.empty_groups = g_list_append(flexi_bd.empty_groups, eg);
-  return eg;
-}
-
-char *flexi_visual_order(void)
-{
-  GString *s = g_string_new(NULL);
-  GList *order = _masks_visual_group_order(&flexi_module);
-  for(GList *l = order; l; l = g_list_next(l))
-  {
-    const _dt_masks_order_item_t *it = l->data;
-    if(s->len) g_string_append(s, " | ");
-    if(it->is_empty)
-    {
-      // a staged group has no members to name, so show only its operator
-      g_string_append_printf(s, "[%c]", _letter_from_op(_eff_group_op(it->eg->op)));
-    }
-    else
-    {
-      GList *run = _selected_group_formids(_grp, it->cid);
-      const dt_masks_point_group_t *head = _group_point(_grp, it->cid);
-      g_string_append_printf(s, "%c:", _letter_from_op(_eff_group_op(head->state)));
-      // _selected_group_formids returns the run top-down; print bottom-up to
-      // match the layout strings
-      GList *rev = g_list_reverse(g_list_copy(run));
-      for(GList *m = rev; m; m = g_list_next(m))
-        g_string_append_printf(s, "%s%d", m == rev ? "" : ",",
-                               GPOINTER_TO_INT(m->data));
-      g_list_free(rev);
-      g_list_free(run);
-    }
-  }
-  g_list_free_full(order, g_free);
-  return g_string_free(s, FALSE);
-}
-
-void flexi_assert_order_(const char *expect, const char *file, const int line)
-{
-  char *got = flexi_visual_order();
-  if(strcmp(got, expect) != 0)
-  {
-    print_error("%s:%d: visual order mismatch\n  expected: %s\n  actual:   %s\n",
-                file, line, expect, got);
-    g_free(got);
-    fail();
-  }
-  g_free(got);
+  const dt_masks_point_group_t *marker = _group_point(_grp, _group_cid_of_form(_grp, fid));
+  return marker ? _eff_group_op(marker->state) & DT_MASKS_STATE_OP_COMBINE : 0;
 }
 
 void flexi_set_ordinal(const dt_mask_id_t cid, const int ord)
@@ -315,14 +311,6 @@ void flexi_teardown(void)
   free(_grp);
   _grp = NULL;
 
-  for(GList *l = flexi_bd.empty_groups; l; l = g_list_next(l))
-  {
-    dt_masks_empty_group_t *eg = l->data;
-    g_free(eg->name);
-    free(eg);
-  }
-  g_list_free(flexi_bd.empty_groups);
-  flexi_bd.empty_groups = NULL;
   if(flexi_bd.group_ordinals)
   {
     g_hash_table_destroy(flexi_bd.group_ordinals);

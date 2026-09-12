@@ -138,6 +138,8 @@ static void _split_nonunion_runs(GList *forms,
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     dt_masks_point_group_t *pt = l->data;
+    // a marked list has its runs already
+    if(dt_masks_point_is_marker(pt)) continue;
     if(pt->state & non_union) pt->group_start = 1;
 
     // A member can itself be a group, and rendering one recurses back into
@@ -210,6 +212,8 @@ static void _repair_base_case_overwrite(GList *forms,
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
+    // a marker is no member, and a marked list was repaired before it was marked
+    if(dt_masks_point_is_marker(pt)) continue;
     if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
     if(live > 0 && (pt->state & DT_MASKS_STATE_OP_COMBINE) == DT_MASKS_STATE_NONE)
       overwriter = l;
@@ -221,6 +225,7 @@ static void _repair_base_case_overwrite(GList *forms,
     for(GList *l = grp->points; l && l != overwriter; l = g_list_next(l))
     {
       dt_masks_point_group_t *pt = l->data;
+      if(dt_masks_point_is_marker(pt)) continue;
       if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
       pt->state |= DT_MASKS_STATE_DISABLE;
     }
@@ -235,9 +240,20 @@ static void _repair_base_case_overwrite(GList *forms,
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
     _repair_base_case_overwrite(forms, dt_masks_get_from_id_ext(forms, pt->formid),
                                 depth + 1);
   }
+}
+
+// the whole normalization of a reused classic group, in order: the repair
+// decides which members are live, the split marks run boundaries among exactly
+// those, and the markers turn those boundaries into groups of their own
+static void _normalize_group(GList *forms, dt_masks_form_t *grp)
+{
+  _repair_base_case_overwrite(forms, grp, 0);
+  _split_nonunion_runs(forms, grp, 0);
+  dt_masks_group_mark_runs(forms, grp);
 }
 
 /* Queue a reused classic drawn group for the normalization above, and do it
@@ -263,9 +279,7 @@ static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_
 {
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
 
-  dt_masks_form_t *grp = dt_masks_get_from_id(module->dev, mask_id);
-  _repair_base_case_overwrite(module->dev->forms, grp, 0);
-  _split_nonunion_runs(module->dev->forms, grp, 0);
+  _normalize_group(module->dev->forms, dt_masks_get_from_id(module->dev, mask_id));
 
   const gpointer key = GINT_TO_POINTER(mask_id);
   if(!g_list_find(module->dev->pending_flexi_group_splits, key))
@@ -681,6 +695,7 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
+  dt_masks_group_mark_runs(module->dev->forms, grp);
   _persist_form(module, grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -780,6 +795,7 @@ static gboolean _migrate_raster(dt_iop_module_t *module,
   }
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
+  dt_masks_group_mark_runs(module->dev->forms, grp);
 
   _persist_form(module, raster_form, history_num);
   _persist_form(module, grp, history_num);
@@ -1030,6 +1046,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
+  dt_masks_group_mark_runs(module->dev->forms, top_grp);
   _persist_form(module, top_grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -1341,10 +1358,7 @@ static void _normalize_history_item(dt_dev_history_item_t *h)
   dt_masks_form_t *grp = dt_masks_get_from_id_ext(h->forms, h->blend_params->mask_id);
   if(!grp) return;
 
-  // same order as the live tree below: the repair decides which members are
-  // live, the run-boundary split then marks boundaries among exactly those
-  _repair_base_case_overwrite(h->forms, grp, 0);
-  _split_nonunion_runs(h->forms, grp, 0);
+  _normalize_group(h->forms, grp);
 }
 
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
@@ -1353,11 +1367,7 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 
   for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))
   {
-    dt_masks_form_t *grp = dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data));
-    // order matters: the repair decides which members are live, and the
-    // run-boundary split then marks boundaries among exactly those
-    _repair_base_case_overwrite(dev->forms, grp, 0);
-    _split_nonunion_runs(dev->forms, grp, 0);
+    _normalize_group(dev->forms, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)));
   }
 
   // The live tree onto the item that owns it, so the current state is stored

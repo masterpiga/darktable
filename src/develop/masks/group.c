@@ -1683,7 +1683,7 @@ void dt_masks_group_duplicate_points(dt_develop_t *const dev,
     dt_masks_point_group_t *pt = pts->data;
     if(dt_masks_point_is_marker(pt))
     {
-      dt_masks_group_copy_marker(dev, dest, pt);
+      dt_masks_group_copy_marker(dev->forms, dest, pt);
       continue;
     }
     dt_masks_point_group_t *npt = calloc(1, sizeof(dt_masks_point_group_t));

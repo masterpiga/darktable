@@ -448,12 +448,14 @@ typedef struct dt_masks_point_group_t
   int group_start;
 } dt_masks_point_group_t;
 
-// Does `pt` end the run whose head's effective operator is `run_op`, and start
-// the next one? The single place a group boundary is decided: the fold
-// (_group_get_mask_roi_flexi() in masks/group.c) and the panel (_starts_group()
-// in blend_gui.c) both go through it, so they cannot partition the same point
-// list differently. They once could, and a group inherited from a classic edit
-// -- whose bottom member carries no combine bit -- landed on the wrong side of
+// In a list without group markers (a flexi edit stored before them), does `pt`
+// end the run whose head's effective operator is `run_op`, and start the next
+// one? The single place such a boundary is decided: the fold
+// (_group_get_mask_roi_flexi() in masks/group.c) and the marking that turns
+// the runs into groups (dt_masks_group_mark_runs() in masks/masks.c) both go
+// through it, so they cannot partition the same point list differently. The
+// fold and the panel once could, and a group inherited from a classic edit --
+// whose bottom member carries no combine bit -- landed on the wrong side of
 // exactly that disagreement (#21905).
 static inline gboolean dt_masks_point_breaks_run(const dt_masks_point_group_t *pt,
                                                  const dt_masks_state_t run_op)
@@ -1032,15 +1034,19 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
 // the "attach an already-registered form to the module's mask group" half of
 // dt_masks_gui_form_save_creation, factored out so any finalize path that
 // builds/names/registers its own form (e.g. the AI-mask object.c finalizers)
-// can still land it exactly where the flexi panel's insert-hint machinery
-// (bd->insert_op/insert_after_fid/insert_realize_empty, see
-// _recompute_insert_hint in blend_gui.c) says the next element should go,
+// can still land it exactly where the flexi panel's insert hint
+// (bd->insert_after_fid, see _recompute_insert_hint in blend_gui.c) says the
+// next element should go,
 // instead of always appending to the module's group -- one code path for
 // "where does a new element land", regardless of what created the element.
 void dt_masks_group_insert_member(dt_develop_t *dev,
                                   struct dt_iop_module_t *module,
                                   dt_masks_form_t *form,
                                   dt_masks_form_gui_t *gui);
+/** a new, empty mask group for `module`, registered in dev->forms and made its
+    mask. Records no history */
+dt_masks_form_t *dt_masks_module_group_create(dt_develop_t *dev,
+                                              struct dt_iop_module_t *module);
 /** the same placement, recording no history and touching no selection: for a
     caller adding several elements and committing once. Returns the new point */
 dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
@@ -1070,12 +1076,22 @@ void dt_masks_group_isolate_state(dt_masks_form_t *grp,
                                   const dt_masks_state_t bits);
 void dt_masks_group_ungroup(dt_masks_form_t *dest_grp, dt_masks_form_t *grp);
 void dt_masks_group_update_name(dt_iop_module_t *module);
-/** a fresh id for a group marker, used by no form and no marker in dev->forms */
-dt_mask_id_t dt_masks_new_marker_id(dt_develop_t *dev);
+/** a fresh id for a group marker, used by no form and no marker in `forms` */
+dt_mask_id_t dt_masks_new_marker_id(GList *forms);
+/** a new group marker for `grp` with the operator and within-group bits of
+    `state` (union if it has none), not yet in any list */
+dt_masks_point_group_t *dt_masks_marker_new(GList *forms,
+                                            const dt_masks_form_t *grp,
+                                            const int state);
 /** append a copy of group marker `marker` to `dest` under a fresh id */
-dt_masks_point_group_t *dt_masks_group_copy_marker(dt_develop_t *dev,
+dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
                                                    dt_masks_form_t *dest,
                                                    const dt_masks_point_group_t *marker);
+/** give a flexi group, and the groups nested in it, their markers: one in
+    front of each run of a list that has none, holding the settings the flexi
+    fold reads for that run, or a single union marker for a list with no points.
+    The members are left as they are. TRUE if anything changed */
+gboolean dt_masks_group_mark_runs(GList *forms, dt_masks_form_t *grp);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form);
 /** returns the composition operator state to assign to a newly added form,

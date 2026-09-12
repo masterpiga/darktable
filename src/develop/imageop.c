@@ -2699,14 +2699,9 @@ static gboolean _gui_reset_callback(GtkButton *button,
     dt_iop_reload_defaults(module);
     dt_iop_commit_blend_params(module, module->default_blendop_params, NULL);
 
-    // the flexi masks panel's empty-group placeholders (bd->empty_groups) are
-    // GUI-only scratch state, never part of blend_params/dev->forms -- a
-    // reset wipes the module's real mask group above but never touches this,
-    // so any staged-but-unfilled placeholder from before the reset survived
-    // it and reappeared as a "phantom" group the next time a shape was
-    // added. dt_iop_gui_blend_forms_reloaded was written for exactly this
-    // "the module's forms got rewritten out from under the panel" situation
-    // (see its own comment); a reset is another such rewrite.
+    // the module's forms were rewritten out from under the flexi masks panel,
+    // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
+    // comment)
     dt_iop_gui_blend_forms_reloaded(module);
 
     /* reset ui to its defaults */
@@ -2750,14 +2745,9 @@ static void _gui_reset_clicked(GtkGestureSingle *gesture,
     dt_iop_reload_defaults(module);
     dt_iop_commit_blend_params(module, module->default_blendop_params, NULL);
 
-    // the flexi masks panel's empty-group placeholders (bd->empty_groups) are
-    // GUI-only scratch state, never part of blend_params/dev->forms -- a
-    // reset wipes the module's real mask group above but never touches this,
-    // so any staged-but-unfilled placeholder from before the reset survived
-    // it and reappeared as a "phantom" group the next time a shape was
-    // added. dt_iop_gui_blend_forms_reloaded was written for exactly this
-    // "the module's forms got rewritten out from under the panel" situation
-    // (see its own comment); a reset is another such rewrite.
+    // the module's forms were rewritten out from under the flexi masks panel,
+    // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
+    // comment)
     dt_iop_gui_blend_forms_reloaded(module);
 
     /* reset ui to its defaults */

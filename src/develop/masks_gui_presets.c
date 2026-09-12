@@ -38,9 +38,8 @@
 // still-empty), its between-group operator, within-group combine mode, name and
 // opacity -- nothing else -- no shapes, no channel/raster elements. Captured/
 // applied as a plain array of _flexi_group_entry_t, one entry per group,
-// bottom-to-top (index 0 is the permanent foundation group), matching the
-// bottom-up convention already used by grp->points and bd->empty_groups
-// everywhere else in this file.
+// bottom-to-top (index 0 is the foundation group), matching the bottom-up
+// convention of grp->points.
 //
 // Presets are stored in the regular presets database table (reusing its schema
 // and INSERT/DELETE machinery directly) under a fixed, fake operation name that
@@ -57,15 +56,14 @@
 #define FLEXI_GROUP_PRESET_VERSION 3
 
 // one captured/restored group: its between-group + within-group state bits, its
-// name, and its opacity (the run's member average when captured from real
-// shapes, or the empty group's own remembered opacity).
+// name, and its group opacity.
 typedef struct _flexi_group_entry_t
 {
   dt_masks_state_t state;
   float opacity;
-  // same width as dt_masks_point_group_t.name, which is where it ends up once a
-  // restored group gets its first member. Inline rather than a pointer because
-  // the entry array is written to the database verbatim as one blob.
+  // same width as dt_masks_point_group_t.name, the group's marker's name.
+  // Inline rather than a pointer because the entry array is written to the
+  // database verbatim as one blob.
   char name[128];
 } _flexi_group_entry_t;
 
@@ -76,128 +74,76 @@ typedef struct _flexi_group_entry_v2_t
   float opacity;
 } _flexi_group_entry_v2_t;
 
-// bottom-to-top ordered snapshot of the module's current group skeleton,
-// mirroring exactly how _build_masks_list merges grp->points runs with
-// bd->empty_groups (unanchored empties at the very bottom, each anchored empty
-// directly above the run it anchors to). Caller frees the returned array.
+// bottom-to-top snapshot of the module's group skeleton: one entry per group
+// marker. Caller frees the returned array.
 static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int *n_out)
 {
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
   GArray *out = g_array_new(FALSE, FALSE, sizeof(_flexi_group_entry_t));
 
-  for(GList *e = bd->empty_groups; e; e = g_list_next(e))
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
   {
-    dt_masks_empty_group_t *eg = e->data;
-    const gboolean anchored =
-      grp && dt_is_valid_maskid(eg->below_fid) && _group_point(grp, eg->below_fid);
-    if(!anchored)
-    {
-      _flexi_group_entry_t ent = { .state = eg->op | eg->within, .opacity = eg->opacity };
-      if(eg->name) g_strlcpy(ent.name, eg->name, sizeof(ent.name));
-      g_array_append_val(out, ent);
-    }
+    if(!_starts_group(l)) continue;
+    const dt_masks_point_group_t *marker = l->data;
+    _flexi_group_entry_t ent = {
+      .state = marker->state & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN),
+      .opacity = marker->group_opacity
+    };
+    g_strlcpy(ent.name, marker->name, sizeof(ent.name));
+    g_array_append_val(out, ent);
   }
-
-  for(GList *l = grp ? grp->points : NULL; l;)
+  // a mask with no group form yet has the one group the panel shows for it
+  if(out->len == 0)
   {
-    const dt_masks_state_t op = _eff_group_op(((dt_masks_point_group_t *)l->data)->state);
-    GList *formids = NULL;
-    gboolean all_screen = TRUE, all_isect = TRUE, all_multiply = TRUE;
-    float opacity_sum = 0.0f;
-    int opacity_n = 0;
-    GList *m = l;
-    for(; m; m = g_list_next(m))
-    {
-      dt_masks_point_group_t *pm = m->data;
-      if(m != l && _starts_group(m)) break;
-      if(!dt_masks_get_from_id(darktable.develop, pm->formid)) continue;
-      formids = g_list_prepend(formids, GINT_TO_POINTER(pm->formid));
-      if(!(pm->state & DT_MASKS_STATE_SCREEN)) all_screen = FALSE;
-      if(!(pm->state & DT_MASKS_STATE_ISECT)) all_isect = FALSE;
-      if(!(pm->state & DT_MASKS_STATE_WITHIN_MULTIPLY)) all_multiply = FALSE;
-      opacity_sum += pm->opacity;
-      opacity_n++;
-    }
-    if(formids)
-    {
-      const dt_masks_state_t within =
-        all_isect ? DT_MASKS_STATE_ISECT
-                  : all_screen ? DT_MASKS_STATE_SCREEN
-                               : all_multiply ? DT_MASKS_STATE_WITHIN_MULTIPLY : 0;
-      // the group's own opacity control has no single absolute value of its
-      // own (it is a delta/ratio control, see _props_row_populate) -- the
-      // member average is the representative value a preset can meaningfully
-      // restore.
-      _flexi_group_entry_t ent = { .state = op | within,
-                                   .opacity =
-                                     opacity_n ? opacity_sum / opacity_n : 1.0f };
-      // every member of a run carries the group's name (see the realize block in
-      // _build_masks_list), so the head's copy is the group's
-      g_strlcpy(ent.name, ((dt_masks_point_group_t *)l->data)->name, sizeof(ent.name));
-      g_array_append_val(out, ent);
-
-      for(GList *e = bd->empty_groups; e; e = g_list_next(e))
-      {
-        dt_masks_empty_group_t *eg = e->data;
-        gboolean match = FALSE;
-        for(GList *mm = formids; mm; mm = g_list_next(mm))
-          if(GPOINTER_TO_INT(mm->data) == eg->below_fid)
-          {
-            match = TRUE;
-            break;
-          }
-        if(match)
-        {
-          _flexi_group_entry_t eent = { .state = eg->op | eg->within,
-                                        .opacity = eg->opacity };
-          if(eg->name) g_strlcpy(eent.name, eg->name, sizeof(eent.name));
-          g_array_append_val(out, eent);
-        }
-      }
-    }
-    g_list_free(formids);
-    l = m;
+    const _flexi_group_entry_t ent = { .state = DT_MASKS_STATE_UNION, .opacity = 1.0f };
+    g_array_append_val(out, ent);
   }
 
   *n_out = out->len;
   return (_flexi_group_entry_t *)g_array_free(out, FALSE);
 }
 
-// replaces the module's whole mask -- shapes AND empty-group skeleton alike --
-// with a fresh skeleton of empty groups matching `entries` (same bottom-to-top
-// encoding as capture). Never asks for confirmation itself; callers that might
-// be discarding real shapes confirm first (see _flexi_preset_apply_confirmed).
+// replaces the module's whole mask -- elements and groups alike -- with empty
+// groups matching `entries` (same bottom-to-top encoding as capture). Never
+// asks for confirmation itself; callers that might be discarding elements
+// confirm first (see _flexi_preset_apply_confirmed).
 static void
 _flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   _masks_reset_mask_core(module);
-  dt_masks_empty_group_t *base = NULL;
+  dt_masks_form_t *grp = _module_flexi_group(module, NULL);
+  if(!grp || n <= 0) return;
+  // the reset left the mask's one empty group, which the layout replaces
+  g_list_free_full(grp->points, free);
+  grp->points = NULL;
   for(int i = 0; i < n; i++)
   {
-    dt_masks_empty_group_t *eg =
-      _empty_group_new(entries[i].state, entries[i].state, INVALID_MASKID);
-    eg->opacity = entries[i].opacity;
-    if(entries[i].name[0]) eg->name = g_strdup(entries[i].name);
-    bd->empty_groups = g_list_append(bd->empty_groups, eg);
-    if(i == 0)
-      base = eg; // index 0 is the bottom (foundation) group, see capture/apply's
-                 // shared bottom-to-top convention
+    dt_masks_point_group_t *marker =
+      dt_masks_marker_new(darktable.develop->forms, grp, entries[i].state);
+    if(!marker) continue;
+    marker->group_opacity = entries[i].opacity;
+    g_strlcpy(marker->name, entries[i].name, sizeof(marker->name));
+    grp->points = g_list_append(grp->points, marker);
   }
-  bd->scaffold_seeded = TRUE;
+  dt_masks_group_mark_runs(darktable.develop->forms, grp);
   // give the panel an immediate, unambiguous starting point -- with more than
-  // one group, nothing would otherwise be selected until the user clicks one
-  bd->selected_empty = base;
+  // one group, nothing would otherwise be selected until the user clicks one.
+  // Index 0 is the bottom (foundation) group
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = ((dt_masks_point_group_t *)grp->points->data)->formid;
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _build_masks_list(module);
   _refresh_canvas_edit(module);
 }
 
+// does the mask have elements an applied layout would discard?
 static gboolean _flexi_layout_has_content(dt_iop_module_t *module)
 {
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
-  return (grp && grp->points) || bd->empty_groups;
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+    if(!_starts_group(l)) return TRUE;
+  return FALSE;
 }
 
 // reads back every user-saved layout preset's name + entry array. Caller frees
@@ -415,11 +361,6 @@ static _flexi_group_entry_t *_flexi_builtin_entries(const _flexi_builtin_t *b)
 
 static void _flexi_preset_save_clicked(dt_iop_module_t *module)
 {
-  if(!_flexi_layout_has_content(module))
-  {
-    dt_control_log(_("the mask has no groups yet, nothing to save as a preset"));
-    return;
-  }
   char *name = dt_gui_show_standalone_string_dialog(
     _("save mask layout preset"),
     _("enter a name for this preset\n"
