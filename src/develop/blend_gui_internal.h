@@ -35,44 +35,12 @@
 
 G_BEGIN_DECLS
 
-typedef struct dt_masks_empty_group_t
-{
-  dt_masks_state_t op;
-  dt_masks_state_t within;  // within-group combine bits (DT_MASKS_STATE_WITHIN subset)
-  dt_mask_id_t below_fid;
-  // opacity a shape realizing this empty group should start at. Normally 1.0
-  // (see dt_masks_gui_form_save_creation); a group restored from a saved
-  // layout preset carries the preset's own remembered opacity instead.
-  float opacity;
-  // group refinement staged before the group has any members. Per-group
-  // refinement normally lives in each member's dt_masks_point_group_t, so an
-  // empty group has nowhere to put it -- without this, selecting the sole
-  // (empty) group of a fresh or just-reset mask silently fell back to global
-  // scope, making "group" and "whole mask" refinement indistinguishable. Held
-  // here and adopted by the run when the group is realized (see the realize
-  // block in _build_masks_list and _masks_shape_to_empty_drop).
-  dt_masks_refinement_t refinement;
-  // the group's displayed number, held here for the same reason real groups
-  // hold theirs in bd->group_ordinals: it is an identity, not a position. 0 =
-  // not assigned yet. Carried across the empty <-> real transitions so a group
-  // that is emptied and refilled keeps the number it had.
-  int ordinal;
-  // custom name (ctrl+click the title, mirrors dt_masks_point_group_t.name on
-  // a real group's members) -- NULL until set. Carried across the empty <->
-  // real transitions the same way refinement/ordinal already are: adopted
-  // onto every member's own pt->name when the group is realized (see
-  // _masks_shape_to_empty_drop and the realize block in _build_masks_list),
-  // and stashed back here from the run's head member when a group empties
-  // out (see _group_reset_members and friends), instead of being silently
-  // dropped as it was before.
-  gchar *name;
-} dt_masks_empty_group_t;
-
 // where a newly added element lands (see _resolve_add_target in blend_gui.c)
 typedef struct dt_masks_add_target_t
 {
-  dt_masks_empty_group_t *empty; // staged (member-less) group, or NULL
-  dt_mask_id_t cid;              // real group's cid, or INVALID_MASKID
+  // the group's marker id; INVALID_MASKID with `valid` set is the one group of
+  // a mask that has no group form yet (see _module_flexi_group)
+  dt_mask_id_t cid;
   gboolean valid;
   gboolean implicit; // resolved from "only one group", not a selection
 } dt_masks_add_target_t;
@@ -92,21 +60,19 @@ enum
   REFINE_SCOPE_GLOBAL = 0,
   REFINE_SCOPE_ALL_SHAPES,
   REFINE_SCOPE_ELEMENT,
-  REFINE_SCOPE_GROUP,
-  REFINE_SCOPE_EMPTY_GROUP
+  REFINE_SCOPE_GROUP
 };
 
 dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
-/** the group point for `id` within `grp`, or NULL */
+/** the module's flexi group, created with its first group if it has no group
+    form yet. *cid, when given and invalid, becomes that first group's id */
+dt_masks_form_t *_module_flexi_group(dt_iop_module_t *module, dt_mask_id_t *cid);
+/** the point for `id` within `grp` -- a member, or a group's marker -- or NULL */
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
-/** a member's effective between-group operator bits */
+/** a group's effective between-group operator bits */
 dt_masks_state_t _eff_group_op(const int state);
-/** does this points-list node start a new group run? */
+/** is this points-list node a group's marker, the start of a group? */
 gboolean _starts_group(GList *l);
-/** allocate a staged (member-less) group */
-dt_masks_empty_group_t *_empty_group_new(const dt_masks_state_t op,
-                                         const dt_masks_state_t within,
-                                         const dt_mask_id_t below_fid);
 /** remove every shape and reset the panel's scratch state (no confirmation) */
 void _masks_reset_mask_core(dt_iop_module_t *module);
 /** destroy and rebuild the panel's row tree */
@@ -119,30 +85,43 @@ void _refresh_canvas_edit(dt_iop_module_t *module);
 // (src/tests/unittests/masks/test_flexi_model.c)
 // ---------------------------------------------------------------------------
 //
-// These five are the flexi panel's *group model*: pure functions over a
-// group's points list, with no GTK, no widget state and no darktable globals
-// between them. Everything the panel does to the mask structure -- every
-// drag/drop, every group split or merge, every operator change -- is
-// ultimately expressed as a call into these, which is what makes the panel's
-// behaviour testable at all without a display.
+// These are the flexi panel's *group model*: pure functions over a group's
+// points list, with no GTK and no widget state between them. A flexi list is
+// a sequence of groups, each its marker followed by its members up to the next
+// marker (see DT_MASKS_STATE_GROUP_MARKER). Everything the panel does to the
+// mask structure -- every drag/drop, every group added, merged or deleted --
+// is ultimately expressed as a call into these, which is what makes the
+// panel's behaviour testable at all without a display.
 //
 // They are declared here for the same reason as everything else in this file:
 // a caller lives in a different translation unit. That the caller is a test
 // rather than another panel file makes no difference to the seam -- but it
-// does mean these five carry a stability expectation the rest of this header
-// does not, since the tests are the regression net for the panel's behaviour.
+// does mean these carry a stability expectation the rest of this header does
+// not, since the tests are the regression net for the panel's behaviour.
 
-/** every group run's head formid, bottom-up. Caller frees the list. */
+/** every group's marker id, bottom-up. Caller frees the list. */
 GList *_group_partition_heads(dt_masks_form_t *grp);
-/** formids of the contiguous run containing `sel`. Caller frees the list. */
-GList *_selected_group_formids(dt_masks_form_t *grp, const dt_mask_id_t sel);
-/** the group id (run head formid) that `fid` belongs to, or INVALID_MASKID */
+/** the member ids of the group `id` is in (`id` a member or the group's
+    marker), top-first. Caller frees the list. */
+GList *_selected_group_formids(dt_masks_form_t *grp, const dt_mask_id_t id);
+/** the id of the group `fid` is in -- its marker's -- or INVALID_MASKID */
 dt_mask_id_t _group_cid_of_form(dt_masks_form_t *grp, const dt_mask_id_t fid);
-/** map every formid -> its run's key, so the partition survives a reorder.
-    Caller destroys the table. */
-GHashTable *_group_keys_snapshot(dt_masks_form_t *grp);
-/** re-stamp every point's group_start from a key map (see _group_keys_snapshot) */
-void _group_keys_apply(dt_masks_form_t *grp, GHashTable *keys);
+/** a new empty group of operator `op` right above group `cid`, or below it
+    with `below`; above or below every group when `cid` names none. Returns
+    its id */
+dt_mask_id_t _model_add_group(dt_masks_form_t *grp,
+                              const dt_masks_state_t op,
+                              const dt_mask_id_t cid,
+                              const gboolean below);
+/** remove group `cid`, its members with it. Returns the member ids, which the
+    caller frees */
+GList *_model_delete_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
+/** remove the members of group `cid`, keeping the group. Returns their ids,
+    which the caller frees */
+GList *_model_empty_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
+/** fold group `cid` into the group below it, whose settings apply to both
+    groups' members. FALSE for the bottom group */
+gboolean _model_merge_group_down(dt_masks_form_t *grp, const dt_mask_id_t cid);
 
 // Gesture semantics, split out from their GTK handlers so the handler and the
 // test drive identical code. These mutate the mask structure and the panel's
@@ -174,56 +153,29 @@ dt_masks_panel_sel_t _model_click_element(const dt_iop_gui_blend_data_t *bd,
 dt_masks_panel_sel_t _model_click_group(const dt_iop_gui_blend_data_t *bd,
                                         const dt_mask_id_t cid);
 
-/** clear DT_MASKS_STATE_SHOW on the base point, ensure it elsewhere, and give
-    any operator-less point the union default */
-void _normalize_group_operators(dt_masks_form_t *grp);
-
-/** move element `src` into group `dst`'s run, landing on top of it */
+/** move element `src` into the group `dst` is in (`dst` a member or the
+    group's marker), landing on top of it */
 gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
                                         dt_masks_form_t *grp,
                                         const dt_mask_id_t src,
                                         const dt_mask_id_t dst);
-/** move element `src` into staged group `eg`, realizing it */
-gboolean _model_drop_element_onto_empty(dt_iop_module_t *module,
-                                        dt_masks_form_t *grp,
-                                        const dt_mask_id_t src,
-                                        dt_masks_empty_group_t *eg);
 /** drop every member whose form is gone from dev->forms; how many went */
 int _model_prune_dangling_members(dt_masks_form_t *grp);
-/** keep at least one group, empty if need be; whether one was added */
-gboolean _model_ensure_a_group(dt_iop_gui_blend_data_t *bd, dt_masks_form_t *grp);
+/** give the group its markers if it has none (see dt_masks_group_mark_runs),
+    so it shows at least one group; whether anything changed */
+gboolean _model_ensure_a_group(dt_masks_form_t *grp);
 /** move a whole same-kind cluster onto an element row or a group header */
 gboolean _masks_cluster_move(dt_iop_module_t *module,
                              GList *member_ids,
                              const dt_mask_id_t dst,
                              const gboolean dst_is_group,
                              const gboolean above);
-/** reorder one whole group (real or staged) above/below another */
+/** move group `src_cid` with its members right above group `dst_cid`, or
+    right below it */
 gboolean _masks_reorder_groups(dt_iop_module_t *module,
-                               const gboolean src_is_empty,
                                const dt_mask_id_t src_cid,
-                               dt_masks_empty_group_t *src_eg,
-                               const gboolean dst_is_empty,
                                const dt_mask_id_t dst_cid,
-                               dt_masks_empty_group_t *dst_eg,
                                const gboolean above);
-/** one group -- real run or staged empty -- in the unified bottom-up order */
-typedef struct _dt_masks_order_item_t
-{
-  gboolean is_empty;
-  dt_mask_id_t cid;           // real: the run's head formid (ignored if is_empty)
-  dt_masks_empty_group_t *eg; // empty: the group itself (ignored otherwise)
-} _dt_masks_order_item_t;
-
-/** every group (real run or staged) in bottom-up visual order.
-    Caller frees with g_list_free_full(..., g_free). */
-GList *_masks_visual_group_order(dt_iop_module_t *module);
-/** if removing `fid` would empty its run, a placeholder preserving that
-    group's operator/ordinal/name/refinement; NULL otherwise */
-struct dt_masks_empty_group_t *_capture_emptied_group(dt_masks_form_t *grp,
-                                                      const dt_mask_id_t fid);
-/** index of the run `ids` within grp->points, and its last index; -1 if absent */
-int _run_extent(dt_masks_form_t *grp, GList *ids, int *last);
 
 /** what a solo-family toggle leaves for its caller to do to the canvas edit
     scope. The model half never touches the canvas itself. */

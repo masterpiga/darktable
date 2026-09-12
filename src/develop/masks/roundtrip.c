@@ -142,10 +142,17 @@ static gchar *_check_group_runs(dt_develop_t *dev,
   const int non_union = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_DIFFERENCE
                       | DT_MASKS_STATE_SUM | DT_MASKS_STATE_EXCLUSION;
 
+  // in a marked group the operator is read off the marker and a member's own
+  // copy of it renders nothing, so only nested groups are left to check
+  gboolean marked = FALSE;
+  for(GList *p = grp->points; p && !marked; p = g_list_next(p))
+    marked = dt_masks_point_is_marker(p->data);
+
   for(GList *p = grp->points; p; p = g_list_next(p))
   {
     const dt_masks_point_group_t *pt = p->data;
-    if((pt->state & non_union) && !pt->group_start)
+    if(dt_masks_point_is_marker(pt)) continue;
+    if(!marked && (pt->state & non_union) && !pt->group_start)
       return g_strdup_printf("group %d member %d has a non-union operator"
                              " (state=%d) but does not start a run",
                              grp->formid, pt->formid, pt->state);
