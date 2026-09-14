@@ -61,13 +61,19 @@ typedef struct _host_t
     style arrives, so that "did the style disturb what was already there" is a
     meaningful question. A parametric-only host would be migrated into a
     synthesized form too, which muddles which of the two synthesis paths a
-    failure came from. */
-static gboolean _pick_host(JsonArray *edits, _host_t *host)
+    failure came from.
+
+    A harvest cut into chunks (tools/masks_corpus.py check) carries its whole
+    library's candidates as "styleapply_host_candidates", so that every chunk
+    picks the host the whole library would have, by this same rule. */
+static gboolean _pick_host(JsonObject *root, JsonArray *edits, _host_t *host)
 {
-  const guint n = json_array_get_length(edits);
+  JsonArray *cands = root && json_object_has_member(root, "styleapply_host_candidates")
+    ? json_object_get_array_member(root, "styleapply_host_candidates") : edits;
+  const guint n = json_array_get_length(cands);
   for(guint i = 0; i < n; i++)
   {
-    JsonObject *edit = json_array_get_object_element(edits, i);
+    JsonObject *edit = json_array_get_object_element(cands, i);
     if(!edit) continue;
     JsonObject *bo = json_object_get_object_member(edit, "blend");
     if(!bo) continue;
@@ -410,7 +416,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
   }
 
   _host_t host = { .valid = FALSE };
-  if(!_pick_host(edits, &host))
+  if(!_pick_host(ro, edits, &host))
   {
     /* Not a failure: this check needs a drawn-mask edit from the corpus to
        stand in for "a mask already on the image", and a library that happens to

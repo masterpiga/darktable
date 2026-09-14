@@ -1691,6 +1691,137 @@ static void test_prune_spares_markers(void **state)
   assert_int_equal(g_list_length(grp->points), 3);
 }
 
+// ---------------------------------------------------------------------------
+// nested groups: the model reaches into them, and stops on a cycle
+// ---------------------------------------------------------------------------
+
+/* A group `gid` with marker `cid` over the forms `members`, made a member of
+   the fixture's group. The fixture frees the forms; _free_nested_points frees
+   the nested group's points */
+static dt_masks_form_t *_nested_group(const dt_mask_id_t gid,
+                                      const dt_mask_id_t cid,
+                                      const dt_mask_id_t *members,
+                                      const int n)
+{
+  dt_masks_form_t *g = calloc(1, sizeof(dt_masks_form_t));
+  g->formid = gid;
+  g->type = DT_MASKS_GROUP;
+  dt_masks_point_group_t *mk = calloc(1, sizeof(dt_masks_point_group_t));
+  mk->formid = cid;
+  mk->parentid = gid;
+  mk->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_UNION;
+  mk->opacity = 1.0f;
+  mk->group_opacity = 1.0f;
+  g->points = g_list_append(NULL, mk);
+  for(int k = 0; k < n; k++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = members[k];
+    pt->parentid = gid;
+    pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+    pt->opacity = 1.0f;
+    pt->group_opacity = 1.0f;
+    g->points = g_list_append(g->points, pt);
+  }
+  flexi_dev.forms = g_list_append(flexi_dev.forms, g);
+
+  dt_masks_form_t *grp = flexi_group();
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = gid;
+  m->parentid = grp->formid;
+  m->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+  m->opacity = 1.0f;
+  m->group_opacity = 1.0f;
+  grp->points = g_list_append(grp->points, m);
+  return g;
+}
+
+static void _free_nested_points(dt_masks_form_t *g)
+{
+  g_list_free_full(g->points, free);
+  g->points = NULL;
+}
+
+// a group's marker is found at any depth, with the group holding it
+static void test_find_marker_reaches_a_subgroup(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_masks_form_t *c = calloc(1, sizeof(dt_masks_form_t));
+  c->formid = 11;
+  c->type = DT_MASKS_CIRCLE;
+  flexi_dev.forms = g_list_append(flexi_dev.forms, c);
+  const dt_mask_id_t members[] = { 11 };
+  dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
+
+  dt_masks_form_t *owner = NULL;
+  const dt_masks_point_group_t *mk =
+    dt_masks_group_find_marker(flexi_dev.forms, grp, 2500, &owner);
+  assert_ptr_equal(mk, sub->points->data);
+  assert_ptr_equal(owner, sub);
+
+  mk = dt_masks_group_find_marker(flexi_dev.forms, grp, FLEXI_GID(0), &owner);
+  assert_ptr_equal(mk, grp->points->data);
+  assert_ptr_equal(owner, grp);
+
+  assert_null(dt_masks_group_find_marker(flexi_dev.forms, grp, 9999, NULL));
+  _free_nested_points(sub);
+}
+
+// a raster element keeps its source publishing from inside a subgroup too
+static void test_a_raster_element_in_a_subgroup_is_found(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_masks_form_t *r = calloc(1, sizeof(dt_masks_form_t));
+  r->formid = 3000;
+  r->type = DT_MASKS_RASTER;
+  dt_masks_point_raster_t *rp = calloc(1, sizeof(dt_masks_point_raster_t));
+  g_strlcpy(rp->source, "exposure", sizeof(rp->source));
+  rp->instance = 1;
+  rp->id = 5;
+  r->points = g_list_append(NULL, rp);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, r);
+  const dt_mask_id_t members[] = { 3000 };
+  dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
+
+  dt_iop_module_so_t so = { 0 };
+  g_strlcpy(so.op, "exposure", sizeof(so.op));
+  dt_iop_module_t source = { 0 };
+  source.so = &so;
+  source.multi_priority = 1;
+
+  assert_ptr_equal(dt_masks_group_find_raster_of(flexi_dev.forms, grp, &source, 5, FALSE), rp);
+  assert_ptr_equal(dt_masks_group_find_raster_of(flexi_dev.forms, grp, &source, NO_MASKID, TRUE),
+                   rp);
+  assert_null(dt_masks_group_find_raster_of(flexi_dev.forms, grp, &source, 6, FALSE));
+  // another instance of the same module is another source
+  source.multi_priority = 0;
+  assert_null(dt_masks_group_find_raster_of(flexi_dev.forms, grp, &source, 5, FALSE));
+
+  g_list_free_full(r->points, free);
+  r->points = NULL;
+  _free_nested_points(sub);
+}
+
+// a group holding its own parent is malformed, and every walk has to end on it
+static void test_a_cyclic_tree_ends_every_walk(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  const dt_mask_id_t members[] = { grp->formid };
+  dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
+
+  assert_null(dt_masks_group_find_marker(flexi_dev.forms, grp, 9999, NULL));
+  assert_null(dt_masks_group_find_raster_of(flexi_dev.forms, grp, NULL, NO_MASKID, TRUE));
+  (void)dt_masks_group_hash_ext(DT_INITHASH, grp, flexi_dev.forms);
+
+  dt_masks_form_t flat = { 0 };
+  flat.type = DT_MASKS_GROUP;
+  dt_masks_group_ungroup(&flat, grp);
+  assert_true(g_list_length(flat.points) > 0);
+  g_list_free_full(flat.points, free);
+
+  _free_nested_points(sub);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -1800,6 +1931,9 @@ int main(void)
                               _teardown),
     cmocka_unit_test_teardown(test_copy_of_a_group_keeps_its_markers, _teardown_linking),
     cmocka_unit_test_teardown(test_prune_spares_markers, _teardown),
+    cmocka_unit_test_teardown(test_find_marker_reaches_a_subgroup, _teardown),
+    cmocka_unit_test_teardown(test_a_raster_element_in_a_subgroup_is_found, _teardown),
+    cmocka_unit_test_teardown(test_a_cyclic_tree_ends_every_walk, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

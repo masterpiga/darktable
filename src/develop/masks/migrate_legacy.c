@@ -47,11 +47,10 @@
  *    DT_MASKS_STATE_MULTIPLY -- the between-group operator built for exactly
  *    this purpose (see its comment in masks.h).
  *
- *  - Fail closed: on any allocation/synthesis failure, or for a combination
- *    the flexi data model cannot cleanly reproduce (see the DEVELOP_COMBINE_*
- *    handling below), bp is left with its original classic mask_mode
- *    untouched and the module keeps rendering through the classic path --
- *    never silently drop a mask.
+ *  - One way: every classic mask_mode becomes a flexi one (or a plain
+ *    uniform blend where classic collapses to a constant). There is no classic
+ *    fallback and no failure path; allocations are not checked, as elsewhere
+ *    in the masks code.
  *
  *  - Persistence: forms created here are appended to module->dev->forms (so
  *    the paths that later snapshot dev->forms into a fresh history item --
@@ -80,7 +79,6 @@
 
 #include "common/darktable.h"
 #include "common/debug.h"
-#include "control/control.h"
 #include "develop/blend.h"
 #include "develop/develop.h"
 #include "develop/imageop.h"
@@ -131,8 +129,8 @@
  * so neither can be the earlier member an operator-less one overwrites, nor
  * the overwriting member itself.
  *
- * Nothing is written back, exactly as with the run-boundary markers this runs
- * beside -- see dt_masks_normalize_flexi_groups(). Idempotent: once the earlier
+ * It is written back together with the group markers it runs beside -- see
+ * dt_masks_normalize_flexi_groups(). Idempotent: once the earlier
  * members are disabled they stop counting as live, so a second pass finds the
  * group already well-formed and changes nothing. */
 static void _repair_base_case_overwrite(GList *forms,
@@ -141,7 +139,7 @@ static void _repair_base_case_overwrite(GList *forms,
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
   // a malformed/cyclic tree must not spin here; classic nesting is shallow
-  if(depth > 8) return;
+  if(depth > DT_MASKS_NESTING_MAX) return;
 
   // the last live member with no operator -- the one whose base case wins
   GList *overwriter = NULL;
@@ -238,15 +236,12 @@ static void _normalize_group(GList *forms, dt_masks_form_t *grp)
  * wholesale straight after migration and would discard the in-memory work --
  * see dev->pending_flexi_group_splits.
  *
- * The queue entry also carries what it takes to *undo* the migration later.
- * The replace-member check above needs the group's real member list, and on the
- * darkroom-load path there is no point before synthesis where that exists:
- * drawn-only migrates inline while dev->forms still holds the previous image's
- * forms, and drawn+parametric is deferred to dt_masks_finish_flexi_migrations(),
- * which by construction runs *before* dt_masks_read_masks_history(). So the
- * decision is made where the forms finally are -- in
- * dt_masks_normalize_flexi_groups() -- and failing closed there means putting
- * back the blend params the migration overwrote. */
+ * The repair above needs the group's real member list, and on the darkroom-load
+ * path there is no point before synthesis where that exists: drawn-only
+ * migrates inline while dev->forms still holds the previous image's forms, and
+ * drawn+parametric is deferred to dt_masks_finish_flexi_migrations(), which by
+ * construction runs *before* dt_masks_read_masks_history(). So the queued pass
+ * runs where the forms finally are, in dt_masks_normalize_flexi_groups(). */
 static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_id)
 {
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
@@ -263,7 +258,6 @@ static dt_masks_point_group_t *_new_group_point(const dt_mask_id_t formid,
                                                 const int state)
 {
   dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
-  if(!pt) return NULL;
   pt->formid = formid;
   pt->state = state;
   // a remembered "last used" opacity has no meaning for a member migration
@@ -281,8 +275,6 @@ static dt_masks_point_group_t *_new_group_point(const dt_mask_id_t formid,
   pt->group_opacity = 1.0f;
   return pt;
 }
-
-static void _migration_failed(const dt_iop_module_t *module, const char *why);
 
 // appends `form` to the live in-memory forms list, and -- only when a real
 // history-stack position is known -- writes it straight into
@@ -324,21 +316,14 @@ _persist_form(dt_iop_module_t *module, dt_masks_form_t *form, const int history_
 // dt_develop_blend_process()'s own post-fold check (blend.c) consumes it,
 // exactly once, on the whole rendered group.
 //
-// Returns the list of forms to persist and add as group members, or NULL
-// (with *ok FALSE) on allocation failure, after freeing every form already
-// built. None of them are added to module->dev->forms yet, so a caller that
-// goes on to fail some later allocation of its own can still discard
-// everything cleanly (see _migrate_parametric_only /
-// _migrate_drawn_and_parametric).
+// Returns the list of forms to persist and add as group members. None of them
+// are added to module->dev->forms yet.
 static GList *_build_channel_forms(dt_iop_module_t *module,
                                    const int32_t blend_cst,
                                    const uint32_t blendif,
                                    const float *const blendif_parameters,
-                                   const float *const blendif_boost_factors,
-                                   gboolean *ok)
+                                   const float *const blendif_boost_factors)
 {
-  *ok = TRUE;
-
   const dt_iop_gui_blendif_channel_t *channels =
     dt_develop_blendif_channels_for_csp((int)blend_cst);
   int nch = 0;
@@ -367,16 +352,7 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
   for(int i = 0; i < n_active; i++)
   {
     dt_masks_form_t *form = dt_masks_create(DT_MASKS_PARAMETRIC);
-    dt_masks_point_parametric_t *p =
-      form ? calloc(1, sizeof(dt_masks_point_parametric_t)) : NULL;
-    if(!form || !p)
-    {
-      dt_masks_free_form(form);
-      g_list_free_full(out, (GDestroyNotify)dt_masks_free_form);
-      _migration_failed(module, "allocation failure");
-      *ok = FALSE;
-      return NULL;
-    }
+    dt_masks_point_parametric_t *p = calloc(1, sizeof(dt_masks_point_parametric_t));
     // keep only this one channel's own active + polarity bits
     const uint32_t ch_mask = (1u << channels[active_ch[i]].param_channels[0])
                              | (1u << channels[active_ch[i]].param_channels[1]);
@@ -403,12 +379,11 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
 // that -- e.g. DT_MASKS_STATE_MULTIPLY, the *between*-group operator a
 // caller needs when these channels' own run must itself multiply into a
 // pre-existing member outside this list (see
-// _migrate_drawn_and_parametric's drawn_pt). Returns FALSE (and leaves
-// `*points` unmodified beyond what it already had) on allocation failure.
-static gboolean _append_channel_points(GList *forms,
-                                       const dt_mask_id_t parentid,
-                                       const int extra_state,
-                                       GList **points)
+// _migrate_drawn_and_parametric's drawn_pt).
+static void _append_channel_points(GList *forms,
+                                   const dt_mask_id_t parentid,
+                                   const int extra_state,
+                                   GList **points)
 {
   const gboolean within_multiply = forms && forms->next;
   GList *added = NULL;
@@ -418,16 +393,10 @@ static gboolean _append_channel_points(GList *forms,
     dt_masks_point_group_t *pt = _new_group_point(
       form->formid, DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | extra_state
                       | (within_multiply ? DT_MASKS_STATE_WITHIN_MULTIPLY : 0));
-    if(!pt)
-    {
-      g_list_free_full(added, free);
-      return FALSE;
-    }
     pt->parentid = parentid;
     added = g_list_append(added, pt);
   }
   *points = g_list_concat(*points, added);
-  return TRUE;
 }
 
 // once a classic module's blendif config has been copied into a synthesized
@@ -536,14 +505,6 @@ static dt_cond_branch_t _classify_conditional(const int32_t blend_cst,
   return DT_COND_PASSTHROUGH;
 }
 
-static void _migration_failed(const dt_iop_module_t *module, const char *why)
-{
-  dt_print(DT_DEBUG_ALWAYS, "[masks] classic->flexi migration failed for module '%s': %s",
-           module->op, why);
-  dt_control_log(_("%s: failed to migrate mask to flexi, mask kept in classic mode"),
-                 module->op);
-}
-
 // does `mask_id` resolve to a form with actual content? Mirrors exactly the
 // condition dt_develop_blend_process() itself uses to decide whether a drawn
 // mask has something to render (`form && form->points`, see blend.c) -- not
@@ -592,10 +553,10 @@ static gboolean _mask_id_has_content(dt_iop_module_t *module,
 // DEVELOP_MASK_CONDITIONAL (pure parametric, no drawn shapes): one group
 // holding one legacy-style (single=0, full multi-channel) DT_MASKS_PARAMETRIC
 // element, with the classic blendif configuration copied verbatim.
-static gboolean _migrate_parametric_only(dt_iop_module_t *module,
-                                         const dt_develop_blend_params_t *const o,
-                                         dt_develop_blend_params_t *n,
-                                         const int history_num)
+static void _migrate_parametric_only(dt_iop_module_t *module,
+                                     const dt_develop_blend_params_t *const o,
+                                     dt_develop_blend_params_t *n,
+                                     const int history_num)
 {
   const gboolean incl = (o->mask_combine & DEVELOP_COMBINE_INCL) != 0;
   const gboolean inv = (o->mask_combine & DEVELOP_COMBINE_INV) != 0;
@@ -627,15 +588,10 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
     n->mask_id = NO_MASKID;
     n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
     if(!opaque) n->opacity = 0.0f;
-    return TRUE;
+    return;
   }
 
   dt_masks_form_t *grp = dt_masks_create(DT_MASKS_GROUP);
-  if(!grp)
-  {
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
 
   // DEVELOP_COMBINE_INCL pre-flips every channel's own polarity bit (see
   // _channel_polarity_mask()'s comment) -- bake that into the copied
@@ -646,23 +602,10 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
   const uint32_t flipped_blendif =
     o->blendif ^ (incl ? (_channel_polarity_mask(o->blend_cst) << 16) : 0);
 
-  gboolean built_ok = FALSE;
   GList *param_forms =
     _build_channel_forms(module, o->blend_cst, flipped_blendif, o->blendif_parameters,
-                         o->blendif_boost_factors, &built_ok);
-  if(!built_ok)
-  {
-    dt_masks_free_form(grp);
-    return FALSE;
-  }
-
-  if(!_append_channel_points(param_forms, grp->formid, 0, &grp->points))
-  {
-    dt_masks_free_form(grp);
-    g_list_free_full(param_forms, (GDestroyNotify)dt_masks_free_form);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
+                         o->blendif_boost_factors);
+  _append_channel_points(param_forms, grp->formid, 0, &grp->points);
 
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
@@ -692,7 +635,6 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
   // back to normal -- so this is driven by their XOR, not INV alone.
   n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
   if(incl != inv) n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
-  return TRUE;
 }
 
 // DEVELOP_MASK_RASTER: one group holding one DT_MASKS_RASTER element,
@@ -702,29 +644,14 @@ static gboolean _migrate_parametric_only(dt_iop_module_t *module,
 // _reconcile_raster_form_users() in imageop.c) already walks the flexi form
 // tree independently of mask_mode, and rendering a DT_MASKS_RASTER form
 // (masks/raster.c) reads them directly too.
-static gboolean _migrate_raster(dt_iop_module_t *module,
-                                const dt_develop_blend_params_t *const o,
-                                dt_develop_blend_params_t *n,
-                                const int history_num)
+static void _migrate_raster(dt_iop_module_t *module,
+                            const dt_develop_blend_params_t *const o,
+                            dt_develop_blend_params_t *n,
+                            const int history_num)
 {
   dt_masks_form_t *raster_form = dt_masks_create(DT_MASKS_RASTER);
   dt_masks_form_t *grp = dt_masks_create(DT_MASKS_GROUP);
-  if(!raster_form || !grp)
-  {
-    dt_masks_free_form(raster_form);
-    dt_masks_free_form(grp);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
-
   dt_masks_point_raster_t *rp = calloc(1, sizeof(dt_masks_point_raster_t));
-  if(!rp)
-  {
-    dt_masks_free_form(raster_form);
-    dt_masks_free_form(grp);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
   g_strlcpy(rp->source, o->raster_mask_source, sizeof(rp->source));
   rp->instance = o->raster_mask_instance;
   rp->id = o->raster_mask_id;
@@ -758,13 +685,6 @@ static gboolean _migrate_raster(dt_iop_module_t *module,
              module->op);
 
   dt_masks_point_group_t *pt = _new_group_point(raster_form->formid, state);
-  if(!pt)
-  {
-    dt_masks_free_form(raster_form);
-    dt_masks_free_form(grp);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
   dt_masks_group_mark_classic_runs(module->dev->forms, grp, FALSE);
@@ -792,16 +712,15 @@ static gboolean _migrate_raster(dt_iop_module_t *module,
   n->mask_combine &= ~(uint32_t)(DEVELOP_COMBINE_INV
                                  | DEVELOP_COMBINE_INCL
                                  | DEVELOP_COMBINE_MASKS_POS);
-  return TRUE;
 }
 
 // DEVELOP_MASK_MASK_CONDITIONAL: drawn AND parametric, combined by
 // multiplication in the classic renderer. Stacks a new parametric element
 // onto the *existing*, untouched drawn group via DT_MASKS_STATE_MULTIPLY.
-static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
-                                              const dt_develop_blend_params_t *const o,
-                                              dt_develop_blend_params_t *n,
-                                              const int history_num)
+static void _migrate_drawn_and_parametric(dt_iop_module_t *module,
+                                          const dt_develop_blend_params_t *const o,
+                                          dt_develop_blend_params_t *n,
+                                          const int history_num)
 {
   // classic: with no resolvable drawn mask, the "no form" fallback fills
   // 1.0/0.0 depending on DEVELOP_COMBINE_MASKS_POS ("inverted"), *then*
@@ -830,7 +749,11 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   {
     const gboolean masks_pos = (o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
     const gboolean incl = (o->mask_combine & DEVELOP_COMBINE_INCL) != 0;
-    if(masks_pos == incl) return _migrate_parametric_only(module, o, n, history_num);
+    if(masks_pos == incl)
+    {
+      _migrate_parametric_only(module, o, n, history_num);
+      return;
+    }
 
     const gboolean inv = (o->mask_combine & DEVELOP_COMBINE_INV) != 0;
     const gboolean opaque = (incl != inv);
@@ -839,7 +762,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
     n->mask_id = NO_MASKID;
     n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
     if(!opaque) n->opacity = 0.0f;
-    return TRUE;
+    return;
   }
 
   {
@@ -863,7 +786,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
       n->mask_id = NO_MASKID;
       n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
       if(!opaque) n->opacity = 0.0f;
-      return TRUE;
+      return;
     }
 
     if(branch == DT_COND_PASSTHROUGH)
@@ -898,7 +821,7 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
         n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
       else
         n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
-      return TRUE;
+      return;
     }
 
     // DT_COND_REAL with INCL set (the only way to reach this while INCL is
@@ -921,25 +844,14 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   }
 
   dt_masks_form_t *top_grp = dt_masks_create(DT_MASKS_GROUP);
-  if(!top_grp)
-  {
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
 
   const gboolean incl = (o->mask_combine & DEVELOP_COMBINE_INCL) != 0;
   const uint32_t flipped_blendif =
     o->blendif ^ (incl ? (_channel_polarity_mask(o->blend_cst) << 16) : 0);
 
-  gboolean built_ok = FALSE;
   GList *param_forms =
     _build_channel_forms(module, o->blend_cst, flipped_blendif, o->blendif_parameters,
-                         o->blendif_boost_factors, &built_ok);
-  if(!built_ok)
-  {
-    dt_masks_free_form(top_grp);
-    return FALSE;
-  }
+                         o->blendif_boost_factors);
 
   // classic has two *independent* inversions in this mode: DEVELOP_COMBINE_
   // MASKS_POS inverts the drawn portion alone, strictly before the
@@ -983,13 +895,6 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   if(invert_drawn) drawn_state |= DT_MASKS_STATE_INVERSE;
 
   dt_masks_point_group_t *drawn_pt = _new_group_point(o->mask_id, drawn_state);
-  if(!drawn_pt)
-  {
-    dt_masks_free_form(top_grp);
-    g_list_free_full(param_forms, (GDestroyNotify)dt_masks_free_form);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
   drawn_pt->parentid = top_grp->formid;
   top_grp->points = g_list_append(top_grp->points, drawn_pt);
 
@@ -999,30 +904,24 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   // *between*-group operator, multiplying its own (possibly multi-channel,
   // WITHIN_MULTIPLY-folded) result into the accumulator drawn_pt already
   // copied in as the first run.
-  if(!_append_channel_points(param_forms, top_grp->formid, DT_MASKS_STATE_MULTIPLY,
-                             &top_grp->points))
-  {
-    dt_masks_free_form(top_grp);
-    g_list_free_full(param_forms, (GDestroyNotify)dt_masks_free_form);
-    _migration_failed(module, "allocation failure");
-    return FALSE;
-  }
+  _append_channel_points(param_forms, top_grp->formid, DT_MASKS_STATE_MULTIPLY,
+                         &top_grp->points);
+
+  for(GList *l = param_forms; l; l = g_list_next(l))
+    _persist_form(module, l->data, history_num);
+  g_list_free(param_forms);
+  _persist_form(module, top_grp, history_num);
 
   // drawn_pt references the *original* classic drawn group, which is rendered
   // by recursing back into dt_masks_group_get_mask_roi() -- and that recursion
   // reads the module's (now flexi) blend_params, so the inner group is folded
   // by the flexi run algebra too. It therefore needs the same run-boundary
-  // normalization as the drawn-only case above. Only past the last point that
-  // can fail: normalizing moves the group's settings off its members, and a
-  // migration that fails keeps rendering the group through the classic fold,
-  // which reads them there
-  _queue_group_split(module, o->mask_id);
-
-  for(GList *l = param_forms; l; l = g_list_next(l))
-    _persist_form(module, l->data, history_num);
-  g_list_free(param_forms);
-  dt_masks_group_mark_classic_runs(module->dev->forms, top_grp, FALSE);
-  _persist_form(module, top_grp, history_num);
+  // normalization as the drawn-only case above. Normalizing from the top group
+  // marks both, and dissolves the drawn group into the top one wherever that
+  // renders the same (dt_masks_group_mark_classic_runs). The split of
+  // non-union runs leaves the top group's own runs as they are: its channel
+  // run is MULTIPLY, see _normalize_group
+  _queue_group_split(module, top_grp->formid);
 
   _clear_toplevel_blendif(n);
   n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
@@ -1033,7 +932,6 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
   // set that same bit if INV asked for the composite-level invert instead.
   n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
   if(invert_composite) n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
-  return TRUE;
 }
 
 // dispatches to the right case builder by precedence, mirroring
@@ -1043,13 +941,11 @@ static gboolean _migrate_drawn_and_parametric(dt_iop_module_t *module,
 // non-standard combination normalizes to pure raster here too, matching
 // what the renderer already does with it. Used both for the immediate path
 // (history_num < 0) and, deferred, from dt_masks_finish_flexi_migrations().
-static gboolean _dispatch(dt_iop_module_t *module,
-                          const dt_develop_blend_params_t *const o,
-                          dt_develop_blend_params_t *n,
-                          const int history_num)
+static void _dispatch(dt_iop_module_t *module,
+                      const dt_develop_blend_params_t *const o,
+                      dt_develop_blend_params_t *n,
+                      const int history_num)
 {
-  gboolean ok;
-
   if(o->mask_mode & DEVELOP_MASK_RASTER)
   {
     if((o->mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL)))
@@ -1058,11 +954,11 @@ static gboolean _dispatch(dt_iop_module_t *module,
         "[masks] module '%s': non-standard mask_mode 0x%x (RASTER combined with "
         "MASK/CONDITIONAL) -- migrating as pure raster, matching how it already renders",
         module->op, o->mask_mode);
-    ok = _migrate_raster(module, o, n, history_num);
+    _migrate_raster(module, o, n, history_num);
   }
   else if((o->mask_mode & DEVELOP_MASK_MASK) && (o->mask_mode & DEVELOP_MASK_CONDITIONAL))
   {
-    ok = _migrate_drawn_and_parametric(module, o, n, history_num);
+    _migrate_drawn_and_parametric(module, o, n, history_num);
   }
   else if(o->mask_mode & DEVELOP_MASK_MASK)
   {
@@ -1076,11 +972,10 @@ static gboolean _dispatch(dt_iop_module_t *module,
     // see its comment for why that is all it takes.
     n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
     _queue_group_split(module, o->mask_id);
-    ok = TRUE;
   }
   else // DEVELOP_MASK_CONDITIONAL alone
   {
-    ok = _migrate_parametric_only(module, o, n, history_num);
+    _migrate_parametric_only(module, o, n, history_num);
   }
 
   // every mode button in the GUI always writes ENABLED together with its
@@ -1091,9 +986,7 @@ static gboolean _dispatch(dt_iop_module_t *module,
   // DEVELOP_MASK_ENABLED is an *exact* equality check gating the uniform
   // path, so this can only ever add a bit that was already implicitly in
   // effect, never change behavior).
-  if(ok) n->mask_mode |= DEVELOP_MASK_ENABLED;
-
-  return ok;
+  n->mask_mode |= DEVELOP_MASK_ENABLED;
 }
 
 // a queued dt_masks_migrate_classic_to_flexi() that needs real form
@@ -1106,15 +999,15 @@ typedef struct _pending_flexi_migration_t
   dt_develop_blend_params_t *bp;     // the live params to update once resolved
 } _pending_flexi_migration_t;
 
-gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
-                                           dt_develop_blend_params_t *bp,
-                                           const int history_num)
+void dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
+                                       dt_develop_blend_params_t *bp,
+                                       const int history_num)
 {
-  if(!module) return TRUE;
+  if(!module) return;
 
   // already flexi (edits created under the POC, before the version bump that
   // gates this migration shipped): nothing to do.
-  if(bp->mask_mode & DEVELOP_MASK_FLEXI) return TRUE;
+  if(bp->mask_mode & DEVELOP_MASK_FLEXI) return;
 
   // no classic mask mode set at all: either disabled (nothing to do), or
   // plain uniform ENABLED -- already renders identically to an empty flexi
@@ -1130,7 +1023,7 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
       bp->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
       bp->mask_id = NO_MASKID;
     }
-    return TRUE;
+    return;
   }
 
   // no dev context to synthesize/persist forms into -- e.g.
@@ -1138,7 +1031,7 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
   // built-in preset's blend params blob at module registration time, with no
   // real image and module->dev == NULL. Nothing meaningful to migrate there
   // (built-in presets carry no drawn geometry); stay classic.
-  if(!module->dev) return TRUE;
+  if(!module->dev) return;
 
   const dt_develop_blend_params_t o = *bp;
 
@@ -1154,16 +1047,6 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
     // history_end and runs before dt_masks_read_masks_history(), so the
     // form it writes actually survives being read back.
     _pending_flexi_migration_t *pending = malloc(sizeof(_pending_flexi_migration_t));
-    if(!pending)
-    {
-      _migration_failed(module, "allocation failure");
-      // clear the mask rather than leave a raw classic value in bp -- the
-      // module's blend_mode/opacity keep working, just uniformly (same
-      // invariant Phase 0.5 establishes for every migration outcome).
-      bp->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-      bp->mask_id = NO_MASKID;
-      return TRUE;
-    }
     pending->module = module;
     pending->classic = o;
     pending->bp = bp;
@@ -1175,10 +1058,10 @@ gboolean dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
     // nothing renders or otherwise reads bp between now and then, still
     // within the same dt_dev_read_history_ext() call.
     bp->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-    return TRUE;
+    return;
   }
 
-  return _dispatch(module, &o, bp, history_num);
+  _dispatch(module, &o, bp, history_num);
 }
 
 // dt_masks_read_masks_history()'s notion of "current" is not literally
@@ -1219,18 +1102,7 @@ void dt_masks_finish_flexi_migrations(dt_develop_t *dev)
   {
     _pending_flexi_migration_t *pending = l->data;
 
-    if(!_dispatch(pending->module, &pending->classic, pending->bp, history_num))
-    {
-      // allocation failure inside _dispatch(): undo the optimistic
-      // mask_mode flip from dt_masks_migrate_classic_to_flexi(), but don't
-      // revert all the way back to the classic snapshot -- clear the mask
-      // (uniform, blend stays on) and log, same as the other
-      // allocation-failure site above, so this never leaves a raw classic
-      // value in bp either.
-      *pending->bp = pending->classic;
-      pending->bp->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-      pending->bp->mask_id = NO_MASKID;
-    }
+    _dispatch(pending->module, &pending->classic, pending->bp, history_num);
     free(pending);
   }
 
@@ -1348,9 +1220,9 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
   // The live tree onto the item that owns it, so the current state is stored
   // exactly as rendered, and then every other stored snapshot in its own
   // right. Both normalizers are idempotent -- the repair skips members it has
-  // already disabled, so it finds no overwriter on a second pass, and the
-  // split only ever sets a bit that is already set -- so the owner being
-  // covered twice costs nothing.
+  // already disabled, so it finds no overwriter on a second pass, and marking
+  // leaves a list that already starts with a marker alone -- so the owner
+  // being covered twice costs nothing.
   _sync_forms_to_history(dev);
   for(GList *l = dev->history; l; l = g_list_next(l))
     _normalize_history_item(l->data);
