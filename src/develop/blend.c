@@ -433,9 +433,10 @@ static gboolean _flexi_global_refine_bypassed(const dt_dev_pixelpipe_iop_t *cons
 // Returns FALSE for the common case (plain drawn shapes, no per-shape feather),
 // preserving the no-readback fast path.
 static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
-                                         const dt_dev_pixelpipe_iop_t *const piece)
+                                         const dt_dev_pixelpipe_iop_t *const piece,
+                                         const int depth)
 {
-  if(!form) return FALSE;
+  if(!form || depth > DT_MASKS_NESTING_MAX) return FALSE;
   for(const GList *l = form->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *const grpt = l->data;
@@ -450,7 +451,7 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
     // a parametric form evaluates blendif against the guide image
     if(f->type & DT_MASKS_PARAMETRIC) return TRUE;
     // recurse into nested groups
-    if((f->type & DT_MASKS_GROUP) && _group_needs_host_guides(f, piece))
+    if((f->type & DT_MASKS_GROUP) && _group_needs_host_guides(f, piece, depth + 1))
       return TRUE;
   }
   return FALSE;
@@ -462,9 +463,10 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
 // without this served the mask cached before the source's own mask changed
 static dt_hash_t _group_raster_sources_hash(dt_hash_t hash,
                                             const dt_masks_form_t *const form,
-                                            dt_dev_pixelpipe_iop_t *const piece)
+                                            dt_dev_pixelpipe_iop_t *const piece,
+                                            const int depth)
 {
-  if(!form) return hash;
+  if(!form || depth > DT_MASKS_NESTING_MAX) return hash;
   for(const GList *l = form->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *const grpt = l->data;
@@ -473,7 +475,7 @@ static dt_hash_t _group_raster_sources_hash(dt_hash_t hash,
     if(!f) continue;
     if(f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
     {
-      hash = _group_raster_sources_hash(hash, f, piece);
+      hash = _group_raster_sources_hash(hash, f, piece, depth + 1);
       continue;
     }
     if(!(f->type & DT_MASKS_RASTER) || !f->points) continue;
@@ -836,7 +838,7 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
   const int oheight = roi_out->height;
 
   dt_dev_distorted_mask_cache_t *const mc = &piece->drawn_mask_cache;
-  const gboolean cacheable = !_group_needs_host_guides(form, piece);
+  const gboolean cacheable = !_group_needs_host_guides(form, piece, 0);
   const dt_hash_t msrc = piece->pipe->scharr.hash;
   dt_hash_t mkey = DT_INVALID_HASH;
   if(cacheable)
@@ -863,7 +865,7 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
     // renderer's output. A cache key has to cover everything the result
     // depends on, and the choice of algorithm is the largest such thing.
     mkey = dt_hash(mkey, &d->mask_mode, sizeof(d->mask_mode));
-    mkey = _group_raster_sources_hash(mkey, form, piece);
+    mkey = _group_raster_sources_hash(mkey, form, piece, 0);
   }
 
   if(cacheable && mc->data && mkey != DT_INVALID_HASH
@@ -1673,7 +1675,7 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
       // fast path (guides left NULL, harmless for plain drawn shapes).
       float *guide_in = NULL;
       float *guide_out = NULL;
-      if(_group_needs_host_guides(form, piece))
+      if(_group_needs_host_guides(form, piece, 0))
       {
         const size_t in_sz = (size_t)roi_in->width * roi_in->height * ch;
         const size_t out_sz = (size_t)roi_out->width * roi_out->height * ch;
@@ -2829,16 +2831,7 @@ gboolean dt_develop_blend_legacy_params_ext(dt_iop_module_t *module,
   // branch checks new_version == DEVELOP_BLEND_VERSION), so on success we
   // always have fully current-layout data in new_params, possibly still
   // carrying a classic (pre-flexi) mask_mode -- migrate it now, uniformly,
-  // regardless of which version branch produced it. On failure,
-  // dt_masks_migrate_classic_to_flexi() leaves new_params untouched (still
-  // classic, still fully functional -- see its own doc comment in masks.h),
-  // so this is reported as an overall failure of the *migration* step, not a
-  // layout failure: the caller falls back exactly as it would for any other
-  // legacy_params failure, which for blend params means defaulting to
-  // default_blendop_params. That is too strong a fallback for "the mask
-  // failed to migrate" (it would silently drop a still-valid classic mask),
-  // so we deliberately do NOT propagate this as a failure: return FALSE
-  // (success) with new_params holding the untouched classic data instead.
+  // regardless of which version branch produced it. Migration cannot fail.
   dt_develop_blend_params_t *n = new_params;
   dt_masks_migrate_classic_to_flexi(module, n, history_num);
   return FALSE;

@@ -35,8 +35,8 @@
 // edit, normalized nothing, and rendered the mask wrong -- permanently, and
 // without the user ever editing anything. Opening or exporting was enough.
 //
-// Not one of the other checks could see it. --verify-masks, --postedit-masks
-// and --styleapply-masks all work in memory, on a single migration; they never
+// Not one of the other checks could see it. --verify-masks and
+// --styleapply-masks both work in memory, on a single migration; they never
 // ask the database anything. --roundtrip-masks does save and reload, but it
 // compares *stored state*, so it can only catch a field that changes across
 // the trip -- and it is checked against an invariant written by hand, which
@@ -103,8 +103,9 @@
 // against the un-poked baseline, which is a different failure and one nothing
 // else here would see.
 //
-// CPU ONLY, for the reason given in postedit.h: the OpenCL blend consumes a
-// mask the CPU built, so a GPU replay would exercise the same fold twice.
+// CPU ONLY: group folding happens on the CPU for the GPU path too, so the
+// OpenCL blend consumes a mask the CPU built, and a GPU replay would exercise
+// the same fold twice.
 
 #include <glib.h>
 #include <stdio.h>

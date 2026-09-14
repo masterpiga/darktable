@@ -546,10 +546,10 @@ scenario("H2_combined_opacity_refinement", DEVELOP_MASK_MASK_CONDITIONAL,
 # Classic walks the member list applying each member's OWN operator to the
 # accumulator, once per member. The flexi fold partitions the list into runs
 # and applies the run's operator once per RUN. For union those agree (max is
-# idempotent), for everything else they do not, so migration marks every
-# non-union member as its own run head -- _split_nonunion_runs() in
-# migrate_legacy.c, whose comment records a real 48-brush mask that reached
-# 0.6202 under classic and 0.1723 without the split.
+# idempotent), for everything else they do not, so migration gives every
+# non-union member its own group -- _normalize_group() in migrate_legacy.c,
+# whose comment records a real 48-brush mask that reached 0.6202 under classic
+# and 0.1723 without the split.
 #
 # Nothing else in this matrix pins that in pixels: the A series uses one
 # operator-carrying member, where per-member and per-run application coincide.
@@ -715,7 +715,7 @@ def build_refinement_scenarios():
         )
 
         saved = DEVELOP_MASKS_VERSION
-        DEVELOP_MASKS_VERSION = 9  # same v9 -> v10 load path as I1
+        DEVELOP_MASKS_VERSION = 9  # GROUP_BREAK is a pre-v10 bit
         try:
             path = build_xmp(name, bp, masks_rows)
         finally:

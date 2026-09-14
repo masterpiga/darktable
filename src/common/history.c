@@ -282,8 +282,10 @@ static dt_iop_module_t *_search_list_iop_by_module(GList *modules_list,
 static void _fill_used_forms(GList *forms_list,
                              const dt_mask_id_t formid,
                              int *used,
-                             const int nb)
+                             const int nb,
+                             const int depth)
 {
+  if(depth > DT_MASKS_NESTING_MAX) return;
   // first, we search for the formid in used table
   for(int i = 0; i < nb; i++)
   {
@@ -305,7 +307,7 @@ static void _fill_used_forms(GList *forms_list,
       dt_masks_point_group_t *grpt = grpts->data;
       // a marker's id names no form, and `used` has room for one id per form
       if(dt_masks_point_is_marker(grpt)) continue;
-      _fill_used_forms(forms_list, grpt->formid, used, nb);
+      _fill_used_forms(forms_list, grpt->formid, used, nb, depth + 1);
     }
   }
 }
@@ -536,7 +538,7 @@ gboolean dt_history_merge_module_into_history(dt_develop_t *dev_dest,
         if(forms_used_replace)
           _fill_used_forms(dev_src->forms,
                            mod_src->blend_params->mask_id,
-                           forms_used_replace, nbf);
+                           forms_used_replace, nbf, 0);
 
         // now copy masks
         for(int i = 0; i < nbf && forms_used_replace && forms_used_replace[i] > 0; i++)

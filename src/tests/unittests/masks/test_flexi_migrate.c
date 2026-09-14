@@ -138,9 +138,9 @@ static void _apply_legacy_combine_fix(void)
   }
 }
 
-static gboolean _migrate(void)
+static void _migrate(void)
 {
-  return dt_masks_migrate_classic_to_flexi(&flexi_module, &flexi_bp, -1);
+  dt_masks_migrate_classic_to_flexi(&flexi_module, &flexi_bp, -1);
 }
 
 // how many forms of `type` the fixture's dev now holds
@@ -167,7 +167,7 @@ static void _assert_flexi(void)
 static void test_disabled_stays_disabled(void **state)
 {
   _classic(DEVELOP_MASK_DISABLED);
-  assert_true(_migrate());
+  _migrate();
   assert_int_equal(flexi_bp.mask_mode, DEVELOP_MASK_DISABLED);
 }
 
@@ -176,7 +176,7 @@ static void test_disabled_stays_disabled(void **state)
 static void test_uniform_enabled_becomes_flexi(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED);
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
 }
 
@@ -192,7 +192,7 @@ static void test_drawn_only_reuses_the_group(void **state)
   const dt_mask_id_t before = flexi_bp.mask_id;
   const int forms_before = g_list_length(flexi_dev.forms);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(flexi_bp.mask_id, before);
   assert_int_equal((int)g_list_length(flexi_dev.forms), forms_before);
@@ -215,7 +215,7 @@ static void test_classic_head_without_an_operator_keeps_its_group(void **state)
   const dt_masks_point_group_t *above = grp->points->next->data;
   head->state &= ~(int)DT_MASKS_STATE_OP;
 
-  assert_true(_migrate());
+  _migrate();
 
   // the group the migration marks keeps the member above in the head's group
   assert_int_equal(_group_cid_of_form(grp, head->formid),
@@ -236,7 +236,7 @@ static void test_a_modifier_is_not_an_operator(void **state)
   dt_masks_point_group_t *above = grp->points->next->data;
   head->state &= ~(int)DT_MASKS_STATE_OP;
 
-  assert_true(_migrate());
+  _migrate();
 
   const int modifiers[] = { DT_MASKS_STATE_OP_DISABLE, DT_MASKS_STATE_OP_INVERT };
   for(int m = 0; m < 2; m++)
@@ -313,7 +313,7 @@ static void test_every_history_snapshot_is_normalized(void **state)
   older.blend_params = &flexi_bp;
   newer.blend_params = &flexi_bp;
 
-  assert_true(_migrate());
+  _migrate();
 
   flexi_dev.history = g_list_append(NULL, &older);
   flexi_dev.history = g_list_append(flexi_dev.history, &newer);
@@ -346,7 +346,7 @@ static void test_drawn_with_dangling_mask_id(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   flexi_bp.mask_id = 4242; // no such form
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
 }
 
@@ -360,7 +360,7 @@ static void test_parametric_only_synthesizes_a_parametric_form(void **state)
   flexi_bp.blendif = _active_channel_bit();
   const int before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_PARAMETRIC), before + 1);
 }
@@ -377,7 +377,7 @@ static void test_drawn_and_parametric_stacks_a_parametric_element(void **state)
   flexi_bp.blendif = _active_channel_bit();
   const int before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_PARAMETRIC), before + 1);
 }
@@ -395,7 +395,7 @@ static void test_raster_synthesizes_a_raster_form(void **state)
   flexi_bp.raster_mask_id = 0;
   const int before = _count_forms(DT_MASKS_RASTER);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_RASTER), before + 1);
 }
@@ -409,7 +409,7 @@ static void test_raster_inversion_moves_onto_the_state_bit(void **state)
             sizeof(flexi_bp.raster_mask_source));
   flexi_bp.raster_mask_invert = TRUE;
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
 
   // find the group the migration pointed us at, and check its raster member
@@ -440,7 +440,7 @@ static void test_raster_inversion_is_dropped_when_the_source_is_gone(void **stat
   flexi_bp.raster_mask_id = -1;
   flexi_bp.raster_mask_invert = TRUE;
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
 
   dt_masks_form_t *grp = dt_masks_get_from_id(&flexi_dev, flexi_bp.mask_id);
@@ -623,7 +623,7 @@ static void test_raster_wins_over_drawn(void **state)
             sizeof(flexi_bp.raster_mask_source));
   const int para_before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_RASTER), 1);
   assert_int_equal(_count_forms(DT_MASKS_PARAMETRIC), para_before);
@@ -637,7 +637,7 @@ static void test_raster_wins_over_parametric(void **state)
   flexi_bp.blendif = _active_channel_bit();
   const int para_before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_RASTER), 1);
   // the parametric data is dropped, matching how classic already rendered it
@@ -650,7 +650,7 @@ static void test_raster_wins_over_both(void **state)
            | DEVELOP_MASK_CONDITIONAL);
   g_strlcpy(flexi_bp.raster_mask_source, "colorbalancergb",
             sizeof(flexi_bp.raster_mask_source));
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
   assert_int_equal(_count_forms(DT_MASKS_RASTER), 1);
 }
@@ -673,7 +673,7 @@ static void test_mode_bit_without_enabled_gets_enabled(void **state)
     flexi_bp.blendif = _active_channel_bit();
     g_strlcpy(flexi_bp.raster_mask_source, "colorbalancergb",
               sizeof(flexi_bp.raster_mask_source));
-    assert_true(_migrate());
+    _migrate();
     _assert_flexi();
     flexi_teardown();
   }
@@ -693,7 +693,7 @@ static void test_degenerate_parametric_collapses_to_uniform(void **state)
   flexi_bp.blendif = 0; // no channel active
   const int before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   assert_int_equal(_count_forms(DT_MASKS_PARAMETRIC), before);
   assert_int_equal(flexi_bp.mask_id, NO_MASKID);
   // no classic bit survives, whichever uniform parity it landed on
@@ -708,7 +708,7 @@ static void test_parametric_in_raw_colorspace_is_degenerate(void **state)
   flexi_bp.blend_cst = DEVELOP_BLEND_CS_RAW;
   const int before = _count_forms(DT_MASKS_PARAMETRIC);
 
-  assert_true(_migrate());
+  _migrate();
   assert_int_equal(_count_forms(DT_MASKS_PARAMETRIC), before);
   assert_int_equal(flexi_bp.mask_mode & DEVELOP_MASK_CONDITIONAL, 0);
 }
@@ -726,7 +726,7 @@ static void test_already_flexi_passes_through(void **state)
   const dt_mask_id_t id_before = flexi_bp.mask_id;
   const int forms_before = g_list_length(flexi_dev.forms);
 
-  assert_true(_migrate());
+  _migrate();
   assert_int_equal(flexi_bp.mask_mode, DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI);
   assert_int_equal(flexi_bp.mask_id, id_before);
   assert_int_equal((int)g_list_length(flexi_dev.forms), forms_before);
@@ -833,7 +833,7 @@ static void test_migration_never_leaves_inv_or_incl_set(void **state)
       flexi_bp.mask_combine = combine;
       flexi_bp.blendif = _real_blendif((combine & DEVELOP_COMBINE_INCL) != 0);
       _apply_legacy_combine_fix();
-      assert_true(_migrate());
+      _migrate();
 
       if(flexi_bp.mask_combine & (DEVELOP_COMBINE_INV | DEVELOP_COMBINE_INCL))
         fail_msg("mode 0x%x combine 0x%x migrated to combine 0x%x, which still "
@@ -858,7 +858,7 @@ static void test_parametric_only_folds_inv_and_incl_onto_masks_pos(void **state)
     // no drawn mask here, so the legacy fix is a no-op; kept for symmetry
     _apply_legacy_combine_fix();
     const gboolean inv = (flexi_bp.mask_combine & DEVELOP_COMBINE_INV) != 0;
-    assert_true(_migrate());
+    _migrate();
 
     const gboolean expect = (incl != inv);
     const gboolean got =
@@ -889,7 +889,7 @@ static void test_inclusive_with_partial_channels_collapses_to_a_constant(void **
     _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL);
     flexi_bp.mask_combine = combine;
     flexi_bp.blendif = _two_active_channel_bits(); // deliberately not all
-    assert_true(_migrate());
+    _migrate();
 
     // a plain uniform blend: no form, no mask id, no leftover polarity
     assert_int_equal(flexi_bp.mask_mode, DEVELOP_MASK_ENABLED);
@@ -927,7 +927,7 @@ static void test_drawn_and_parametric_folds_composite_invert_onto_masks_pos(void
 
     const uint32_t effective = flexi_bp.mask_combine;
     const gboolean eff_inv = (effective & DEVELOP_COMBINE_INV) != 0;
-    assert_true(_migrate());
+    _migrate();
 
     const gboolean expect = (eff_inv != incl);
     const gboolean got =
@@ -1047,7 +1047,7 @@ static void test_parametric_on_no_masks_module_stays_renderable(void **state)
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL);
   flexi_module.flags = _flags_no_masks;
   flexi_bp.blendif = _two_active_channel_bits();
-  assert_true(_migrate());
+  _migrate();
   _assert_flexi();
 
   // the parametric config now lives in a synthesized form...
@@ -1058,16 +1058,284 @@ static void test_parametric_on_no_masks_module_stays_renderable(void **state)
 
 // migrating an already-migrated edit is a no-op -- the FLEXI guard at the top
 // makes this structural rather than something a runtime flag has to enforce
+// ---------------------------------------------------------------------------
+// nested classic groups: dissolved where the flexi fold does not need them
+// ---------------------------------------------------------------------------
+
+/* A classic group `gid` of circles `ids`, the k-th carrying operator `ops[k]`
+   (0 for the bottom one, as classic leaves it), made a member of the fixture's
+   group with `state`: its bottom member with `bottom`, its top one otherwise.
+   The fixture frees the forms; _free_nested frees the nested group's points */
+static dt_masks_form_t *_nest(const dt_mask_id_t gid,
+                              const int state,
+                              const gboolean bottom,
+                              const dt_mask_id_t *ids,
+                              const int *ops,
+                              const int n)
+{
+  dt_masks_form_t *g = calloc(1, sizeof(dt_masks_form_t));
+  g->formid = gid;
+  g->type = DT_MASKS_GROUP;
+  for(int k = 0; k < n; k++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = ids[k];
+    pt->parentid = gid;
+    pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | ops[k];
+    pt->opacity = 1.0f;
+    pt->group_opacity = 1.0f;
+    g->points = g_list_append(g->points, pt);
+
+    dt_masks_form_t *c = calloc(1, sizeof(dt_masks_form_t));
+    c->formid = ids[k];
+    c->type = DT_MASKS_CIRCLE;
+    flexi_dev.forms = g_list_append(flexi_dev.forms, c);
+  }
+  flexi_dev.forms = g_list_append(flexi_dev.forms, g);
+
+  dt_masks_form_t *grp = flexi_group();
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = gid;
+  m->parentid = grp->formid;
+  m->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | state;
+  m->opacity = 1.0f;
+  m->group_opacity = 1.0f;
+  grp->points = bottom ? g_list_prepend(grp->points, m) : g_list_append(grp->points, m);
+  return g;
+}
+
+static void _free_nested(dt_masks_form_t *g)
+{
+  g_list_free_full(g->points, free);
+  g->points = NULL;
+}
+
+// the marker of the group member `fid` is in, in the module's mask
+static const dt_masks_point_group_t *_marker_of(const dt_mask_id_t fid)
+{
+  const dt_masks_form_t *grp = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  const dt_masks_point_group_t *mk = NULL;
+  for(const GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt))
+      mk = pt;
+    else if(pt->formid == fid)
+      return mk;
+  }
+  return NULL;
+}
+
+static int _op_of(const dt_masks_point_group_t *mk)
+{
+  return mk->state & DT_MASKS_STATE_OP_COMBINE;
+}
+
+// a nested union group in a union run is only more shapes for that run
+static void test_nested_union_group_joins_its_run(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  assert_layout("u:1,2,11,12");
+  _free_nested(g);
+}
+
+// an inverted one-run group becomes one group whose output is inverted: the
+// union of its shapes inverted, not each shape inverted
+static void test_inverted_nested_group_becomes_an_inverted_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_DIFFERENCE | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  assert_ptr_equal(mk, _marker_of(12));
+  assert_null(_marker_of(2000));
+  assert_int_equal(_op_of(mk), DT_MASKS_STATE_DIFFERENCE);
+  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
+  assert_false(_marker_of(1)->state & DT_MASKS_STATE_OP_INVERT);
+  _free_nested(g);
+}
+
+// a sum has no dual to push an inversion through, and the group is not the
+// bottom one: the flexi fold needs the nesting, so it stays
+static void test_a_sum_under_an_inverted_member_stays_nested(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  assert_layout("u:1,2,2000");
+  _free_nested(g);
+}
+
+// at the bottom, the inversion goes into the nested groups by De Morgan:
+// 1 - a(1 - b) is the screen of 1 - a and b
+static void test_inverted_bottom_group_is_spliced_in(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_INVERSE, TRUE, ids, ops, 2);
+
+  _migrate();
+
+  assert_null(_marker_of(2000));
+  const dt_masks_point_group_t *a = _marker_of(11);
+  const dt_masks_point_group_t *b = _marker_of(12);
+  const dt_masks_point_group_t *rest = _marker_of(1);
+  assert_ptr_equal(a, flexi_group()->points->data);
+  assert_true(a->state & DT_MASKS_STATE_OP_INVERT);
+  assert_int_equal(_op_of(b), DT_MASKS_STATE_OP_SCREEN);
+  assert_false(b->state & DT_MASKS_STATE_OP_INVERT);
+  // the members that shared the nested group's run stay a union of their own
+  assert_ptr_not_equal(rest, b);
+  assert_ptr_equal(rest, _marker_of(2));
+  assert_int_equal(_op_of(rest), DT_MASKS_STATE_UNION);
+  _free_nested(g);
+}
+
+// a group that already has markers was nested in flexi, on purpose
+static void test_a_flexi_nested_group_stays_nested(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+  dt_masks_group_ensure_marker(flexi_dev.forms, g);
+
+  _migrate();
+
+  assert_layout("u:1,2,2000");
+  _free_nested(g);
+}
+
+// drawn + parametric wraps the drawn group in a new top group. A one-run drawn
+// group dissolves back out of it, the drawn inversion onto its group
+static void test_drawn_and_parametric_dissolves_the_drawn_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL);
+  flexi_bp.mask_combine |= DEVELOP_COMBINE_MASKS_POS;
+  flexi_bp.blendif = _real_blendif(FALSE);
+  _apply_legacy_combine_fix();
+  const dt_mask_id_t drawn = flexi_bp.mask_id;
+
+  _migrate();
+
+  assert_int_not_equal(flexi_bp.mask_id, drawn);
+  assert_null(_marker_of(drawn));
+  const dt_masks_point_group_t *mk = _marker_of(1);
+  assert_non_null(mk);
+  assert_ptr_equal(mk, _marker_of(2));
+  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
+}
+
+// classic lets two groups hold the same group. Where it is met first marks
+// it, and it still has to dissolve where it is met again
+static void test_a_group_nested_twice_dissolves_twice(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+
+  dt_masks_form_t *h = calloc(1, sizeof(dt_masks_form_t));
+  h->formid = 3000;
+  h->type = DT_MASKS_GROUP;
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = 2000;
+  pt->parentid = 3000;
+  pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  h->points = g_list_append(NULL, pt);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, h);
+
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = 3000;
+  m->parentid = flexi_group()->formid;
+  m->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | DT_MASKS_STATE_UNION;
+  m->opacity = 1.0f;
+  m->group_opacity = 1.0f;
+  flexi_group()->points = g_list_append(flexi_group()->points, m);
+
+  _migrate();
+
+  assert_layout("u:1,2,11,12,11,12");
+  _free_nested(g);
+  _free_nested(h);
+}
+
+// within one mask a group has one parent: a nested group held twice that has
+// to stay nested gets a copy, with a form id and marker ids of its own
+static void test_a_group_kept_nested_twice_is_copied(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+  dt_masks_point_group_t *again = malloc(sizeof(dt_masks_point_group_t));
+  memcpy(again, g_list_last(flexi_group()->points)->data, sizeof(dt_masks_point_group_t));
+  flexi_group()->points = g_list_append(flexi_group()->points, again);
+
+  _migrate();
+
+  dt_mask_id_t held[2] = { 0 };
+  int n = 0;
+  for(GList *l = flexi_group()->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(!dt_masks_point_is_marker(pt) && f && (f->type & DT_MASKS_GROUP) && n < 2)
+      held[n++] = pt->formid;
+  }
+  assert_int_equal(n, 2);
+  assert_int_equal(held[0], 2000);
+  assert_int_not_equal(held[1], 2000);
+
+  dt_masks_form_t *copy = dt_masks_get_from_id_ext(flexi_dev.forms, held[1]);
+  assert_non_null(copy);
+  assert_int_equal(g_list_length(copy->points), g_list_length(g->points));
+  // the same members, and markers of its own: a marker id names one group
+  for(GList *a = copy->points, *b = g->points; a && b; a = a->next, b = b->next)
+  {
+    const dt_masks_point_group_t *pa = a->data;
+    const dt_masks_point_group_t *pb = b->data;
+    if(dt_masks_point_is_marker(pa))
+      assert_int_not_equal(pa->formid, pb->formid);
+    else
+      assert_int_equal(pa->formid, pb->formid);
+  }
+  g_list_free_full(copy->points, free);
+  copy->points = NULL;
+  _free_nested(g);
+}
+
 static void test_migration_is_idempotent(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL);
   flexi_bp.blendif = _active_channel_bit();
-  assert_true(_migrate());
+  _migrate();
 
   const uint32_t mode_once = flexi_bp.mask_mode;
   const int forms_once = g_list_length(flexi_dev.forms);
 
-  assert_true(_migrate());
+  _migrate();
   assert_int_equal(flexi_bp.mask_mode, mode_once);
   assert_int_equal((int)g_list_length(flexi_dev.forms), forms_once);
 }
@@ -1133,6 +1401,14 @@ int main(void)
     cmocka_unit_test_teardown(test_no_masks_module_still_renders_a_flexi_group, _teardown),
     cmocka_unit_test_teardown(test_ordinary_module_always_renders_its_group, _teardown),
     cmocka_unit_test_teardown(test_parametric_on_no_masks_module_stays_renderable, _teardown),
+    cmocka_unit_test_teardown(test_nested_union_group_joins_its_run, _teardown),
+    cmocka_unit_test_teardown(test_inverted_nested_group_becomes_an_inverted_group, _teardown),
+    cmocka_unit_test_teardown(test_a_sum_under_an_inverted_member_stays_nested, _teardown),
+    cmocka_unit_test_teardown(test_inverted_bottom_group_is_spliced_in, _teardown),
+    cmocka_unit_test_teardown(test_a_flexi_nested_group_stays_nested, _teardown),
+    cmocka_unit_test_teardown(test_drawn_and_parametric_dissolves_the_drawn_group, _teardown),
+    cmocka_unit_test_teardown(test_a_group_nested_twice_dissolves_twice, _teardown),
+    cmocka_unit_test_teardown(test_a_group_kept_nested_twice_is_copied, _teardown),
     cmocka_unit_test_teardown(test_migration_is_idempotent, _teardown),
     cmocka_unit_test_teardown(test_module_without_dev_does_not_half_migrate, _teardown),
   };

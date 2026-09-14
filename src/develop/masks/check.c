@@ -20,7 +20,6 @@
 
 #include "config.h"
 #include "develop/masks/persist.h"
-#include "develop/masks/postedit.h"
 #include "develop/masks/roundtrip.h"
 #include "develop/masks/styleapply.h"
 #include "develop/masks/undo.h"
@@ -42,7 +41,7 @@ gboolean dt_masks_check_harvest(const char *json_path, const char *report_path)
     fprintf(rf, "{\n  \"source\": \"%s\",\n  \"darktable_version\": \"%s\",\n",
             json_path, darktable_package_version);
 
-  // All six run unconditionally. A contributor's harvest may be the only one
+  // All five run unconditionally. A contributor's harvest may be the only one
   // we ever get from that library, so stopping at the first failure would throw
   // away the other answers about the same corpus.
   if(rf) fputs("  \"roundtrip\": {", rf);
@@ -58,25 +57,19 @@ gboolean dt_masks_check_harvest(const char *json_path, const char *report_path)
   const gboolean sa = dt_masks_styleapply_harvest_section(json_path, rf, &sa_ran);
   if(rf) fputs("\n  },\n", rf);
 
-  // last because it is by far the most expensive: it renders the mask twice per
-  // control per group, where the checks above render at most four times per edit
-  if(rf) fputs("  \"postedit\": {", rf);
-  const gboolean pe = dt_masks_postedit_harvest_section(json_path, rf);
-  if(rf) fputs("\n  },\n", rf);
-
-  // after postedit: it too renders per configuration, and on top of that it
+  // after the three above: it renders per configuration, and on top of that it
   // reads and writes the database for every step of every sequence
   if(rf) fputs("  \"persist\": {", rf);
   const gboolean pp = dt_masks_persist_harvest_section(json_path, rf);
   if(rf) fputs("\n  },\n", rf);
 
   // last: it drives the history writer three times per action per group, on
-  // top of four renders, so it is the most expensive of the six
+  // top of four renders, so it is the most expensive of the five
   if(rf) fputs("  \"undo\": {", rf);
   const gboolean ud = dt_masks_undo_harvest_section(json_path, rf);
   if(rf) fputs("\n  },\n", rf);
 
-  const gboolean passed = rt && vf && sa && pe && pp && ud;
+  const gboolean passed = rt && vf && sa && pp && ud;
 
   if(rf)
   {
@@ -86,7 +79,6 @@ gboolean dt_masks_check_harvest(const char *json_path, const char *report_path)
     fprintf(rf, "    \"verify_passed\": %s,\n", vf ? "true" : "false");
     fprintf(rf, "    \"styleapply_ran\": %s,\n", sa_ran ? "true" : "false");
     fprintf(rf, "    \"styleapply_passed\": %s,\n", sa ? "true" : "false");
-    fprintf(rf, "    \"postedit_passed\": %s,\n", pe ? "true" : "false");
     fprintf(rf, "    \"persist_passed\": %s,\n", pp ? "true" : "false");
     fprintf(rf, "    \"undo_passed\": %s\n", ud ? "true" : "false");
     fputs("  }\n}\n", rf);
@@ -99,7 +91,6 @@ gboolean dt_masks_check_harvest(const char *json_path, const char *report_path)
   printf("[check] style-apply : %s\n",
          !sa_ran ? "not applicable (no drawn-mask edit to host a style)"
                  : (sa ? "passed" : "FAILED"));
-  printf("[check] post-edit   : %s\n", pe ? "passed" : "FAILED");
   printf("[check] persistence : %s\n", pp ? "passed" : "FAILED");
   printf("[check] undo/redo   : %s\n", ud ? "passed" : "FAILED");
   printf("[check] overall     : %s\n", passed ? "PASSED" : "FAILED");

@@ -450,6 +450,11 @@ static inline gboolean dt_masks_point_is_marker(const dt_masks_point_group_t *pt
   return (pt->state & DT_MASKS_STATE_GROUP_MARKER) != 0;
 }
 
+// how deep a walk follows groups nested in groups. The panel nests one level
+// and migration leaves no more than that, so a deeper tree is malformed or
+// cyclic, and a walk stops there instead of recursing until the stack is gone
+#define DT_MASKS_NESTING_MAX 8
+
 /** structure used to store pointers to the functions implementing operations on a mask shape */
 /** plus a few per-class descriptive data items */
 typedef struct dt_masks_functions_t
@@ -888,12 +893,10 @@ int dt_masks_legacy_params(dt_develop_t *dev,
     main.masks_history row must be written under (see that function's own
     comment, and the field's comment in develop.h).
 
-    Returns FALSE only on a real synthesis failure, in which case bp is left
-    with its original classic mask_mode untouched (never silently drops the
-    mask) and the caller should treat the whole legacy upgrade as failed. */
-gboolean dt_masks_migrate_classic_to_flexi(struct dt_iop_module_t *module,
-                                           struct dt_develop_blend_params_t *bp,
-                                           const int history_num);
+    It cannot fail: migration is one way, with no classic fallback. */
+void dt_masks_migrate_classic_to_flexi(struct dt_iop_module_t *module,
+                                       struct dt_develop_blend_params_t *bp,
+                                       const int history_num);
 
 /** synthesizes the forms for every migration
     dt_masks_migrate_classic_to_flexi() deferred (see dev->pending_flexi_migrations
@@ -1076,10 +1079,28 @@ gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp);
     group_start, and with `split_nonunion` every member with a non-union
     operator is a run of its own. A marked list is left as it is. The
     group's settings leave the members, which become plain union elements:
-    the classic fold cannot read the result. TRUE if anything changed */
+    the classic fold cannot read the result. A nested group marked here is
+    then replaced by its own groups wherever that renders the same mask;
+    one that was marked already stays nested. A nested group the mask still
+    holds twice gets a copy for each reference past the first, so a group
+    has one parent within a mask. TRUE if anything changed */
 gboolean dt_masks_group_mark_classic_runs(GList *forms,
                                           dt_masks_form_t *grp,
                                           const gboolean split_nonunion);
+/** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when
+    given, is set to the group form whose list holds it. NULL if none does */
+dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
+                                                   dt_masks_form_t *root,
+                                                   const dt_mask_id_t cid,
+                                                   dt_masks_form_t **owner);
+/** the first raster element in the mask `grp`, nested groups included, that
+    reads a mask of `source`: mask `id`, or any of its masks with `any_id`.
+    NULL if there is none */
+const struct dt_masks_point_raster_t *dt_masks_group_find_raster_of(GList *forms,
+                                                                    const dt_masks_form_t *grp,
+                                                                    const dt_iop_module_t *source,
+                                                                    const dt_mask_id_t id,
+                                                                    const gboolean any_id);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form);
 /** returns the composition operator state to assign to a newly added form,

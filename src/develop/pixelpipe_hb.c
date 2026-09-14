@@ -563,20 +563,30 @@ void dt_dev_pixelpipe_create_nodes(dt_dev_pixelpipe_t *pipe,
 // TRUE if any form in the blend mask group carries a non-zero per-shape
 // detail threshold (flexi scoped refinement, masks v7). Such refinements need
 // the scharr/detail buffer even when the global bp->details is neutral.
-static gboolean _blend_group_wants_details(dt_develop_t *dev,
-                                           const dt_mask_id_t mask_id)
+static gboolean _group_wants_details(dt_develop_t *dev,
+                                     const dt_masks_form_t *grp,
+                                     const int depth)
 {
-  if(!dt_is_valid_maskid(mask_id)) return FALSE;
-  const dt_masks_form_t *grp = dt_masks_get_from_id(dev, mask_id);
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return FALSE;
 
   for(const GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
-    if(pt && pt->refinement.enabled && !feqf(pt->refinement.details, 0.0f, 1e-6))
+    if(!pt) continue;
+    if(pt->refinement.enabled && !feqf(pt->refinement.details, 0.0f, 1e-6))
+      return TRUE;
+    const dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
+    if(child && child != grp && _group_wants_details(dev, child, depth + 1))
       return TRUE;
   }
   return FALSE;
+}
+
+static gboolean _blend_group_wants_details(dt_develop_t *dev,
+                                           const dt_mask_id_t mask_id)
+{
+  if(!dt_is_valid_maskid(mask_id)) return FALSE;
+  return _group_wants_details(dev, dt_masks_get_from_id(dev, mask_id), 0);
 }
 
 // helper
@@ -749,20 +759,7 @@ static gboolean _raster_form_consumes(dt_develop_t *dev,
 {
   if(!dev || !dt_is_valid_maskid(mask_id)) return FALSE;
   const dt_masks_form_t *grp = dt_masks_get_from_id(dev, mask_id);
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
-
-  for(const GList *l = grp->points; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *pt = l->data;
-    if(!pt) continue;
-    const dt_masks_form_t *f = dt_masks_get_from_id(dev, pt->formid);
-    if(!f || !(f->type & DT_MASKS_RASTER) || !f->points) continue;
-    const dt_masks_point_raster_t *rp = f->points->data;
-    if(dt_iop_module_is(source, rp->source)
-       && source->multi_priority == rp->instance)
-      return TRUE;
-  }
-  return FALSE;
+  return dt_masks_group_find_raster_of(dev->forms, grp, source, NO_MASKID, TRUE) != NULL;
 }
 
 /** remove stale entries (deleted, disabled or de-synced consumers) from a

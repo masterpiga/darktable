@@ -22,14 +22,13 @@
 //
 // postedit.c owns this: it enumerates every control the masks panel offers and
 // applies one to a range of a group's point list, which is what a check needs
-// to stand in for a user changing something. persist.c needs the same
-// vocabulary -- the difference between the two checks is what they do around
-// the change (postedit compares against a from-scratch group, persist compares
-// against a save/reload), not what the change is.
+// to stand in for a user changing something. --persist-masks and --undo-masks
+// both use it; they differ in what they do around the change (a save and
+// reload, an undo and redo), not in what the change is.
 //
-// Sharing it is not just economy. If the two files each kept their own idea of
-// what "set the group opacity" means they could drift, and the weaker of the
-// two would then be reporting on a control the panel no longer has.
+// Sharing it is not just economy. If the checks each kept their own idea of
+// what "set the group opacity" means they could drift, and the weaker one
+// would then be reporting on a control the panel no longer has.
 //
 // Nothing outside src/develop/masks/ may use this: it exists for the
 // --harvest-masks tooling, not for the GUI or the pipeline.
@@ -185,11 +184,9 @@ const char *_poke_label(const poke_t k);
 
 /** Apply one poke to the member index range [first, last] of `points`.
 
-    A run-level poke is broadcast across the whole range because that is what
-    the panel does with it -- the fold reads it back from the run's head, but
-    every member carries a copy so that any one of them can represent the group
-    (see dt_masks_point_group_t's own comments on name/refinement/group_opacity).
-    An element-level poke is passed first == last. */
+    A run-level poke is broadcast across the whole range, which starts at the
+    group's marker: the fold reads the group's settings from there. An
+    element-level poke is passed first == last. */
 void _apply_poke(GList *points, const poke_t k, const int first, const int last);
 
 G_END_DECLS

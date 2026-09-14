@@ -790,14 +790,14 @@ static void _inverse_mask(const dt_iop_module_t *const module,
   *height = ht;
 }
 
-int dt_masks_group_get_mask(const dt_iop_module_t *const module,
-                            const dt_dev_pixelpipe_iop_t *const piece,
-                            dt_masks_form_t *const form,
-                            float **buffer,
-                            int *width,
-                            int *height,
-                            int *posx,
-                            int *posy)
+static int _group_get_mask(const dt_iop_module_t *const module,
+                           const dt_dev_pixelpipe_iop_t *const piece,
+                           dt_masks_form_t *const form,
+                           float **buffer,
+                           int *width,
+                           int *height,
+                           int *posx,
+                           int *posy)
 {
   // we allocate buffers and values
   const guint nb = g_list_length(form->points);
@@ -1473,11 +1473,11 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   return nb_groups != 0;
 }
 
-int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
-                                const dt_dev_pixelpipe_iop_t *const restrict piece,
-                                dt_masks_form_t *const form,
-                                const dt_iop_roi_t *const roi,
-                                float *const restrict buffer)
+static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
+                               const dt_dev_pixelpipe_iop_t *const restrict piece,
+                               dt_masks_form_t *const form,
+                               const dt_iop_roi_t *const roi,
+                               float *const restrict buffer)
 {
   if(!form->points) return 0;
 
@@ -1682,6 +1682,41 @@ void dt_masks_group_duplicate_points(dt_develop_t *const dev,
 }
 
 // The function table for groups.  This must be public, i.e. no "static" keyword.
+// a group renders a member group by recursing through the functions table,
+// which has no room for a depth, so a cyclic tree would recurse until the
+// stack is gone. Pipes render on threads of their own, hence the per-thread
+// count
+static __thread int _render_depth = 0;
+
+int dt_masks_group_get_mask(const dt_iop_module_t *const module,
+                            const dt_dev_pixelpipe_iop_t *const piece,
+                            dt_masks_form_t *const form,
+                            float **buffer,
+                            int *width,
+                            int *height,
+                            int *posx,
+                            int *posy)
+{
+  if(_render_depth > DT_MASKS_NESTING_MAX) return 0;
+  _render_depth++;
+  const int ok = _group_get_mask(module, piece, form, buffer, width, height, posx, posy);
+  _render_depth--;
+  return ok;
+}
+
+int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
+                                const dt_dev_pixelpipe_iop_t *const restrict piece,
+                                dt_masks_form_t *const form,
+                                const dt_iop_roi_t *const roi,
+                                float *const restrict buffer)
+{
+  if(_render_depth > DT_MASKS_NESTING_MAX) return 0;
+  _render_depth++;
+  const int ok = _group_get_mask_roi(module, piece, form, roi, buffer);
+  _render_depth--;
+  return ok;
+}
+
 const dt_masks_functions_t dt_masks_functions_group = {
   .point_struct_size = sizeof(struct dt_masks_point_group_t),
   .sanitize_config = NULL,

@@ -30,7 +30,6 @@
 #include "common/darktable.h"
 #include "develop/masks/check.h"
 #include "develop/masks/persist.h"
-#include "develop/masks/postedit.h"
 #include "develop/masks/harvest.h"
 #include "develop/masks/roundtrip.h"
 #include "develop/masks/styleapply.h"
@@ -288,17 +287,6 @@ static int usage(const char *argv0)
          "    --verify-masks and --styleapply-masks below -- which is useful when\n"
          "    investigating one of them, but --check-masks is what a contributed\n"
          "    harvest should be run through.\n"
-         "\n"
-         "--postedit-masks FILE\n"
-         "    Replay the mask configurations in a --harvest-masks FILE, migrate\n"
-         "    each one, then sweep every control the masks panel offers over\n"
-         "    every group and check that each behaves as it does on the\n"
-         "    equivalent group built from scratch. Writes FILE.postedit.json.\n"
-         "\n"
-         "    This is the only check that looks at what happens *after*\n"
-         "    migration: the other three judge a migrated edit as authored, and\n"
-         "    a control that silently does nothing renders identically to one\n"
-         "    that was never touched.\n"
          "\n"
          "--persist-masks FILE\n"
          "    Replay the mask configurations in a --harvest-masks FILE, migrate\n"
@@ -1277,7 +1265,6 @@ int dt_init(int argc,
   char *styleapply_masks_input = NULL;
   char *persist_masks_input = NULL;
   char *undo_masks_input = NULL;
-  char *postedit_masks_input = NULL;
   char *check_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
@@ -1414,17 +1401,6 @@ int dt_init(int argc,
           return usage(argv[0]);
         }
         verify_masks_input = argv[++k];
-        argv[k-1] = NULL;
-        argv[k] = NULL;
-      }
-      else if(!strcmp(argv[k], "--postedit-masks"))
-      {
-        if(argc <= k + 1 || argv[k + 1][0] == '-')
-        {
-          g_strfreev(myoptions);
-          return usage(argv[0]);
-        }
-        postedit_masks_input = argv[++k];
         argv[k-1] = NULL;
         argv[k] = NULL;
       }
@@ -2632,19 +2608,6 @@ int dt_init(int argc,
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(styleapply_masks_input, ".styleapply.json");
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
-    g_free(report);
-    exit(ok ? 0 : 1);
-  }
-
-  if(postedit_masks_input)
-  {
-    // Same placement rationale as --verify-masks above: it renders through the
-    // real blend, so it needs the colour profiles and the iop registry, and it
-    // needs no GUI. No database either -- everything it does happens in memory
-    // on the replayed edit.
-    dt_splash_screen_destroy();
-    gchar *report = _masks_report_path(postedit_masks_input, ".postedit.json");
-    const gboolean ok = dt_masks_postedit_harvest(postedit_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
   }

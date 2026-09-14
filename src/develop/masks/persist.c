@@ -42,7 +42,7 @@
 #define PERSIST_IMGID 1
 
 // Both arms run the identical blend over data that should be identical, so a
-// real match is bit-exact; the same reasoning as verify.c and postedit.c.
+// real match is bit-exact; the same reasoning as verify.c.
 #define PERSIST_EPS 1e-6
 
 static gint64 _obj_int(JsonObject *o, const char *k, const gint64 dflt)
@@ -716,7 +716,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
   setvbuf(stdout, NULL, _IOLBF, 0);
 
 #ifdef _OPENMP
-  /* Single-threaded for the same reason as verify.c and postedit.c: a
+  /* Single-threaded for the same reason as verify.c: a
      reduction whose float addition order depends on thread scheduling makes
      the last bits of the mask move between runs, and this compares at 1e-6.
 

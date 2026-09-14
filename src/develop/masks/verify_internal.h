@@ -22,9 +22,9 @@
 //
 // verify.c owns it: it builds a dt_develop_t, an iop module, a pixelpipe and
 // one piece around a harvested edit, over the generated probe image, and
-// renders the mask through the real dt_develop_blend_process(). postedit.c
-// needs exactly the same thing -- the difference between the two checks is
-// what they do to the mask between renders, not how they render it.
+// renders the mask through the real dt_develop_blend_process(). persist.c and
+// undo.c need exactly the same thing -- the checks differ in what they do to
+// the mask between renders, not in how they render it.
 //
 // Everything here was file-static in verify.c and is declared only because a
 // second caller now lives in another translation unit. Nothing outside

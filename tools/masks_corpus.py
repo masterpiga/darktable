@@ -21,7 +21,13 @@
     tools/masks_corpus.py add     corpus.db harvest9.json.gz
     tools/masks_corpus.py verify  corpus.db harvest1.json.gz ...
     tools/masks_corpus.py export  corpus.db outdir/ [library ...]
+    tools/masks_corpus.py check   corpus.db outdir/ [library ...] --darktable BIN
     tools/masks_corpus.py stats   corpus.db
+
+`check` runs --check-masks over the corpus in a pool of processes and writes,
+per library, the harvest and the <harvest>.check.json a whole-library run
+would have written, so masks_migration_confidence.py --record takes them as
+they are.
 
 WHY
 
@@ -787,6 +793,466 @@ def cmd_export(args):
 
 
 # ---------------------------------------------------------------------------
+# check
+# ---------------------------------------------------------------------------
+
+# One --check-masks process per chunk, never threads inside one. The checks
+# pin OpenMP to one thread for reproducibility (verify.c), hold an OpenCL
+# device for the whole run, and drive the real history reader and writer
+# against scratch images at fixed ids in the process's own library, so a
+# second thread would share all of that. Processes share nothing but the
+# scratch root flexi test mode puts under g_get_tmp_dir(), and a private
+# TMPDIR per worker separates that too.
+#
+# Every occurrence of an edit goes to the same chunk, in library order. The
+# checks replay the first occurrence and reuse its verdict for the rest, so
+# keeping them together makes each "repeat" flag and each distinct count come
+# out exactly as a whole-library run would print them.
+
+SECTIONS = ('roundtrip', 'verify', 'styleapply', 'persist', 'undo')
+
+# How each summary member merges across chunks. Every member the C side writes
+# has to be listed: one it has never seen stops the merge rather than being
+# summed by default, which would be wrong for the first maximum added.
+_SUM = 'sum'
+_MAX = 'max'
+_ALL = 'all'
+_EQUAL = 'equal'
+MERGE = {
+    'roundtrip': {
+        'passed': _ALL,
+        **{k: _SUM for k in ('harvested', 'round_tripped', 'distinct_edits',
+                             'unchanged', 'different', 'errors', 'skipped',
+                             'multi_instance', 'loaded_with_no_module')},
+    },
+    'verify': {
+        'passed': _ALL,
+        **{k: _SUM for k in ('harvested', 'replayed', 'distinct_edits',
+                             'identical', 'equivalent', 'different', 'skipped',
+                             'errors', 'live', 'live_identical',
+                             'live_equivalent', 'live_different', 'inert',
+                             'gpu_compared', 'image_compared',
+                             'gpu_image_compared', 'dev_gap_widened',
+                             'dev_gap_widened_own')},
+        'worst_dev_gap_classic': _MAX,
+        'worst_dev_gap_migrated': _MAX,
+    },
+    'styleapply': {
+        'passed': _ALL,
+        'ran': _EQUAL,
+        'reason': _EQUAL,
+        **{k: _SUM for k in ('harvested', 'applied_as_style', 'distinct_edits',
+                             'ok', 'style_mask_lost', 'host_disturbed',
+                             'no_module_at_all', 'drawn_only_not_carried',
+                             'errors', 'skipped', 'same_op_as_host',
+                             'drawn_mask_in_style', 'multi_instance_styles',
+                             'second_instance_allocated')},
+    },
+    'persist': {
+        'passed': _ALL,
+        **{k: _SUM for k in ('harvested', 'swept', 'distinct_edits',
+                             'distinct_swept', 'identical', 'different',
+                             'errors', 'skipped', 'sequences_compared',
+                             'sequences_disagreed', 'sequences_live',
+                             'swept_nothing', 'groups_swept',
+                             'edits_with_nested_group')},
+    },
+    'undo': {
+        'passed': _ALL,
+        **{k: _SUM for k in ('harvested', 'swept', 'distinct_edits',
+                             'distinct_swept', 'identical', 'different',
+                             'errors', 'skipped', 'cycles_compared',
+                             'cycles_disagreed', 'cycles_live', 'undo_failed',
+                             'redo_failed', 'swept_nothing', 'groups_swept',
+                             'edits_with_nested_group')},
+        'worst_diff': _MAX,
+    },
+}
+
+# A worst value together with the edit it came from and that edit's other
+# figures. verify.c keeps the first edit strictly above the running worst,
+# starting from 0 at index -1, so the merge keeps the largest value and, on a
+# tie, the lowest library position.
+WORST = {
+    'verify': [
+        ('worst_cpu_diff', 'worst_cpu_diff_index',
+         ('worst_cpu_mean_diff', 'worst_cpu_differing_pixels')),
+        ('worst_gpu_diff', 'worst_gpu_diff_index',
+         ('worst_gpu_mean_diff', 'worst_gpu_differing_pixels')),
+        ('worst_image_diff', 'worst_image_diff_index',
+         ('worst_image_mean_diff', 'worst_image_differing_pixels')),
+        ('worst_gpu_image_diff', 'worst_gpu_image_diff_index',
+         ('worst_gpu_image_mean_diff', 'worst_gpu_image_differing_pixels')),
+    ],
+}
+
+# per-sequence and per-action tallies: summed entry by entry, keyed on a name
+TALLY = {
+    'persist': ('per_sequence', 'name', ('compared', 'disagreed', 'live')),
+    'undo': ('per_action', 'action',
+             ('compared', 'disagreed', 'undo_failed', 'redo_failed', 'live')),
+}
+
+# mirrors blend.h: what _pick_host() in styleapply.c asks of a host
+_MASK_DRAWN, _MASK_CONDITIONAL, _MASK_RASTER, _MASK_FLEXI = 2, 4, 8, 16
+
+# How many host candidates a chunk carries. _pick_host() takes the first
+# candidate whose forms it can rebuild, and a form the harvester could not
+# decode is the only way that fails, so a handful past the first clean one is
+# already more than it can need.
+HOST_CANDIDATES_PAST_CLEAN = 8
+
+
+def _host_candidates(rebuilt, rows):
+    """The library's possible style-apply hosts, in order, each edit once.
+
+    Only the conditions that can be read off the record are applied here; the
+    rest (whether the forms rebuild) is left to _pick_host() itself, which runs
+    over this list instead of the chunk's own edits. Deduplicated by edit,
+    since an edit that fails as a host fails again at every repeat."""
+    out, seen, clean = [], set(), 0
+    for _, eid, _ in rows:
+        if eid in seen:
+            continue
+        seen.add(eid)
+        e = rebuilt[eid]
+        mode = int((e.get('blend') or {}).get('mask_mode', 0))
+        forms = e.get('forms') or []
+        if (mode & _MASK_FLEXI or not mode & _MASK_DRAWN
+                or mode & (_MASK_CONDITIONAL | _MASK_RASTER)
+                or not forms or not e.get('operation')):
+            continue
+        out.append(e)
+        if not any('points_error' in f for f in forms):
+            clean += 1
+            if clean >= HOST_CANDIDATES_PAST_CLEAN:
+                break
+    return out
+
+
+def _chunks(rows, size):
+    """Library positions cut into chunks of about `size` distinct edits.
+
+    All positions of one edit land in the same chunk, and each chunk lists its
+    positions in library order."""
+    by_edit = collections.OrderedDict()
+    for pos, (_, eid, _) in enumerate(rows):
+        by_edit.setdefault(eid, []).append(pos)
+    out, cur, n = [], [], 0
+    for positions in by_edit.values():
+        cur.extend(positions)
+        n += 1
+        if n >= size:
+            out.append(sorted(cur))
+            cur, n = [], 0
+    if cur:
+        out.append(sorted(cur))
+    return out
+
+
+def _harvest_doc(con_meta, edits, **extra):
+    name, dv, fv, bv, mv = con_meta
+    doc = {'format': 'darktable mask harvest',
+           'format_version': fv, 'darktable_version': dv,
+           'current_blend_version': bv, 'current_masks_version': mv}
+    doc.update(extra)
+    doc['edits'] = edits
+    return doc
+
+
+def _occurrence(rebuilt, seq, eid, iidx):
+    e = json.loads(json.dumps(rebuilt[eid]))   # a copy per occurrence
+    e['index'] = seq
+    if iidx is not None:
+        e['image_index'] = iidx
+    return e
+
+
+def _merge_summary(section, parts, remap):
+    """One section's summary from its chunks' summaries. `remap[k]` turns
+    chunk k's positions into library positions."""
+    rules = MERGE[section]
+    worst = WORST.get(section, [])
+    worst_keys = {k for v, i, c in worst for k in (v, i, *c)}
+    tally = TALLY.get(section)
+    out = {}
+    for k, part in enumerate(parts):
+        for key in part:
+            if key not in rules and key not in worst_keys \
+                    and not (tally and key == tally[0]):
+                raise SystemExit(
+                    f"{section}.summary.{key}: no merge rule. Add it to MERGE,\n"
+                    f"  WORST or TALLY in {os.path.relpath(__file__)} -- summing\n"
+                    f"  it by default would be wrong the first time it is not a count.")
+    for key, rule in rules.items():
+        vals = [p[key] for p in parts if key in p]
+        if not vals:
+            continue
+        if rule == _SUM:
+            out[key] = sum(vals)
+        elif rule == _MAX:
+            out[key] = max(vals)
+        elif rule == _ALL:
+            out[key] = all(vals)
+        elif any(v != vals[0] for v in vals):
+            raise SystemExit(f"{section}.summary.{key}: chunks disagree {sorted(set(map(str, vals)))}")
+        else:
+            out[key] = vals[0]
+    for vkey, ikey, companions in worst:
+        best = None
+        for k, p in enumerate(parts):
+            if vkey not in p or p[ikey] < 0:
+                continue
+            cand = (p[vkey], -remap[k][p[ikey]], k)
+            if best is None or cand > best:
+                best = cand
+        if best is None:
+            src = next((p for p in parts if vkey in p), None)
+            if src is not None:
+                out.update({vkey: src[vkey], ikey: -1,
+                            **{c: src[c] for c in companions}})
+        else:
+            p = parts[best[2]]
+            out.update({vkey: p[vkey], ikey: -best[1],
+                        **{c: p[c] for c in companions}})
+    if tally:
+        # undo lists only the actions a chunk compared, so the order is that of
+        # first sighting rather than undo.c's own; nothing reads it by position
+        member, name, fields = tally
+        merged = collections.OrderedDict()
+        for p in parts:
+            for entry in p.get(member, []):
+                m = merged.get(entry[name])
+                if m is None:
+                    merged[entry[name]] = dict(entry)
+                else:
+                    for f in fields:
+                        m[f] += entry[f]
+        out[member] = list(merged.values())
+    return out
+
+
+def _merge_reports(source, reports, remaps, expected_positions):
+    """The chunks' --check-masks reports as the report a whole-library run
+    would have written: rows renumbered to library positions and in library
+    order, summaries merged by MERGE/WORST/TALLY."""
+    doc = {'source': source}
+    versions = {r.get('darktable_version') for r in reports}
+    if len(versions) != 1:
+        raise SystemExit(f"{source}: chunks were checked by different builds {sorted(map(str, versions))}")
+    doc['darktable_version'] = versions.pop()
+    for section in SECTIONS:
+        secs = [r.get(section) or {} for r in reports]
+        out = {'source': source}
+        hosts = {s['host'] for s in secs if 'host' in s}
+        if len(hosts) > 1:
+            raise SystemExit(f"{source}: chunks picked different style-apply hosts {sorted(hosts)}")
+        if hosts:
+            out['host'] = hosts.pop()
+        rows = []
+        for k, s in enumerate(secs):
+            for row in s.get('edits', []):
+                row = dict(row)
+                row['index'] = remaps[k][row['index']]
+                rows.append(row)
+        rows.sort(key=lambda r: r['index'])
+        got = [r['index'] for r in rows]
+        if got and got != expected_positions:
+            raise SystemExit(f"{source}: {section} does not report every edit exactly once "
+                             f"({len(got)} rows for {len(expected_positions)} edits)")
+        out['edits'] = rows
+        out['summary'] = _merge_summary(section, [s.get('summary') or {} for s in secs], remaps)
+        doc[section] = out
+    ran = {bool(doc['styleapply']['summary'].get('ran', True))}
+    doc['summary'] = {
+        'passed': all(doc[s]['summary'].get('passed', False) for s in SECTIONS),
+        'roundtrip_passed': doc['roundtrip']['summary'].get('passed', False),
+        'verify_passed': doc['verify']['summary'].get('passed', False),
+        'styleapply_ran': ran.pop(),
+        'styleapply_passed': doc['styleapply']['summary'].get('passed', False),
+        'persist_passed': doc['persist']['summary'].get('passed', False),
+        'undo_passed': doc['undo']['summary'].get('passed', False),
+    }
+    return doc
+
+
+def cmd_check(args):
+    import concurrent.futures
+    import queue
+    import shutil
+    import subprocess
+    import tempfile
+    import time
+
+    # a run takes a while and is usually redirected to a log someone tails
+    sys.stdout.reconfigure(line_buffering=True)
+    dt = os.path.abspath(args.darktable)
+    if not os.access(dt, os.X_OK):
+        raise SystemExit(f"{args.darktable}: not an executable darktable binary")
+    outdir = os.path.abspath(args.outdir)
+    work = os.path.join(outdir, 'chunks')
+    os.makedirs(work, exist_ok=True)
+
+    con = sqlite3.connect(args.db)
+    rebuilt = _read_all(con, with_derived=True)
+    libs = {i: (n, dv, fv, bv, mv) for i, n, dv, fv, bv, mv in con.execute(
+        "SELECT id,name,dt_version,format_version,blend_version,masks_version"
+        " FROM library")}
+    per_lib = collections.defaultdict(list)
+    for lid, seq, eid, iidx in con.execute(
+            "SELECT library_id,seq,edit_id,image_index FROM edit_instance"
+            " ORDER BY library_id,seq"):
+        per_lib[lid].append((seq, eid, iidx))
+    con.close()
+
+    wanted = set(args.libraries or [])
+    plan = []       # (library name, harvest path, positions, [chunk jobs])
+    jobs = []       # (chunk path, number of distinct edits)
+    for lid, rows in sorted(per_lib.items()):
+        meta = libs[lid]
+        name = meta[0]
+        stem = name[:-3] if name.endswith('.gz') else name
+        # the contributor's name alone will do: "akgt94" for masks_harvest.akgt94.json.gz
+        short = os.path.splitext(stem)[0]
+        for prefix in ('masks_harvest.', 'masks_harvest_'):
+            if short.startswith(prefix):
+                short = short[len(prefix):]
+        if wanted and not wanted & {name, stem, os.path.splitext(stem)[0], short}:
+            continue
+        occ = [_occurrence(rebuilt, *r) for r in rows]
+
+        # the whole library too: the ledger reads its edits next to the report
+        harvest = os.path.join(outdir, stem + '.gz')
+        with gzip.open(harvest, 'wt') as fh:
+            json.dump(_harvest_doc(meta, occ, exported_from=os.path.basename(args.db)),
+                      fh, separators=(',', ':'))
+
+        cands = _host_candidates(rebuilt, rows)
+        chunk_jobs = []
+        for c, positions in enumerate(_chunks(rows, args.chunk)):
+            path = os.path.join(work, f"{os.path.splitext(stem)[0]}.c{c:04d}.json.gz")
+            with gzip.open(path, 'wt') as fh:
+                json.dump(_harvest_doc(meta, [occ[p] for p in positions],
+                                       exported_from=os.path.basename(args.db),
+                                       styleapply_host_candidates=cands),
+                          fh, separators=(',', ':'))
+            distinct = len({rows[p][1] for p in positions})
+            chunk_jobs.append((path, positions))
+            jobs.append((path, distinct))
+        plan.append((name, harvest, list(range(len(rows))), chunk_jobs))
+        print(f"  {stem}: {len(rows)} edits, {len({r[1] for r in rows})} distinct,"
+              f" {len(chunk_jobs)} chunks")
+    if not plan:
+        print("nothing to check"
+              + (f" -- no library matched {args.libraries}" if args.libraries else ""))
+        return 1
+
+    # Each worker slot gets its own scratch root, reused across its chunks. The
+    # darktablerc of the shared scratch root is copied in when there is one, so
+    # a pooled run starts from the configuration a plain --check-masks run on
+    # this machine would.
+    rc = args.rc or os.path.join(tempfile.gettempdir(), 'flexi_mask_test',
+                                 'config', 'darktablerc')
+    slots = queue.Queue()
+    for k in range(args.jobs):
+        tmp = os.path.join(outdir, 'tmp', f'slot{k:02d}')
+        cfg = os.path.join(tmp, 'flexi_mask_test', 'config')
+        os.makedirs(cfg, exist_ok=True)
+        if os.path.exists(rc) and not os.path.exists(os.path.join(cfg, 'darktablerc')):
+            shutil.copy(rc, cfg)
+        slots.put(tmp)
+    print(f"{len(jobs)} chunks over {args.jobs} processes"
+          + (f", darktablerc from {rc}" if os.path.exists(rc) else ", fresh configuration"))
+
+    def run(path, extra=()):
+        report = path[:-3] + '.check.json'
+        if args.resume and not extra and os.path.exists(report):
+            return path, 'reused'
+        tmp = slots.get()
+        try:
+            env = dict(os.environ, TMPDIR=tmp + os.sep)
+            with open(path[:-8] + '.log', 'w') as log:
+                rc_ = subprocess.call([dt, *extra, '--library', ':memory:',
+                                       '--check-masks', path],
+                                      cwd=outdir, env=env, stdout=log,
+                                      stderr=subprocess.STDOUT)
+        finally:
+            slots.put(tmp)
+        # 1 is a check that ran and failed; anything else left no usable report
+        if rc_ not in (0, 1) or not os.path.exists(report):
+            return path, f'crashed ({rc_})'
+        return path, 'ok' if rc_ == 0 else 'failed'
+
+    def pool(paths, extra=()):
+        t0 = time.time()
+        with concurrent.futures.ThreadPoolExecutor(args.jobs) as ex:
+            for done, fut in enumerate(concurrent.futures.as_completed(
+                    [ex.submit(run, p, extra) for p in paths]), 1):
+                path, st = fut.result()
+                status[path] = st
+                if st.startswith('crashed') or done % max(1, len(paths) // 20) == 0 \
+                        or done == len(paths):
+                    print(f"  {done}/{len(paths)} chunks, {time.time() - t0:.0f}s"
+                          + (f"  -- {os.path.basename(path)} {st}"
+                             if st.startswith('crashed') else ''))
+
+    def gpu(path):
+        """True/False for whether verify got an OpenCL device, None if unknown"""
+        try:
+            with open(path[:-8] + '.log', errors='replace') as log:
+                text = log.read()
+        except OSError:
+            return None
+        if '[verify] no OpenCL device' in text:
+            return False
+        return True if '[verify] OpenCL device' in text else None
+
+    t0 = time.time()
+    status = {}
+    # largest first, so the pool does not end waiting on one long chunk
+    pool([p for p, _ in sorted(jobs, key=lambda j: -j[1])])
+
+    # A process that came up without an OpenCL device replays verify on the CPU
+    # only and still passes, so the GPU half of the check would be missing
+    # without a word. Seen once, on the first chunk of each worker, with twelve
+    # processes on fourteen cores; not reproducible on its own. Where the
+    # machine has a device, such a chunk is run again, with -d opencl so the log
+    # says why if it happens twice.
+    cpu_only = [p for p in status if not status[p].startswith('crashed') and gpu(p) is False]
+    if cpu_only and any(gpu(p) for p in status):
+        print(f"  {len(cpu_only)} chunk(s) ran verify without an OpenCL device; running again")
+        pool(cpu_only, ('-d', 'opencl'))
+        for p in cpu_only:
+            if gpu(p) is False:
+                status[p] = 'crashed (no OpenCL device twice)'
+                print(f"  -- {os.path.basename(p)}: still no OpenCL device, see its .log")
+
+    crashed = [p for p, st in status.items() if st.startswith('crashed')]
+    all_passed = True
+    print()
+    for name, harvest, positions, chunk_jobs in plan:
+        stem = os.path.basename(harvest)[:-3]
+        if any(p in crashed for p, _ in chunk_jobs):
+            print(f"  {stem:44s} INCOMPLETE (a chunk crashed; see its .log)")
+            all_passed = False
+            continue
+        reports = [_load_harvest(p[:-3] + '.check.json') for p, _ in chunk_jobs]
+        doc = _merge_reports(harvest, reports, [pos for _, pos in chunk_jobs], positions)
+        with open(os.path.join(outdir, stem + '.check.json'), 'w') as fh:
+            json.dump(doc, fh, indent=2)
+        s = doc['summary']
+        failed = [k[:-7] for k in ('roundtrip_passed', 'verify_passed',
+                                   'styleapply_passed', 'persist_passed',
+                                   'undo_passed') if not s[k]]
+        all_passed &= s['passed']
+        print(f"  {stem:44s} {'PASSED' if s['passed'] else 'FAILED: ' + ', '.join(failed)}")
+    print(f"\nreports and harvests in {outdir}  ({time.time() - t0:.0f}s)")
+    if crashed:
+        return 2
+    return 0 if all_passed else 1
+
+
+# ---------------------------------------------------------------------------
 # stats
 # ---------------------------------------------------------------------------
 
@@ -836,6 +1302,20 @@ def main():
     p.add_argument('db'); p.add_argument('outdir')
     p.add_argument('libraries', nargs='*')
     p.set_defaults(fn=cmd_export)
+
+    p = sub.add_parser('check', help='run --check-masks over the corpus in parallel')
+    p.add_argument('db'); p.add_argument('outdir')
+    p.add_argument('libraries', nargs='*')
+    p.add_argument('--darktable', required=True, help='the darktable binary to check with')
+    p.add_argument('--jobs', type=int, default=max(1, (os.cpu_count() or 2) - 2),
+                   help='processes at once (default: cores - 2)')
+    p.add_argument('--chunk', type=int, default=100,
+                   help='distinct edits per process (default: 100)')
+    p.add_argument('--rc', help='darktablerc to start each process from (default:'
+                   ' the one in the flexi test mode scratch root, if any)')
+    p.add_argument('--resume', action='store_true',
+                   help='keep chunk reports already in outdir from an earlier run')
+    p.set_defaults(fn=cmd_check)
 
     p = sub.add_parser('stats', help='what is in the corpus')
     p.add_argument('db')
