@@ -114,7 +114,7 @@ static gchar *_snapshot(dt_develop_t *dev)
   return g_string_free(s, FALSE);
 }
 
-/** Does every non-union member start its own run?
+/** Does every group list, nested ones included, start with a marker?
 
     Comparing load #1 with load #2 catches state that changes across a save,
     and nothing else -- a migration that produced the *same wrong* tree both
@@ -123,46 +123,35 @@ static gchar *_snapshot(dt_develop_t *dev)
     the second finds them already flexi and no-ops), and the interesting
     failure is precisely one of them silently doing nothing.
 
-    So each load is also checked against the invariant the fix exists to
-    establish: the flexi fold applies a run's operator once per run, classic
-    applies it once per member, and they agree only when every non-union member
-    heads its own group (see _normalize_group in migrate_legacy.c). Checking
-    it on both loads means a normalization that failed to run is caught even
-    when it fails identically twice.
+    So each load is also checked for what a normalization that did not run
+    leaves behind: a list with no marker, which the flexi fold reads as one
+    union group (#21905). Checking it on both loads means a normalization that
+    failed to run is caught even when it fails identically twice.
+
+    This used to also require every non-union group to hold one member, since
+    classic applies a non-union operator once per member. Migration now
+    dissolves nested groups (_dissolve_member in masks.c), and a subtracted
+    group of several shapes becomes one difference group of several members,
+    exactly. That is indistinguishable here from a run that was wrongly left
+    merged, so that case is left to --verify-masks, which renders both.
 
     Returns a description of the first violation, or NULL. */
 static gchar *_check_group_runs(dt_develop_t *dev,
                                 const dt_mask_id_t formid,
                                 const int depth)
 {
-  if(depth > 8) return NULL;
+  if(depth > DT_MASKS_NESTING_MAX) return NULL;
   dt_masks_form_t *grp = dt_masks_get_from_id(dev, formid);
   if(!grp || !(grp->type & DT_MASKS_GROUP)) return NULL;
-
-  const int non_union = DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_DIFFERENCE
-                      | DT_MASKS_STATE_SUM | DT_MASKS_STATE_EXCLUSION;
 
   // the flexi fold reads a list with no marker as one union group
   if(grp->points && !dt_masks_point_is_marker(grp->points->data))
     return g_strdup_printf("group %d does not start with a group marker", grp->formid);
 
-  const dt_masks_point_group_t *marker = NULL;
-  int members = 0;
   for(GList *p = grp->points; p; p = g_list_next(p))
   {
     const dt_masks_point_group_t *pt = p->data;
-    if(dt_masks_point_is_marker(pt))
-    {
-      marker = pt;
-      members = 0;
-      continue;
-    }
-    // classic applies a non-union operator once per member, so each such
-    // member has a group of its own
-    if((marker->state & non_union) && ++members > 1)
-      return g_strdup_printf("group %d: the group of marker %d has a non-union"
-                             " operator (state=%d) and more than one member",
-                             grp->formid, marker->formid, marker->state);
+    if(dt_masks_point_is_marker(pt)) continue;
     gchar *deeper = _check_group_runs(dev, pt->formid, depth + 1);
     if(deeper) return deeper;
   }

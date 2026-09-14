@@ -22,7 +22,7 @@
 // This deliberately does NOT test the GUI. Whether a widget is wired to the
 // right callback, whether a click lands, whether a toggle repaints -- none of
 // that is here, and none of it is what the mask checks are for. The question
-// is narrower and answerable: --postedit-masks and --persist-masks sweep a
+// is narrower and answerable: --persist-masks and --undo-masks sweep a
 // fixed vocabulary of control changes (postedit_internal.h), and that
 // vocabulary is a hand-written list. If the panel can put a member into a
 // state no poke produces, then every one of those checks is silent about it --

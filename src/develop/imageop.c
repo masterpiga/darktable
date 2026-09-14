@@ -2154,19 +2154,9 @@ static void _reconcile_raster_form_users(dt_iop_module_t *module,
     dt_mask_id_t want = INVALID_MASKID;
     if(grp)
     {
-      for(GList *l = grp->points; l; l = g_list_next(l))
-      {
-        const dt_masks_point_group_t *pt = l->data;
-        dt_masks_form_t *f = dt_masks_get_from_id(module->dev, pt->formid);
-        if(!f || !(f->type & DT_MASKS_RASTER) || !f->points) continue;
-        const dt_masks_point_raster_t *rp = f->points->data;
-        if(dt_iop_module_is(cand, rp->source)
-           && cand->multi_priority == rp->instance)
-        {
-          want = rp->id;
-          break;
-        }
-      }
+      const dt_masks_point_raster_t *rp =
+        dt_masks_group_find_raster_of(module->dev->forms, grp, cand, NO_MASKID, TRUE);
+      if(rp) want = rp->id;
     }
 
     // NB: `want` here is a raster-mask id (BLEND_RASTER_ID == 0 for every
@@ -3338,9 +3328,10 @@ static void _collect_mask_counts(const dt_develop_t *dev,
                                  int *brushes,
                                  int *objects,
                                  int *rasters,
-                                 GHashTable *param_counts)
+                                 GHashTable *param_counts,
+                                 const int depth)
 {
-  if(!form || !dev) return;
+  if(!form || !dev || depth > DT_MASKS_NESTING_MAX) return;
 
   if(form->type & DT_MASKS_GROUP)
   {
@@ -3353,7 +3344,8 @@ static void _collect_mask_counts(const dt_develop_t *dev,
         if(child->type & DT_MASKS_GROUP)
         {
           _collect_mask_counts(dev, child, total, circles, ellipses, paths,
-                               gradients, brushes, objects, rasters, param_counts);
+                               gradients, brushes, objects, rasters, param_counts,
+                               depth + 1);
         }
         else
         {
@@ -3407,7 +3399,7 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
     const dt_masks_form_t *grp =
       dt_masks_get_from_id(module->dev, module->blend_params->mask_id);
     _collect_mask_counts(module->dev, grp, &total, &circles, &ellipses, &paths,
-                         &gradients, &brushes, &objects, &rasters, param_counts);
+                         &gradients, &brushes, &objects, &rasters, param_counts, 0);
   }
 
   gchar *part1 = NULL;
@@ -4257,17 +4249,8 @@ static gboolean _pipe_has_raster_form_consumer(const dt_dev_pixelpipe_iop_t *pie
     const dt_develop_blend_params_t *bp = sink->blendop_data;
     if(!sink->enabled || !bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) continue;
     const dt_masks_form_t *grp = dt_masks_get_from_id_ext(piece->pipe->forms, bp->mask_id);
-    if(!grp || !(grp->type & DT_MASKS_GROUP)) continue;
-    for(const GList *l = grp->points; l; l = g_list_next(l))
-    {
-      const dt_masks_point_group_t *pt = l->data;
-      const dt_masks_form_t *f = dt_masks_get_from_id_ext(piece->pipe->forms, pt->formid);
-      if(!f || !(f->type & DT_MASKS_RASTER) || !f->points) continue;
-      const dt_masks_point_raster_t *rp = f->points->data;
-      if(rp->id == id && dt_iop_module_is(piece->module, rp->source)
-         && piece->module->multi_priority == rp->instance)
-        return TRUE;
-    }
+    if(dt_masks_group_find_raster_of(piece->pipe->forms, grp, piece->module, id, FALSE))
+      return TRUE;
   }
   return FALSE;
 }

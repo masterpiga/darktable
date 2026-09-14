@@ -2398,7 +2398,7 @@ static void _collect_parametric_forms(dt_masks_form_t *grp,
                                       GList **out,
                                       const int depth)
 {
-  if(!grp || depth > 16) return;  // malformed/cyclic nesting must not hang the GUI
+  if(!grp || depth > DT_MASKS_NESTING_MAX) return;
   for(const GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *const pt = l->data;
@@ -3483,9 +3483,9 @@ static void _toggle_solo_group(dt_iop_module_t *module, const dt_mask_id_t cid);
 static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id);
 static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t id);
 
-static gboolean _form_has_drawn_shape(const dt_masks_form_t *form)
+static gboolean _form_has_drawn_shape(const dt_masks_form_t *form, const int depth)
 {
-  if(!form) return FALSE;
+  if(!form || depth > DT_MASKS_NESTING_MAX) return FALSE;
   if(form->type & (DT_MASKS_CIRCLE | DT_MASKS_PATH | DT_MASKS_GRADIENT | DT_MASKS_ELLIPSE
                    | DT_MASKS_BRUSH
 #ifdef HAVE_AI
@@ -3500,7 +3500,7 @@ static gboolean _form_has_drawn_shape(const dt_masks_form_t *form)
     {
       const dt_masks_point_group_t *pt = l->data;
       const dt_masks_form_t *child = dt_masks_get_from_id(darktable.develop, pt->formid);
-      if(_form_has_drawn_shape(child)) return TRUE;
+      if(_form_has_drawn_shape(child, depth + 1)) return TRUE;
     }
   }
   return FALSE;
@@ -3511,7 +3511,7 @@ static gboolean _module_has_drawn_shapes(const dt_iop_module_t *module)
   if(!module || !module->blend_params) return FALSE;
   const dt_masks_form_t *grp =
     dt_masks_get_from_id(darktable.develop, module->blend_params->mask_id);
-  return _form_has_drawn_shape(grp);
+  return _form_has_drawn_shape(grp, 0);
 }
 
 dt_masks_form_t *_module_mask_group(dt_iop_module_t *module)
@@ -5638,9 +5638,10 @@ static void _pack_row_header(GtkWidget *row,
 // to the leaves, or hiding/soloing such a set would leave its outlines drawn.
 static void _collect_effective_hidden(dt_masks_form_t *grp,
                                       const gboolean inherited_hidden,
-                                      GHashTable *hidden_by_formid)
+                                      GHashTable *hidden_by_formid,
+                                      const int depth)
 {
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return;
   gboolean group_bypassed = FALSE;
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
@@ -5656,7 +5657,7 @@ static void _collect_effective_hidden(dt_masks_form_t *grp,
       || group_bypassed;
     dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
     if(form && (form->type & DT_MASKS_GROUP))
-      _collect_effective_hidden(form, hidden, hidden_by_formid);
+      _collect_effective_hidden(form, hidden, hidden_by_formid, depth + 1);
     else
       g_hash_table_insert(hidden_by_formid, GINT_TO_POINTER(pt->formid),
                           GINT_TO_POINTER(hidden ? 1 : 0));
@@ -5678,7 +5679,7 @@ static void _sync_hidden_to_form_visible(dt_iop_module_t *module)
   if(!grp || !vis || !(vis->type & DT_MASKS_GROUP)) return;
 
   GHashTable *hidden = g_hash_table_new(g_direct_hash, g_direct_equal);
-  _collect_effective_hidden(grp, FALSE, hidden);
+  _collect_effective_hidden(grp, FALSE, hidden, 0);
 
   for(GList *l = vis->points; l; l = g_list_next(l))
   {
