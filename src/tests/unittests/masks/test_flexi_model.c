@@ -1822,6 +1822,222 @@ static void test_a_cyclic_tree_ends_every_walk(void **state)
   _free_nested_points(sub);
 }
 
+// ---------------------------------------------------------------------------
+// nested groups in the panel: a gesture acts on the list that holds its target
+// ---------------------------------------------------------------------------
+
+static dt_masks_form_t *_sub = NULL;
+
+static int _teardown_nested(void **state)
+{
+  if(_sub) _free_nested_points(_sub);
+  _sub = NULL;
+  flexi_conf_cleanup();
+  flexi_teardown();
+  return 0;
+}
+
+static void _circle(const dt_mask_id_t fid)
+{
+  dt_masks_form_t *c = calloc(1, sizeof(dt_masks_form_t));
+  c->formid = fid;
+  c->type = DT_MASKS_CIRCLE;
+  snprintf(c->name, sizeof(c->name), "circle #%d", (int)fid);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, c);
+}
+
+/* "u:1,2 | i:3,2000", where 2000 is the nested group "u:11,12 | d:13" with
+   the markers 2500 and 2501 */
+static dt_masks_form_t *_two_levels(void)
+{
+  flexi_build("u:1,2 | i:3");
+  for(dt_mask_id_t id = 11; id <= 13; id++) _circle(id);
+  const dt_mask_id_t lower[] = { 11, 12 };
+  _sub = _nested_group(2000, 2500, lower, 2);
+
+  dt_masks_point_group_t *mk = calloc(1, sizeof(dt_masks_point_group_t));
+  mk->formid = 2501;
+  mk->parentid = 2000;
+  mk->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_DIFFERENCE;
+  mk->opacity = 1.0f;
+  mk->group_opacity = 1.0f;
+  _sub->points = g_list_append(_sub->points, mk);
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = 13;
+  pt->parentid = 2000;
+  pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  _sub->points = g_list_append(_sub->points, pt);
+
+  assert_layout("u:1,2 | i:3,2000");
+  assert_layout_of(_sub, "u:11,12 | d:13");
+  return flexi_group();
+}
+
+static void test_nested_points_are_found_with_their_group(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  assert_non_null(_group_point(grp, 13));
+  assert_int_equal(_group_cid_of_form(grp, 13), 2501);
+  assert_int_equal(_group_cid_of_form(grp, 11), 2500);
+  assert_int_equal(_group_cid_of_form(grp, 2501), 2501);
+  // the nested group itself is a member of the top list's group
+  assert_int_equal(_group_cid_of_form(grp, 2000), FLEXI_GID(1));
+
+  GList *run = _selected_group_formids(grp, 2500);
+  assert_int_equal(g_list_length(run), 2);
+  g_list_free(run);
+}
+
+static void test_nested_drop_stays_in_its_list(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 11, 13, TRUE));
+  assert_layout_of(_sub, "u:12 | d:13,11");
+  assert_layout("u:1,2 | i:3,2000");
+
+  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 13, 2500));
+  assert_layout_of(_sub, "u:12,13 | d:11");
+}
+
+// across nesting levels a group could land inside itself, so nothing moves
+static void test_nested_drop_across_levels_is_refused(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 1, 13, TRUE));
+  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 11, 3, FALSE));
+  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 1, 2501));
+  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 12, FLEXI_GID(0)));
+  assert_false(_masks_reorder_groups(&flexi_module, 2500, FLEXI_GID(1), TRUE));
+  assert_layout("u:1,2 | i:3,2000");
+  assert_layout_of(_sub, "u:11,12 | d:13");
+}
+
+static void test_nested_groups_are_added_and_deleted_in_place(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  const dt_mask_id_t added = _model_add_group(grp, DT_MASKS_STATE_INTERSECTION, 2500, FALSE);
+  assert_true(dt_is_valid_maskid(added));
+  assert_layout_of(_sub, "u:11,12 | [i] | d:13");
+  assert_int_equal(((dt_masks_point_group_t *)_group_point(grp, added))->parentid, 2000);
+
+  GList *gone = _model_delete_group(grp, 2501);
+  assert_int_equal(g_list_length(gone), 1);
+  assert_int_equal(GPOINTER_TO_INT(gone->data), 13);
+  g_list_free(gone);
+  assert_layout_of(_sub, "u:11,12 | [i]");
+
+  assert_true(_masks_reorder_groups(&flexi_module, 2500, added, TRUE));
+  assert_layout_of(_sub, "[i] | u:11,12");
+  assert_layout("u:1,2 | i:3,2000");
+}
+
+static void test_new_element_lands_in_a_nested_target(void **state)
+{
+  flexi_conf_init();
+  dt_masks_form_t *grp = _two_levels();
+  _circle(14);
+  _aim_at(12);
+  dt_masks_point_group_t *pt = dt_masks_group_insert_point(
+    &flexi_dev, &flexi_module, dt_masks_get_from_id(&flexi_dev, 14));
+  assert_non_null(pt);
+  assert_int_equal(pt->parentid, 2000);
+  assert_layout_of(_sub, "u:11,12,14 | d:13");
+  assert_layout("u:1,2 | i:3,2000");
+  (void)grp;
+}
+
+static gboolean _is_hidden(const dt_mask_id_t fid)
+{
+  return (_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
+}
+
+// soloing an element inside a nested group hides everything else at every
+// level, but not the nested group's own member, or nothing would show
+static void test_solo_inside_a_nested_group_keeps_the_path(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  GList *keep = g_list_prepend(NULL, GINT_TO_POINTER(13));
+  dt_masks_group_isolate_state(grp, keep, DT_MASKS_STATE_HIDDEN);
+  g_list_free(keep);
+
+  assert_true(_is_hidden(1));
+  assert_true(_is_hidden(3));
+  assert_false(_is_hidden(2000));
+  assert_true(_is_hidden(11));
+  assert_true(_is_hidden(12));
+  assert_false(_is_hidden(13));
+
+  dt_masks_group_isolate_state(grp, NULL, DT_MASKS_STATE_HIDDEN);
+  assert_false(_is_hidden(1));
+  assert_false(_is_hidden(11));
+}
+
+// soloing the nested group shows all of it, including what an earlier solo
+// inside it hid
+static void test_solo_of_a_nested_group_clears_inside_it(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  _group_point(grp, 11)->state |= DT_MASKS_STATE_HIDDEN;
+  GList *keep = g_list_prepend(NULL, GINT_TO_POINTER(2000));
+  dt_masks_group_isolate_state(grp, keep, DT_MASKS_STATE_HIDDEN);
+  g_list_free(keep);
+
+  assert_false(_is_hidden(2000));
+  assert_false(_is_hidden(11));
+  assert_true(_is_hidden(3));
+}
+
+static void test_nested_groups_are_counted_and_numbered(void **state)
+{
+  _two_levels();
+  assert_int_equal(_group_count(&flexi_module), 4);
+
+  // one numbering for the whole mask: the nested union is the second union
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 1);
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2500), 2);
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2501), 1);
+
+  // a soloed nested group is still a group
+  flexi_bd.solo_group_key = 2501;
+  _prune_stale_solo(&flexi_module);
+  assert_int_equal(flexi_bd.solo_group_key, 2501);
+}
+
+static void test_nested_shapes_are_listed_and_signed(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+
+  // what another mask can link from this group: its shapes, nested ones too
+  GList *shapes = _model_module_shapes(&flexi_module, FLEXI_GID(1));
+  assert_int_equal(g_list_length(shapes), 4);
+  assert_int_equal(GPOINTER_TO_INT(g_list_nth_data(shapes, 0)), 3);
+  assert_int_equal(GPOINTER_TO_INT(g_list_nth_data(shapes, 3)), 13);
+  g_list_free(shapes);
+
+  // a change the rows show, inside the nested group, rebuilds the panel
+  const dt_hash_t before = _masks_list_signature(&flexi_module);
+  g_strlcpy(_group_point(grp, 13)->name, "sky", sizeof(((dt_masks_point_group_t *)0)->name));
+  assert_true(_masks_list_signature(&flexi_module) != before);
+}
+
+// a member of a nested group whose form is gone leaves that group's list
+static void test_lost_member_leaves_a_nested_group(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  for(GList *l = flexi_dev.forms; l; l = g_list_next(l))
+    if(((dt_masks_form_t *)l->data)->formid == 12)
+    {
+      free(l->data);
+      flexi_dev.forms = g_list_delete_link(flexi_dev.forms, l);
+      break;
+    }
+  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_layout_of(_sub, "u:11 | d:13");
+  assert_layout("u:1,2 | i:3,2000");
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -1934,6 +2150,19 @@ int main(void)
     cmocka_unit_test_teardown(test_find_marker_reaches_a_subgroup, _teardown),
     cmocka_unit_test_teardown(test_a_raster_element_in_a_subgroup_is_found, _teardown),
     cmocka_unit_test_teardown(test_a_cyclic_tree_ends_every_walk, _teardown),
+    cmocka_unit_test_teardown(test_nested_points_are_found_with_their_group, _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_drop_stays_in_its_list, _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_drop_across_levels_is_refused, _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_groups_are_added_and_deleted_in_place,
+                              _teardown_nested),
+    cmocka_unit_test_teardown(test_new_element_lands_in_a_nested_target, _teardown_nested),
+    cmocka_unit_test_teardown(test_solo_inside_a_nested_group_keeps_the_path,
+                              _teardown_nested),
+    cmocka_unit_test_teardown(test_solo_of_a_nested_group_clears_inside_it,
+                              _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_groups_are_counted_and_numbered, _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_shapes_are_listed_and_signed, _teardown_nested),
+    cmocka_unit_test_teardown(test_lost_member_leaves_a_nested_group, _teardown_nested),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

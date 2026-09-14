@@ -500,14 +500,16 @@ dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
     dt_masks_group_ensure_marker(dev->forms, grp);
     grpt->state |= DT_MASKS_STATE_UNION;
     // the panel's target group: on top of it, which for an empty group is
-    // right after its marker. Without one the element lands in the top group
+    // right after its marker, at whatever depth it is. Without one the
+    // element lands in the top group
     dt_iop_gui_blend_data_t *bd = module->blend_data;
-    GList *after = NULL;
-    if(bd && bd->insert_active && dt_is_valid_maskid(bd->insert_after_fid))
-      for(GList *l = grp->points; l && !after; l = g_list_next(l))
-        if(((dt_masks_point_group_t *)l->data)->formid == bd->insert_after_fid) after = l;
-    grp->points = after ? g_list_insert_before(grp->points, after->next, grpt)
-                        : g_list_append(grp->points, grpt);
+    dt_masks_form_t *owner = grp;
+    GList *after = bd && bd->insert_active && dt_is_valid_maskid(bd->insert_after_fid)
+                     ? dt_masks_group_find_node(dev->forms, grp, bd->insert_after_fid, &owner)
+                     : NULL;
+    grpt->parentid = owner->formid;
+    owner->points = after ? g_list_insert_before(owner->points, after->next, grpt)
+                          : g_list_append(owner->points, grpt);
   }
   else
   {
@@ -1645,28 +1647,39 @@ gboolean dt_masks_group_mark_classic_runs(GList *forms,
   return changed;
 }
 
-static dt_masks_point_group_t *_find_marker(GList *forms,
-                                            dt_masks_form_t *grp,
-                                            const dt_mask_id_t cid,
-                                            dt_masks_form_t **owner,
-                                            const int depth)
+static GList *_find_node(GList *forms,
+                         dt_masks_form_t *grp,
+                         const dt_mask_id_t id,
+                         dt_masks_form_t **owner,
+                         const int depth)
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return NULL;
+  // the list itself first: most lookups are for a point of the top group, and
+  // resolving every member's form on the way would make those slow
+  for(GList *l = grp->points; l; l = g_list_next(l))
+    if(((dt_masks_point_group_t *)l->data)->formid == id)
+    {
+      if(owner) *owner = grp;
+      return l;
+    }
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     dt_masks_point_group_t *pt = l->data;
-    if(dt_masks_point_is_marker(pt))
-    {
-      if(pt->formid != cid) continue;
-      if(owner) *owner = grp;
-      return pt;
-    }
+    if(dt_masks_point_is_marker(pt)) continue;
     dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
     if(child == grp) continue;
-    dt_masks_point_group_t *mk = _find_marker(forms, child, cid, owner, depth + 1);
-    if(mk) return mk;
+    GList *found = _find_node(forms, child, id, owner, depth + 1);
+    if(found) return found;
   }
   return NULL;
+}
+
+GList *dt_masks_group_find_node(GList *forms,
+                                dt_masks_form_t *root,
+                                const dt_mask_id_t id,
+                                dt_masks_form_t **owner)
+{
+  return _find_node(forms, root, id, owner, 0);
 }
 
 dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
@@ -1674,7 +1687,8 @@ dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
                                                    const dt_mask_id_t cid,
                                                    dt_masks_form_t **owner)
 {
-  return _find_marker(forms, root, cid, owner, 0);
+  GList *node = _find_node(forms, root, cid, owner, 0);
+  return node && dt_masks_point_is_marker(node->data) ? node->data : NULL;
 }
 
 static const dt_masks_point_raster_t *_find_raster_of(GList *forms,
@@ -2988,24 +3002,57 @@ void dt_masks_group_set_state(dt_masks_form_t *grp,
   }
 }
 
+// does the nested group `grp` hold, at any depth, a point named in `formids`?
+static gboolean _subtree_names_any(GList *forms,
+                                   dt_masks_form_t *grp,
+                                   GList *formids,
+                                   const int depth)
+{
+  for(GList *l = formids; l; l = g_list_next(l))
+    if(_find_node(forms, grp, GPOINTER_TO_INT(l->data), NULL, depth)) return TRUE;
+  return FALSE;
+}
+
+static void _isolate_state(GList *forms,
+                           dt_masks_form_t *grp,
+                           GList *formids,
+                           const dt_masks_state_t bits,
+                           const int depth)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    dt_masks_form_t *child = dt_masks_point_is_marker(pt)
+                               ? NULL
+                               : dt_masks_get_from_id_ext(forms, pt->formid);
+    if(child == grp || (child && !(child->type & DT_MASKS_GROUP))) child = NULL;
+    // formids == NULL is the "solo off" case: nothing is singled out any more,
+    // so the bits come off everywhere. Note this is NOT the same as treating
+    // every point as a non-member, which would set the bits everywhere and
+    // hide the entire group instead. A nested group that is kept whole is
+    // cleared the same way, from an earlier solo inside it.
+    if(!formids || _id_in_list(formids, pt->formid))
+    {
+      pt->state &= ~bits;
+      if(child) _isolate_state(forms, child, NULL, bits, depth + 1);
+    }
+    // a nested group holding what is singled out stays, and is isolated in turn
+    else if(child && _subtree_names_any(forms, child, formids, depth + 1))
+    {
+      pt->state &= ~bits;
+      _isolate_state(forms, child, formids, bits, depth + 1);
+    }
+    else
+      pt->state |= bits;
+  }
+}
+
 void dt_masks_group_isolate_state(dt_masks_form_t *grp,
                                   GList *formids,
                                   const dt_masks_state_t bits)
 {
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
-  for(GList *l = grp->points; l; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = l->data;
-    // formids == NULL is the "solo off" case: nothing is singled out any more,
-    // so the bits come off everywhere. Note this is NOT the same as treating
-    // every point as a non-member, which would set the bits everywhere and
-    // hide the entire group instead.
-    const gboolean keep = !formids || _id_in_list(formids, pt->formid);
-    if(keep)
-      pt->state &= ~bits;
-    else
-      pt->state |= bits;
-  }
+  _isolate_state(darktable.develop ? darktable.develop->forms : NULL, grp, formids, bits, 0);
 }
 
 static void _ungroup(dt_masks_form_t *dest_grp,

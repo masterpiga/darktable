@@ -201,10 +201,15 @@ dt_masks_form_t *flexi_group(void)
 
 char *flexi_layout(void)
 {
+  return flexi_layout_of(_grp);
+}
+
+char *flexi_layout_of(const dt_masks_form_t *g)
+{
   GString *s = g_string_new(NULL);
   gboolean open_group = FALSE; // a group whose "x:" is written, with members
   char pending = 0;            // a group whose marker is read, with none yet
-  for(GList *l = _grp ? _grp->points : NULL; l; l = g_list_next(l))
+  for(GList *l = g ? g->points : NULL; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
     // partition through the same predicate the panel uses -- see the header
@@ -252,7 +257,15 @@ int flexi_get_ordinal(const dt_mask_id_t cid)
 
 void flexi_assert_layout_(const char *expect, const char *file, const int line)
 {
-  char *got = flexi_layout();
+  flexi_assert_layout_of_(_grp, expect, file, line);
+}
+
+void flexi_assert_layout_of_(const dt_masks_form_t *g,
+                             const char *expect,
+                             const char *file,
+                             const int line)
+{
+  char *got = flexi_layout_of(g);
   if(strcmp(got, expect) != 0)
   {
     // print both before failing: cmocka's string diff alone is hard to read
