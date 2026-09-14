@@ -87,6 +87,8 @@ dt_masks_form_t *flexi_group(void);
 
 /** serialise the current group back to a layout string. Caller frees. */
 char *flexi_layout(void);
+/** the same for any group form, such as a nested group. Caller frees. */
+char *flexi_layout_of(const dt_masks_form_t *g);
 
 /** the between-group operator of the group element `fid` is in */
 dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid);
@@ -108,6 +110,12 @@ void flexi_teardown(void);
 /** cmocka assertion: current layout equals `expect`, with a readable diff. */
 void flexi_assert_layout_(const char *expect, const char *file, const int line);
 #define assert_layout(expect) flexi_assert_layout_((expect), __FILE__, __LINE__)
+/** cmocka assertion: the layout of group form `g` equals `expect`. */
+void flexi_assert_layout_of_(const dt_masks_form_t *g,
+                             const char *expect,
+                             const char *file,
+                             const int line);
+#define assert_layout_of(g, expect) flexi_assert_layout_of_((g), (expect), __FILE__, __LINE__)
 
 // modelines: These editor modelines have been set for all relevant files
 // by tools/update_modelines.py

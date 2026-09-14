@@ -1049,9 +1049,12 @@ void dt_masks_group_set_state(dt_masks_form_t *grp,
                               const dt_masks_state_t bits,
                               const gboolean set);
 /** Solo: clear `bits` on the members named by `formids` and set them on every
- * other member of `grp`. Passing formids == NULL clears `bits` on every member
- * (i.e. "solo off"), which is why this is not just the negation of
- * dt_masks_group_set_state. */
+ * other member of `grp`. A nested group holding a named point keeps its own
+ * member clear and is isolated the same way, at any depth; one that is named
+ * is cleared whole. Passing formids == NULL clears `bits` on every member at
+ * every depth (i.e. "solo off"), which is why this is not just the negation
+ * of dt_masks_group_set_state. A nested group another module's mask also
+ * holds is isolated for that mask too, since the two share its points. */
 void dt_masks_group_isolate_state(dt_masks_form_t *grp,
                                   GList *formids,
                                   const dt_masks_state_t bits);
@@ -1093,6 +1096,13 @@ dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
                                                    dt_masks_form_t *root,
                                                    const dt_mask_id_t cid,
                                                    dt_masks_form_t **owner);
+/** the list node of point `id` of the mask `root`, a member or a marker, at
+    any depth. `*owner`, when given, is set to the group form whose list holds
+    it. NULL if none does */
+GList *dt_masks_group_find_node(GList *forms,
+                                dt_masks_form_t *root,
+                                const dt_mask_id_t id,
+                                dt_masks_form_t **owner);
 /** the first raster element in the mask `grp`, nested groups included, that
     reads a mask of `source`: mask `id`, or any of its masks with `any_id`.
     NULL if there is none */
