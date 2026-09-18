@@ -110,6 +110,8 @@ static void _bench_init(void)
   B.source.dev = &B.dev;
   B.sink.dev = &B.dev;
   B.source.raster_mask.source.users = g_hash_table_new(NULL, NULL);
+  // the prune holds this while it reads the table, see dt_iop_raster_users_lock()
+  dt_pthread_recursive_mutex_init(&B.source.raster_mask.source.users_lock);
 
   /* Zeroed, then set per case. The prune reads only mask_mode, mask_id and the
      raster source (raster_mask_source/instance) of these params, so a real
@@ -145,6 +147,7 @@ static void _bench_cleanup(void)
   if(B.source.raster_mask.source.users)
     g_hash_table_destroy(B.source.raster_mask.source.users);
   B.source.raster_mask.source.users = NULL;
+  dt_pthread_mutex_destroy(&B.source.raster_mask.source.users_lock);
   g_list_free_full(B.dev.forms, (GDestroyNotify)dt_masks_free_form);
   B.dev.forms = NULL;
 }

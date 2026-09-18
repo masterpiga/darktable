@@ -119,11 +119,14 @@
  *
  * So repair the data instead of arguing with it, preserving the EFFECT rather
  * than the encoding: everything before the last operator-less member is what
- * classic discards, so disable exactly those. That member then really is the
- * bottom one, the group satisfies the invariant, and both folds render what
- * classic rendered all along. Disabled rather than deleted so the shapes stay
- * in the panel and the user can bring them back -- they contribute nothing to
- * either renderer (see the HIDDEN|DISABLE skips in both folds in group.c).
+ * classic discards, so drop exactly those members. That member then really is
+ * the bottom one, the group satisfies the invariant, and both folds render what
+ * classic rendered all along. They were kept as disabled members at first, so
+ * the user could bring them back; in the panel that reads as a mask full of
+ * greyed rows nobody asked for, next to controls they can still reach. Classic
+ * never rendered them, so there is nothing to bring back: drop the references
+ * and let the panel show what the mask actually is. The forms themselves stay
+ * in the list, unreferenced, like the orphans this data already carries.
  *
  * Hidden and disabled members are not counted on either side: neither renders,
  * so neither can be the earlier member an operator-less one overwrites, nor
@@ -131,8 +134,9 @@
  *
  * It is written back together with the group markers it runs beside -- see
  * dt_masks_normalize_flexi_groups(). Idempotent: once the earlier
- * members are disabled they stop counting as live, so a second pass finds the
- * group already well-formed and changes nothing. */
+ * members are gone the operator-less one is the only member left without an
+ * operator, so a second pass finds the group already well-formed and changes
+ * nothing. */
 static void _repair_base_case_overwrite(GList *forms,
                                         dt_masks_form_t *grp,
                                         const int depth)
@@ -157,16 +161,24 @@ static void _repair_base_case_overwrite(GList *forms,
 
   if(overwriter)
   {
-    for(GList *l = grp->points; l && l != overwriter; l = g_list_next(l))
+    GList *l = grp->points;
+    while(l && l != overwriter)
     {
+      GList *next = g_list_next(l);
       dt_masks_point_group_t *pt = l->data;
-      if(dt_masks_point_is_marker(pt)) continue;
-      if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
-      pt->state |= DT_MASKS_STATE_DISABLE;
+      // hidden and disabled members render nothing either way, so classic
+      // discarding them changes nothing: leave them as they are
+      if(!dt_masks_point_is_marker(pt)
+         && !(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+      {
+        grp->points = g_list_delete_link(grp->points, l);
+        free(pt);
+      }
+      l = next;
     }
     dt_print(DT_DEBUG_ALWAYS,
              "[masks] group %d: a member with no combine operator sits above"
-             " others, which classic renders by discarding them -- disabling"
+             " others, which classic renders by discarding them -- dropping"
              " them so the migrated mask keeps rendering the same",
              grp->formid);
   }
@@ -206,7 +218,9 @@ static void _repair_base_case_overwrite(GList *forms,
  * became identical, worst residual 2.98e-08). Consecutive union members are
  * deliberately left merged -- they are already equivalent, and splitting them
  * would turn a 48-stroke mask into 48 one-shape groups in the panel for no
- * behavioural gain.
+ * behavioural gain. Consecutive difference members are merged back into one
+ * group folding them by screen, which is exact too (see
+ * _merge_difference_runs in masks.c): an AI object's holes are one group.
  *
  * MULTIPLY is deliberately not split: no classic drawn shape carries it (it is
  * the operator migration itself attaches to a synthesized parametric run),
@@ -218,11 +232,155 @@ static void _repair_base_case_overwrite(GList *forms,
  * the same treatment. Missing this left 4 of the 27 corpus divergences
  * unfixed when the split was applied only to the top-level group.
  *
- * The repair runs first, since it decides which members are live. Idempotent:
- * a marked list is left as it is, which is what lets this run on every load. */
-static void _normalize_group(GList *forms, dt_masks_form_t *grp)
+ * The repair runs first, since it decides which members are live, and the
+ * no-op duplicate prune next, reading that same live list. Idempotent: a
+ * marked list is left as it is, which is what lets this run on every load. */
+/* A member that composites as `max(dest, mask)`: union is
+ * `dest = MAX(dest, opacity * mask)` (group.c:1018-1024), and the first
+ * visible member is a plain copy whatever its operator (group.c:867-870), so
+ * both seed or grow the same maximum -- but only at full opacity, uninverted
+ * (inversion is baked into the member's own buffer, group.c:827-834) and
+ * unrefined, since each of those changes what the member contributes. */
+static gboolean _is_union_equivalent(const dt_masks_point_group_t *pt,
+                                     const gboolean first)
 {
-  _repair_base_case_overwrite(forms, grp, 0);
+  if(pt->state & DT_MASKS_STATE_INVERSE) return FALSE;
+  if(pt->opacity != 1.0f) return FALSE;
+  if(pt->refinement.enabled != DT_MASKS_REFINE_OFF) return FALSE;
+  return first || (pt->state & DT_MASKS_STATE_UNION);
+}
+
+/* Is every live member of `grp` union-equivalent? Then the list renders
+ * exactly `max` over its members, in any order, and a member whose value is
+ * already in that maximum can go.
+ *
+ * The whole list has to qualify, not just the member dropped: the first
+ * visible member composites as a plain copy whatever its operator, so
+ * removing one can promote the next member out of its own operator. In
+ * `[a, b:difference]` dropping `a` leaves `b` copied rather than subtracted.
+ *
+ * A member group is one term of the maximum whatever it holds inside, so this
+ * looks at one level only; a group of its own that is not a union list is an
+ * opaque term, never descended into by _drop_seen_refs. */
+static gboolean _is_union_list(GList *forms, const dt_masks_form_t *grp)
+{
+  int live = 0;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    const dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+    // a member whose form is gone takes no slot in the composite (group.c:823)
+    if(!child) continue;
+    if(child == grp || !_is_union_equivalent(pt, live == 0)) return FALSE;
+    live++;
+  }
+  return TRUE;
+}
+
+/* Drop every reference that adds nothing to this region's maximum: a shape
+ * already seen, a group form already walked, and a group left empty because
+ * everything it held was already there. `seen` and `walked` span the whole
+ * region, since the duplicate is usually held both inside a nested group and
+ * beside it.
+ *
+ * A group form is never descended into twice. Both references name one form,
+ * so a second descent would find its own leaves already seen and delete them,
+ * emptying the form for both references. Dropping the second reference whole
+ * is exact for the same reason it would have been empty: everything under it
+ * is already in the maximum.
+ *
+ * A group that is not itself a union list is one opaque term: its shapes are
+ * not terms of this maximum, so none of them is seen and none is dropped. A
+ * shape held both beside and inside `[a, b:difference]` is no duplicate. */
+static void _drop_seen_refs(GList *forms,
+                            dt_masks_form_t *grp,
+                            GHashTable *seen,
+                            GHashTable *walked,
+                            const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return;
+  GList *l = grp->points;
+  while(l)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *pt = l->data;
+    // a hidden or disabled member renders nothing, so it is nobody's duplicate
+    // and keeping it costs the render nothing either
+    if(!(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+    {
+      dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+      gboolean drop = FALSE;
+      if(child && child != grp && (child->type & DT_MASKS_GROUP))
+      {
+        if(!g_hash_table_add(walked, GINT_TO_POINTER(child->formid)))
+        {
+          // this group form is already in the maximum, with exactly these
+          // leaves: drop the second reference rather than descending into it.
+          // Descending would find its own leaves seen and delete them, and
+          // both references name one form, so that would empty it for both
+          drop = TRUE;
+        }
+        else if(_is_union_list(forms, child))
+        {
+          _drop_seen_refs(forms, child, seen, walked, depth + 1);
+          // everything it held was already in the maximum: an empty group
+          // renders nothing, so the reference to it is noise as well
+          drop = child->points == NULL;
+        }
+      }
+      else if(child && !g_hash_table_add(seen, GINT_TO_POINTER(pt->formid)))
+        drop = TRUE;
+
+      if(drop)
+      {
+        grp->points = g_list_delete_link(grp->points, l);
+        free(pt);
+      }
+    }
+    l = next;
+  }
+}
+
+/* Classic lets one shape be a member of two groups of the same mask, and
+ * nothing stops the same shape being reached twice (dt_masks_group_add_form
+ * refuses only cycles, masks.c:2996-3003). Where everything combining them is
+ * a union, the repeat renders nothing at all: max(a, a) = a. 20 edits of the
+ * 26,283-edit corpus carry one: 17 duplicate shape references, 3 duplicate
+ * references to a whole group, and 8 wrapper groups left holding nothing once
+ * their contents were already in the maximum.
+ *
+ * They are dropped rather than migrated, because a mask has to make sense when
+ * someone opens it: a shape listed twice in one union invites exactly the
+ * investigation it does not repay. This is the one case where that is provable
+ * -- anything else the duplicate could carry (a different operator, opacity,
+ * inversion or refinement) makes the second reference mean something, as it
+ * does in the exclusion form, where the duplication IS the algebra.
+ *
+ * Only an unmarked list is pruned. A marked one is already a flexi mask, where
+ * a shape held twice is a link the user made on purpose -- each reference is
+ * its own row, with its own opacity and operator (blend_gui.c
+ * _masks_row_for_point) -- and must survive untouched. */
+static void _prune_noop_duplicate_refs(GList *forms, dt_masks_form_t *grp)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+    if(dt_masks_point_is_marker(l->data)) return;
+  if(!_is_union_list(forms, grp)) return;
+
+  GHashTable *seen = g_hash_table_new(g_direct_hash, g_direct_equal);
+  // the group forms already descended into: one form can be referenced twice
+  GHashTable *walked = g_hash_table_new(g_direct_hash, g_direct_equal);
+  g_hash_table_add(walked, GINT_TO_POINTER(grp->formid));
+  _drop_seen_refs(forms, grp, seen, walked, 0);
+  g_hash_table_destroy(walked);
+  g_hash_table_destroy(seen);
+}
+
+static void _normalize_group(GList **forms, dt_masks_form_t *grp)
+{
+  _repair_base_case_overwrite(*forms, grp, 0);
+  _prune_noop_duplicate_refs(*forms, grp);
   dt_masks_group_mark_classic_runs(forms, grp, TRUE);
 }
 
@@ -246,7 +404,7 @@ static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_
 {
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
 
-  _normalize_group(module->dev->forms, dt_masks_get_from_id(module->dev, mask_id));
+  _normalize_group(&module->dev->forms, dt_masks_get_from_id(module->dev, mask_id));
 
   const gpointer key = GINT_TO_POINTER(mask_id);
   if(!g_list_find(module->dev->pending_flexi_group_splits, key))
@@ -610,7 +768,7 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
-  dt_masks_group_mark_classic_runs(module->dev->forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&module->dev->forms, grp, FALSE);
   _persist_form(module, grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -687,7 +845,7 @@ static void _migrate_raster(dt_iop_module_t *module,
   dt_masks_point_group_t *pt = _new_group_point(raster_form->formid, state);
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
-  dt_masks_group_mark_classic_runs(module->dev->forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&module->dev->forms, grp, FALSE);
 
   _persist_form(module, raster_form, history_num);
   _persist_form(module, grp, history_num);
@@ -1205,7 +1363,7 @@ static void _normalize_history_item(dt_dev_history_item_t *h)
   dt_masks_form_t *grp = dt_masks_get_from_id_ext(h->forms, h->blend_params->mask_id);
   if(!grp) return;
 
-  _normalize_group(h->forms, grp);
+  _normalize_group(&h->forms, grp);
 }
 
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
@@ -1214,7 +1372,7 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 
   for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))
   {
-    _normalize_group(dev->forms, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)));
+    _normalize_group(&dev->forms, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)));
   }
 
   // The live tree onto the item that owns it, so the current state is stored

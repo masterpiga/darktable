@@ -323,17 +323,54 @@ static void test_ensure_a_group_gives_an_old_list_one_group(void **state)
 static void test_classic_marking_gives_each_run_a_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
-  assert_true(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE));
   assert_layout("u:1,2 | i:3 | i:4");
-  assert_false(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE));
+  assert_false(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE));
 }
 
 // ...and with the split, a group to every member with a non-union operator
 static void test_classic_marking_splits_nonunion_members(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3,4");
-  assert_true(dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, TRUE));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
   assert_layout("u:1,2 | i:3 | i:4");
+}
+
+static gboolean _screens(dt_masks_form_t *grp, const dt_mask_id_t fid)
+{
+  const dt_masks_point_group_t *mk = _group_point(grp, _group_cid_of_form(grp, fid));
+  return (mk->state & DT_MASKS_STATE_SCREEN) != 0;
+}
+
+// ...except differences, which fold into one group by screen: exact, since
+// difference multiplies by 1 - x and screen gives 1 - x1 - x2 + x1 x2
+static void test_classic_marking_merges_difference_runs(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3,4");
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
+  assert_layout("u:1 | d:2,3,4");
+  assert_true(_screens(grp, 2));
+  assert_false(_screens(grp, 1));
+}
+
+// the bottom group's operator is never applied, so nothing merges onto it
+static void test_difference_does_not_merge_onto_the_bottom_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("d:1,2,3");
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
+  assert_layout("d:1 | d:2,3");
+  assert_false(_screens(grp, 1));
+  assert_true(_screens(grp, 2));
+}
+
+// a faded difference applies its fade to its own shape only: it stays apart
+static void test_faded_difference_stays_its_own_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3");
+  _group_point(grp, 3)->group_opacity = 0.5f;
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
+  assert_layout("u:1 | d:2 | d:3");
+  assert_false(_screens(grp, 2));
 }
 
 // ...holding the settings each run's first member carries
@@ -346,7 +383,7 @@ static void test_marking_carries_the_group_settings(void **state)
   g_strlcpy(head->name, "sky", sizeof(head->name));
   head->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
                                               .blur_radius = 2.0f };
-  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
 
   const dt_masks_point_group_t *marker = _group_point(grp, _group_cid_of_form(grp, 3));
   assert_true(dt_masks_point_is_marker(marker));
@@ -371,12 +408,12 @@ static void test_marking_carries_the_group_settings(void **state)
 static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
   const dt_mask_id_t first = _group_cid_of_form(grp, 2);
   flexi_teardown();
 
   grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
   assert_int_equal(_group_cid_of_form(grp, 2), first);
 }
 
@@ -900,6 +937,50 @@ static void test_unlink_leaves_the_group_alone(void **state)
   assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
   assert_int_equal(flexi_get_ordinal(FLEXI_GID(1)), 2);
   assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
+}
+
+// One mask can hold the same shape twice -- a group referencing a shape another
+// group of the same mask defines -- and then each reference unlinks on its own:
+// the row the user picked gets the copy, every other row keeps the original.
+static void test_unlink_one_reference_leaves_the_others_linked(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1 | i:2");
+  // a second reference to shape 1, in the upper group: what flexi_build cannot
+  // express, since it makes one form per id it parses
+  dt_masks_point_group_t *second = calloc(1, sizeof(dt_masks_point_group_t));
+  second->formid = 1;
+  second->parentid = flexi_group()->formid;
+  second->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+  second->opacity = 1.0f;
+  second->group_opacity = 1.0f;
+  flexi_group()->points = g_list_append(flexi_group()->points, second);
+  flexi_bd.panel_selected_formid = 1;
+
+  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 1, second);
+  assert_true(dt_is_valid_maskid(nid));
+  assert_int_not_equal(nid, 1);
+  // the picked reference now carries the copy, the other still the original
+  assert_int_equal(second->formid, nid);
+  assert_non_null(_group_point(flexi_group(), 1));
+  // the selection describes the row that kept the shape, so it stays there
+  assert_int_equal(flexi_bd.panel_selected_formid, 1);
+}
+
+// unlinking the last reference does carry the panel state over, exactly as
+// unlinking a shape only one row shows always has
+static void test_unlink_the_last_reference_carries_the_selection(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1 | i:2");
+  const dt_mask_id_t other[] = { 1 };
+  _other_module(other, 1);
+  flexi_bd.panel_selected_formid = 1;
+
+  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 1, NULL);
+  assert_true(dt_is_valid_maskid(nid));
+  assert_null(_group_point(flexi_group(), 1));
+  assert_int_equal(flexi_bd.panel_selected_formid, nid);
 }
 
 // the link indicator: the chain icon and the "unlink" entry show together
@@ -1901,17 +1982,198 @@ static void test_nested_drop_stays_in_its_list(void **state)
   assert_layout_of(_sub, "u:12,13 | d:11");
 }
 
-// across nesting levels a group could land inside itself, so nothing moves
-static void test_nested_drop_across_levels_is_refused(void **state)
+// an element moves between nesting levels; a nested group never into itself
+static void test_nested_drop_moves_across_levels(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 1, 13, TRUE));
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 11, 3, FALSE));
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 1, 2501));
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 12, FLEXI_GID(0)));
-  assert_false(_masks_reorder_groups(&flexi_module, 2500, FLEXI_GID(1), TRUE));
-  assert_layout("u:1,2 | i:3,2000");
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 13, TRUE));
+  assert_layout("u:2 | i:3,2000");
+  assert_layout_of(_sub, "u:11,12 | d:13,1");
+  assert_int_equal(_group_point(grp, 1)->parentid, 2000);
+
+  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 12, FLEXI_GID(0)));
+  assert_layout("u:2,12 | i:3,2000");
+  assert_layout_of(_sub, "u:11 | d:13,1");
+  assert_int_equal(_group_point(grp, 12)->parentid, flexi_group()->formid);
+
+  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 2000, 11, TRUE));
+  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 2000, 2501));
+  assert_layout("u:2,12 | i:3,2000");
+}
+
+// the panel nests one level: a nested group stays out of another one
+static void test_a_nested_group_goes_no_deeper(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  _circle(14);
+  const dt_mask_id_t m[] = { 14 };
+  dt_masks_form_t *other = _nested_group(3000, 3500, m, 1);
+  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 3000, 11, TRUE));
+  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 3000, 2500));
+  assert_false(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, 2500)));
+  assert_layout("u:1,2 | i:3,2000,3000");
   assert_layout_of(_sub, "u:11,12 | d:13");
+  _free_nested_points(other);
+}
+
+// a group moves between levels too, as long as its list keeps one
+static void test_group_reorders_across_levels(void **state)
+{
+  _two_levels();
+  assert_true(_masks_reorder_groups(&flexi_module, 2500, FLEXI_GID(1), TRUE));
+  assert_layout("u:1,2 | i:3,2000 | u:11,12");
+  assert_layout_of(_sub, "d:13");
+  assert_int_equal(_group_point(flexi_group(), 11)->parentid, flexi_group()->formid);
+  assert_false(_masks_reorder_groups(&flexi_module, 2501, FLEXI_GID(0), FALSE));
+  assert_layout_of(_sub, "d:13");
+}
+
+// the nested group on top of the members of `grp`'s group whose top point is
+// at index `at`
+static dt_masks_form_t *_nested_at(dt_masks_form_t *grp, const int at)
+{
+  const dt_masks_point_group_t *pt = g_list_nth_data(grp->points, at);
+  dt_masks_form_t *sub = pt ? dt_masks_get_from_id(&flexi_dev, pt->formid) : NULL;
+  assert_non_null(sub);
+  assert_true(sub->type & DT_MASKS_GROUP);
+  return sub;
+}
+
+static void test_add_a_group_inside_a_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  const dt_mask_id_t cid = _model_nest_new_group(grp, DT_MASKS_STATE_UNION, FLEXI_GID(0));
+  assert_true(dt_is_valid_maskid(cid));
+  // on top of the group's members: a nested group holding one empty group
+  _sub = _nested_at(grp, 3);
+  assert_layout_of(_sub, "[u]");
+  assert_int_equal(_group_cid_of_form(grp, cid), cid);
+  assert_int_equal(_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
+  assert_int_equal(_group_count(&flexi_module), 3);
+}
+
+static void test_drop_a_group_inside_another(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | d:4");
+  assert_true(_model_nest_group(grp, FLEXI_GID(2), FLEXI_GID(0)));
+  // the group keeps its id, as the one group of a new nested group
+  _sub = _nested_at(grp, 3);
+  assert_layout_of(_sub, "d:4");
+  assert_int_equal(_group_cid_of_form(grp, 4), FLEXI_GID(2));
+  assert_int_equal(((dt_masks_point_group_t *)_sub->points->data)->parentid, _sub->formid);
+  // a group holding a nested group cannot go one level down, and a group
+  // is not put inside itself
+  assert_false(_model_nest_group(grp, FLEXI_GID(0), FLEXI_GID(1)));
+  assert_false(_model_nest_group(grp, FLEXI_GID(1), FLEXI_GID(1)));
+  assert_int_equal(_group_count(&flexi_module), 3);
+}
+
+// a nested group shown as its one group moves out to the top list as that
+// group, keeping its settings, and its reference goes. Its between-group
+// operator, unused while nested, becomes union
+static void test_a_nested_group_moves_out_as_its_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _circle(11);
+  const dt_mask_id_t m[] = { 11 };
+  _sub = _nested_group(2000, 2500, m, 1);
+  dt_masks_point_group_t *mk = _sub->points->data;
+  mk->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_DIFFERENCE | DT_MASKS_STATE_OP_INVERT;
+  mk->group_opacity = 0.4f;
+  assert_ptr_equal(_model_nested_group_of(grp, 2500), _sub);
+  assert_null(_model_nested_group_of(grp, FLEXI_GID(0)));
+
+  assert_true(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
+  assert_layout("u:1,2 | u:11 | i:3");
+  mk = _group_point(grp, 2500);
+  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
+  assert_float_equal(mk->group_opacity, 0.4f, 1e-6f);
+  assert_null(_sub->points);
+  assert_int_equal(_group_point(grp, 11)->parentid, grp->formid);
+}
+
+// a faded reference is shown as an element row, not as its group, and its
+// fade applies on top of the group's own opacity: it stays nested
+static void test_a_faded_nested_group_stays_nested(void **state)
+{
+  flexi_build("u:1,2 | i:3");
+  _circle(11);
+  const dt_mask_id_t m[] = { 11 };
+  _sub = _nested_group(2000, 2500, m, 1);
+  _group_point(flexi_group(), 2000)->opacity = 0.5f;
+  assert_false(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
+  assert_layout("u:1,2 | i:3,2000");
+  assert_layout_of(_sub, "u:11");
+}
+
+// a group dropped beside a nested group is nested beside it: no nested group
+// ever holds a second group this way
+static void test_a_group_beside_a_nested_group_is_nested(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | d:4");
+  _circle(11);
+  const dt_mask_id_t m[] = { 11 };
+  _sub = _nested_group(2000, 2500, m, 1);
+  assert_layout("u:1,2 | i:3 | d:4,2000");
+
+  assert_true(_model_move_group(&flexi_module, FLEXI_GID(0), 2500, TRUE, FALSE));
+  assert_layout_of(_sub, "u:11");
+  dt_masks_form_t *added = _nested_at(grp, 5);
+  assert_true(added != _sub);
+  assert_layout_of(added, "u:1,2");
+  assert_int_equal(_group_cid_of_form(grp, 1), FLEXI_GID(0));
+  assert_int_equal(_group_cid_of_form(grp, added->formid), FLEXI_GID(2));
+  _free_nested_points(added);
+}
+
+// nested groups shown as groups reorder among their holder's elements, and
+// go inside another group as elements
+static void test_a_nested_group_moves_as_an_element(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _circle(11);
+  _circle(12);
+  const dt_mask_id_t m1[] = { 11 }, m2[] = { 12 };
+  _sub = _nested_group(2000, 2500, m1, 1);
+  dt_masks_form_t *other = _nested_group(3000, 3500, m2, 1);
+  assert_layout("u:1,2 | i:3,2000,3000");
+
+  assert_true(_model_move_group(&flexi_module, 2500, 3500, TRUE, FALSE));
+  assert_layout("u:1,2 | i:3,3000,2000");
+  assert_true(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), FALSE, TRUE));
+  assert_layout("u:1,2,2000 | i:3,3000");
+  // never into itself
+  assert_false(_model_move_group(&flexi_module, 2500, 2500, FALSE, TRUE));
+  (void)grp;
+  _free_nested_points(other);
+}
+
+// a sibling of a nested group shown as its group is another nested group
+// beside it: the nested group keeps its one group
+static void test_a_nested_group_gets_a_nested_sibling(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _circle(11);
+  const dt_mask_id_t m[] = { 11 };
+  _sub = _nested_group(2000, 2500, m, 1);
+  assert_layout("u:1,2 | i:3,2000");
+
+  const dt_mask_id_t above = _model_add_group(grp, DT_MASKS_STATE_UNION, 2500, FALSE);
+  assert_true(dt_is_valid_maskid(above));
+  assert_layout_of(_sub, "u:11");
+  // the top list is g0, 1, 2, g1, 3, 2000, then the new one
+  dt_masks_form_t *a = _nested_at(grp, 6);
+  assert_layout_of(a, "[u]");
+  assert_int_equal(_group_cid_of_form(grp, above), above);
+
+  const dt_mask_id_t below = _model_add_group(grp, DT_MASKS_STATE_UNION, 2500, TRUE);
+  assert_true(dt_is_valid_maskid(below));
+  dt_masks_form_t *b = _nested_at(grp, 5);
+  assert_layout_of(b, "[u]");
+  assert_ptr_equal(_nested_at(grp, 6), _sub);
+  assert_ptr_equal(_nested_at(grp, 7), a);
+  _free_nested_points(a);
+  _free_nested_points(b);
 }
 
 static void test_nested_groups_are_added_and_deleted_in_place(void **state)
@@ -1994,10 +2256,11 @@ static void test_nested_groups_are_counted_and_numbered(void **state)
   _two_levels();
   assert_int_equal(_group_count(&flexi_module), 4);
 
-  // one numbering for the whole mask: the nested union is the second union
+  // one numbering for the whole mask, by within-group mode: every group here
+  // folds its members by union, whatever its operator
   assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 1);
   assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2500), 2);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2501), 1);
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2501), 3);
 
   // a soloed nested group is still a group
   flexi_bd.solo_group_key = 2501;
@@ -2152,7 +2415,16 @@ int main(void)
     cmocka_unit_test_teardown(test_a_cyclic_tree_ends_every_walk, _teardown),
     cmocka_unit_test_teardown(test_nested_points_are_found_with_their_group, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_drop_stays_in_its_list, _teardown_nested),
-    cmocka_unit_test_teardown(test_nested_drop_across_levels_is_refused, _teardown_nested),
+    cmocka_unit_test_teardown(test_nested_drop_moves_across_levels, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_nested_group_goes_no_deeper, _teardown_nested),
+    cmocka_unit_test_teardown(test_group_reorders_across_levels, _teardown_nested),
+    cmocka_unit_test_teardown(test_add_a_group_inside_a_group, _teardown_nested),
+    cmocka_unit_test_teardown(test_drop_a_group_inside_another, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_nested_group_moves_out_as_its_group, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_faded_nested_group_stays_nested, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_group_beside_a_nested_group_is_nested, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_nested_group_moves_as_an_element, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_nested_group_gets_a_nested_sibling, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_groups_are_added_and_deleted_in_place,
                               _teardown_nested),
     cmocka_unit_test_teardown(test_new_element_lands_in_a_nested_target, _teardown_nested),
@@ -2163,6 +2435,14 @@ int main(void)
     cmocka_unit_test_teardown(test_nested_groups_are_counted_and_numbered, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_shapes_are_listed_and_signed, _teardown_nested),
     cmocka_unit_test_teardown(test_lost_member_leaves_a_nested_group, _teardown_nested),
+    cmocka_unit_test_teardown(test_classic_marking_merges_difference_runs, _teardown),
+    cmocka_unit_test_teardown(test_difference_does_not_merge_onto_the_bottom_group,
+                              _teardown),
+    cmocka_unit_test_teardown(test_faded_difference_stays_its_own_group, _teardown),
+    cmocka_unit_test_teardown(test_unlink_one_reference_leaves_the_others_linked,
+                              _teardown_linking),
+    cmocka_unit_test_teardown(test_unlink_the_last_reference_carries_the_selection,
+                              _teardown_linking),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

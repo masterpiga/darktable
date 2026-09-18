@@ -461,17 +461,20 @@ static void test_group_bypass_is_independent_of_disable(void **state)
 // group numbering
 // ---------------------------------------------------------------------------
 
-static void test_ordinal_max_is_per_operator(void **state)
+// numbered per within-group mode, the one a group is named after: the
+// between-group operator plays no part
+static void test_ordinal_max_is_per_within_mode(void **state)
 {
-  flexi_build("u:1,2 | i:3 | u:4");
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | i:4");
+  _group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_ISECT;
   flexi_set_ordinal(FLEXI_GID(0), 1); // union 1
-  flexi_set_ordinal(FLEXI_GID(2), 2); // union 2
-  flexi_set_ordinal(FLEXI_GID(1), 1); // intersection 1
+  flexi_set_ordinal(FLEXI_GID(2), 2); // union 2, though its operator is intersection
+  flexi_set_ordinal(FLEXI_GID(1), 1); // intersect 1
 
-  const int uop = _op_index_for_state(DT_MASKS_STATE_UNION);
-  const int iop = _op_index_for_state(DT_MASKS_STATE_INTERSECTION);
-  assert_int_equal(_group_ord_max_for_op(&flexi_module, uop), 2);
-  assert_int_equal(_group_ord_max_for_op(&flexi_module, iop), 1);
+  const int u = _within_index_for_state(0);
+  const int i = _within_index_for_state(DT_MASKS_STATE_ISECT);
+  assert_int_equal(_group_ord_max_for_within(&flexi_module, u), 2);
+  assert_int_equal(_group_ord_max_for_within(&flexi_module, i), 1);
 }
 
 // an empty group holds a number too, so a new group must not reuse it
@@ -481,8 +484,8 @@ static void test_ordinal_max_counts_empty_groups(void **state)
   flexi_set_ordinal(FLEXI_GID(0), 1);
   flexi_set_ordinal(FLEXI_GID(1), 5);
 
-  const int uop = _op_index_for_state(DT_MASKS_STATE_UNION);
-  assert_int_equal(_group_ord_max_for_op(&flexi_module, uop), 5);
+  const int u = _within_index_for_state(0);
+  assert_int_equal(_group_ord_max_for_within(&flexi_module, u), 5);
 }
 
 static void test_ordinal_of_cid_reads_back(void **state)
@@ -802,7 +805,7 @@ int main(void)
     cmocka_unit_test_teardown(test_solo_of_unknown_element_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_disable_is_independent_of_solo, _teardown),
     cmocka_unit_test_teardown(test_group_bypass_is_independent_of_disable, _teardown),
-    cmocka_unit_test_teardown(test_ordinal_max_is_per_operator, _teardown),
+    cmocka_unit_test_teardown(test_ordinal_max_is_per_within_mode, _teardown),
     cmocka_unit_test_teardown(test_ordinal_max_counts_empty_groups, _teardown),
     cmocka_unit_test_teardown(test_ordinal_of_cid_reads_back, _teardown),
     cmocka_unit_test_teardown(test_pruning_drops_numbers_of_vanished_groups, _teardown),

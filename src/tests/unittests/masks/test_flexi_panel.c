@@ -579,15 +579,16 @@ static void test_panel_state_expanded_module_respects_pref(void **state)
 }
 
 // when masking is disabled on a focused, expanded module:
-// - the panel respects user preference so blend mode and opacity controls remain accessible
-// - the corner icon is rendered in its inactive state
+// - the panel is collapsed: it edits a mask, and there is no mask to edit
+// - the corner icon stays visible, inactive, since it is what brings the panel
+//   back (and blend mode and opacity live in the module's header regardless)
 static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
 {
   const dt_masks_panel_state_t s =
     _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, FALSE);
   assert_true(s.want_hosted);
-  assert_false(s.panel_collapsed);
-  assert_false(s.corner_icon_visible);
+  assert_true(s.panel_collapsed);
+  assert_true(s.corner_icon_visible);
   assert_false(s.corner_icon_active);
 }
 
