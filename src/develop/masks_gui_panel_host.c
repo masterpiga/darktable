@@ -593,9 +593,19 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
       s.corner_icon_visible = TRUE;
       s.corner_icon_active = mask_active;
     }
+    else if(!mask_active)
+    {
+      // the panel exists to edit a mask, so with none switched on it has
+      // nothing to show: fold it away to the corner icon, which is also how it
+      // is brought back. Blend mode and opacity are not lost with it -- they
+      // live in the module's own header, where they always are
+      s.panel_collapsed = TRUE;
+      s.corner_icon_visible = TRUE;
+      s.corner_icon_active = FALSE;
+    }
     else
     {
-      // module is expanded: follow the user's preference
+      // module is expanded and masking: follow the user's preference
       s.panel_collapsed = panel_pref_collapsed;
       s.corner_icon_visible = panel_pref_collapsed;
       s.corner_icon_active = mask_active;
