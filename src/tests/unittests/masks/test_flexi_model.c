@@ -2001,19 +2001,58 @@ static void test_nested_drop_moves_across_levels(void **state)
   assert_layout("u:2,12 | i:3,2000");
 }
 
-// the panel nests one level: a nested group stays out of another one
-static void test_a_nested_group_goes_no_deeper(void **state)
+// a nested group goes inside another nested group
+static void test_a_nested_group_goes_deeper(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
   _circle(14);
   const dt_mask_id_t m[] = { 14 };
   dt_masks_form_t *other = _nested_group(3000, 3500, m, 1);
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 3000, 11, TRUE));
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 3000, 2500));
-  assert_false(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, 2500)));
-  assert_layout("u:1,2 | i:3,2000,3000");
-  assert_layout_of(_sub, "u:11,12 | d:13");
+  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 3000, 2500));
+  assert_layout("u:1,2 | i:3,2000");
+  assert_layout_of(_sub, "u:11,12,3000 | d:13");
+  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 3000, 13, TRUE));
+  assert_layout_of(_sub, "u:11,12 | d:13,3000");
+  assert_true(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, 2500)));
   _free_nested_points(other);
+}
+
+// a shape the mask holds twice, once in a nested group: a drop acts on the
+// reference its row shows, not on the first one with its form id
+static void test_a_drop_acts_on_the_row_reference(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
+  _circle(11);
+  const dt_mask_id_t m[] = { 1, 11 };
+  _sub = _nested_group(2000, 2500, m, 2);
+  const dt_masks_point_group_t *inner = g_list_nth_data(_sub->points, 1);
+  assert_int_equal(inner->formid, 1);
+
+  assert_true(_model_drop_point_onto_point(&flexi_module, grp, _group_point(grp, 3), inner,
+                                           TRUE));
+  assert_layout("u:1,2 | i:2000");
+  assert_layout_of(_sub, "u:1,3,11");
+
+  // the inner reference, not the top one that is already there
+  assert_true(_model_drop_point_onto_group(&flexi_module, grp, inner, FLEXI_GID(0)));
+  assert_layout("u:1,2,1 | i:2000");
+  assert_layout_of(_sub, "u:3,11");
+}
+
+// the panel nests groups as deep as a walk of the mask follows, and no deeper
+static void test_nesting_stops_where_walks_stop(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_mask_id_t cid = FLEXI_GID(0);
+  for(int depth = 1; depth <= DT_MASKS_NESTING_MAX; depth++)
+  {
+    cid = _model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid);
+    assert_true(dt_is_valid_maskid(cid));
+  }
+  assert_false(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid)));
+  for(GList *l = flexi_dev.forms; l; l = g_list_next(l))
+    if(l->data != grp && (((dt_masks_form_t *)l->data)->type & DT_MASKS_GROUP))
+      _free_nested_points(l->data);
 }
 
 // a group moves between levels too, as long as its list keeps one
@@ -2061,11 +2100,15 @@ static void test_drop_a_group_inside_another(void **state)
   assert_layout_of(_sub, "d:4");
   assert_int_equal(_group_cid_of_form(grp, 4), FLEXI_GID(2));
   assert_int_equal(((dt_masks_point_group_t *)_sub->points->data)->parentid, _sub->formid);
-  // a group holding a nested group cannot go one level down, and a group
-  // is not put inside itself
-  assert_false(_model_nest_group(grp, FLEXI_GID(0), FLEXI_GID(1)));
+  // a group is not put inside itself; one holding a nested group goes a level
+  // down with it
   assert_false(_model_nest_group(grp, FLEXI_GID(1), FLEXI_GID(1)));
+  assert_true(_model_nest_group(grp, FLEXI_GID(0), FLEXI_GID(1)));
   assert_int_equal(_group_count(&flexi_module), 3);
+  dt_masks_form_t *outer = _nested_at(grp, 2);
+  assert_true(outer != _sub);
+  assert_int_equal(_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
+  _free_nested_points(outer);
 }
 
 // a nested group shown as its one group moves out to the top list as that
@@ -2416,7 +2459,9 @@ int main(void)
     cmocka_unit_test_teardown(test_nested_points_are_found_with_their_group, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_drop_stays_in_its_list, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_drop_moves_across_levels, _teardown_nested),
-    cmocka_unit_test_teardown(test_a_nested_group_goes_no_deeper, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_nested_group_goes_deeper, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_drop_acts_on_the_row_reference, _teardown_nested),
+    cmocka_unit_test_teardown(test_nesting_stops_where_walks_stop, _teardown_nested),
     cmocka_unit_test_teardown(test_group_reorders_across_levels, _teardown_nested),
     cmocka_unit_test_teardown(test_add_a_group_inside_a_group, _teardown_nested),
     cmocka_unit_test_teardown(test_drop_a_group_inside_another, _teardown_nested),

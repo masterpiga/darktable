@@ -461,9 +461,9 @@ static inline gboolean dt_masks_point_is_marker(const dt_masks_point_group_t *pt
   return (pt->state & DT_MASKS_STATE_GROUP_MARKER) != 0;
 }
 
-// how deep a walk follows groups nested in groups. The panel nests one level
-// and migration leaves no more than that, so a deeper tree is malformed or
-// cyclic, and a walk stops there instead of recursing until the stack is gone
+// how deep a walk follows groups nested in groups, and so how deep the panel
+// lets groups nest. A deeper tree is malformed or cyclic, and a walk stops
+// there instead of recursing until the stack is gone
 #define DT_MASKS_NESTING_MAX 8
 
 /** structure used to store pointers to the functions implementing operations on a mask shape */

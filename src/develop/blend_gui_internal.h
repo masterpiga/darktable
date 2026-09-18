@@ -147,6 +147,13 @@ gboolean _model_drop_element_onto_element(dt_iop_module_t *module,
                                           const dt_mask_id_t src,
                                           const dt_mask_id_t dst,
                                           const gboolean above);
+/** the same for the references `sp` and `dp` themselves, where the mask holds
+    either shape twice and the form id alone names the first reference */
+gboolean _model_drop_point_onto_point(dt_iop_module_t *module,
+                                      dt_masks_form_t *grp,
+                                      const dt_masks_point_group_t *sp,
+                                      const dt_masks_point_group_t *dp,
+                                      const gboolean above);
 
 /** a panel selection: an element, and the group it sits in. Either may be
     INVALID_MASKID -- an element is never selected without its group, but a
@@ -171,6 +178,11 @@ gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
                                         dt_masks_form_t *grp,
                                         const dt_mask_id_t src,
                                         const dt_mask_id_t dst);
+/** the same for the reference `sp` itself (see _model_drop_point_onto_point) */
+gboolean _model_drop_point_onto_group(dt_iop_module_t *module,
+                                      dt_masks_form_t *grp,
+                                      const dt_masks_point_group_t *sp,
+                                      const dt_mask_id_t dst);
 /** drop every member whose form is gone from dev->forms; how many went */
 int _model_prune_dangling_members(dt_masks_form_t *grp);
 /** start the list with a group marker if it does not (see
