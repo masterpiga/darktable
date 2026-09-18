@@ -243,14 +243,23 @@ Done:
 - Shift+click on the add-group menu adds a nested group on top of the
   selected group's members, holding one empty group of the chosen operator,
   which is selected (`_model_nest_new_group`). Refused, with a message,
-  inside a nested group.
+  only past `DT_MASKS_NESTING_MAX`.
 - Dropping a group with shift held puts it inside the group under the
   pointer, as the one group of a new nested group (`_model_nest_group`); the
   target lights up whole while shift is held. A plain drop reorders.
 - Elements and groups move across nesting levels. A move is refused where a
   nested group would land inside itself, where it would nest deeper than
-  `PANEL_NESTING_MAX` (1: mask > group > nested group, Q2), or where a group
-  would leave its list without one (`_may_move_into`).
+  `DT_MASKS_NESTING_MAX` (8, where every walk of the mask stops), or where a
+  group would leave its list without one (`_may_move_into`).
+- 2026-09-18: the panel's own one-level cap (`PANEL_NESTING_MAX`, Q2) is
+  gone; it was an artificial limit once the fold, the display and every walk
+  handled any depth. Found in the GUI: two nested groups could not go inside
+  each other and the drop gave no sign why.
+- 2026-09-18: a drop onto an element row acted on the first reference to that
+  shape, not the row's. With a shape linked at the top level and inside a
+  nested group, dropping beside the nested one moved the dragged item out to
+  the top level. The row handlers now pass the row's own reference
+  (`_row_reference`, `_model_drop_point_onto_point`/`_onto_group`).
 - 5 model tests.
 Still to do:
 - "Group selected": wrap the selected elements or groups into a new subgroup.
@@ -286,7 +295,8 @@ Still to do:
   and editing it still changes both. Migration copies a nested group one
   mask still holds twice after dissolving (masks.c `_unshare_nested`); the
   panel copies a group nested where the mask already holds it (phase 3).
-- **Q2. Depth: proposed, one level: mask > group > subgroup.** A subgroup
+- **Q2. Depth: proposed, one level: mask > group > subgroup; superseded
+  2026-09-18, the panel nests to `DT_MASKS_NESTING_MAX`.** A subgroup
   cannot hold subgroups. Measured on the 13 harvests (19,731 classic drawn
   edits, 5,170 of them drawn + parametric, where migration wraps the drawn
   group as the first member of a new top group):
@@ -460,8 +470,8 @@ Still to do:
   and an exclusion four, so edit 6400 goes from nesting 1 to 2 and edits 20583
   and 9094 to 4.
 
-  Still open: the depth cap. `PANEL_NESTING_MAX` is 1, so those deeper trees
-  display but the panel's own nest/move operations refuse targets below it.
+  The depth cap that left those deeper trees display-only is gone
+  (2026-09-18): the panel nests down to `DT_MASKS_NESTING_MAX`.
 
   Panel display, 2026-09-17: a nested group shows as a group, with the same
   header as a top-level one, except its lead icon is the nested-group icon

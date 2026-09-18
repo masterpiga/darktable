@@ -3605,6 +3605,36 @@ static GList *_point_node_owner(dt_masks_form_t *grp,
            : NULL;
 }
 
+// the node of point `pt` itself at any depth, with the list holding it. A mask
+// can hold the same shape twice, so where a row knows its own reference this
+// finds that one, not the first with its form id as _point_node_owner does.
+// `pt` is only compared, never read
+static GList *_point_node_at(dt_masks_form_t *grp,
+                             const dt_masks_point_group_t *pt,
+                             dt_masks_form_t **owner,
+                             const int depth)
+{
+  if(!grp || !pt || depth > DT_MASKS_NESTING_MAX) return NULL;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+    if(l->data == pt)
+    {
+      if(owner) *owner = grp;
+      return l;
+    }
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *p = l->data;
+    if(dt_masks_point_is_marker(p)) continue;
+    dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, p->formid);
+    if(f && f != grp && (f->type & DT_MASKS_GROUP))
+    {
+      GList *n = _point_node_at(f, pt, owner, depth + 1);
+      if(n) return n;
+    }
+  }
+  return NULL;
+}
+
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id)
 {
   GList *node = _point_node_owner(grp, id, NULL);
@@ -3919,11 +3949,6 @@ dt_mask_id_t _model_add_group(dt_masks_form_t *grp,
   return m->formid;
 }
 
-// how deep the panel nests groups: mask > group > nested group
-// (masks_revamp_nested_groups.md, Q2). A deeper tree can only come from
-// stored data; it still shows, down to DT_MASKS_NESTING_MAX
-#define PANEL_NESTING_MAX 1
-
 // how many levels of nested groups the member form `f` brings: 0 for a shape
 static int _form_nesting(const dt_masks_form_t *f, const int depth)
 {
@@ -3954,8 +3979,9 @@ static int _list_depth(dt_masks_form_t *grp, dt_masks_form_t *owner)
 }
 
 // may the member `fid` move from the list of `from` into the list of `to`?
-// A nested group never into itself or below itself, and nothing deeper than
-// the panel nests, unless it is no deeper than it already was
+// A nested group never into itself or below itself, and nothing deeper than a
+// walk of the mask follows (DT_MASKS_NESTING_MAX), unless it is no deeper than
+// it already was
 static gboolean _may_move_into(dt_masks_form_t *grp,
                                dt_masks_form_t *from,
                                dt_masks_form_t *to,
@@ -3967,7 +3993,7 @@ static gboolean _may_move_into(dt_masks_form_t *grp,
     return FALSE;
   const int n = _form_nesting(f, 0);
   const int depth = _list_depth(grp, to) + n;
-  return depth <= PANEL_NESTING_MAX || depth <= _list_depth(grp, from) + n;
+  return depth <= DT_MASKS_NESTING_MAX || depth <= _list_depth(grp, from) + n;
 }
 
 // how many groups the list of `owner` holds
@@ -4029,7 +4055,7 @@ dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
 {
   dt_masks_form_t *owner = NULL;
   GList *marker = _group_marker_node(_point_node_owner(grp, cid, &owner));
-  if(!marker || _list_depth(grp, owner) + 1 > PANEL_NESTING_MAX) return INVALID_MASKID;
+  if(!marker || _list_depth(grp, owner) + 1 > DT_MASKS_NESTING_MAX) return INVALID_MASKID;
   dt_masks_form_t *sub = _new_nested_group();
   if(!sub) return INVALID_MASKID;
   dt_masks_point_group_t *m =
@@ -4043,8 +4069,8 @@ dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
 // new nested group as its one group, the reference to which goes into the
 // list of `to` right after the point `after`. FALSE where it may not go: the
 // list it leaves keeps a group, and its members land one level below the list
-// of `to`, never beside or inside themselves and never deeper than the panel
-// nests
+// of `to`, never beside or inside themselves and never deeper than
+// DT_MASKS_NESTING_MAX
 static gboolean _wrap_group(dt_masks_form_t *grp,
                             dt_masks_form_t *sowner,
                             GList *src,
@@ -4053,7 +4079,7 @@ static gboolean _wrap_group(dt_masks_form_t *grp,
 {
   if(_list_group_count(sowner) <= 1 || !after || after == src->data) return FALSE;
   const int depth = _list_depth(grp, to) + 1;
-  if(depth > PANEL_NESTING_MAX) return FALSE;
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
   for(GList *l = src->next; l && !_starts_group(l); l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
@@ -4062,7 +4088,7 @@ static gboolean _wrap_group(dt_masks_form_t *grp,
     if(f && (f->type & DT_MASKS_GROUP)
        && (f == to || _point_node_owner(f, to->formid, NULL)))
       return FALSE;
-    if(depth + _form_nesting(f, 0) > PANEL_NESTING_MAX) return FALSE;
+    if(depth + _form_nesting(f, 0) > DT_MASKS_NESTING_MAX) return FALSE;
   }
 
   dt_masks_form_t *sub = _new_nested_group();
@@ -7929,9 +7955,21 @@ gboolean _model_drop_element_onto_element(dt_iop_module_t *module,
                                           const gboolean above)
 {
   if(!grp || src == dst) return FALSE;
+  return _model_drop_point_onto_point(module, grp, _group_point(grp, src),
+                                      _group_point(grp, dst), above);
+}
+
+gboolean _model_drop_point_onto_point(dt_iop_module_t *module,
+                                      dt_masks_form_t *grp,
+                                      const dt_masks_point_group_t *sp,
+                                      const dt_masks_point_group_t *dp,
+                                      const gboolean above)
+{
+  if(!grp || !sp || !dp || sp->formid == dp->formid) return FALSE;
+  const dt_mask_id_t src = sp->formid;
   dt_masks_form_t *sowner = NULL, *downer = NULL;
-  GList *s = _point_node_owner(grp, src, &sowner);
-  GList *d = _point_node_owner(grp, dst, &downer);
+  GList *s = _point_node_at(grp, sp, &sowner, 0);
+  GList *d = _point_node_at(grp, dp, &downer, 0);
   // elements both: a group is dropped onto through its header. Across nesting
   // levels, only where it may go (see _may_move_into)
   if(!s || !d || _starts_group(s) || _starts_group(d)
@@ -7961,6 +7999,19 @@ static gboolean _drags_as_element(GdkDragContext *ctx)
   return source && g_object_get_data(G_OBJECT(source), "drags-as-element");
 }
 
+// the reference the element row of widget `w` shows, while it is still in the
+// mask and still shape `id`; else the first reference to `id`. A mask can hold
+// a shape twice, and then its form id alone names the wrong row
+static const dt_masks_point_group_t *_row_reference(dt_masks_form_t *grp,
+                                                    GtkWidget *w,
+                                                    const dt_mask_id_t id)
+{
+  GtkWidget *row = w ? g_object_get_data(G_OBJECT(w), "row-vbox") : NULL;
+  const dt_masks_point_group_t *pt = row ? g_object_get_data(G_OBJECT(row), "row-point") : NULL;
+  if(pt && _point_node_at(grp, pt, NULL, 0) && pt->formid == id) return pt;
+  return _group_point(grp, id);
+}
+
 static void _masks_row_drag_received(GtkWidget *w,
                                      GdkDragContext *ctx,
                                      gint x,
@@ -7973,11 +8024,13 @@ static void _masks_row_drag_received(GtkWidget *w,
   gboolean ok = FALSE;
   if(gtk_selection_data_get_length(sel) == (gint)sizeof(dt_mask_id_t))
   {
+    dt_masks_form_t *grp = _module_mask_group(module);
     dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
     // a nested group dragged by its header carries its group's id
-    if(_drags_as_element(ctx))
+    const gboolean nested = _drags_as_element(ctx);
+    if(nested)
     {
-      const dt_masks_form_t *sub = _model_nested_group_of(_module_mask_group(module), src);
+      const dt_masks_form_t *sub = _model_nested_group_of(grp, src);
       src = sub ? sub->formid : INVALID_MASKID;
     }
     const dt_mask_id_t dst = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
@@ -7985,8 +8038,9 @@ static void _masks_row_drag_received(GtkWidget *w,
     // shape visually above the target (= later in the list).
     const int h = gtk_widget_get_allocated_height(w);
     const gboolean above = (h > 0 && y < h / 2);
-    ok = _model_drop_element_onto_element(module, _module_mask_group(module),
-                                          src, dst, above);
+    const dt_masks_point_group_t *sp =
+      nested ? _group_point(grp, src) : _row_reference(grp, gtk_drag_get_source_widget(ctx), src);
+    ok = _model_drop_point_onto_point(module, grp, sp, _row_reference(grp, w, dst), above);
     if(ok)
     {
       dt_print(DT_DEBUG_MASKS, "[masks] form %d drag-moved near %d", src, dst);
@@ -8153,8 +8207,8 @@ static void _masks_group_drag_received(GtkWidget *w,
       const gboolean inside = dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK);
       ok = _model_move_group(module, src, dst, above, inside);
       if(inside && !ok && src != dst)
-        dt_control_log(_("this group cannot go inside that one: groups nest one level"
-                         " deep, and a list keeps its last group"));
+        dt_control_log(_("this group cannot go inside that one: a group never goes"
+                         " inside itself, and a list keeps its last group"));
       // a moved group stays selected, exactly as a moved element does (see
       // _masks_row_drag_received's own note): otherwise it lands in its new
       // spot with nothing indicating what just moved, and -- worse -- the
@@ -8187,8 +8241,18 @@ gboolean _model_drop_element_onto_group(dt_iop_module_t *module,
                                         const dt_mask_id_t dst)
 {
   if(!grp || src == dst) return FALSE;
+  return _model_drop_point_onto_group(module, grp, _group_point(grp, src), dst);
+}
+
+gboolean _model_drop_point_onto_group(dt_iop_module_t *module,
+                                      dt_masks_form_t *grp,
+                                      const dt_masks_point_group_t *sp,
+                                      const dt_mask_id_t dst)
+{
+  if(!grp || !sp || sp->formid == dst) return FALSE;
+  const dt_mask_id_t src = sp->formid;
   dt_masks_form_t *sowner = NULL, *downer = NULL;
-  GList *s = _point_node_owner(grp, src, &sowner);
+  GList *s = _point_node_at(grp, sp, &sowner, 0);
   GList *marker = _group_marker_node(_point_node_owner(grp, dst, &downer));
   // as for a drop onto an element
   if(!s || _starts_group(s) || !marker || !_may_move_into(grp, sowner, downer, src))
@@ -8218,8 +8282,10 @@ static void _masks_shape_to_group_drop(GtkWidget *w,
   if(gtk_selection_data_get_length(sel) == (gint)sizeof(dt_mask_id_t))
   {
     const dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
-    ok = _model_drop_element_onto_group(module, _module_mask_group(module), src,
-                                        _header_cid(w));
+    dt_masks_form_t *grp = _module_mask_group(module);
+    ok = _model_drop_point_onto_group(module, grp,
+                                      _row_reference(grp, gtk_drag_get_source_widget(ctx), src),
+                                      _header_cid(w));
     if(ok)
     {
       dt_print(DT_DEBUG_MASKS, "[masks] shape %d moved into group %d", src, _header_cid(w));
@@ -10027,7 +10093,7 @@ static void _stage_nested_group(dt_iop_module_t *module, const int op_state)
   const dt_mask_id_t nid = _model_nest_new_group(grp, op, cid);
   if(!dt_is_valid_maskid(nid))
   {
-    dt_control_log(_("groups nest one level deep: this group cannot hold groups"));
+    dt_control_log(_("this group is nested as deep as groups go"));
     return;
   }
   bd->panel_selected_formid = INVALID_MASKID;
@@ -14787,6 +14853,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   dt_gui_box_add(row_vbox, row_evbox);
   g_object_set_data(G_OBJECT(row_evbox), "row-vbox", row_vbox);
   g_object_set_data(G_OBJECT(evbox), "row-vbox", row_vbox);
+  g_object_set_data(G_OBJECT(handle), "row-vbox", row_vbox);
 
   g_object_set_data(G_OBJECT(row_vbox), "mask-row", GINT_TO_POINTER(1));
   g_object_set_data(G_OBJECT(row_vbox), "formid", GINT_TO_POINTER(fid));
