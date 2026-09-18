@@ -294,7 +294,9 @@ expected) — no regression.
 
 **Result: `migrate_legacy.c` now has zero logic-driven fail-closed cases.**
 Every remaining `_migration_failed()` call site is a generic
-allocation-failure guard, not a "no flexi equivalent" decision. The
+allocation-failure guard, not a "no flexi equivalent" decision (those guards
+and `_migration_failed()` itself were removed on 2026-09-13: migration has
+no failure path and no classic fallback any more). The
 classic mask *rendering* code in `blend.c`/`blendif_*.c` remains in the
 tree (flexi's drawn masks still share the `DEVELOP_MASK_MASK` rendering
 path with classic, and the allocation-failure fallback still needs

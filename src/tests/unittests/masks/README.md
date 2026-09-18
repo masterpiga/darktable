@@ -12,10 +12,10 @@ ctest --test-dir build-test -R flexi --output-on-failure
 
 | Suite | Covers |
 |---|---|
-| `test_flexi_model` | grouping and partitioning, element drag-and-drop, the selection state machine, operator normalisation, solo/mute primitives |
+| `test_flexi_model` | grouping and partitioning, element drag-and-drop, the selection state machine, marking classic runs as groups, solo/mute primitives |
 | `test_flexi_cache` | which edits must — and must not — invalidate the pixelpipe's mask cache |
 | `test_flexi_persistence` | mask blob version migration, i.e. carrying already-saved edits forward |
-| `test_flexi_dnd` | the drop paths other than element-onto-element: group headers, staged groups, clusters, whole-group reorder |
+| `test_flexi_dnd` | the drop paths other than element-onto-element: group headers, empty groups, clusters, whole-group reorder, adding, deleting, emptying and merging groups |
 | `test_flexi_groups` | the solo family's mutual exclusivity, group numbering, refinement scope |
 | `test_flexi_panel` | what the panel shows: warning badges, adaptive parametric rows, preferences |
 | `test_flexi_migrate` | the classic → flexi migration case table (structure, not pixels) |
@@ -27,8 +27,8 @@ The panel looks like it needs a GUI harness to test. It mostly does not.
 
 Its group model is a plain structure — a `dt_masks_form_t` of type
 `DT_MASKS_GROUP` whose `points` list holds one `dt_masks_point_group_t` per
-element, bottom-up, partitioned into groups by `group_start` (see
-`_starts_group`). Every gesture the panel offers is ultimately a mutation of
+element, bottom-up, with each group opened by a marker record that holds the
+group's own settings (`DT_MASKS_STATE_GROUP_MARKER`, see `_starts_group`). Every gesture the panel offers is ultimately a mutation of
 that list. The functions that perform those mutations take a mask group and
 plain values; the only global they touch is `darktable.develop`, and only to
 resolve a formid to a form.
@@ -64,11 +64,11 @@ gesture to the suite means extracting its handler the same way first.
 Scenarios read as what the panel shows, bottom group first:
 
 ```
-"u:1,2 | i:3"
+"u:1,2 | [d] | i:3"
 ```
 
-A union group holding elements 1 and 2, with an intersection group holding
-element 3 above it. Operators: `u`nion, `i`ntersection, `d`ifference,
+A union group holding elements 1 and 2, an empty difference group above it,
+then an intersection group holding element 3. Operators: `u`nion, `i`ntersection, `d`ifference,
 e`x`clusion, `s`um.
 
 ```c
@@ -102,8 +102,7 @@ The negative cases matter as much as the positive ones. Solo-*edit* narrows
 which shapes are editable on canvas and must **not** invalidate; solo/mute
 (`DT_MASKS_STATE_HIDDEN`) changes what the mask renders to and **must**. Those
 two are easy to conflate, so they are pinned apart explicitly — as are
-selection, cluster collapse/expand, canvas edit mode, group renaming, and empty
-group placeholders.
+selection, cluster collapse/expand, canvas edit mode, and group renaming.
 
 Some of those negative tests look tautological today, because the state they
 poke lives in `blend_data` rather than in the group. That is what makes them
@@ -207,9 +206,8 @@ more structure.
 The six gaps this suite started with are closed. What is left needs machinery
 the fixture does not have:
 
-- **Undo/redo interaction.** A stale `bd->empty_groups` placeholder previously
-  duplicated a group on undo. Reproducing it needs a real history stack, so it
-  belongs in an integration test rather than here.
+- **Undo/redo interaction.** Needs a real history stack, so it belongs in an
+  integration test (`--undo-masks`) rather than here.
 - **Anything requiring the database.** The read-time stride selection in
   `dt_masks_read_forms_ext` (which picks how many bytes of each stored point to
   read, per masks version) is SQLite-coupled; only the migration chain that runs
@@ -309,9 +307,10 @@ caught on 264 of the 288 generated edits and only 22 of 118 real ones.
 3. **Prove the test can fail** — break the code deliberately and watch it go
    red before committing it. A test that has never failed has not been shown to
    test anything. Two mutations worth knowing:
-   - removing the `_group_keys_apply` call in
-     `_model_drop_element_onto_element` reproduces the "moving an element
-     between two groups creates a third group" bug exactly;
+   - in `_model_drop_element_onto_group`, inserting after the group's marker
+     instead of after `_group_last_node` sends an element dropped on a group
+     header to the bottom of that group instead of the top, and fails three
+     of the header-drop tests;
    - removing the solo-edit clear in `_model_toggle_solo_form` breaks the
      solo / solo-edit mutual exclusivity.
 4. Check the invariant after **every** step of a sequence, not just at the end.

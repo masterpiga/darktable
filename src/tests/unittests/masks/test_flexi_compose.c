@@ -221,6 +221,154 @@ static void test_difference_is_order_dependent(void **state)
 }
 
 // ---------------------------------------------------------------------------
+// the nested forms -- what lets a between-group operator become a group
+// (masks_revamp_nested_groups.md, Q7)
+// ---------------------------------------------------------------------------
+
+// fold `src` into a group seeded empty, at `opacity`, by screen; then invert
+// the finished sub-mask, the way a group's invert-output does (group.c:1427)
+static void _inverted_screen_group(const float *src, const float opacity, float *out)
+{
+  const float empty[N] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+  _apply(_combine_masks_screen, empty, src, out, opacity, 0);
+  for(int i = 0; i < N; i++) out[i] = 1.0f - out[i];
+}
+
+/* A hole is `multiply { A, inverted screen group { B } }`. The screen group's
+   sub-mask is o*B, inverting it gives 1 - o*B, and multiplying that into A is
+   exactly classic's acc * (1 - o*B) (group.c:1081).
+
+   The opacity ORDER is the whole point: inside the group the hole's opacity
+   applies before the invert, which is what the negative control below pins. */
+static void test_a_faded_hole_is_a_multiply_of_an_inverted_screen_group(void **state)
+{
+  // the corpus's faded holes sit at 0.36, 0.75 and 0.93; 1.0 must agree too
+  const float opacities[] = { 0.36f, 0.75f, 0.93f, 1.0f, 0.0f };
+  for(size_t k = 0; k < sizeof(opacities) / sizeof(*opacities); k++)
+  {
+    float classic[N], sub[N], got[N];
+    _apply(_combine_masks_difference, A, B, classic, opacities[k], 0);
+    _inverted_screen_group(B, opacities[k], sub);
+    _apply(_combine_masks_multiply, A, sub, got, 1.0f, 0);
+    _assert_close(got, classic, "faded hole is not the inverted screen group");
+  }
+}
+
+// and a RUN of holes is one screen group: 1 - (1 - o1*x1)(1 - o2*x2) is what
+// the screen fold computes, which is classic subtracting each hole in turn
+static void test_a_run_of_faded_holes_folds_into_one_screen_group(void **state)
+{
+  const float C[N] = { 0.6f, 0.1f, 0.9f, 0.4f, 0.2f };
+  const float o1 = 0.36f, o2 = 0.75f;
+
+  float classic[N], step[N];
+  _apply(_combine_masks_difference, A, B, step, o1, 0);
+  _apply(_combine_masks_difference, step, C, classic, o2, 0);
+
+  const float empty[N] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+  float sub[N], sub2[N], inv[N], got[N];
+  _apply(_combine_masks_screen, empty, B, sub, o1, 0);
+  _apply(_combine_masks_screen, sub, C, sub2, o2, 0);
+  for(int i = 0; i < N; i++) inv[i] = 1.0f - sub2[i];
+  _apply(_combine_masks_multiply, A, inv, got, 1.0f, 0);
+
+  _assert_close(got, classic, "a run of holes is not one screen group");
+}
+
+/* The negative control, and the reason the operand is wrapped in a group at
+   all: an element's own invert applies its opacity AFTER inverting
+   (group.c:1012), giving o*(1 - B) instead of 1 - o*B. At a fractional
+   opacity those are different masks, so inverting the element directly would
+   silently change every faded hole. */
+static void test_inverting_the_element_is_not_the_faded_hole_form(void **state)
+{
+  const float o = 0.36f;
+  float classic[N], elem[N], got[N];
+  _apply(_combine_masks_difference, A, B, classic, o, 0);
+  // an element inverted in place: opacity applied to the complement
+  for(int i = 0; i < N; i++) elem[i] = o * (1.0f - B[i]);
+  _apply(_combine_masks_multiply, A, elem, got, 1.0f, 0);
+
+  gboolean same = TRUE;
+  for(int i = 0; i < N; i++) if(fabsf(got[i] - classic[i]) > 1e-5f) same = FALSE;
+  if(same)
+    fail_msg("inverting the element matched the hole form; the group wrapper"
+             " would then be pointless and the ordering claim is wrong");
+}
+
+/* Exclusion is `union { multiply { A, inverted P }, multiply { P, inverted A } }`.
+   Classic computes MAX((1-A)*P, A*(1-P)) where both operands are positive, and
+   falls back to MAX(A, P) where either is zero (group.c:1112-1145) -- the two
+   agree, since with A or P zero the products reduce to the surviving operand. */
+static void test_exclusion_is_the_union_of_two_multiplies(void **state)
+{
+  const float opacities[] = { 0.36f, 1.0f, 0.0f };
+  for(size_t k = 0; k < sizeof(opacities) / sizeof(*opacities); k++)
+  {
+    const float o = opacities[k];
+    float classic[N], got[N];
+    _apply(_combine_masks_exclusion, A, B, classic, o, 0);
+    for(int i = 0; i < N; i++)
+    {
+      const float p = o * B[i];
+      got[i] = fmaxf(A[i] * (1.0f - p), p * (1.0f - A[i]));
+    }
+    _assert_close(got, classic, "exclusion is not the union of two multiplies");
+  }
+}
+
+// a group's finished sub-mask: inverted, then scaled by its group opacity
+// (group.c _group_get_mask_roi_flexi)
+static void _group_output(const float *x, const float go, const int inverted, float *out)
+{
+  for(int i = 0; i < N; i++) out[i] = go * (inverted ? 1.0f - x[i] : x[i]);
+}
+
+/* Migration moves a nested group reference's opacity and inversion onto the
+   group's marker (masks.c _fold_nested_refs), so the panel can show them on
+   the group's header. Every within-group combine must see the same member:
+   o * (inv ? 1 - g : g) with g = go * (minv ? 1 - x : x). Uninverted, the
+   opacities multiply; inverted over a group at full opacity, the inversion
+   flips and the opacity moves across. */
+static void test_a_nested_reference_folds_onto_its_group(void **state)
+{
+  const combine_fn fns[] = { _combine_masks_union, _combine_masks_intersect,
+                             _combine_masks_screen, _combine_masks_multiply,
+                             _combine_masks_sum };
+  const float opacities[] = { 0.36f, 0.75f, 1.0f };
+  for(size_t f = 0; f < sizeof(fns) / sizeof(*fns); f++)
+    for(size_t a = 0; a < sizeof(opacities) / sizeof(*opacities); a++)
+      for(size_t b = 0; b < sizeof(opacities) / sizeof(*opacities); b++)
+        for(int inv = 0; inv < 2; inv++)
+          for(int minv = 0; minv < 2; minv++)
+          {
+            const float o = opacities[a], go = opacities[b];
+            if(inv && go != 1.0f) continue; // not foldable, left as it is
+            float g[N], want[N], folded[N], got[N];
+            _group_output(B, go, minv, g);
+            _apply(fns[f], A, g, want, o, inv);
+            _group_output(B, go * o, minv ^ inv, folded);
+            _apply(fns[f], A, folded, got, 1.0f, 0);
+            _assert_close(got, want, "a folded nested reference renders differently");
+          }
+}
+
+/* ... and the case it leaves alone: an inverted reference over a faded group
+   is o * (1 - go * x), which no single group opacity and inversion produce */
+static void test_an_inverted_reference_over_a_faded_group_does_not_fold(void **state)
+{
+  const float o = 0.75f, go = 0.36f;
+  float g[N], want[N], folded[N], got[N];
+  _group_output(B, go, 0, g);
+  _apply(_combine_masks_union, A, g, want, o, 1);
+  _group_output(B, go * o, 1, folded);
+  _apply(_combine_masks_union, A, folded, got, 1.0f, 0);
+  gboolean differs = FALSE;
+  for(int i = 0; i < N; i++) differs |= fabsf(got[i] - want[i]) > 1e-5f;
+  assert_true(differs);
+}
+
+// ---------------------------------------------------------------------------
 // identities -- what makes an empty group harmless
 // ---------------------------------------------------------------------------
 
@@ -396,6 +544,12 @@ int main(void)
     cmocka_unit_test(test_group_fold_operators_are_commutative),
     cmocka_unit_test(test_group_fold_operators_are_associative),
     cmocka_unit_test(test_difference_is_order_dependent),
+    cmocka_unit_test(test_a_faded_hole_is_a_multiply_of_an_inverted_screen_group),
+    cmocka_unit_test(test_a_run_of_faded_holes_folds_into_one_screen_group),
+    cmocka_unit_test(test_inverting_the_element_is_not_the_faded_hole_form),
+    cmocka_unit_test(test_exclusion_is_the_union_of_two_multiplies),
+    cmocka_unit_test(test_a_nested_reference_folds_onto_its_group),
+    cmocka_unit_test(test_an_inverted_reference_over_a_faded_group_does_not_fold),
     cmocka_unit_test(test_union_with_zero_is_identity),
     cmocka_unit_test(test_intersection_with_one_is_identity),
     cmocka_unit_test(test_multiply_with_one_is_identity),

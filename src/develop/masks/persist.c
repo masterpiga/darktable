@@ -140,7 +140,7 @@ static const seq_t _sequences[] =
   // migrate_legacy.c) and have now been through storage once.
   { "migrated:opacity then refine", "migration's markers are lost by a save that did not touch them",
     2, { { POKE_ELEM_OPACITY, SCOPE_FIRST }, { POKE_GROUP_REFINE, SCOPE_RUN } } },
-  { "migrated:disable then within", "the base-case repair's disable bits are lost by a save",
+  { "migrated:disable then within", "a disable bit set on a migrated group is lost by a save",
     2, { { POKE_ELEM_DISABLE, SCOPE_LAST }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
 
   // ---- a run-level modifier set before the save and read after it. These

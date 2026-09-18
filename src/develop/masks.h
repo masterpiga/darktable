@@ -160,6 +160,16 @@ typedef enum dt_masks_state_t
   // holds the group's settings once, followed by the group's members up to
   // the next marker. See dt_masks_point_is_marker below
   DT_MASKS_STATE_GROUP_MARKER = 1 << 18,
+  // within-group counterpart to the between-group DT_MASKS_STATE_SUM: members
+  // fold together by min(1, a + b). Classic applies its own per-shape sum with
+  // the same clamp after every shape (_combine_masks_sum in group.c), and a
+  // clamp at 1 is absorbing for non-negative terms, so folding the whole group
+  // in one order-free step renders exactly what classic's chain does. That is
+  // what lets a classic nested sum group migrate as one group instead of a run
+  // per shape (masks_revamp_nested_groups.md, Q7). Mutually exclusive with
+  // SCREEN/ISECT/WITHIN_MULTIPLY (see DT_MASKS_STATE_WITHIN). Additive new
+  // flag, so legacy edits (which never set it) render identically.
+  DT_MASKS_STATE_WITHIN_SUM = 1 << 19,
   // the between-group combining operators: exactly one of these is set on a
   // group's members (disable/invert are modifiers on top, not one of these)
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
@@ -174,10 +184,11 @@ typedef enum dt_masks_state_t
                      | DT_MASKS_STATE_OP_INVERT,
   // within-group combine mode: how a group's own members fold together (before
   // the finished sub-mask is composited onto the stack by the group's OP).
-  // The three bits are mutually exclusive; none set = union (max, the default).
+  // The four bits are mutually exclusive; none set = union (max, the default).
   DT_MASKS_STATE_WITHIN = DT_MASKS_STATE_SCREEN
                         | DT_MASKS_STATE_ISECT
                         | DT_MASKS_STATE_WITHIN_MULTIPLY
+                        | DT_MASKS_STATE_WITHIN_SUM
 } dt_masks_state_t;
 
 // One `state` word carries three INDEPENDENT roles at once, so their bit sets
@@ -1087,7 +1098,7 @@ gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp);
     one that was marked already stays nested. A nested group the mask still
     holds twice gets a copy for each reference past the first, so a group
     has one parent within a mask. TRUE if anything changed */
-gboolean dt_masks_group_mark_classic_runs(GList *forms,
+gboolean dt_masks_group_mark_classic_runs(GList **forms,
                                           dt_masks_form_t *grp,
                                           const gboolean split_nonunion);
 /** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when

@@ -36,11 +36,36 @@ For the drawn/parametric fold: **yes, functionally.**
   closed — a classic "replace"-position member, an operator-less member sitting
   above others, which classic renders by discarding everything below it — is now
   *repaired* rather than refused: `_repair_base_case_overwrite()`
-  (`migrate_legacy.c:199`) disables exactly the members classic discarded, so
+  (`migrate_legacy.c:199`) drops exactly the members classic discarded, so
   both folds render what classic always rendered. `_group_has_replace_member()`
   no longer exists. Every remaining `return FALSE` in the file is
   `_migration_failed(module, "allocation failure")` plus one invalid-`mask_id`
   guard, i.e. OOM.
+- **Migration drops provably no-op duplicate shape references.** Classic can
+  reach one shape twice in a mask, and where every member combining them is a
+  union at full opacity, uninverted and unrefined, the repeat renders nothing:
+  `max(a, a) = a`. `_prune_noop_duplicate_refs()` removes it, between the
+  base-case repair and the run marking, so a migrated mask means what it looks
+  like. 20 edits of the corpus carry one: 17 duplicate shape references, 3
+  duplicate references to a whole group, and 8 wrapper groups left holding
+  nothing once their contents were already in the maximum. A group referenced
+  twice is dropped as a reference, never descended into twice -- both
+  references name one form, so a second descent would empty it for both, and
+  dropping the reference is exact for the same reason it would have been
+  empty. Without this, corpus edit 3320 dissolved into a panel showing four
+  rows for two shapes. The test is each whole
+  list walked, not the path to the member: the first visible member composites
+  as a plain copy whatever its operator (`group.c:867-870`), so a non-union
+  sibling would be promoted out of its operator by the removal. A member group
+  whose own list is not a union (a hole, a fade inside) is one opaque term of
+  its parent's maximum: it is not descended into, its shapes are never counted
+  as seen, and it no longer blocks the prune around it (2026-09-17). Before,
+  one such group anywhere disabled the prune for the whole mask, which left
+  corpus edit 6400 (panel case link_02) with a shape listed twice in its
+  top-level union; a model of the rule over the corpus finds that edit the only
+  one the change reaches. Only an unmarked list
+  is pruned -- in a flexi mask a shape held twice is a link the user made, and
+  each reference is its own panel row.
 - **Nothing in a migrated tree can reach the classic fold.**
   `dt_masks_group_get_mask_roi()` (`group.c:1405`) dispatches on the *module's*
   `blend_params`, and every recursive call site passes `piece` through, so
@@ -53,8 +78,8 @@ Three reasons it still stays in the tree for now, in order of weight:
 
 1. **It is the verification suite's oracle.** `verify.c` renders classic and
    migrated in the same binary and diffs them (`max_diff` = "CPU: classic vs
-   migrated", `verify.c:1034`); `--check-masks`, `--postedit-masks` and
-   `src/tests/masking/flexi` all rest on that comparison. Delete the classic
+   migrated", `verify.c:1034`); `--check-masks` and
+   `src/tests/masking/flexi` both rest on that comparison. Delete the classic
    fold and §3's entire evidence base stops being re-runnable — including by a
    future contributor investigating a migration bug we have not seen. This is
    the argument that actually decides it.
@@ -134,7 +159,6 @@ This is the argument the PR description leads with, not an appendix.
 | 46-scenario pixel suite | migrated render == classic render on the export pipe, re-established against a real pristine build on `620e80c1e0` (43/46 bit-identical, the 3 being the known `J5`/`J6`/`J7`; 46/46 in normal mode) — plus two route-equivalence controls (K1/K1C, K2/K2C) that hold without a pristine build. See §5a | `src/tests/masking/flexi/run.sh` |
 | Corpus campaign | 14 libraries, 61,332 edits, 7,932 distinct configuration *shapes*, **0 failures** → failure rate < 0.038% (1 in 2,648) at 95% confidence | `masks_revamp_migration_confidence.md` |
 | `--persist-masks` | a save/reload between two edits does not change the mask | `masks/persist.c` |
-| `--postedit-masks` | a migrated group edited through every panel control matches the from-scratch equivalent — the only check that looks *past* migration | `masks/postedit.c` |
 | `--undo-masks`, `--verify-masks`, `--check-masks` | undo/geometry, targeted replay of known failures, per-corpus harvest | `masks/{undo,verify,check}.c` |
 
 Two real migration bugs were found by this campaign and fixed
@@ -256,8 +280,9 @@ isn't in the tree they just read.
 `common/darktable.c`. These are what let a user with a broken edit hand us a
 reproducer, and what lets a future contributor re-run the migration oracle.
 
-Staying on the branch: `masks/{postedit,undo,roundtrip,styleapply}.c` and their
-verbs. They are our development harness — they exercise panel controls and undo,
+Staying on the branch: `masks/{postedit,undo,roundtrip,styleapply}.c` and the
+verbs that use them (`postedit.c` now only holds the panel steps
+`--persist-masks` and `--undo-masks` share; `--postedit-masks` is gone). They are our development harness — they exercise panel controls and undo,
 so they will not even be meaningful upstream until Batch 7 lands, and they would
 add several thousand lines to a binary that ships to every user for no reader
 outside this team.
@@ -375,6 +400,29 @@ Still to extract:
   vanishes) rather than being flagged. It cannot help *this* transition, since
   released versions already behave that way, but it helps the next bump and it
   is the same shape as the rest of this batch.
+- **6d - cross-pipe reads of shared module state during `synch_all`.** A
+  pipe's `synch_all` commits `default_blendop_params` into the shared
+  `module->blend_params` (imageop.c `dt_iop_commit_blend_params`) before
+  replaying history, and registers or removes raster users in the shared
+  `raster_mask.source.users` tables. Pipes processing concurrently saw both.
+  All of these are on `master`:
+  - `dt_dev_get_raster_mask` judges the source from `module->blend_params`
+    (master pixelpipe_hb.c:3851). A default there makes it delete the stored
+    mask and return NULL, an intermittently empty mask. On the branch this
+    showed up with raster elements.
+  - `_get_guide_weight` / `_get_feathering_eps` read `feather_version` from
+    the module (blend.c).
+  - the raster sink's source and id come from the module's
+    `raster_mask.sink`, which the replay clears: in `dt_develop_blend_process`
+    and its OpenCL twin, and in the stale-user prune's "points back" test.
+  - The users tables are inserted into, removed from and iterated with no
+    lock.
+
+  The fix reads the mask mode, `feather_version` and the raster source (op,
+  instance, id) from `piece->blendop_data`, and guards every users-table access
+  with one recursive mutex (`dt_iop_raster_users_lock`). Prepared as
+  `a8a12194e2` on `pixelpipe-shared-state-race` in the master worktree; the
+  branch carries the same change.
 
 ### Batch 7 — flexi replaces classic
 

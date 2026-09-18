@@ -113,6 +113,18 @@ dt_mask_id_t _model_add_group(dt_masks_form_t *grp,
                               const dt_masks_state_t op,
                               const dt_mask_id_t cid,
                               const gboolean below);
+/** a new nested group on top of the members of group `cid`, holding one empty
+    group of operator `op`. Returns that group's id, or INVALID_MASKID where
+    groups may not nest any deeper */
+dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
+                                   const dt_masks_state_t op,
+                                   const dt_mask_id_t cid);
+/** move group `src_cid` into group `dst_cid`, as the one group of a new
+    nested group on top of its members. FALSE where it may not go: the list it
+    leaves keeps a group, and nothing nests inside itself or too deep */
+gboolean _model_nest_group(dt_masks_form_t *grp,
+                           const dt_mask_id_t src_cid,
+                           const dt_mask_id_t dst_cid);
 /** remove group `cid`, its members with it. Returns the member ids, which the
     caller frees */
 GList *_model_delete_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
@@ -177,6 +189,18 @@ gboolean _masks_reorder_groups(dt_iop_module_t *module,
                                const dt_mask_id_t src_cid,
                                const dt_mask_id_t dst_cid,
                                const gboolean above);
+/** the nested group whose one group is `cid`, which the panel shows as that
+    group, or NULL */
+dt_masks_form_t *_model_nested_group_of(dt_masks_form_t *grp, const dt_mask_id_t cid);
+/** a group dropped on group `dst_cid`: right above or below it, or with
+    `inside` on top of its members. A nested group holding one group moves as
+    the element it is, and a group landing beside such a nested group is
+    nested beside it. FALSE where it may not go */
+gboolean _model_move_group(dt_iop_module_t *module,
+                           const dt_mask_id_t src_cid,
+                           const dt_mask_id_t dst_cid,
+                           const gboolean above,
+                           const gboolean inside);
 
 /** what a solo-family toggle leaves for its caller to do to the canvas edit
     scope. The model half never touches the canvas itself. */
@@ -349,6 +373,11 @@ GList *_model_import_forms(dt_iop_module_t *module,
 /** replace linked form `fid` in `module`'s mask with its own copy, carrying
     the panel's references over. Returns the copy's id. Records no history. */
 dt_mask_id_t _model_unlink_form(dt_iop_module_t *module, const dt_mask_id_t fid);
+// the same, for one named reference: a mask can hold the same shape twice, and
+// each reference unlinks on its own (NULL pt: the first one the mask holds)
+dt_mask_id_t _model_unlink_form_point(dt_iop_module_t *module,
+                                      const dt_mask_id_t fid,
+                                      dt_masks_point_group_t *pt);
 /** the name a row shows: the form's own without its type prefix, or for a
     raster element named by its type alone, its source's current name */
 gchar *_form_display_name(const dt_masks_form_t *form);
@@ -372,8 +401,8 @@ dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t
 dt_hash_t _masks_list_signature(dt_iop_module_t *module);
 
 /** group numbering: identity that must survive a group emptying and refilling */
-int _op_index_for_state(const int state);
-int _group_ord_max_for_op(dt_iop_module_t *module, const int opidx);
+int _within_index_for_state(const int state);
+int _group_ord_max_for_within(dt_iop_module_t *module, const int mode);
 int _group_ordinal_of_cid(dt_iop_module_t *module, const dt_mask_id_t cid);
 void _prune_group_ordinals(dt_iop_module_t *module);
 void _prune_stale_solo(dt_iop_module_t *module);

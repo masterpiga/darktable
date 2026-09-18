@@ -138,21 +138,38 @@ static gchar *_snapshot(dt_develop_t *dev)
     Returns a description of the first violation, or NULL. */
 static gchar *_check_group_runs(dt_develop_t *dev,
                                 const dt_mask_id_t formid,
+                                const dt_masks_point_group_t *ref,
                                 const int depth)
 {
   if(depth > DT_MASKS_NESTING_MAX) return NULL;
   dt_masks_form_t *grp = dt_masks_get_from_id(dev, formid);
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return NULL;
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || (grp->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
+    return NULL;
 
   // the flexi fold reads a list with no marker as one union group
   if(grp->points && !dt_masks_point_is_marker(grp->points->data))
     return g_strdup_printf("group %d does not start with a group marker", grp->formid);
 
+  // the panel shows only groups and elements: a nested group is one group,
+  // and its settings are that group's, never its reference's
+  if(ref)
+  {
+    int groups = 0;
+    for(const GList *p = grp->points; p; p = g_list_next(p))
+      if(dt_masks_point_is_marker(p->data)) groups++;
+    if(groups != 1)
+      return g_strdup_printf("nested group %d holds %d groups", grp->formid, groups);
+    if(ref->opacity != 1.0f || (ref->state & DT_MASKS_STATE_INVERSE)
+       || ref->refinement.enabled != DT_MASKS_REFINE_OFF)
+      return g_strdup_printf("the reference to nested group %d has settings of its own",
+                             grp->formid);
+  }
+
   for(GList *p = grp->points; p; p = g_list_next(p))
   {
     const dt_masks_point_group_t *pt = p->data;
     if(dt_masks_point_is_marker(pt)) continue;
-    gchar *deeper = _check_group_runs(dev, pt->formid, depth + 1);
+    gchar *deeper = _check_group_runs(dev, pt->formid, pt, depth + 1);
     if(deeper) return deeper;
   }
   return NULL;
@@ -175,7 +192,7 @@ static gchar *_check_run_invariant(dt_develop_t *dev)
     const dt_develop_blend_params_t *bp = h->blend_params;
     if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) continue;
     if(!dt_is_valid_maskid(bp->mask_id)) continue;
-    gchar *v = _check_group_runs(dev, bp->mask_id, 0);
+    gchar *v = _check_group_runs(dev, bp->mask_id, NULL, 0);
     if(v) return v;
   }
   return NULL;

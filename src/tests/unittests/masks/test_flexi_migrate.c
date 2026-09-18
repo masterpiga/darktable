@@ -257,7 +257,7 @@ static void test_a_modifier_is_not_an_operator(void **state)
       }
       p = next;
     }
-    dt_masks_group_mark_classic_runs(flexi_dev.forms, grp, TRUE);
+    dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE);
     assert_int_equal(_group_cid_of_form(grp, head->formid),
                      _group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
@@ -340,6 +340,97 @@ static void test_every_history_snapshot_is_normalized(void **state)
   g_list_free(flexi_dev.history);
   flexi_dev.history = NULL;
   flexi_dev.history_end = 0;
+}
+
+// a member point appended to `grp`, the way classic stores one
+static void _append_member(dt_masks_form_t *grp, const dt_mask_id_t fid, const int op)
+{
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = fid;
+  pt->parentid = grp->formid;
+  pt->state = DT_MASKS_STATE_USE | op;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  grp->points = g_list_append(grp->points, pt);
+}
+
+// how many of `grp`'s members reference `fid` (a marker is no member)
+static int _refs_to(const dt_masks_form_t *grp, const dt_mask_id_t fid)
+{
+  int n = 0;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(!dt_masks_point_is_marker(pt) && pt->formid == fid) n++;
+  }
+  return n;
+}
+
+// Classic can reach the same shape twice in one mask (dt_masks_group_add_form
+// refuses only cycles), and where everything combining them is a union the
+// repeat renders nothing at all: max(a, a) = a. Migration drops it, so the
+// mask means what it looks like when someone opens it.
+static void test_a_duplicate_union_reference_is_dropped(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+  _append_member(grp, 1, DT_MASKS_STATE_UNION);   // shape 1 a second time
+
+  _migrate();
+
+  assert_int_equal(_refs_to(grp, 1), 1);
+  assert_int_equal(_refs_to(grp, 2), 1);
+}
+
+// ... but only where it provably renders nothing. The first visible member
+// composites as a plain copy whatever its operator (group.c:867-870), so with
+// a sibling that is not a union, dropping a reference could promote another
+// member out of its own operator: the whole group then keeps what it has
+static void test_a_duplicate_is_kept_when_a_sibling_is_not_a_union(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+  dt_masks_point_group_t *second = grp->points->next->data;
+  second->state =
+    (second->state & ~(int)DT_MASKS_STATE_OP_COMBINE) | DT_MASKS_STATE_DIFFERENCE;
+  _append_member(grp, 1, DT_MASKS_STATE_UNION);
+
+  _migrate();
+
+  assert_int_equal(_refs_to(grp, 1), 2);
+}
+
+// a faded repeat adds nothing either: in a union, max(x, o * x) is x, so the
+// stronger reference stays and the weaker goes (masks.c _drop_dominated_refs)
+static void test_a_faded_repeat_is_dropped_for_the_stronger(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+  _append_member(grp, 1, DT_MASKS_STATE_UNION);
+  ((dt_masks_point_group_t *)g_list_last(grp->points)->data)->opacity = 0.5f;
+
+  _migrate();
+
+  assert_int_equal(_refs_to(grp, 1), 1);
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(!dt_masks_point_is_marker(pt) && pt->formid == 1)
+      assert_float_equal(pt->opacity, 1.0f, 1e-6);
+  }
+}
+
+// an inverted repeat is not the same shape twice over: 1 - x contributes what
+// x does not, so both references stay
+static void test_an_inverted_repeat_is_kept(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  dt_masks_form_t *grp = flexi_group();
+  _append_member(grp, 1, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE);
+
+  _migrate();
+
+  assert_int_equal(_refs_to(grp, 1), 2);
 }
 
 static void test_drawn_with_dangling_mask_id(void **state)
@@ -1110,20 +1201,75 @@ static void _free_nested(dt_masks_form_t *g)
   g->points = NULL;
 }
 
-// the marker of the group member `fid` is in, in the module's mask
-static const dt_masks_point_group_t *_marker_of(const dt_mask_id_t fid)
+// the marker of the group member `fid` is in, anywhere in the module's mask:
+// the Q7 rewrite moves a shape into a synthesized group, so a top-level-only
+// search would return NULL for a shape that is very much still there
+static const dt_masks_point_group_t *_marker_in(const dt_masks_form_t *grp,
+                                                const dt_mask_id_t fid,
+                                                const int depth)
 {
-  const dt_masks_form_t *grp = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  if(!grp || depth > 6) return NULL;
   const dt_masks_point_group_t *mk = NULL;
-  for(const GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  for(const GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
     if(dt_masks_point_is_marker(pt))
+    {
       mk = pt;
-    else if(pt->formid == fid)
-      return mk;
+      continue;
+    }
+    if(pt->formid == fid) return mk;
+    const dt_masks_form_t *ch = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(ch && ch != grp && (ch->type & DT_MASKS_GROUP))
+    {
+      const dt_masks_point_group_t *found = _marker_in(ch, fid, depth + 1);
+      if(found) return found;
+    }
   }
   return NULL;
+}
+
+static const dt_masks_point_group_t *_marker_of(const dt_mask_id_t fid)
+{
+  return _marker_in(dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id), fid, 0);
+}
+
+// the member record referring to `fid`, wherever it sits
+static const dt_masks_point_group_t *_ref_in(const dt_masks_form_t *grp,
+                                             const dt_mask_id_t fid,
+                                             const int depth)
+{
+  if(!grp || depth > 6) return NULL;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    if(pt->formid == fid) return pt;
+    const dt_masks_form_t *ch = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(ch && ch != grp && (ch->type & DT_MASKS_GROUP))
+    {
+      const dt_masks_point_group_t *found = _ref_in(ch, fid, depth + 1);
+      if(found) return found;
+    }
+  }
+  return NULL;
+}
+
+
+// how many members anywhere under `grp` reference `fid`
+static int _refs_below(const dt_masks_form_t *grp, const dt_mask_id_t fid, const int depth)
+{
+  if(!grp || depth > 6) return 0;
+  int n = 0;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    if(pt->formid == fid) n++;
+    const dt_masks_form_t *ch = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(ch && ch != grp && (ch->type & DT_MASKS_GROUP)) n += _refs_below(ch, fid, depth + 1);
+  }
+  return n;
 }
 
 static int _op_of(const dt_masks_point_group_t *mk)
@@ -1167,9 +1313,11 @@ static void test_inverted_nested_group_becomes_an_inverted_group(void **state)
   _free_nested(g);
 }
 
-// a sum has no dual to push an inversion through, and the group is not the
-// bottom one: the flexi fold needs the nesting, so it stays
-static void test_a_sum_under_an_inverted_member_stays_nested(void **state)
+// a sum group whose members all carry the sum is one within-group sum, so it
+// becomes a single group and needs no nesting at all: it is spliced in as a
+// group of its own, the member's inversion becoming that group's
+// invert-output. 1 - min(1, a + b) unioned on is what classic folded
+static void test_a_sum_under_an_inverted_member_dissolves_inverted(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1179,7 +1327,91 @@ static void test_a_sum_under_an_inverted_member_stays_nested(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2,2000");
+  assert_layout("u:1,2 | u:11,12");
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  // the inversion the member carried is the group's now, not each shape's
+  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
+  assert_false(mk->state & DT_MASKS_STATE_INVERSE);
+  _free_nested(g);
+}
+
+// every member of a nested group carrying one order-free operator is a
+// within-group combine, not a run per member: the group is marked once and
+// keeps no wrapper level (masks_revamp_nested_groups.md, Q7)
+static void test_a_nested_sum_group_becomes_one_within_sum_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  // inverted so the group survives dissolution and can be inspected in place
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  // one group holds both shapes, folding them by the within-group sum: no run
+  // per member, and no wrapper level left to show
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  assert_ptr_equal(mk, _marker_of(12));
+  assert_true(mk->state & DT_MASKS_STATE_WITHIN_SUM);
+  _free_nested(g);
+}
+
+// the same for intersection, which folds as min in any order
+static void test_a_nested_intersection_group_becomes_one_isect_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_INTERSECTION };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  assert_ptr_equal(mk, _marker_of(12));
+  assert_true(mk->state & DT_MASKS_STATE_ISECT);
+  _free_nested(g);
+}
+
+// a hole is not order-free, so the run cannot simply join a within-group
+// fold: it becomes multiply { rest, inverted screen { holes } }, which is
+// classic's acc * (1 - o*x) with the opacity applied before the invert
+static void test_a_nested_difference_becomes_a_multiply_of_an_inverted_screen(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+  // a faded hole: at full opacity the inverted hole group would be just the
+  // hole inverted (_collapse_single_members)
+  ((dt_masks_point_group_t *)g->points->next->data)->opacity = 0.7f;
+
+  _migrate();
+
+  // the kept shape folds by multiply with the inverted hole group
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  assert_true(mk->state & DT_MASKS_STATE_WITHIN_MULTIPLY);
+  // the hole sits in a screen group with its output inverted. The rewrite
+  // refers to it inverted at full opacity, and the fold moves that onto the
+  // group's own marker, where the panel shows it: the reference is plain
+  const dt_masks_point_group_t *hole = _marker_of(12);
+  assert_non_null(hole);
+  assert_true(hole->state & DT_MASKS_STATE_SCREEN);
+  assert_true(hole->state & DT_MASKS_STATE_OP_INVERT);
+  assert_float_equal(hole->group_opacity, 1.0f, 1e-6);
+  assert_ptr_not_equal(hole, mk);
+  const dt_masks_form_t *root =
+    dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  const dt_masks_point_group_t *ref = _ref_in(root, hole->parentid, 0);
+  assert_non_null(ref);
+  assert_false(ref->state & DT_MASKS_STATE_INVERSE);
+  assert_float_equal(ref->opacity, 1.0f, 1e-6);
   _free_nested(g);
 }
 
@@ -1191,21 +1423,158 @@ static void test_inverted_bottom_group_is_spliced_in(void **state)
   const dt_mask_id_t ids[] = { 11, 12 };
   const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
   dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_INVERSE, TRUE, ids, ops, 2);
+  // faded, so the hole keeps its group (see the test above)
+  ((dt_masks_point_group_t *)g->points->next->data)->opacity = 0.7f;
 
   _migrate();
 
+  // the nested group is gone: its hole became an inverted screen group, and
+  // the member's own inversion is the multiply group's invert-output -- the
+  // De Morgan this case has always been about, in the Q7 form
   assert_null(_marker_of(2000));
   const dt_masks_point_group_t *a = _marker_of(11);
   const dt_masks_point_group_t *b = _marker_of(12);
   const dt_masks_point_group_t *rest = _marker_of(1);
+  assert_non_null(a);
+  assert_non_null(b);
   assert_ptr_equal(a, flexi_group()->points->data);
+  assert_true(a->state & DT_MASKS_STATE_WITHIN_MULTIPLY);
   assert_true(a->state & DT_MASKS_STATE_OP_INVERT);
-  assert_int_equal(_op_of(b), DT_MASKS_STATE_OP_SCREEN);
-  assert_false(b->state & DT_MASKS_STATE_OP_INVERT);
+  assert_true(b->state & DT_MASKS_STATE_SCREEN);
+  // the hole group's inversion is its own invert-output, folded off its reference
+  assert_true(b->state & DT_MASKS_STATE_OP_INVERT);
   // the members that shared the nested group's run stay a union of their own
   assert_ptr_not_equal(rest, b);
   assert_ptr_equal(rest, _marker_of(2));
   assert_int_equal(_op_of(rest), DT_MASKS_STATE_UNION);
+  _free_nested(g);
+}
+
+// the panel shows only groups and elements: every nested group under `grp` is
+// one group, and a member referring to it carries no settings of its own
+static void _assert_only_groups_and_elements(const dt_masks_form_t *grp, const int depth)
+{
+  if(!grp || depth > 6) return;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *ch = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(!ch || ch == grp || !(ch->type & DT_MASKS_GROUP)
+       || (ch->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
+      continue;
+    assert_float_equal(pt->opacity, 1.0f, 1e-6);
+    assert_false(pt->state & DT_MASKS_STATE_INVERSE);
+    assert_int_equal(pt->refinement.enabled, DT_MASKS_REFINE_OFF);
+    int groups = 0;
+    for(const GList *m = ch->points; m; m = g_list_next(m))
+      if(dt_masks_point_is_marker(m->data)) groups++;
+    assert_int_equal(groups, 1);
+    _assert_only_groups_and_elements(ch, depth + 1);
+  }
+}
+
+// no nested group under `grp` holds a single element: it would be that element
+static void _assert_no_one_element_group(const dt_masks_form_t *grp, const int depth)
+{
+  if(!grp || depth > 6) return;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *ch = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(!ch || ch == grp || !(ch->type & DT_MASKS_GROUP)) continue;
+    if(g_list_length(ch->points) == 2)
+    {
+      const dt_masks_form_t *m = dt_masks_get_from_id_ext(
+        flexi_dev.forms, ((dt_masks_point_group_t *)ch->points->next->data)->formid);
+      assert_true(m && (m->type & DT_MASKS_GROUP));
+    }
+    _assert_no_one_element_group(ch, depth + 1);
+  }
+}
+
+/* classic "o1 * (1 - (a u b u o2 * (c u d)))": an inverted, faded group
+   holding shapes and a faded group. The inner group's fade is its own
+   group's opacity, and the outer reference's inversion and fade are the
+   outer group's, set when each group is converted. Converting the outer one
+   after the inner one was dissolved into it left a group of two groups under
+   an inverted, faded reference, which no group's settings can express */
+static void test_nested_settings_become_their_groups(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *outer =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+  ((dt_masks_point_group_t *)g_list_last(flexi_group()->points)->data)->opacity = 0.5f;
+
+  dt_masks_form_t *inner = calloc(1, sizeof(dt_masks_form_t));
+  inner->formid = 3000;
+  inner->type = DT_MASKS_GROUP;
+  for(dt_mask_id_t id = 13; id <= 14; id++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = id;
+    pt->parentid = inner->formid;
+    pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | (id == 13 ? 0 : DT_MASKS_STATE_UNION);
+    pt->opacity = 1.0f;
+    pt->group_opacity = 1.0f;
+    inner->points = g_list_append(inner->points, pt);
+    dt_masks_form_t *c = calloc(1, sizeof(dt_masks_form_t));
+    c->formid = id;
+    c->type = DT_MASKS_CIRCLE;
+    flexi_dev.forms = g_list_append(flexi_dev.forms, c);
+  }
+  flexi_dev.forms = g_list_append(flexi_dev.forms, inner);
+  dt_masks_point_group_t *m = calloc(1, sizeof(dt_masks_point_group_t));
+  m->formid = inner->formid;
+  m->parentid = outer->formid;
+  m->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | DT_MASKS_STATE_UNION;
+  m->opacity = 0.3f;
+  m->group_opacity = 1.0f;
+  outer->points = g_list_append(outer->points, m);
+
+  _migrate();
+
+  _assert_only_groups_and_elements(dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id), 0);
+  // the outer group's settings: inverted, at 0.5
+  const dt_masks_point_group_t *o = _marker_of(11);
+  assert_non_null(o);
+  assert_true(o->state & DT_MASKS_STATE_OP_INVERT);
+  assert_float_equal(o->group_opacity, 0.5f, 1e-6);
+  // the inner group's: at 0.3, beside the outer group's shapes
+  const dt_masks_point_group_t *i = _marker_of(13);
+  assert_non_null(i);
+  assert_ptr_not_equal(i, o);
+  assert_false(i->state & DT_MASKS_STATE_OP_INVERT);
+  assert_float_equal(i->group_opacity, 0.3f, 1e-6);
+  _free_nested(inner);
+  _free_nested(outer);
+}
+
+// an exclusion's operands each appear twice, once inverted: as an inverted
+// copy of the operand's group, not as an inverted reference to the same one
+static void test_a_nested_exclusion_has_no_inverted_reference(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_EXCLUSION };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  const dt_masks_form_t *root = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  _assert_only_groups_and_elements(root, 0);
+  // a x b is union { multiply { a, inverted b }, multiply { b, inverted a } }:
+  // each operand here is one shape, so no group is left holding just one
+  _assert_no_one_element_group(root, 0);
+  const dt_masks_point_group_t *a = _ref_in(root, 11, 0), *b = _ref_in(root, 12, 0);
+  assert_non_null(a);
+  assert_non_null(b);
+  assert_int_equal(_refs_below(root, 11, 0), 2);
+  assert_int_equal(_refs_below(root, 12, 0), 2);
   _free_nested(g);
 }
 
@@ -1252,6 +1621,16 @@ static void test_a_group_nested_twice_dissolves_twice(void **state)
   const dt_mask_id_t ids[] = { 11, 12 };
   const int ops[] = { 0, DT_MASKS_STATE_UNION };
   dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+  // this test is about dissolution, so both duplicate prunes are kept away
+  // (the test below covers them instead). A fade in the top-level list stops
+  // _prune_noop_duplicate_refs, which only runs on a list that is union at
+  // full strength, from dropping the second reference to group 2000 before
+  // dissolution sees it; a refinement on the nested shapes stops
+  // _drop_dominated_refs, which only drops an unrefined repeat, from dropping
+  // the dissolved copies after
+  ((dt_masks_point_group_t *)flexi_group()->points->next->data)->opacity = 0.5f;
+  for(GList *l = g->points; l; l = g_list_next(l))
+    ((dt_masks_point_group_t *)l->data)->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
 
   dt_masks_form_t *h = calloc(1, sizeof(dt_masks_form_t));
   h->formid = 3000;
@@ -1280,15 +1659,182 @@ static void test_a_group_nested_twice_dissolves_twice(void **state)
   _free_nested(h);
 }
 
+// A whole GROUP referenced twice under unions contributes the same shapes
+// twice, and max(a, a) = a just the same: the second reference goes, and the
+// wrapper group left holding nothing goes with it. Dissolving it instead gave
+// a list showing every shape of it twice -- corpus edit 3320, which reached
+// the panel as four rows for two shapes.
+static void test_a_group_referenced_twice_is_pruned(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_UNION };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+
+  // a wrapper group holding that very same group again, unioned in beside it
+  dt_masks_form_t *h = calloc(1, sizeof(dt_masks_form_t));
+  h->formid = 3000;
+  h->type = DT_MASKS_GROUP;
+  dt_masks_point_group_t *inner = calloc(1, sizeof(dt_masks_point_group_t));
+  inner->formid = 2000;
+  inner->parentid = 3000;
+  inner->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW;
+  inner->opacity = 1.0f;
+  inner->group_opacity = 1.0f;
+  h->points = g_list_append(NULL, inner);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, h);
+  _append_member(flexi_group(), 3000, DT_MASKS_STATE_UNION);
+
+  _migrate();
+
+  assert_layout("u:1,2,11,12");
+  _free_nested(g);
+  _free_nested(h);
+}
+
+// A group that is not a union list is one term of its parent's maximum, so it
+// does not stop the parent's own repeats from going: corpus edit 6400 kept a
+// shape listed twice at the top level only because a sibling group held a hole
+static void test_a_duplicate_beside_a_hole_group_is_dropped(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+  _append_member(flexi_group(), 1, DT_MASKS_STATE_UNION);
+
+  _migrate();
+
+  assert_int_equal(_refs_to(flexi_group(), 1), 1);
+  assert_non_null(_ref_in(flexi_group(), 11, 0));
+  assert_non_null(_ref_in(flexi_group(), 12, 0));
+  _free_nested(g);
+}
+
+// A faded nested group dissolves into a group of its own carrying the fade,
+// one per member. Where each of those folds as a plain maximum and joins by
+// union, they are one union with the fade multiplied into the members:
+// g * max(o * x) = max(g * o * x). Corpus edit 6803 showed as a column of
+// one-shape unions at 36%
+static void test_faded_union_groups_merge_into_one(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11 };
+  const int ops[] = { 0 };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 1);
+  ((dt_masks_point_group_t *)g->points->data)->opacity = 0.5f;
+  ((dt_masks_point_group_t *)g_list_last(flexi_group()->points)->data)->opacity = 0.5f;
+
+  _migrate();
+
+  assert_layout("u:1,2,11");
+  const dt_masks_point_group_t *mk = _marker_of(11);
+  assert_non_null(mk);
+  assert_float_equal(mk->group_opacity, 1.0f, 1e-6);
+  assert_float_equal(_ref_in(flexi_group(), 11, 0)->opacity, 0.25f, 1e-6);
+  _free_nested(g);
+}
+
+// ... and a shape held twice in that union keeps only its stronger reference:
+// max(o1 * x, o2 * x) is the larger opacity's term
+static void test_a_weaker_repeat_in_a_union_is_dropped(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 1 };
+  const int ops[] = { 0 };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 1);
+  ((dt_masks_point_group_t *)g->points->data)->opacity = 0.5f;
+
+  _migrate();
+
+  assert_layout("u:1,2");
+  assert_int_equal(_refs_to(flexi_group(), 1), 1);
+  assert_float_equal(_ref_in(flexi_group(), 1, 0)->opacity, 1.0f, 1e-6);
+  _free_nested(g);
+}
+
+// a group that does something to its maximum is not merged: here its output
+// is inverted, so its members' opacities cannot move into a plain union
+static void test_an_inverted_union_group_is_not_merged(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  assert_ptr_not_equal(_marker_of(1), _marker_of(11));
+  _free_nested(g);
+}
+
+// a shape held alone next to a sum group that already holds it adds nothing:
+// max(x, min(1, x + y)) is min(1, x + y). Corpus edit 17473 (link_06)
+static void test_a_shape_absorbed_by_a_sum_group_is_dropped(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 1, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  assert_int_equal(_refs_below(flexi_group(), 1, 0), 1);
+  const dt_masks_point_group_t *mk = _marker_of(1);
+  assert_non_null(mk);
+  assert_true(mk->state & DT_MASKS_STATE_WITHIN_SUM);
+  assert_ptr_equal(mk, _marker_of(12));
+  assert_non_null(_marker_of(2));
+  _free_nested(g);
+}
+
+// ... but not by a group that inverts its result: 1 - min(1, x + y) is no
+// longer at least x
+static void test_a_shape_is_not_absorbed_by_an_inverted_group(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 1, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  dt_masks_form_t *g =
+    _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+
+  _migrate();
+
+  assert_int_equal(_refs_below(flexi_group(), 1, 0), 2);
+  _free_nested(g);
+}
+
+// ... but a shape inside that group is no term of the parent's maximum: held
+// both beside the hole group and inside it, it means something in each place
+static void test_a_shape_inside_a_hole_group_is_no_duplicate(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  const dt_mask_id_t ids[] = { 11, 12 };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
+  dt_masks_form_t *g = _nest(2000, DT_MASKS_STATE_UNION, FALSE, ids, ops, 2);
+  _append_member(flexi_group(), 11, DT_MASKS_STATE_UNION);
+
+  _migrate();
+
+  assert_int_equal(_refs_below(flexi_group(), 11, 0), 2);
+  _free_nested(g);
+}
+
+
 // within one mask a group has one parent: a nested group held twice that has
-// to stay nested gets a copy, with a form id and marker ids of its own
+// to stay nested gets a copy, with a form id and marker ids of its own.
+// Mixed operators are what keeps it nested -- a group whose members share one
+// order-free operator folds as a single within-group combine and dissolves
 static void test_a_group_kept_nested_twice_is_copied(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
-  const int ops[] = { 0, DT_MASKS_STATE_SUM };
+  const int ops[] = { 0, DT_MASKS_STATE_DIFFERENCE };
   dt_masks_form_t *g =
     _nest(2000, DT_MASKS_STATE_UNION | DT_MASKS_STATE_INVERSE, FALSE, ids, ops, 2);
+  // faded, so the hole keeps a group of its own to be copied
+  ((dt_masks_point_group_t *)g->points->next->data)->opacity = 0.7f;
   dt_masks_point_group_t *again = malloc(sizeof(dt_masks_point_group_t));
   memcpy(again, g_list_last(flexi_group()->points)->data, sizeof(dt_masks_point_group_t));
   flexi_group()->points = g_list_append(flexi_group()->points, again);
@@ -1305,24 +1851,30 @@ static void test_a_group_kept_nested_twice_is_copied(void **state)
       held[n++] = pt->formid;
   }
   assert_int_equal(n, 2);
-  assert_int_equal(held[0], 2000);
-  assert_int_not_equal(held[1], 2000);
+  // the Q7 rewrite replaces the classic nested group by groups it synthesizes,
+  // so neither reference names 2000 any more -- what matters is that the two
+  // references still name two DIFFERENT forms, which is what the copy is for
+  assert_int_not_equal(held[0], held[1]);
 
+  // each reference carries its own hole group: same shape inside, markers of
+  // its own, so editing one place of it cannot edit the other
+  dt_masks_form_t *first = dt_masks_get_from_id_ext(flexi_dev.forms, held[0]);
   dt_masks_form_t *copy = dt_masks_get_from_id_ext(flexi_dev.forms, held[1]);
+  assert_non_null(first);
   assert_non_null(copy);
-  assert_int_equal(g_list_length(copy->points), g_list_length(g->points));
-  // the same members, and markers of its own: a marker id names one group
-  for(GList *a = copy->points, *b = g->points; a && b; a = a->next, b = b->next)
+  assert_int_equal(g_list_length(copy->points), g_list_length(first->points));
+  for(GList *a = copy->points, *b = first->points; a && b; a = a->next, b = b->next)
   {
     const dt_masks_point_group_t *pa = a->data;
     const dt_masks_point_group_t *pb = b->data;
     if(dt_masks_point_is_marker(pa))
+    {
+      assert_true(dt_masks_point_is_marker(pb));
       assert_int_not_equal(pa->formid, pb->formid);
+    }
     else
       assert_int_equal(pa->formid, pb->formid);
   }
-  g_list_free_full(copy->points, free);
-  copy->points = NULL;
   _free_nested(g);
 }
 
@@ -1403,14 +1955,36 @@ int main(void)
     cmocka_unit_test_teardown(test_parametric_on_no_masks_module_stays_renderable, _teardown),
     cmocka_unit_test_teardown(test_nested_union_group_joins_its_run, _teardown),
     cmocka_unit_test_teardown(test_inverted_nested_group_becomes_an_inverted_group, _teardown),
-    cmocka_unit_test_teardown(test_a_sum_under_an_inverted_member_stays_nested, _teardown),
+    cmocka_unit_test_teardown(test_a_sum_under_an_inverted_member_dissolves_inverted,
+                              _teardown),
     cmocka_unit_test_teardown(test_inverted_bottom_group_is_spliced_in, _teardown),
     cmocka_unit_test_teardown(test_a_flexi_nested_group_stays_nested, _teardown),
+    cmocka_unit_test_teardown(test_nested_settings_become_their_groups, _teardown),
+    cmocka_unit_test_teardown(test_a_nested_exclusion_has_no_inverted_reference, _teardown),
+    cmocka_unit_test_teardown(test_a_nested_sum_group_becomes_one_within_sum_group,
+                              _teardown),
+    cmocka_unit_test_teardown(test_a_nested_intersection_group_becomes_one_isect_group,
+                              _teardown),
+    cmocka_unit_test_teardown(
+      test_a_nested_difference_becomes_a_multiply_of_an_inverted_screen, _teardown),
     cmocka_unit_test_teardown(test_drawn_and_parametric_dissolves_the_drawn_group, _teardown),
     cmocka_unit_test_teardown(test_a_group_nested_twice_dissolves_twice, _teardown),
     cmocka_unit_test_teardown(test_a_group_kept_nested_twice_is_copied, _teardown),
     cmocka_unit_test_teardown(test_migration_is_idempotent, _teardown),
     cmocka_unit_test_teardown(test_module_without_dev_does_not_half_migrate, _teardown),
+    cmocka_unit_test_teardown(test_a_duplicate_union_reference_is_dropped, _teardown),
+    cmocka_unit_test_teardown(test_a_duplicate_is_kept_when_a_sibling_is_not_a_union,
+                              _teardown),
+    cmocka_unit_test_teardown(test_a_duplicate_beside_a_hole_group_is_dropped, _teardown),
+    cmocka_unit_test_teardown(test_a_shape_inside_a_hole_group_is_no_duplicate, _teardown),
+    cmocka_unit_test_teardown(test_faded_union_groups_merge_into_one, _teardown),
+    cmocka_unit_test_teardown(test_a_weaker_repeat_in_a_union_is_dropped, _teardown),
+    cmocka_unit_test_teardown(test_an_inverted_union_group_is_not_merged, _teardown),
+    cmocka_unit_test_teardown(test_a_shape_absorbed_by_a_sum_group_is_dropped, _teardown),
+    cmocka_unit_test_teardown(test_a_shape_is_not_absorbed_by_an_inverted_group, _teardown),
+    cmocka_unit_test_teardown(test_a_faded_repeat_is_dropped_for_the_stronger, _teardown),
+    cmocka_unit_test_teardown(test_an_inverted_repeat_is_kept, _teardown),
+    cmocka_unit_test_teardown(test_a_group_referenced_twice_is_pruned, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

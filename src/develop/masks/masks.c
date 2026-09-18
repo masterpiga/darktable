@@ -1274,6 +1274,7 @@ static gboolean _push_into_run(dt_masks_point_group_t *mk,
    On success *resume is the node after what was spliced in. */
 static gboolean _dissolve_member(GList *forms,
                                  dt_masks_form_t *grp,
+                                 const gboolean nested,
                                  GList *ml,
                                  GList **resume)
 {
@@ -1324,6 +1325,10 @@ static gboolean _dissolve_member(GList *forms,
     if(pt->state & DT_MASKS_STATE_OP_DISABLE) return FALSE;
     n++;
   }
+
+  // a nested group is one group: only a group taking its member's place
+  // keeps it one
+  if(nested && (split_before || split_after || n != 1)) return FALSE;
 
   enum { ONE_GROUP, BOTTOM, SAME_OP } rule;
   if(n == 1)
@@ -1485,8 +1490,399 @@ static void _collect_classic(GList *forms,
   }
 }
 
-static gboolean _mark_runs(GList *forms,
+/* Classic applies a difference once per shape, so marking gives each such
+   shape a group of its own (see _normalize_group in migrate_legacy.c). A run
+   of them can be one group all the same: difference composites acc * (1 - g),
+   and folding the shapes by screen makes 1 - g = (1 - x1)(1 - x2)..., which is
+   what classic computes shape after shape, inverted shapes and opacities
+   included. Plain one-member groups only, and not onto the bottom group of the
+   list, whose operator is never applied */
+static void _merge_difference_runs(dt_masks_form_t *grp)
+{
+  GList *into = NULL; // the marker of the difference group being grown
+  for(GList *l = grp->points; l;)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *mk = l->data;
+    if(dt_masks_point_is_marker(mk))
+    {
+      const gboolean one_member =
+        next && !dt_masks_point_is_marker(next->data)
+        && (!next->next || dt_masks_point_is_marker(next->next->data));
+      const gboolean mergeable = l != grp->points && one_member && _marker_is_plain(mk)
+                                 && !mk->name[0]
+                                 && _combine_op(mk->state) == DT_MASKS_STATE_DIFFERENCE;
+      if(mergeable && into)
+      {
+        ((dt_masks_point_group_t *)into->data)->state |= DT_MASKS_STATE_SCREEN;
+        free(mk);
+        grp->points = g_list_delete_link(grp->points, l);
+      }
+      else
+        into = mergeable ? l : NULL;
+    }
+    l = next;
+  }
+}
+
+/* Classic applies a member's operator once per member, so marking a group
+   whose members carry different operators gives each run a group of its own.
+   Where every member carries the SAME order-free operator, the whole list
+   folds by that one operator instead, which is a within-group combine and
+   needs no runs at all (masks_revamp_nested_groups.md, Q7). Marking it as one
+   group is what keeps a nested group from showing as "grp N > union-2, sum-1",
+   two levels the mask its author drew never had.
+
+   The first member that renders seeds the fold and its own operator is never
+   applied (group.c:867-870), so it does not have to match. Union needs nothing:
+   an all-union list is already one run. Only intersection (min) and sum
+   (min(1, a + b)) are collected here; difference and exclusion are not
+   order-free in this form and keep their runs.
+
+   Returns the within bit to mark the group with, or 0 to leave it alone. */
+static int _uniform_within(const dt_masks_form_t *grp)
+{
+  int op = 0;
+  gboolean seed = TRUE;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    // an author-set run boundary is a grouping of its own, not ours to undo
+    if(pt->group_start) return 0;
+    // a hidden or disabled member renders nothing, so it neither seeds the
+    // fold nor carries an operator classic would ever apply
+    if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    if(seed)
+    {
+      seed = FALSE;
+      continue;
+    }
+    const int mop = dt_masks_eff_group_op(pt->state) & DT_MASKS_STATE_OP_COMBINE;
+    if(op && mop != op) return 0;
+    op = mop;
+  }
+  if(op == DT_MASKS_STATE_INTERSECTION) return DT_MASKS_STATE_ISECT;
+  if(op == DT_MASKS_STATE_SUM) return DT_MASKS_STATE_WITHIN_SUM;
+  return 0;
+}
+
+static dt_masks_form_t *_copy_group(GList **forms,
+                                    const dt_masks_form_t *src,
+                                    const dt_mask_id_t parent);
+static dt_masks_point_group_t *_sole_marker(const dt_masks_form_t *g);
+static gboolean _has_visible_member(GList *forms, const dt_masks_form_t *g);
+
+/* A group form migration synthesizes to hold part of a rewritten nested list.
+   Its id is derived from its parent and `seed` rather than allocated, so every
+   history snapshot holding the same tree derives the same one (the reason
+   _run_marker_id exists), and it is registered in the caller's list so
+   whoever persists that list picks it up. */
+static dt_masks_form_t *_synth_group(GList **forms,
+                                     const dt_mask_id_t parent,
+                                     const dt_mask_id_t seed,
+                                     const int within)
+{
+  dt_masks_form_t *g = dt_masks_create(DT_MASKS_GROUP);
+  if(!g) return NULL;
+  g->formid = _run_marker_id(*forms, parent, seed);
+  *forms = g_list_append(*forms, g);
+  dt_masks_point_group_t *mk =
+    dt_masks_marker_new(*forms, g, DT_MASKS_STATE_UNION | within);
+  mk->formid = _run_marker_id(*forms, g->formid, seed);
+  g->points = g_list_append(NULL, mk);
+  return g;
+}
+
+/* A plain member record referring to `formid`. A nested group's settings are
+   its own group's: a reference carries none, so the panel shows only groups
+   and elements (masks_revamp_nested_groups.md, Q7) */
+static dt_masks_point_group_t *_synth_ref(const dt_mask_id_t formid,
+                                          const dt_mask_id_t parent)
+{
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  if(!pt) return NULL;
+  pt->formid = formid;
+  pt->parentid = parent;
+  pt->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_SHOW | DT_MASKS_STATE_UNION;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  return pt;
+}
+
+// move the accumulated members into a group of their own, folding by the
+// within mode they were accumulated with. The members are re-parented, not
+// copied: a member's parentid is what the canvas resolves its owner from
+// (group.c:39, :85), so a stale one breaks editing while still rendering
+static dt_masks_form_t *_wrap_acc(GList **forms,
+                                  const dt_mask_id_t parent,
+                                  GList **acc,
+                                  int *acc_within,
+                                  const dt_mask_id_t seed)
+{
+  dt_masks_form_t *g = _synth_group(forms, parent, seed, *acc_within);
+  if(!g) return NULL;
+  for(GList *l = *acc; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    pt->parentid = g->formid;
+    g->points = g_list_append(g->points, pt);
+  }
+  g_list_free(*acc);
+  *acc = NULL;
+  *acc_within = 0;
+  return g;
+}
+
+// the within-group mode that folds a run in with the accumulator, or -1 for
+// an operator that is not a within-group combine on its own
+static int _within_for_op(const int op)
+{
+  switch(op)
+  {
+    case DT_MASKS_STATE_UNION:        return 0;
+    case DT_MASKS_STATE_INTERSECTION: return DT_MASKS_STATE_ISECT;
+    case DT_MASKS_STATE_SUM:          return DT_MASKS_STATE_WITHIN_SUM;
+    case DT_MASKS_STATE_MULTIPLY:     return DT_MASKS_STATE_WITHIN_MULTIPLY;
+    case DT_MASKS_STATE_OP_SCREEN:    return DT_MASKS_STATE_SCREEN;
+    default:                          return -1;
+  }
+}
+
+// a run whose settings the rewrite cannot carry into a synthesized group
+static gboolean _run_is_rewritable(const dt_masks_point_group_t *mk)
+{
+  return !(mk->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT))
+         && mk->group_opacity == 1.0f
+         && mk->refinement.enabled == DT_MASKS_REFINE_OFF
+         && !mk->name[0];
+}
+
+/* Rewrite a nested group's list of runs as one group folding by within-group
+   operators (masks_revamp_nested_groups.md, Q7). Classic applies a member's
+   operator to the accumulator once per member, in order; every within-group
+   operator is order-free, so the sequence is rebuilt as nested groups instead
+   of a run per operator -- which is what stops the panel showing levels the
+   author never drew.
+
+   Folding left over the runs, with `acc` the accumulator built so far:
+   - union, intersection, sum, multiply and screen extend `acc`, wrapping it
+     into a group of its own first when the within mode changes;
+   - difference `acc - h...` becomes multiply { acc, inverted screen { h... } }:
+     the holes' own opacities apply inside the screen group, before the invert,
+     which is classic's acc * (1 - o*x) (group.c:1081). Inverting the members
+     instead would apply opacity after inverting, a different mask entirely --
+     see test_inverting_the_element_is_not_the_faded_hole_form;
+   - exclusion `acc x p...` becomes
+     union { multiply { acc, inverted p }, multiply { p, inverted acc } },
+     where both operands are referred to twice. The duplication is the algebra
+     here, not redundancy: each reference carries a different sign.
+
+   Only for a NESTED group: the top level stays an ordered list of groups
+   applied with their own between-group operators. Leaves the list untouched
+   and returns FALSE when any run carries settings the rewrite cannot carry
+   (a name, a group opacity, invert-output, a refinement, or a bypass). */
+static gboolean _rewrite_nested_runs(GList **forms, dt_masks_form_t *grp)
+{
+  int runs = 0;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(!dt_masks_point_is_marker(pt)) continue;
+    if(!_run_is_rewritable(pt)) return FALSE;
+    if(runs > 0 && _within_for_op(_combine_op(pt->state)) < 0
+       && _combine_op(pt->state) != DT_MASKS_STATE_DIFFERENCE
+       && _combine_op(pt->state) != DT_MASKS_STATE_EXCLUSION)
+      return FALSE;
+    runs++;
+  }
+  if(runs < 2) return FALSE;
+
+  GList *acc = NULL;       // the member records accumulated so far
+  int acc_within = 0;      // how they fold together
+  dt_mask_id_t seed = grp->formid;
+  gboolean first = TRUE;
+
+  GList *l = grp->points;
+  while(l)
+  {
+    dt_masks_point_group_t *mk = l->data;   // a marker: the run starts here
+    const int op = _combine_op(mk->state);
+    const int mk_within = mk->state & DT_MASKS_STATE_WITHIN;
+    GList *members = NULL;
+    GList *m = g_list_next(l);
+    while(m && !dt_masks_point_is_marker(m->data))
+    {
+      members = g_list_append(members, m->data);
+      m = g_list_next(m);
+    }
+    if(members) seed = ((dt_masks_point_group_t *)members->data)->formid;
+
+    if(first)
+    {
+      acc = members;
+      acc_within = mk_within;    // a run folds its own members by its mode
+      first = FALSE;
+    }
+    else if(op == DT_MASKS_STATE_DIFFERENCE)
+    {
+      // the holes, folded by screen and inverted by their own group
+      dt_masks_form_t *holes = _synth_group(forms, grp->formid, seed,
+                                            DT_MASKS_STATE_SCREEN);
+      ((dt_masks_point_group_t *)holes->points->data)->state |= DT_MASKS_STATE_OP_INVERT;
+      for(GList *h = members; h; h = g_list_next(h))
+      {
+        dt_masks_point_group_t *pt = h->data;
+        pt->parentid = holes->formid;
+        holes->points = g_list_append(holes->points, pt);
+      }
+      g_list_free(members);
+      if(acc_within != DT_MASKS_STATE_WITHIN_MULTIPLY && g_list_length(acc) > 1)
+      {
+        dt_masks_form_t *g = _wrap_acc(forms, grp->formid, &acc, &acc_within, seed);
+        acc = g_list_append(NULL, _synth_ref(g->formid, grp->formid));
+      }
+      acc_within = DT_MASKS_STATE_WITHIN_MULTIPLY;
+      acc = g_list_append(acc, _synth_ref(holes->formid, grp->formid));
+    }
+    else if(op == DT_MASKS_STATE_EXCLUSION)
+    {
+      dt_masks_form_t *a = _wrap_acc(forms, grp->formid, &acc, &acc_within, seed);
+      dt_masks_form_t *p = _synth_group(forms, grp->formid, seed, mk_within);
+      for(GList *h = members; h; h = g_list_next(h))
+      {
+        dt_masks_point_group_t *pt = h->data;
+        pt->parentid = p->formid;
+        p->points = g_list_append(p->points, pt);
+      }
+      g_list_free(members);
+
+      // each operand appears twice, once as an inverted copy of itself
+      dt_masks_form_t *m1 = _synth_group(forms, grp->formid, seed,
+                                         DT_MASKS_STATE_WITHIN_MULTIPLY);
+      dt_masks_form_t *m2 = _synth_group(forms, grp->formid, seed,
+                                         DT_MASKS_STATE_WITHIN_MULTIPLY);
+      dt_masks_form_t *p_inv = _copy_group(forms, p, m1->formid);
+      dt_masks_form_t *a_inv = _copy_group(forms, a, m2->formid);
+      ((dt_masks_point_group_t *)p_inv->points->data)->state |= DT_MASKS_STATE_OP_INVERT;
+      ((dt_masks_point_group_t *)a_inv->points->data)->state |= DT_MASKS_STATE_OP_INVERT;
+      m1->points = g_list_append(m1->points, _synth_ref(a->formid, m1->formid));
+      m1->points = g_list_append(m1->points, _synth_ref(p_inv->formid, m1->formid));
+      m2->points = g_list_append(m2->points, _synth_ref(p->formid, m2->formid));
+      m2->points = g_list_append(m2->points, _synth_ref(a_inv->formid, m2->formid));
+
+      acc = g_list_append(NULL, _synth_ref(m1->formid, grp->formid));
+      acc = g_list_append(acc, _synth_ref(m2->formid, grp->formid));
+      acc_within = 0;   // the two products union together
+    }
+    else
+    {
+      const int want = _within_for_op(op);
+      // a single element folds the same whatever the mode, so it can simply
+      // adopt the new one; otherwise the accumulated fold has to finish first
+      if(acc_within != want && g_list_length(acc) > 1)
+      {
+        dt_masks_form_t *g = _wrap_acc(forms, grp->formid, &acc, &acc_within, seed);
+        acc = g_list_append(NULL, _synth_ref(g->formid, grp->formid));
+      }
+      acc_within = want;
+      // the run's own members fold by union among themselves; where that
+      // disagrees with the mode they are joining under, they need a group
+      if(mk_within != want && g_list_length(members) > 1)
+      {
+        dt_masks_form_t *g = _synth_group(forms, grp->formid, seed, mk_within);
+        for(GList *h = members; h; h = g_list_next(h))
+        {
+          dt_masks_point_group_t *pt = h->data;
+          pt->parentid = g->formid;
+          g->points = g_list_append(g->points, pt);
+        }
+        g_list_free(members);
+        acc = g_list_append(acc, _synth_ref(g->formid, grp->formid));
+      }
+      else
+        acc = g_list_concat(acc, members);
+    }
+
+    free(mk);
+    grp->points = g_list_delete_link(grp->points, l);
+    // the members were taken over by the accumulator; drop their nodes
+    while(grp->points && !dt_masks_point_is_marker(grp->points->data))
+      grp->points = g_list_delete_link(grp->points, grp->points);
+    l = grp->points;
+  }
+
+  dt_masks_point_group_t *head =
+    dt_masks_marker_new(*forms, grp, DT_MASKS_STATE_UNION | acc_within);
+  head->formid = _run_marker_id(*forms, grp->formid, seed);
+  for(GList *a = acc; a; a = g_list_next(a))
+    ((dt_masks_point_group_t *)a->data)->parentid = grp->formid;
+  grp->points = g_list_concat(g_list_append(NULL, head), acc);
+  return TRUE;
+}
+
+/* The group a drawn+parametric migration wraps around the drawn group: it
+   holds the synthesized parametric channel elements and one reference to the
+   user's own drawn group (_migrate_drawn_and_parametric in migrate_legacy.c).
+   That wrapper is not a level the user made, so the drawn group inside it is
+   still their top level -- and the top level keeps its ordered list of groups
+   rather than being rewritten as a within-group fold (Q7). Without this, a
+   flat classic mask with an exclusion came out two levels deep. */
+static gboolean _is_synth_wrapper(GList *forms, const dt_masks_form_t *grp)
+{
+  gboolean parametric = FALSE, group = FALSE;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, pt->formid);
+    if(!f) continue;
+    if(f->type & DT_MASKS_PARAMETRIC) parametric = TRUE;
+    else if(f->type & DT_MASKS_GROUP) group = TRUE;
+  }
+  return parametric && group;
+}
+
+/* Move the settings of `ref`, the member referring to the classic group `grp`
+   just converted, onto the group's marker. In classic a group has no settings
+   of its own: what shows as its opacity, inversion or refinement is stored on
+   its reference. A freshly converted group's marker is plain, and a member's
+   refinement, inversion and opacity apply to the nested result in the order a
+   group applies its own (group.c _group_get_mask_roi_flexi), so the move is
+   exact. Doing it before anything is dissolved into the group is what keeps
+   it so: dissolving can give the marker settings of its own */
+static void _move_ref_settings(GList *forms, dt_masks_form_t *grp, dt_masks_point_group_t *ref)
+{
+  dt_masks_point_group_t *mk = _sole_marker(grp);
+  const gboolean inverted = (ref->state & DT_MASKS_STATE_INVERSE) != 0;
+  const gboolean refined = ref->refinement.enabled != DT_MASKS_REFINE_OFF;
+  if(!mk || (ref->opacity == 1.0f && !inverted && !refined)) return;
+  if(ref->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) return;
+  // a group with no member that renders is opaque, whatever its settings
+  if(!_has_visible_member(forms, grp)) return;
+  if((mk->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT))
+     || mk->group_opacity != 1.0f || mk->refinement.enabled != DT_MASKS_REFINE_OFF)
+    return;
+
+  if(refined)
+  {
+    mk->refinement = ref->refinement;
+    mk->refinement.enabled = DT_MASKS_REFINE_GROUP;
+    memset(&ref->refinement, 0, sizeof(ref->refinement));
+  }
+  if(inverted) mk->state |= DT_MASKS_STATE_OP_INVERT;
+  mk->group_opacity = ref->opacity;
+  ref->opacity = 1.0f;
+  ref->state &= ~DT_MASKS_STATE_INVERSE;
+}
+
+// `forms` is threaded by reference because the rewrites below synthesize group
+// forms of their own, and they have to land in the list the caller will go on
+// to persist -- dev->forms for the live tree, and each history item's own
+// snapshot list when every stored state is normalized (_normalize_history_item
+// in migrate_legacy.c)
+static gboolean _mark_runs(GList **forms,
                            dt_masks_form_t *grp,
+                           dt_masks_point_group_t *ref,
                            const gboolean split_nonunion,
                            const int depth,
                            GHashTable *classic)
@@ -1502,15 +1898,19 @@ static gboolean _mark_runs(GList *forms,
 
   if(!grp->points)
   {
-    grp->points = g_list_append(NULL, dt_masks_marker_new(forms, grp, DT_MASKS_STATE_UNION));
+    grp->points = g_list_append(NULL, dt_masks_marker_new(*forms, grp, DT_MASKS_STATE_UNION));
     changed = TRUE;
   }
   else if(!marked)
   {
+    // the top level stays a list of groups applied in order with their own
+    // operators; only a nested group collapses into a single within-group
+    // combine (masks_revamp_nested_groups.md, Q7)
+    const int within = depth > 0 ? _uniform_within(grp) : 0;
     GList *l = grp->points;
     while(l)
     {
-      GList *end = g_list_next(l);
+      GList *end = within ? NULL : g_list_next(l);
       while(end && !_classic_run_starts(end, split_nonunion)) end = g_list_next(end);
 
       // the settings are the ones the flexi fold reads for this run: off its
@@ -1519,19 +1919,25 @@ static gboolean _mark_runs(GList *forms,
       for(GList *m = l; m != end; m = g_list_next(m))
       {
         const dt_masks_point_group_t *pt = m->data;
-        if(!(pt->state & DT_MASKS_STATE_HIDDEN) && dt_masks_get_from_id_ext(forms, pt->formid))
+        if(!(pt->state & DT_MASKS_STATE_HIDDEN) && dt_masks_get_from_id_ext(*forms, pt->formid))
         {
           src = pt;
           break;
         }
       }
 
+      // a collapsed group is the only group of its list, so the fold never
+      // evaluates its own operator (it seeds the accumulator) and dissolving
+      // it into its parent overwrites that operator with the member's
+      // (_dissolve_member, ONE_GROUP): union is the honest neutral to show
       dt_masks_point_group_t *marker =
-        dt_masks_marker_new(forms, grp,
-                            dt_masks_eff_group_op(src->state)
-                              | (src->state & DT_MASKS_STATE_WITHIN));
+        dt_masks_marker_new(*forms, grp,
+                            within
+                              ? (DT_MASKS_STATE_UNION | within)
+                              : (dt_masks_eff_group_op(src->state)
+                                 | (src->state & DT_MASKS_STATE_WITHIN)));
       marker->formid =
-        _run_marker_id(forms, grp->formid, ((dt_masks_point_group_t *)l->data)->formid);
+        _run_marker_id(*forms, grp->formid, ((dt_masks_point_group_t *)l->data)->formid);
       g_strlcpy(marker->name, src->name, sizeof(marker->name));
       marker->group_opacity = src->group_opacity;
       if(src->refinement.enabled == DT_MASKS_REFINE_GROUP) marker->refinement = src->refinement;
@@ -1552,6 +1958,11 @@ static gboolean _mark_runs(GList *forms,
       grp->points = g_list_insert_before(grp->points, l, marker);
       l = end;
     }
+    if(split_nonunion) _merge_difference_runs(grp);
+    // a nested group's runs become one within-group fold; the top level keeps
+    // its ordered list of groups (masks_revamp_nested_groups.md, Q7)
+    if(split_nonunion && depth > 0) _rewrite_nested_runs(forms, grp);
+    if(ref) _move_ref_settings(*forms, grp, ref);
     changed = TRUE;
   }
 
@@ -1561,15 +1972,30 @@ static gboolean _mark_runs(GList *forms,
   for(GList *l = grp->points; l;)
   {
     GList *next = g_list_next(l);
-    const dt_masks_point_group_t *pt = l->data;
+    dt_masks_point_group_t *pt = l->data;
     dt_masks_form_t *child =
-      dt_masks_point_is_marker(pt) ? NULL : dt_masks_get_from_id_ext(forms, pt->formid);
+      dt_masks_point_is_marker(pt) ? NULL : dt_masks_get_from_id_ext(*forms, pt->formid);
     if(child && child != grp && (child->type & DT_MASKS_GROUP))
     {
-      changed |= _mark_runs(forms, child, split_nonunion, depth + 1, classic);
-      if(g_hash_table_contains(classic, GINT_TO_POINTER(child->formid))
-         && _dissolve_member(forms, grp, l, &next))
-        changed = TRUE;
+      // a drawn group under the parametric wrapper is still the user's top
+      // level, so it does not count as a level of nesting
+      const int below = depth + (_is_synth_wrapper(*forms, grp) ? 0 : 1);
+      changed |= _mark_runs(forms, child, pt, split_nonunion, below, classic);
+      if(g_hash_table_contains(classic, GINT_TO_POINTER(child->formid)))
+      {
+        if(_dissolve_member(*forms, grp, depth > 0, l, &next))
+          changed = TRUE;
+        // the drawn group under the parametric wrapper was kept a list of
+        // groups, to splice into the wrapper. Where it cannot be, it is a
+        // nested group like any other: one group, which holds its
+        // reference's settings
+        else if(split_nonunion && below == depth && _rewrite_nested_runs(forms, child))
+        {
+          _move_ref_settings(*forms, child, pt);
+          _dissolve_member(*forms, grp, depth > 0, l, &next);
+          changed = TRUE;
+        }
+      }
     }
     l = next;
   }
@@ -1579,38 +2005,160 @@ static gboolean _mark_runs(GList *forms,
 // a copy of the nested group `src` for the group `parent`, its form and marker
 // ids its own. They are derived from the ids copied, so every history snapshot
 // holding the same tree gets the same ones
-static dt_masks_form_t *_copy_group(GList *forms,
+static dt_masks_form_t *_copy_group(GList **forms,
                                     const dt_masks_form_t *src,
                                     const dt_mask_id_t parent)
 {
   dt_masks_form_t *copy = malloc(sizeof(dt_masks_form_t));
   memcpy(copy, src, sizeof(dt_masks_form_t));
   copy->points = NULL;
-  copy->formid = _run_marker_id(forms, parent, src->formid);
-  // `forms` holds the parent, so appending keeps the caller's head
-  forms = g_list_append(forms, copy);
+  copy->formid = _run_marker_id(*forms, parent, src->formid);
+  *forms = g_list_append(*forms, copy);
   for(const GList *l = src->points; l; l = g_list_next(l))
   {
     dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
     memcpy(pt, l->data, sizeof(dt_masks_point_group_t));
     pt->parentid = copy->formid;
     if(dt_masks_point_is_marker(pt))
-      pt->formid = _run_marker_id(forms, copy->formid, pt->formid);
+      pt->formid = _run_marker_id(*forms, copy->formid, pt->formid);
     copy->points = g_list_append(copy->points, pt);
   }
   return copy;
 }
 
+// how many members of any form in `forms` refer to `fid`
+static int _ref_count(GList *forms, const dt_mask_id_t fid)
+{
+  int n = 0;
+  for(const GList *f = forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *form = f->data;
+    if(!(form->type & DT_MASKS_GROUP)) continue;
+    for(const GList *l = form->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      if(!dt_masks_point_is_marker(pt) && pt->formid == fid) n++;
+    }
+  }
+  return n;
+}
+
 // Within one mask a group has one parent: the panel keys a group's rows on its
 // id, and editing one place of it would edit the other. Classic can hold the
-// same nested group twice, so each reference past the first gets a copy. A
-// group shared with another module's mask stays shared
-static gboolean _unshare_nested(GList *forms,
+// same nested group twice, so each reference past the first gets a copy. With
+// `classic_elsewhere`, a classic group another form refers to as well gets a
+// copy too, since converting it moves this reference's settings onto it
+static gboolean _unshare_nested(GList **forms,
                                 dt_masks_form_t *grp,
                                 GHashTable *seen,
-                                const int depth)
+                                const int depth,
+                                const gboolean classic_elsewhere)
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return FALSE;
+  gboolean changed = FALSE;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    dt_masks_form_t *child = dt_masks_get_from_id_ext(*forms, pt->formid);
+    if(!child || child == grp || !(child->type & DT_MASKS_GROUP)
+       || (child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
+      continue;
+    if(g_hash_table_contains(seen, GINT_TO_POINTER(child->formid))
+       || (classic_elsewhere && !_has_marker(child) && _ref_count(*forms, child->formid) > 1))
+    {
+      child = _copy_group(forms, child, grp->formid);
+      pt->formid = child->formid;
+      changed = TRUE;
+    }
+    g_hash_table_add(seen, GINT_TO_POINTER(child->formid));
+    changed |= _unshare_nested(forms, child, seen, depth + 1, classic_elsewhere);
+  }
+  return changed;
+}
+
+// every group form reachable from `grp`, `grp` included
+static void _collect_reachable(GList *forms, const dt_masks_form_t *grp, GHashTable *out,
+                               const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX || !g_hash_table_add(out, GINT_TO_POINTER(grp->formid)))
+    return;
+  for(const GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+    if(child && (child->type & DT_MASKS_GROUP)) _collect_reachable(forms, child, out, depth + 1);
+  }
+}
+
+// how many members reference `fid`, from any group but one this migration
+// emptied: a dissolved classic group stays in `forms` holding its old list,
+// though nothing reaches it any more. Another module's mask sharing `fid`
+// still counts
+static int _live_refs(GList *forms, const dt_mask_id_t fid, GHashTable *classic,
+                      GHashTable *reachable)
+{
+  int n = 0;
+  for(const GList *f = forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *g = f->data;
+    if(!(g->type & DT_MASKS_GROUP)) continue;
+    const gpointer key = GINT_TO_POINTER(g->formid);
+    if(g_hash_table_contains(classic, key) && !g_hash_table_contains(reachable, key)) continue;
+    for(const GList *l = g->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      if(!dt_masks_point_is_marker(pt) && pt->formid == fid) n++;
+    }
+  }
+  return n;
+}
+
+// the marker of `g` when it is g's only one and heads its list: a nested group
+// in the Q7 model, a single group with a within-group operator
+static dt_masks_point_group_t *_sole_marker(const dt_masks_form_t *g)
+{
+  if(!g->points || !dt_masks_point_is_marker(g->points->data)) return NULL;
+  for(const GList *l = g_list_next(g->points); l; l = g_list_next(l))
+    if(dt_masks_point_is_marker(l->data)) return NULL;
+  return g->points->data;
+}
+
+// does `g` hold a member that renders? With none, the fold returns an opaque
+// mask without applying the group's invert or opacity (group.c, nb_groups == 0)
+static gboolean _has_visible_member(GList *forms, const dt_masks_form_t *g)
+{
+  for(const GList *l = g->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(!dt_masks_point_is_marker(pt)
+       && !(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
+       && dt_masks_get_from_id_ext(forms, pt->formid))
+      return TRUE;
+  }
+  return FALSE;
+}
+
+/* Move a nested group reference's opacity and inversion onto the group's own
+ * marker, where the panel shows a group's settings on its header, as it does
+ * for a top-level group (masks_revamp_nested_groups.md, Q7).
+ *
+ * Exact because both take the same shape: a member contributes
+ * `o * (inverted ? 1 - m : m)` to every within-group combine (group.c
+ * _combine_masks_*), and a group's finished sub-mask is inverted, then scaled
+ * by group_opacity (group.c _group_get_mask_roi_flexi). Uninverted, the
+ * opacities multiply. Inverted, it holds only over a group at full opacity:
+ * `o * (1 - g * x)` has no single-marker form, so that reference keeps its
+ * settings, as does a refined or hidden one, or one to a group shared with
+ * another reference. */
+static gboolean _fold_nested_refs(GList *forms,
+                                  dt_masks_form_t *grp,
+                                  GHashTable *classic,
+                                  GHashTable *reachable,
+                                  const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
   gboolean changed = FALSE;
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
@@ -1620,30 +2168,355 @@ static gboolean _unshare_nested(GList *forms,
     if(!child || child == grp || !(child->type & DT_MASKS_GROUP)
        || (child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
       continue;
-    if(g_hash_table_contains(seen, GINT_TO_POINTER(child->formid)))
-    {
-      child = _copy_group(forms, child, grp->formid);
-      pt->formid = child->formid;
-      changed = TRUE;
-    }
-    g_hash_table_add(seen, GINT_TO_POINTER(child->formid));
-    changed |= _unshare_nested(forms, child, seen, depth + 1);
+    changed |= _fold_nested_refs(forms, child, classic, reachable, depth + 1);
+
+    const gboolean inverted = (pt->state & DT_MASKS_STATE_INVERSE) != 0;
+    if(pt->opacity == 1.0f && !inverted) continue;
+    if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    if(pt->refinement.enabled != DT_MASKS_REFINE_OFF) continue;
+    dt_masks_point_group_t *mk = _sole_marker(child);
+    if(!mk || _live_refs(forms, child->formid, classic, reachable) != 1) continue;
+    if(!_has_visible_member(forms, child)) continue;
+    if(inverted && mk->group_opacity != 1.0f) continue;
+
+    if(inverted) mk->state ^= DT_MASKS_STATE_OP_INVERT;
+    mk->group_opacity *= pt->opacity;
+    pt->opacity = 1.0f;
+    pt->state &= ~DT_MASKS_STATE_INVERSE;
+    changed = TRUE;
   }
   return changed;
 }
 
-gboolean dt_masks_group_mark_classic_runs(GList *forms,
+/* Replace a plain reference to a nested group holding one element by that
+   element, where it renders the same. Every within-group combine of a single
+   member is that member, so the group contributes
+   g * (inverted ? 1 - m : m) of the member's own m = o * (inv ? 1 - x : x):
+   - not inverted, that is the element at opacity g * o;
+   - inverted, at o == 1, the element with its inversion flipped, at g.
+   A group refinement applies after the member's own and has nowhere to go,
+   and a bypassed or empty group, or a hidden member, renders as no group at
+   all (group.c, nb_groups == 0), which an element cannot. A parametric
+   channel at its neutral range is not counted either, and a raster element
+   whose source is gone drops its inversion, so both stay in their group.
+   Returns whether anything changed */
+static gboolean _collapse_single_members(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  gboolean changed = FALSE;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *ref = l->data;
+    if(dt_masks_point_is_marker(ref)) continue;
+    dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, ref->formid);
+    if(!child || child == grp || !(child->type & DT_MASKS_GROUP)
+       || (child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
+      continue;
+    changed |= _collapse_single_members(forms, child, depth + 1);
+
+    if(ref->opacity != 1.0f || ref->refinement.enabled != DT_MASKS_REFINE_OFF
+       || (ref->state & (DT_MASKS_STATE_INVERSE | DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+      continue;
+    const dt_masks_point_group_t *mk = _sole_marker(child);
+    if(!mk || g_list_length(child->points) != 2) continue;
+    if((mk->state & DT_MASKS_STATE_OP_DISABLE) || mk->refinement.enabled != DT_MASKS_REFINE_OFF
+       || mk->name[0])
+      continue;
+    const dt_masks_point_group_t *m = child->points->next->data;
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, m->formid);
+    if(!f || (f->type & (DT_MASKS_GROUP | DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+       || (m->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+      continue;
+    const gboolean g_inv = (mk->state & DT_MASKS_STATE_OP_INVERT) != 0;
+    if(g_inv && m->opacity != 1.0f) continue;
+
+    // the element takes the reference's place and parent, and the group
+    // stays behind unreferenced, as a dissolved one does
+    dt_masks_point_group_t *e = malloc(sizeof(dt_masks_point_group_t));
+    memcpy(e, m, sizeof(dt_masks_point_group_t));
+    e->parentid = grp->formid;
+    e->state = (e->state & ~(DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN))
+               | (ref->state & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN));
+    if(g_inv) e->state ^= DT_MASKS_STATE_INVERSE;
+    e->opacity = mk->group_opacity * m->opacity;
+    free(ref);
+    l->data = e;
+    changed = TRUE;
+  }
+  return changed;
+}
+
+// a group of `grp`'s list that folds as a plain maximum, whatever its group
+// opacity: union within, nothing applied to its result but that opacity, and
+// no member the fold counts differently on its own. A parametric channel left
+// at full range renders all ones and is not counted (group.c, is_uniform_noop),
+// so a group holding only that is skipped where, merged, it would add 1.0
+static gboolean _is_max_group(GList *forms, const dt_masks_point_group_t *mk, GList *first)
+{
+  if(mk->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT | DT_MASKS_STATE_WITHIN))
+    return FALSE;
+  if(mk->refinement.enabled != DT_MASKS_REFINE_OFF || mk->name[0]) return FALSE;
+  for(GList *l = first; l && !dt_masks_point_is_marker(l->data); l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, pt->formid);
+    if(pt->group_start || (f && (f->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))))
+      return FALSE;
+  }
+  return TRUE;
+}
+
+// multiply a group's opacity into its members: `g * max(o * x)` is
+// `max(g * o * x)`, an inverted member included, since its opacity applies
+// after its inversion (group.c _combine_masks_union)
+static void _push_group_opacity(dt_masks_point_group_t *mk, GList *first)
+{
+  if(mk->group_opacity == 1.0f) return;
+  for(GList *l = first; l && !dt_masks_point_is_marker(l->data); l = g_list_next(l))
+    ((dt_masks_point_group_t *)l->data)->opacity *= mk->group_opacity;
+  mk->group_opacity = 1.0f;
+}
+
+/* Consecutive groups that each fold as a plain maximum and join the stack by
+ * union are one group: `max(acc, g1, g2) = max(acc, g1 u g2)`, each group's
+ * opacity multiplied into its own members first. Migration leaves such runs
+ * wherever classic faded a nested group: dissolving it puts the fade on a
+ * group of its own, one per member, which the panel shows as a column of
+ * one-shape unions. The bottom group's operator is never applied, so it
+ * starts a run whatever it shows. */
+static gboolean _merge_union_groups(GList *forms, dt_masks_form_t *grp)
+{
+  gboolean changed = FALSE;
+  GList *into = NULL; // the marker of the group being grown
+  for(GList *l = grp->points; l;)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *mk = l->data;
+    if(dt_masks_point_is_marker(mk))
+    {
+      const gboolean max_group = _is_max_group(forms, mk, next);
+      const gboolean joins = l == grp->points || _combine_op(mk->state) == DT_MASKS_STATE_UNION;
+      if(into && max_group && joins)
+      {
+        _push_group_opacity(into->data, g_list_next(into));
+        _push_group_opacity(mk, next);
+        free(mk);
+        grp->points = g_list_delete_link(grp->points, l);
+        changed = TRUE;
+      }
+      else
+        into = max_group && joins ? l : NULL;
+    }
+    l = next;
+  }
+  return changed;
+}
+
+/* In a group folding by union, a shape held twice with the same inversion and
+ * no refinement contributes only its stronger reference: `max(o1 * x, o2 * x)`
+ * is the larger opacity's term, and likewise with `1 - x`. The weaker one goes.
+ * The no-op prune before marking only drops exact full-opacity repeats
+ * (migrate_legacy.c _prune_noop_duplicate_refs); a repeat whose opacity came
+ * from a dissolved faded group only shows up once the groups are merged. */
+static gboolean _drop_dominated_refs(GList *forms, dt_masks_form_t *grp)
+{
+  gboolean changed = FALSE;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *mk = l->data;
+    if(!dt_masks_point_is_marker(mk) || (mk->state & DT_MASKS_STATE_WITHIN)) continue;
+    for(GList *a = g_list_next(l); a && !dt_masks_point_is_marker(a->data); a = g_list_next(a))
+    {
+      dt_masks_point_group_t *pa = a->data;
+      const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, pa->formid);
+      if(!f || (f->type & (DT_MASKS_GROUP | DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+         || (pa->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
+         || pa->refinement.enabled != DT_MASKS_REFINE_OFF)
+        continue;
+      for(GList *b = g_list_next(a); b && !dt_masks_point_is_marker(b->data);)
+      {
+        GList *bnext = g_list_next(b);
+        dt_masks_point_group_t *pb = b->data;
+        if(pb->formid == pa->formid
+           && !(pb->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
+           && pb->refinement.enabled == DT_MASKS_REFINE_OFF
+           && (pb->state & DT_MASKS_STATE_INVERSE) == (pa->state & DT_MASKS_STATE_INVERSE))
+        {
+          pa->opacity = MAX(pa->opacity, pb->opacity);
+          free(pb);
+          grp->points = g_list_delete_link(grp->points, b);
+          changed = TRUE;
+        }
+        b = bnext;
+      }
+    }
+  }
+  return changed;
+}
+
+// a member that is one plain term of its group's fold, as the absorption
+// below compares them
+static gboolean _is_plain_term(GList *forms, const dt_masks_point_group_t *pt)
+{
+  const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, pt->formid);
+  return f && !(f->type & (DT_MASKS_GROUP | DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))
+         && !(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
+         && pt->refinement.enabled == DT_MASKS_REFINE_OFF;
+}
+
+// a group whose finished sub-mask is never below any member's own term:
+// union (max), screen (a + b - ab) and sum (min(1, a + b)) all grow with every
+// member, and nothing but a group opacity is applied to the result
+static gboolean _is_growing_group(const dt_masks_point_group_t *mk)
+{
+  if(mk->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT)) return FALSE;
+  if(mk->refinement.enabled != DT_MASKS_REFINE_OFF) return FALSE;
+  const int within = mk->state & DT_MASKS_STATE_WITHIN;
+  return within == 0 || within == DT_MASKS_STATE_SCREEN || within == DT_MASKS_STATE_WITHIN_SUM;
+}
+
+/* Across groups joined by union, a shape in a plain maximum group adds nothing
+ * when another group of the same run holds it at least as strongly and folds
+ * to no less than it: `max(g1 * o1 * x, g2 * fold(.., o2 * x, ..))` is the
+ * second whenever g2 * o2 >= g1 * o1. Edit 17473 (panel case link_06) holds
+ * `x u {x, sum y}`, which is `min(1, x + y)`: the lone x goes, and with it its
+ * group. Between two plain maximum groups a tie keeps the earlier reference,
+ * so they never drop each other's copy. The emptied group is removed; the next group of the run joined
+ * by union, so becoming the bottom group changes nothing. */
+static gboolean _drop_absorbed_refs(GList *forms, dt_masks_form_t *grp)
+{
+  gboolean changed = FALSE;
+  // the first marker of the current run of groups joined by union, or NULL
+  // while inside a group that joins by anything else: the bottom group starts
+  // a run whatever it shows, since its operator is never applied
+  GList *run = NULL;
+  for(GList *l = grp->points; l;)
+  {
+    GList *next_marker = g_list_next(l);
+    while(next_marker && !dt_masks_point_is_marker(next_marker->data))
+      next_marker = g_list_next(next_marker);
+    dt_masks_point_group_t *mk = l->data;
+    if(!dt_masks_point_is_marker(mk))
+    {
+      l = next_marker;
+      continue;
+    }
+    const gboolean joins = l == grp->points || _combine_op(mk->state) == DT_MASKS_STATE_UNION;
+    if(!joins)
+      run = NULL;
+    else if(!run || l == grp->points)
+      run = l;
+
+    gboolean dropped = FALSE;
+    if(run && _is_max_group(forms, mk, g_list_next(l)))
+    {
+      for(GList *a = g_list_next(l); a && !dt_masks_point_is_marker(a->data);)
+      {
+        GList *anext = g_list_next(a);
+        dt_masks_point_group_t *pa = a->data;
+        const float wa = mk->group_opacity * pa->opacity;
+        gboolean absorbed = FALSE;
+        // every other group of the run, up to the first that does not join by union
+        for(GList *m = run; m && !absorbed && _is_plain_term(forms, pa); m = g_list_next(m))
+        {
+          const dt_masks_point_group_t *other = m->data;
+          if(!dt_masks_point_is_marker(other)) continue;
+          if(m != run && _combine_op(other->state) != DT_MASKS_STATE_UNION) break;
+          if(m == l || !_is_growing_group(other)) continue;
+          for(GList *b = g_list_next(m); b && !dt_masks_point_is_marker(b->data);
+              b = g_list_next(b))
+          {
+            const dt_masks_point_group_t *pb = b->data;
+            if(pb->formid != pa->formid || !_is_plain_term(forms, pb)
+               || (pb->state & DT_MASKS_STATE_INVERSE) != (pa->state & DT_MASKS_STATE_INVERSE))
+              continue;
+            const float wb = other->group_opacity * pb->opacity;
+            // on a tie, only another plain maximum group could drop this
+            // group's copy in turn: the earlier reference stays
+            if(wb > wa
+               || (wb == wa
+                   && (!_is_max_group(forms, other, g_list_next(m))
+                       || g_list_position(grp->points, m) < g_list_position(grp->points, l))))
+            {
+              absorbed = TRUE;
+              break;
+            }
+          }
+        }
+        if(absorbed)
+        {
+          free(pa);
+          grp->points = g_list_delete_link(grp->points, a);
+          dropped = changed = TRUE;
+        }
+        a = anext;
+      }
+    }
+
+    // emptied here: the group goes with its last shape
+    if(dropped && (!g_list_next(l) || dt_masks_point_is_marker(g_list_next(l)->data)))
+    {
+      GList *after = g_list_next(l);
+      const gboolean starts_run = run == l;
+      free(mk);
+      grp->points = g_list_delete_link(grp->points, l);
+      if(starts_run) run = NULL;
+      l = after;
+      continue;
+    }
+    l = next_marker;
+  }
+  return changed;
+}
+
+// all of the above, on every list of the tree
+static void _simplify_unions(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return;
+  _merge_union_groups(forms, grp);
+  _drop_dominated_refs(forms, grp);
+  // removing an emptied group can leave two mergeable groups side by side
+  if(_drop_absorbed_refs(forms, grp)) _merge_union_groups(forms, grp);
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+    if(child && child != grp && (child->type & DT_MASKS_GROUP)
+       && !(child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
+      _simplify_unions(forms, child, depth + 1);
+  }
+}
+
+gboolean dt_masks_group_mark_classic_runs(GList **forms,
                                           dt_masks_form_t *grp,
                                           const gboolean split_nonunion)
 {
-  GHashTable *classic = g_hash_table_new(NULL, NULL);
-  _collect_classic(forms, grp, classic, 0);
-  gboolean changed = _mark_runs(forms, grp, split_nonunion, 0, classic);
-  g_hash_table_destroy(classic);
-
+  // a classic group gets one reference before it is converted, since its
+  // reference's settings move onto it
   GHashTable *seen = g_hash_table_new(NULL, NULL);
-  changed |= _unshare_nested(forms, grp, seen, 0);
+  gboolean changed = _unshare_nested(forms, grp, seen, 0, TRUE);
   g_hash_table_destroy(seen);
+
+  GHashTable *classic = g_hash_table_new(NULL, NULL);
+  _collect_classic(*forms, grp, classic, 0);
+  changed |= _mark_runs(forms, grp, NULL, split_nonunion, 0, classic);
+
+  seen = g_hash_table_new(NULL, NULL);
+  changed |= _unshare_nested(forms, grp, seen, 0, FALSE);
+  g_hash_table_destroy(seen);
+
+  // only a tree converted here: a flexi-authored one keeps what its author set
+  if(changed)
+  {
+    GHashTable *reachable = g_hash_table_new(NULL, NULL);
+    _collect_reachable(*forms, grp, reachable, 0);
+    _fold_nested_refs(*forms, grp, classic, reachable, 0);
+    g_hash_table_destroy(reachable);
+    _collapse_single_members(*forms, grp, 0);
+    if(split_nonunion) _simplify_unions(*forms, grp, 0);
+  }
+  g_hash_table_destroy(classic);
   return changed;
 }
 

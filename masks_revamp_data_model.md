@@ -231,6 +231,7 @@ alone:
 +  DT_MASKS_STATE_MULTIPLY         = 1 << 10, // ...between-group: combine by multiplication
 +  DT_MASKS_STATE_ISECT            = 1 << 12, // within-group: combine by intersection (min)
 +  DT_MASKS_STATE_WITHIN_MULTIPLY  = 1 << 15, // within-group: combine by true multiplication
++  DT_MASKS_STATE_WITHIN_SUM       = 1 << 19, // within-group: combine by min(1, a + b)
 +  DT_MASKS_STATE_OP_SCREEN        = 1 << 13, // between-group: combine by soft union
 +  DT_MASKS_STATE_OP_BYPASS        = 1 << 14, // whole group temporarily skipped
 +  DT_MASKS_STATE_OP_INVERT        = 1 << 16, // invert the group's own finished sub-mask
@@ -493,6 +494,11 @@ over because it's the one design that *isn't* free: it needs a schema
 change, a version bump on read for every existing image, and a real
 answer for "what happens to a group row when its last member is deleted" —
 none of which the flat-list-plus-marker approach has to solve.
+
+**Group marker entries**, a record in the member list that opens each group
+and holds its settings, were not considered at the time. They need no
+database change, and the last-member question has a plain answer: the marker
+stays. `masks_revamp_group_markers.md` proposes them.
 
 **A JSON/serialized blob for the whole `DT_MASKS_GROUP`**, replacing the
 fixed-size struct-per-point blob. More flexible, easier to extend without

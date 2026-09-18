@@ -15,12 +15,6 @@ way, and the methodology these fixtures were produced with.
   structs, i.e. without going through the darktable UI. Each XMP loads as a
   genuinely classic (non-flexi) history stack, so rendering it with any
   current darktable-cli build forces the classic->flexi migration to run.
-  One exception: `I1_two_adjacent_intersect_groups` is flexi-native, not
-  classic (built by `build_group_start_scenario()`, not the `scenario()`
-  matrix below) — it targets the *masks* v9->v10 migration (the
-  `DT_MASKS_STATE_GROUP_BREAK` bit -> `dt_masks_point_group_t.group_start`
-  field swap), which classic mode has no equivalent state to migrate
-  *from*, so it needs its own already-flexi (masks v9) fixture instead.
 - `images/Sweep_sRGB_Linear_Half_Zip_01.tif` — the single input image all
   scenarios render against. Downscaled to 960x540 (Lanczos, 16-bit and the
   original linear-RGB ICC profile preserved) from the original 1920x1080 to
@@ -67,15 +61,11 @@ channels with a taper-in 0-30% / taper-off 50-80% curve, and
   parametric/raster bit at all) — deliberately never touched by migration
   before Phase 0.5, now normalized to `ENABLED|FLEXI` explicitly
 - `H*` — per-shape opacity + refinement, carried over unchanged by migration
-- `I*` — flexi-native (not a migration scenario, see above): two adjacent
-  same-operator groups (`DEVELOP_MASKS_STATE_INTERSECTION`), the upper run's
-  head carrying the pre-v10 `GROUP_BREAK` bit, regressing the masks v9->v10
-  migration that replaces it with `dt_masks_point_group_t.group_start`.
-  `INTERSECTION` is deliberately used, not `UNION`: it's the one operator
-  where "two separate runs" and "one merged run" render differently
-  (`intersect(unionA, unionB)` vs `intersect(unionA ∪ unionB)`), so a broken
-  migration (break bit lost, or never carried into the new field) shows up
-  as a pixel diff instead of silently passing by accident.
+- `I*` - two members over the same overlapping circle and square, both
+  carrying the same non-union operator (`I1` intersection, `I2` sum).
+  Classic applies each member's operator once per member, so migration has
+  to give each member its own group; merged into one, the pair renders
+  differently (see `build_operator_chain_scenarios()` in `gen_xmp.py`).
 
 - `J*` — mask refinement at each of its three scopes. The same fields
   (details / feathering / blur / contrast / brightness) apply at three
