@@ -113,11 +113,11 @@ dt_mask_id_t _model_add_group(dt_masks_form_t *grp,
                               const dt_masks_state_t op,
                               const dt_mask_id_t cid,
                               const gboolean below);
-/** a new nested group on top of the members of group `cid`, holding one empty
-    group of operator `op`. Returns that group's id, or INVALID_MASKID where
-    groups may not nest any deeper */
+/** a new empty nested group on top of the members of group `cid`, folding
+    its members with the within-group operator `within`. Returns that group's
+    id, or INVALID_MASKID where groups may not nest any deeper */
 dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
-                                   const dt_masks_state_t op,
+                                   const dt_masks_state_t within,
                                    const dt_mask_id_t cid);
 /** move group `src_cid` into group `dst_cid`, as the one group of a new
     nested group on top of its members. FALSE where it may not go: the list it

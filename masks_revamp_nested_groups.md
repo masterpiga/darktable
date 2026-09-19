@@ -636,3 +636,66 @@ Still to do:
   every other reference keeps the original, including when another module is
   also linked. Form-id-keyed panel state (selection, solo, expanded) moves to
   the copy only when no other reference to the original is left.
+
+- **Q8. One operator per group, of any kind, applied in order: decided and
+  being implemented 2026-09-18.** The mask is one group (its list holds one
+  marker, whose within-group operator is the mask's); old-shape flexi edits
+  are not supported. Done so far, not yet GUI-tried and not yet run over the
+  corpus:
+  - renderer: within-group difference (first visible member is the base) and
+    exclusion (`DT_MASKS_STATE_WITHIN_DIFFERENCE`/`_EXCLUSION`, bits 20, 21);
+  - migration (masks.c `_convert_classic`, `_fold_classic_list`,
+    `_splice_nested`, `_drop_absorbed_members`): a classic list folds into
+    one group per operator run, the list so far becoming the next group's
+    first member; converted groups with plain settings and their holder's
+    operator merge back in (difference and exclusion only as the base). Q7's
+    rewrites, the run marking and the dissolve rules are gone;
+  - panel: the root group has no header; the mask operator sits leftmost in
+    the toolbar, the add-group button right after the shape buttons; a
+    group's lead handle is its operator; "add group" nests into the selected
+    group or the mask. The between-group operator menu is gone.
+  - same-kind clusters fold only adjacent runs (3 or more) and no longer
+    reorder the group (`_consolidate_cluster_in_group` is gone): gathering
+    scattered members rewrote the fold order on every panel build and kept a
+    member from leaving its cluster. Dragging a member next to another kind
+    takes it out.
+  - Known gaps: the group layout presets (right-click on add group) still
+    build old-shape top-level runs; drag-and-drop still carries the
+    top-level-run code paths, unused by new-shape masks.
+  Original proposal: Drop the between-group operator. Every group
+  folds its members in order with one operator from the full vocabulary
+  (union, intersection, difference, exclusion, sum, plus multiply and
+  screen), and the mask has one mask-level operator for its top-level
+  members. Classic's arithmetic then carries over unchanged: difference is
+  `base - rest` with the first member as base, and exclusion is classic's own
+  branchy combiner (group.c `_combine_masks_exclusion`, symmetric but not
+  associative, so ordered). Q7's multiply / inverted-screen and duplicated
+  exclusion forms are no longer needed. Only difference's base and exclusion
+  care about order.
+
+  Depth, measured 2026-09-18 on the full corpus check of that day (today's
+  numbers are the real `nesting` migration reports; the proposal is a static
+  conversion of the classic tree, scratchpad `depth_compare.py`: a new group
+  per operator change, a same-operator child spliced into its parent where
+  exact, a one-member group replaced by its member). Levels are group headers
+  on the deepest path, the mask-level operator not counted, so today's is
+  1 + `nesting`. 16,037 distinct edits:
+
+  | Levels | Today | Proposed |
+  |---|---|---|
+  | 0 | 0 | 15,139 |
+  | 1 | 15,926 | 848 |
+  | 2 | 92 | 43 |
+  | 3 | 14 | 6 |
+  | 4 | 4 | 1 |
+  | 5 | 1 | 0 |
+
+  - 15,136 edits go from 1 to 0: a single top-level group of shapes becomes
+    the mask-level operator. That is presentation, not nesting.
+  - Every edit nested today (111) gets shallower (96) or stays (15); none
+    gets deeper. Exclusion and difference no longer expand (kofa_2 256:
+    `u@0.35[u@0.7o d@0.7o uo xo]`, 5 levels today, 3 proposed).
+  - 29 edits get deeper, all flat today: a top-level stack that switches
+    operators back and forth (dudo 90: `uo so so so so so so uo so so uo uo`,
+    1 level today, 3 proposed). Union and sum do not commute with each other,
+    so any one-operator-per-group model nests once per switch.

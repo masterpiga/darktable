@@ -528,16 +528,22 @@ typedef struct dt_iop_gui_blend_data_t
   // buttons (rebuilt per csp); the only child of masks_param_channels_box.
   GtkWidget *masks_param_channels_inner;
   int param_channels_csp;
-  // masks_new_op: the "add group" button (flexi-only). Clicking it opens an
-  // operator chooser; picking an operator stages a new (empty) group of that
-  // operator on top of the list, which the next drawn shape joins.
-  // masks_new_op_box: the combo-box-like wrapper (icon + border) holding it --
-  // one of masks_toolbar's children, a fixed, always-visible position
-  // (placing it dynamically above whichever group is selected turned out to
-  // rely on the panel being tall enough to scroll, which is not always the
-  // case).
+  // masks_new_op: the "add group" button (flexi-only), right after the shape
+  // buttons. Clicking it opens an operator chooser; picking one adds a new
+  // (empty) group with that operator inside the selected group, or at the top
+  // of the mask, which the next drawn shape joins.
+  // masks_new_op_box: the wrapper holding it, one of masks_toolbar's children
+  // at a fixed, always-visible position (placing it dynamically above
+  // whichever group is selected turned out to rely on the panel being tall
+  // enough to scroll, which is not always the case).
   GtkWidget *masks_new_op;
   GtkWidget *masks_new_op_box;
+  // masks_root_op: the mask's own operator, how the elements and groups at the
+  // top of the mask combine (flexi-only, leftmost in masks_toolbar). The mask is
+  // one group whose header the panel does not show, so this is that group's
+  // operator (masks_revamp_nested_groups.md, Q8). masks_root_op_box wraps it
+  GtkWidget *masks_root_op;
+  GtkWidget *masks_root_op_box;
   // masks_new_op_label: the "new group" caption next to the add-group button.
   // masks_new_group_op: the operator state the next added group will use. It is
   // driven ONLY by the user picking an operator from the add-group menu, never by

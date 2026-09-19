@@ -620,7 +620,6 @@ static void _add_raster_mask(dt_iop_module_t *self,
                              dt_iop_module_t *src,
                              const dt_mask_id_t id);
 static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t cid);
-static const char *_op_name_for_state(const int state);
 static const char *_within_name(const dt_masks_state_t within);
 static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd);
 void _refresh_canvas_edit(dt_iop_module_t *module);
@@ -1551,7 +1550,6 @@ static void _paint_param_inout(cairo_t *cr,
 static void _detach_group_members(dt_masks_form_t *grp, GList *fids);
 static void _recompute_insert_hint(dt_iop_module_t *module);
 static void _blendif_options_callback(GtkButton *button, dt_iop_module_t *module);
-static const char *_op_name_for_state(const int state);
 static gboolean _op_is_bypassed(const int state);
 static GtkWidget *_find_row_by_formid(GtkWidget *w, const dt_mask_id_t formid);
 int _group_ordinal_of_cid(dt_iop_module_t *module, const dt_mask_id_t cid);
@@ -3865,6 +3863,15 @@ static void _insert_points_after(dt_masks_form_t *grp, GList *at, GList *pts)
   }
 }
 
+// how many groups the list of `grp` itself holds, nested ones not counted
+static int _group_partition_count(const dt_masks_form_t *grp)
+{
+  int n = 0;
+  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+    if(_starts_group(l)) n++;
+  return n;
+}
+
 GList *_group_partition_heads(dt_masks_form_t *grp)
 {
   GList *out = NULL;
@@ -4050,7 +4057,7 @@ static void _add_nested_member(dt_masks_form_t *owner, GList *marker, dt_masks_f
 }
 
 dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
-                                   const dt_masks_state_t op,
+                                   const dt_masks_state_t within,
                                    const dt_mask_id_t cid)
 {
   dt_masks_form_t *owner = NULL;
@@ -4058,8 +4065,8 @@ dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
   if(!marker || _list_depth(grp, owner) + 1 > DT_MASKS_NESTING_MAX) return INVALID_MASKID;
   dt_masks_form_t *sub = _new_nested_group();
   if(!sub) return INVALID_MASKID;
-  dt_masks_point_group_t *m =
-    dt_masks_marker_new(darktable.develop->forms, sub, op & DT_MASKS_STATE_OP_COMBINE);
+  dt_masks_point_group_t *m = dt_masks_marker_new(darktable.develop->forms, sub,
+                                                  within & DT_MASKS_STATE_WITHIN);
   sub->points = g_list_append(NULL, m);
   _add_nested_member(owner, marker, sub);
   return m->formid;
@@ -6305,7 +6312,10 @@ static void _paint_group_selection(GtkWidget *header, gpointer sel)
   GtkWidget *target = g_object_get_data(G_OBJECT(header), "header-widget");
   if(!target) target = header;
   const dt_mask_id_t cid = GPOINTER_TO_INT(sel);
-  if(dt_is_valid_maskid(cid) && _header_cid(header) == cid)
+  // the mask's own group has no header, and selecting it is selecting nothing
+  // in particular: the whole list would light up
+  if(dt_is_valid_maskid(cid) && _header_cid(header) == cid
+     && !g_object_get_data(G_OBJECT(target), "is-root"))
     dt_gui_add_class(target, "mask-list-row-selected");
   else
     dt_gui_remove_class(target, "mask-list-row-selected");
@@ -7033,14 +7043,6 @@ void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
   _refresh_lowop_badges(module);
 }
 
-// is cid the base (bottom-most) group? grp->points is ordered bottom-up and
-// starts with the base group's marker, whose id is the group's cid.
-static gboolean _group_is_base(dt_masks_form_t *grp, const dt_mask_id_t cid)
-{
-  return grp && grp->points
-         && ((dt_masks_point_group_t *)grp->points->data)->formid == cid;
-}
-
 // keep the canvas's persistent solo highlight (gui->solo_formids) in step with the
 // panel's solo / solo-edit state. Unlike the hover sync (panel_hover_formids,
 // cleared the moment the mouse moves elsewhere), this must survive the user
@@ -7547,6 +7549,57 @@ static const struct
   { DT_MASKS_STATE_OP_BYPASS, _paint_masks_bypass, N_("disable"), NULL }
 };
 
+// a group's operator: how it folds its own members together, in list order
+// (masks_revamp_nested_groups.md, Q8). union (max) is the neutral default;
+// screen (a+b-ab) smooths feathered overlaps; intersect (min) is the AND;
+// difference subtracts every member from the bottom one. Order matches the
+// menu.
+static const struct
+{
+  dt_masks_state_t bit; // 0 = union (no within bit)
+  DTGTKCairoPaintIconFunc paint;
+  const char *name;
+  const char *tooltip;
+} _within_modes[] = {
+  { 0, dtgtk_cairo_paint_masks_union, N_("union"),
+    N_("standard combination: highest opacity wins") },
+  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
+    N_("soft blend: feathered edges merge smoothly without harsh seams") },
+  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect"),
+    N_("keeps only mutual overlap where all shapes coincide") },
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
+    N_("scales shape opacities against each other") },
+  { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
+    N_("adds shape opacities together, clipped at full opacity") },
+  { DT_MASKS_STATE_WITHIN_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"),
+    N_("subtracts every element from the bottom one, cutting holes where they overlap") },
+  { DT_MASKS_STATE_WITHIN_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion"),
+    N_("keeps areas covered by one element alone, clearing overlaps, "
+       "from the bottom element up") },
+};
+
+static DTGTKCairoPaintIconFunc _within_paint(const dt_masks_state_t within)
+{
+  if(within & DT_MASKS_STATE_ISECT) return dtgtk_cairo_paint_masks_intersection;
+  if(within & DT_MASKS_STATE_SCREEN) return dtgtk_cairo_paint_tool_blur;
+  if(within & DT_MASKS_STATE_WITHIN_MULTIPLY) return dtgtk_cairo_paint_masks_multiply;
+  if(within & DT_MASKS_STATE_WITHIN_SUM) return dtgtk_cairo_paint_masks_sum;
+  if(within & DT_MASKS_STATE_WITHIN_DIFFERENCE) return dtgtk_cairo_paint_masks_difference;
+  if(within & DT_MASKS_STATE_WITHIN_EXCLUSION) return dtgtk_cairo_paint_masks_exclusion;
+  return dtgtk_cairo_paint_masks_union;
+}
+
+static const char *_within_name(const dt_masks_state_t within)
+{
+  if(within & DT_MASKS_STATE_ISECT) return _("intersect");
+  if(within & DT_MASKS_STATE_SCREEN) return _("screen");
+  if(within & DT_MASKS_STATE_WITHIN_MULTIPLY) return _("multiply");
+  if(within & DT_MASKS_STATE_WITHIN_SUM) return _("sum");
+  if(within & DT_MASKS_STATE_WITHIN_DIFFERENCE) return _("difference");
+  if(within & DT_MASKS_STATE_WITHIN_EXCLUSION) return _("exclusion");
+  return _("union");
+}
+
 // is this group's between-group operator currently bypassed (group disabled)?
 static gboolean _op_is_bypassed(const int state)
 {
@@ -7565,16 +7618,6 @@ static DTGTKCairoPaintIconFunc _op_paint_for_state(const int state)
     if(state & _masks_ops[i].state) return _masks_ops[i].paint;
   }
   return dtgtk_cairo_paint_masks_union;
-}
-
-// the group's combining operator name, unaffected by bypass: a bypassed group
-// keeps its identity (and its "<op>-<n>" default label) while disabled.
-static const char *_op_name_for_state(const int state)
-{
-  for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
-    if((state & DT_MASKS_STATE_OP_COMBINE) & _masks_ops[i].state)
-      return _(_masks_ops[i].name);
-  return _("union");
 }
 
 static GdkPixbuf *_op_pixbuf(DTGTKCairoPaintIconFunc paint)
@@ -7610,18 +7653,15 @@ static void _new_shape_op_update(GtkWidget *btn)
   // chooser. The icon never reflects the selection or the chosen operator. It is a
   // filled circle with a cut-out plus.
   dtgtk_button_set_paint(DTGTK_BUTTON(btn), dtgtk_cairo_paint_plus, 0, NULL);
-  gtk_widget_set_tooltip_text(btn, _("add a new group above the selected group\n"
-                                     "(ctrl+click to add it below instead,\n"
-                                     "shift+click to add it inside)\n"
+  gtk_widget_set_tooltip_text(btn, _("add a new group inside the selected group\n"
+                                     "(or at the top of the mask, if none is selected)\n"
                                      "click to pick its operator"));
   gtk_widget_queue_draw(btn);
 }
 
-// stage an empty group of the chosen operator on top of the list (defined after
-// the operator-index helpers it relies on).
-static void _stage_new_group(dt_iop_module_t *module,
-                             const int op_state,
-                             const gboolean below_target);
+// stage an empty group of the chosen operator (defined after the helpers it
+// relies on).
+static void _stage_new_group(dt_iop_module_t *module, const int within);
 
 // build a labelled "icon + name" menu item with an action target for an operator chooser
 static GMenuItem *_op_gmenu_item_target(DTGTKCairoPaintIconFunc paint,
@@ -9413,6 +9453,8 @@ int _within_index_for_state(const int state)
   if(state & DT_MASKS_STATE_ISECT) return 2;
   if(state & DT_MASKS_STATE_WITHIN_MULTIPLY) return 3;
   if(state & DT_MASKS_STATE_WITHIN_SUM) return 4;
+  if(state & DT_MASKS_STATE_WITHIN_DIFFERENCE) return 5;
+  if(state & DT_MASKS_STATE_WITHIN_EXCLUSION) return 6;
   return 0;
 }
 
@@ -9642,10 +9684,12 @@ dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
     t.cid = bd->panel_selected_group_cid;
     t.valid = TRUE;
   }
-  else if(_group_count(module) == 1)
+  else if(_group_count(module) == 1 || _group_partition_count(grp) == 1)
   {
-    // the sole group; a mask with no group form yet has no id for it, and its
-    // first element creates it (see dt_masks_group_insert_point)
+    // the sole group, or the mask's own when its list holds one: what the
+    // mask holds at the top is that group's (masks_revamp_nested_groups.md,
+    // Q8). A mask with no group form yet has no id for it, and its first
+    // element creates it (see dt_masks_group_insert_point)
     GList *heads = _group_partition_heads(grp);
     t.cid = heads ? GPOINTER_TO_INT(heads->data) : INVALID_MASKID;
     g_list_free(heads);
@@ -10045,52 +10089,18 @@ int _group_ordinal_of_cid(dt_iop_module_t *module, const dt_mask_id_t cid)
   return _group_ordinal_any(module, cid);
 }
 
-// "add group": a new empty group, selected, right above the selected group, or
-// right below it with `below_target`; with nothing selected, above every
-// group, or below them all. A group is part of the mask now, so it is
-// recorded. The add-group icon adopts the chosen operator (the one explicit
-// place the icon is repainted from a user action).
-static void
-_stage_new_group(dt_iop_module_t *module, const int op_state, const gboolean below_target)
-{
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  dt_masks_form_t *grp = _module_flexi_group(module, NULL);
-  if(!grp) return;
-  const dt_masks_state_t op = (op_state & DT_MASKS_STATE_OP_COMBINE)
-                                ? (op_state & DT_MASKS_STATE_OP_COMBINE)
-                                : DT_MASKS_STATE_UNION;
-  const dt_mask_id_t cid =
-    _model_add_group(grp, op, bd->panel_selected_group_cid, below_target);
-
-  bd->panel_selected_formid = INVALID_MASKID;
-  bd->panel_selected_group_cid = cid;
-  // the user explicitly chose this operator for the add-group button: update the icon
-  bd->masks_new_group_op = op;
-  if(bd->masks_new_op) _new_shape_op_update(bd->masks_new_op);
-  dt_print(DT_DEBUG_MASKS, "[masks] add group %d op=0x%x below_target=%d", cid, op,
-           below_target);
-  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  _build_masks_list(module);
-}
-
-// shift+click on an operator: a new nested group on top of the members of the
-// target group, holding one empty group of that operator, which is selected
-static void _stage_nested_group(dt_iop_module_t *module, const int op_state)
+// "add group": a new empty group, selected, on top of the members of the
+// group new elements go to -- the selected one, or the mask's own -- folding
+// its members with the within-group operator `within`. A group is part of the
+// mask now, so it is recorded
+static void _stage_new_group(dt_iop_module_t *module, const int within)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   const dt_masks_add_target_t target = _resolve_add_target(module);
-  if(!target.valid)
-  {
-    dt_control_log(_("select the group to add a group inside"));
-    return;
-  }
-  dt_mask_id_t cid = target.cid;
+  dt_mask_id_t cid = target.valid ? target.cid : INVALID_MASKID;
   dt_masks_form_t *grp = _module_flexi_group(module, &cid);
   if(!grp) return;
-  const dt_masks_state_t op = (op_state & DT_MASKS_STATE_OP_COMBINE)
-                                ? (op_state & DT_MASKS_STATE_OP_COMBINE)
-                                : DT_MASKS_STATE_UNION;
-  const dt_mask_id_t nid = _model_nest_new_group(grp, op, cid);
+  const dt_mask_id_t nid = _model_nest_new_group(grp, within, cid);
   if(!dt_is_valid_maskid(nid))
   {
     dt_control_log(_("this group is nested as deep as groups go"));
@@ -10098,9 +10108,9 @@ static void _stage_nested_group(dt_iop_module_t *module, const int op_state)
   }
   bd->panel_selected_formid = INVALID_MASKID;
   bd->panel_selected_group_cid = nid;
-  bd->masks_new_group_op = op;
-  if(bd->masks_new_op) _new_shape_op_update(bd->masks_new_op);
-  dt_print(DT_DEBUG_MASKS, "[masks] add group %d inside group %d op=0x%x", nid, cid, op);
+  bd->masks_new_group_op = within & DT_MASKS_STATE_WITHIN;
+  dt_print(DT_DEBUG_MASKS, "[masks] add group %d inside group %d within=0x%x", nid, cid,
+           within);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _build_masks_list(module);
 }
@@ -10175,35 +10185,19 @@ static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd)
   _recompute_insert_hint(bd->module);
 }
 
-// the final click on an operator item: plain click stages the new group above
-// the current target, ctrl+click stages it below (or, with nothing selected,
-// above everything vs. at the very bottom -- see _stage_new_group). "activate"
-// carries no event of its own, so the modifier state is read off whichever
-// event is currently being processed (the button-release on this very item).
+// the final click on an operator item of the add-group chooser
 static void _new_shape_op_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
 {
   dt_iop_module_t *module = (dt_iop_module_t *)user_data;
   const int idx = g_variant_get_int32(parameter);
-  GdkModifierType state = 0;
-  gtk_get_current_event_state(&state);
-  const gboolean below = dt_modifier_is(state, GDK_CONTROL_MASK);
-  const gboolean inside = dt_modifier_is(state, GDK_SHIFT_MASK);
   if(darktable.gui->active_popover_menu)
     gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(module && idx >= 0 && idx < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])))
-  {
-    if(inside)
-      _stage_nested_group(module, _masks_ops[idx].state);
-    else
-      _stage_new_group(module, _masks_ops[idx].state, below);
-  }
+  if(module && idx >= 0 && idx < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])))
+    _stage_new_group(module, _within_modes[idx].bit);
 }
 
-// the add-group operator chooser. With first-class groups two same-operator groups
-// may sit adjacent (kept apart by GROUP_BREAK), so every operator is offered
-// unconditionally -- including at the base (bottom): a base group's own
-// operator is never evaluated at all (see _group_get_mask_roi_flexi), so it
-// always contributes exactly its own mask regardless of which one is picked.
+// the add-group operator chooser: every operator a group can fold its members
+// with
 static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u)
 {
   GtkWidget *btn = u ? GTK_WIDGET(u) : w;
@@ -10241,14 +10235,11 @@ static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u
   }
 
   GMenu *menu = g_menu_new();
-  for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
+  for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
   {
-    // bypass is not an operator a group can be created with -- it only
-    // disables an existing one (see _build_group_op_menu)
-    if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
     GMenuItem *it =
-      _op_gmenu_item_target(_masks_ops[i].paint, _masks_ops[i].name,
-                            _masks_ops[i].tooltip, "masks_new_op.add", i);
+      _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
+                            _within_modes[i].tooltip, "masks_new_op.add", i);
     g_menu_append_item(menu, it);
     g_object_unref(it);
   }
@@ -10415,10 +10406,6 @@ static void _group_reset_members(dt_iop_module_t *module, const dt_mask_id_t cid
 
 static void
 _group_op_apply(dt_iop_module_t *module, const dt_mask_id_t cid, const dt_masks_state_t op);
-static void _build_group_between_op_menu(GtkWidget *anchor,
-                                         dt_iop_module_t *module,
-                                         const dt_mask_id_t cid,
-                                         const gboolean is_base);
 static void _build_group_actions_menu(GtkWidget *anchor,
                                       dt_iop_module_t *module,
                                       const dt_mask_id_t cid,
@@ -10694,48 +10681,6 @@ _solo_badge_group_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module
   return FALSE;
 }
 
-// within-group combine modes: how a group folds its own members together, before
-// the finished sub-mask is composited onto the stack by the group's operator.
-// union (max) is the neutral default; screen (a+b-ab) smooths feathered overlaps;
-// intersect (min) is the AND, e.g. to rebuild a legacy multi-channel parametric
-// mask from single-channel parametric elements. Order matches the menu.
-static const struct
-{
-  dt_masks_state_t bit; // 0 = union (no within bit)
-  DTGTKCairoPaintIconFunc paint;
-  const char *name;
-  const char *tooltip;
-} _within_modes[] = {
-  { 0, dtgtk_cairo_paint_masks_union, N_("union"),
-    N_("standard combination: highest opacity wins") },
-  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
-    N_("soft blend: feathered edges merge smoothly without harsh seams") },
-  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect"),
-    N_("keeps only mutual overlap where all shapes coincide") },
-  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
-    N_("scales shape opacities against each other") },
-  { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
-    N_("adds shape opacities together, clipped at full opacity") },
-};
-
-static DTGTKCairoPaintIconFunc _within_paint(const dt_masks_state_t within)
-{
-  if(within & DT_MASKS_STATE_ISECT) return dtgtk_cairo_paint_masks_intersection;
-  if(within & DT_MASKS_STATE_SCREEN) return dtgtk_cairo_paint_tool_blur;
-  if(within & DT_MASKS_STATE_WITHIN_MULTIPLY) return dtgtk_cairo_paint_masks_multiply;
-  if(within & DT_MASKS_STATE_WITHIN_SUM) return dtgtk_cairo_paint_masks_sum;
-  return dtgtk_cairo_paint_masks_union;
-}
-
-static const char *_within_name(const dt_masks_state_t within)
-{
-  if(within & DT_MASKS_STATE_ISECT) return _("intersect");
-  if(within & DT_MASKS_STATE_SCREEN) return _("screen");
-  if(within & DT_MASKS_STATE_WITHIN_MULTIPLY) return _("multiply");
-  if(within & DT_MASKS_STATE_WITHIN_SUM) return _("sum");
-  return _("union");
-}
-
 // set a group's within-group combine mode, on its marker. Union (no within
 // bit) ⇒ byte-identical for groups that never touch this.
 static void
@@ -10746,6 +10691,47 @@ _within_mode_apply(dt_iop_module_t *module, dt_mask_id_t cid, const dt_masks_sta
   marker->state = (marker->state & ~DT_MASKS_STATE_WITHIN) | (within & DT_MASKS_STATE_WITHIN);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _build_masks_list(module);
+}
+
+// the marker of the mask's own group: the first of its list, or INVALID_MASKID
+// for a mask with no group form yet
+static dt_mask_id_t _root_cid(dt_iop_module_t *module)
+{
+  const dt_masks_form_t *grp = _module_mask_group(module);
+  return grp && grp->points && dt_masks_point_is_marker(grp->points->data)
+           ? ((dt_masks_point_group_t *)grp->points->data)->formid
+           : INVALID_MASKID;
+}
+
+// the toolbar's mask operator shows the mask's own group's
+static void _root_op_update(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->masks_root_op) return;
+  const dt_mask_id_t cid = _root_cid(module);
+  const dt_masks_point_group_t *mk =
+    dt_is_valid_maskid(cid) ? _group_point(_module_mask_group(module), cid) : NULL;
+  const dt_masks_state_t within = mk ? (mk->state & DT_MASKS_STATE_WITHIN) : 0;
+  dtgtk_button_set_paint(DTGTK_BUTTON(bd->masks_root_op), _within_paint(within), 0, NULL);
+  gchar *tip = g_strdup_printf(_("mask operator: %s\n"
+                                 "how the elements and groups at the top of the mask"
+                                 " combine, from the bottom one up\n"
+                                 "click to change it"),
+                               _within_name(within));
+  gtk_widget_set_tooltip_text(bd->masks_root_op, tip);
+  g_free(tip);
+  gtk_widget_queue_draw(bd->masks_root_op);
+}
+
+static void _build_within_menu(GtkWidget *anchor, dt_iop_module_t *module, const dt_mask_id_t cid);
+
+static gboolean _root_op_press(GtkWidget *w, GdkEventButton *ev, gpointer user_data)
+{
+  if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
+  GtkWidget *btn = user_data;
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
+  if(module) _build_within_menu(btn, module, _root_cid(module));
+  return TRUE;
 }
 
 static void _within_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
@@ -10806,43 +10792,6 @@ _group_within_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_data)
 
   _build_within_menu(btn, module, _header_cid(btn));
   return TRUE;
-}
-
-// build the within-group combine chooser: a bordered chooser box (like the
-// add-group operator combo) showing the current mode's icon. `within` is the
-// group's mode. Packed on the RIGHT of the header so it never reads as the
-// group's own (between-group) operator chip, which lives in the left-hand
-// handle.
-static GtkWidget *_make_within_selector(dt_iop_module_t *module,
-                                        const dt_mask_id_t cid,
-                                        const dt_masks_state_t within,
-                                        const gboolean sensitive)
-{
-  GtkWidget *inner = NULL;
-  GtkWidget *box =
-    _make_op_combo(&inner, _within_paint(within), G_CALLBACK(_group_within_press));
-  // unlike the between-group operator chip, this selector should not read as
-  // a bordered "combo" -- drop the border so it sits flush in the header.
-  dt_gui_remove_class(box, "mask-op-combo");
-  // the label next to it has hexpand and no margin of its own, so without this
-  // the icon sits flush against the label text -- add breathing room (see
-  // darktable.css)
-  dt_gui_add_class(box, "mask-within-combo");
-  // same footprint as the between-group operator chip (_make_drag_handle's
-  // own 18dpi plate) -- the two read as a matched pair of operator icons
-  // either side of the group's title/opacity, not a big chip and a small one.
-  gtk_widget_set_size_request(box, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
-  gtk_widget_set_valign(box, GTK_ALIGN_CENTER);
-  g_object_set_data(G_OBJECT(inner), "module", module);
-  g_object_set_data(G_OBJECT(inner), "group-key", GINT_TO_POINTER(cid));
-  gchar *tip = g_strdup_printf(_("within-group combine: %s\n"
-                                 "click to change how this group's shapes fold together:\n"
-                                 "union (max), screen (soft overlaps) or intersect (min/AND)"),
-                               _within_name(within));
-  gtk_widget_set_tooltip_text(inner, tip);
-  g_free(tip);
-  gtk_widget_set_sensitive(box, sensitive);
-  return box;
 }
 
 // change the operator of a whole group, on its marker.
@@ -10998,69 +10947,6 @@ static void _group_opacity_changed(GtkWidget *w, dt_iop_module_t *module)
   // low-opacity threshold; refresh every badge in the panel, not just this
   // group's own (mirrors _props_row_apply's own call for the same reason).
   _refresh_lowop_badges(module);
-}
-
-static void _group_op_action(GSimpleAction *action, GVariant *parameter, gpointer user_data)
-{
-  GtkWidget *anchor = GTK_WIDGET(user_data);
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
-  const dt_mask_id_t cid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "group_op_cid"));
-  const dt_masks_state_t op = (dt_masks_state_t)g_variant_get_int32(parameter);
-  if(darktable.gui->active_popover_menu)
-    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(module) _group_op_apply(module, cid, op);
-}
-
-static gboolean
-_group_between_op_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_data)
-{
-  if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
-  GtkWidget *btn = user_data;
-  dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
-  const gboolean is_base = g_object_get_data(G_OBJECT(btn), "is-base-group") != NULL;
-  if(!module) return TRUE;
-
-  _build_group_between_op_menu(btn, module, _header_cid(btn), is_base);
-  return TRUE;
-}
-
-static void _build_group_between_op_menu(GtkWidget *anchor,
-                                         dt_iop_module_t *module,
-                                         const dt_mask_id_t cid,
-                                         const gboolean is_base)
-{
-  g_object_set_data(G_OBJECT(anchor), "module", module);
-  g_object_set_data(G_OBJECT(anchor), "group_op_cid", GINT_TO_POINTER(cid));
-
-  GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_group_op");
-  if(action_group == NULL)
-  {
-    GActionEntry action_entries[] =
-    {
-      { "set", _group_op_action, "i", NULL },
-    };
-    action_group = G_ACTION_GROUP(g_simple_action_group_new());
-    g_action_map_add_action_entries(G_ACTION_MAP(action_group), action_entries,
-                                    G_N_ELEMENTS(action_entries), anchor);
-    gtk_widget_insert_action_group(anchor, "masks_group_op", action_group);
-  }
-
-  GMenu *menu = g_menu_new();
-  for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
-  {
-    if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
-    if(is_base) continue; // the base group's operator is a no-op
-    GMenuItem *it =
-      _op_gmenu_item_target(_masks_ops[i].paint, _masks_ops[i].name,
-                            _masks_ops[i].tooltip, "masks_group_op.set",
-                            _masks_ops[i].state);
-    g_menu_append_item(menu, it);
-    g_object_unref(it);
-  }
-
-  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(anchor, menu);
-  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
-  g_object_unref(menu);
 }
 
 // the group an actions-menu item acts on, and its module
@@ -15007,68 +14893,6 @@ static guint64 _fold_flag_table(GHashTable *t)
   return acc;
 }
 
-static void _consolidate_cluster_in_group(dt_masks_form_t *grp,
-                                          const dt_mask_id_t *fids_in_cluster,
-                                          int count)
-{
-  if(!grp || count < 2) return;
-  int base_pos = -1, idx = 0;
-  for(GList *l = grp->points; l; l = g_list_next(l), idx++)
-  {
-    const dt_masks_point_group_t *pt = l->data;
-    for(int j = 0; j < count; j++)
-    {
-      if(pt->formid == fids_in_cluster[j])
-      {
-        base_pos = idx;
-        break;
-      }
-    }
-    if(base_pos >= 0) break;
-  }
-  if(base_pos < 0) return;
-
-  GList *pts = NULL;
-  for(int j = 0; j < count; j++)
-  {
-    for(GList *l = grp->points; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = l->data;
-      // a group can hold one shape twice: each reference is its own point, and
-      // taking the first twice would reinsert one point twice (a double free)
-      if(pt->formid == fids_in_cluster[j] && !g_list_find(pts, pt))
-      {
-        pts = g_list_append(pts, pt);
-        break;
-      }
-    }
-  }
-
-  gboolean already_contiguous = TRUE;
-  idx = base_pos;
-  for(GList *l = pts; l; l = g_list_next(l), idx++)
-  {
-    GList *node = g_list_nth(grp->points, idx);
-    if(!node || node->data != l->data)
-    {
-      already_contiguous = FALSE;
-      break;
-    }
-  }
-
-  if(!already_contiguous)
-  {
-    for(GList *l = pts; l; l = g_list_next(l))
-      grp->points = g_list_remove(grp->points, l->data);
-
-    int pos = base_pos;
-    for(GList *l = pts; l; l = g_list_next(l), pos++)
-      grp->points = g_list_insert(grp->points, l->data, pos);
-  }
-
-  g_list_free(pts);
-}
-
 // A hash of everything _build_masks_list builds the tree from: the mask model
 // (dt_masks_group_hash already folds every point's formid/state/opacity/
 // refinement in order plus each leaf form's own config, so add/delete/reorder/
@@ -15280,16 +15104,19 @@ static void _pack_group(dt_iop_module_t *module,
   // visible effect: everything below is built insensitive except the operator
   // handle, which is the way back (see the sensitivity block after `hdr`).
   const gboolean group_bypassed = _op_is_bypassed(opstate);
+  // the mask's own group, when its list holds that one group: what it holds
+  // shows at the top of the panel, with no header, and its operator is the
+  // mask's, chosen in the toolbar (masks_revamp_nested_groups.md, Q8)
+  const gboolean is_root = !grp || (grp == _module_mask_group(module) && ngroups == 1);
   // persistent "true" group invert (DT_MASKS_STATE_OP_INVERT, see
   // _group_toggle_output_invert) -- unlike group_bypassed this does not
   // affect what is built below (an inverted group still contributes to the
   // mask, just flipped), only the handle's look and its tooltip.
   const gboolean group_inverted = (opstate & DT_MASKS_STATE_OP_INVERT) != 0;
 
-  // within-group combine chooser (union / screen / intersect) -- packed on the
-  // RIGHT of the header (see below) so it is not confused with the group's own
-  // between-group operator chip, which is the handle in column 0.
-  GtkWidget *within_sel = _make_within_selector(module, (dt_mask_id_t)cid, group_within, TRUE);
+  // the group's operator is its lead handle's (see ghandle below): there is no
+  // second operator to choose on the right
+  GtkWidget *within_sel = NULL;
 
   // label: "<mode>-<id>" -- the group's within-group mode and its per-mode id
   // (shared with empty groups and the refinement caption). Once the group
@@ -15372,17 +15199,9 @@ static void _pack_group(dt_iop_module_t *module,
                       "(also reachable from the lead icon), which "
                       "includes \"solo\": use only this group"));
 
-  // column 0 -- drag handle, doubling as the operator chip (ctrl+click invert,
-  // shift+click show/hide this group's opacity (same as the title, see
-  // labevt's tooltip above), plain click changes the operator -- see
-  // _group_op_press/_group_op_release). The base (bottom) group is no
-  // longer a fixed foundation: any group can end up there (see the seed
-  // placeholder row below the list), and every operator can be picked for
-  // it -- its own operator is simply never evaluated (see
-  // _group_get_mask_roi_flexi), so it always contributes exactly its own
-  // mask, whatever is shown here. With only one group there is nothing to
-  // reorder against, so dragging is disabled (ngroups is computed once
-  // before the loop).
+  // column 0 is the group's operator (ghandle below). With only one group in
+  // its list there is nothing to reorder against, so dragging is disabled
+  // (ngroups is computed once before the loop).
   const gboolean group_movable = ngroups >= 2;
   // a group nested in another is one element of its holder: it has no
   // between-group operator, its holder's within-group operator combines it
@@ -15393,70 +15212,28 @@ static void _pack_group(dt_iop_module_t *module,
   const dt_masks_point_group_t *nested_ref =
     nested && ngroups == 1 ? _group_point(_module_mask_group(module), grp->formid) : NULL;
   const gboolean shown_nested = nested_ref && _nested_as_group(nested_ref, grp);
-  // explicit about what this operator actually does -- it combines this
-  // group's own (within-group) mask onto the stack accumulated by every
-  // group below it, the same way the within-group chooser spells out what
-  // union/screen/intersect mean for a group's own members (see
-  // _make_within_selector) -- "click to change this group's operator" alone
-  // did not make that relationship clear.
-  // the base group is a special case worth spelling out unconditionally,
-  // not just in the "click to change" line: it has no predecessor to
-  // combine with, so its own operator is never evaluated at all -- it
-  // always just contributes its own mask, whatever operator is shown on
-  // it. Invert (this group's output, or an individual element) is how to
-  gchar *ghandle_tip =
-    nested
-      ? g_strdup(_("nested group: combines with the other elements of its group "
-                   "by that group's within-group operator"))
-    : is_base_group
-      ? g_strdup(
-          group_bypassed
-            ? _("between-group combine: bypassed\n"
-                "this group is disabled: it keeps its shapes and its place, "
-                "but contributes nothing to the mask\n"
-                "the base group has no predecessor to combine with, "
-                "so its operator has no effect")
-            : _("between-group combine: the base group has no predecessor to combine "
-                "with, "
-                "so its operator has no effect -- it always contributes its own mask"))
-      : g_strdup_printf(
-          group_bypassed
-            ? _("between-group combine: %s (bypassed)\n"
-                "this group is disabled: it keeps its shapes and its "
-                "place, but contributes nothing to the mask\n"
-                "click to change operator\n"
-                "right-click for actions")
-            : _("between-group combine: %s\n"
-                "how this group's mask combines with the "
-                "stack accumulated by every group below it\n"
-                "click to change operator\n"
-                "right-click for actions (solo, inverting, emptying and deleting)"),
-          _op_name_for_state(opstate));
+  // the group's operator: how it folds its own elements, from the bottom one
+  // up (masks_revamp_nested_groups.md, Q8)
+  gchar *ghandle_tip = g_strdup_printf(
+    group_bypassed ? _("group operator: %s (disabled)\n"
+                       "this group keeps its elements and its place, but contributes"
+                       " nothing to the mask\n"
+                       "click to change the operator\n"
+                       "right-click for actions")
+                   : _("group operator: %s\n"
+                       "how this group combines its elements, from the bottom one up\n"
+                       "click to change the operator\n"
+                       "right-click for actions (solo, inverting, emptying and deleting)"),
+    _within_name(group_within));
   GtkWidget *ghandle_btn = NULL;
   GtkWidget *ghandle =
-    _make_op_combo(&ghandle_btn,
-                   nested ? dtgtk_cairo_paint_masks_multi : _op_paint_for_state(opstate),
-                   is_base_group || nested ? NULL : G_CALLBACK(_group_between_op_press));
+    _make_op_combo(&ghandle_btn, _within_paint(group_within), G_CALLBACK(_group_within_press));
   dt_gui_remove_class(ghandle, "mask-op-combo");
   dt_gui_add_class(ghandle, "mask-within-combo");
   dt_gui_add_class(ghandle, "mask-group-lead-handle");
-  if(is_base_group || nested)
-  {
-    // .mask-lead-static clears the background, which would also clear the
-    // light plate .mask-list-handle-inverted gives an inverted handle
-    if(!group_inverted)
-    {
-      dt_gui_add_class(ghandle, "mask-lead-static");
-      dt_gui_add_class(ghandle_btn, "mask-lead-static");
-    }
-    dt_gui_add_class(ghandle_btn, "dt_no_hover");
-    // so _apply_group_output_invert_icon swaps the same classes in place
-    g_object_set_data(G_OBJECT(ghandle_btn), "lead-static", GINT_TO_POINTER(1));
-  }
   gtk_widget_set_valign(ghandle, GTK_ALIGN_CENTER);
 
   if(group_inverted) dt_gui_add_class(ghandle_btn, "mask-list-handle-inverted");
-  if(!group_movable && !shown_nested) gtk_widget_set_opacity(ghandle, 0.6);
   g_object_set_data(G_OBJECT(ghandle_btn), "module", module);
   if(is_base_group)
     g_object_set_data(G_OBJECT(ghandle_btn), "is-base-group", GINT_TO_POINTER(1));
@@ -15562,7 +15339,8 @@ static void _pack_group(dt_iop_module_t *module,
 
   // with the anchor nested in it, this group has to be open to show it
   const gboolean group_expanded =
-    group_auto_exp
+    is_root ? TRUE
+    : group_auto_exp
       ? ((dt_mask_id_t)cid == group_anchor || _members_hold(formids, group_anchor))
       : (has_selected || !bd->masks_props_expanded
          || !g_hash_table_contains(bd->masks_props_expanded, GUINT_TO_POINTER(cid))
@@ -15617,7 +15395,6 @@ static void _pack_group(dt_iop_module_t *module,
   // which reads the bypass bit off each member's own state.
   if(group_bypassed)
   {
-    gtk_widget_set_sensitive(within_sel, FALSE);
     if(group_opacity_slider) gtk_widget_set_sensitive(group_opacity_slider, FALSE);
     if(group_val_widget) gtk_widget_set_sensitive(group_val_widget, FALSE);
   }
@@ -15697,6 +15474,13 @@ static void _pack_group(dt_iop_module_t *module,
   gtk_widget_set_name(group_block, "mask-group-block");
   dt_gui_add_class(group_block, "mask-group-block");
   dt_gui_box_add(block_inner, hdr_evbox);
+  if(is_root)
+  {
+    gtk_widget_set_no_show_all(hdr_evbox, TRUE);
+    gtk_widget_hide(hdr_evbox);
+    dt_gui_add_class(group_block, "mask-root-block");
+    g_object_set_data(G_OBJECT(group_block), "is-root", GINT_TO_POINTER(1));
+  }
   g_object_set_data(G_OBJECT(hdr_evbox), "header-widget", group_block);
   // "header-widget" above targets the whole block (selection shades the
   // group's entire body); solo-suppression dimming (_apply_group_header_dimming)
@@ -15772,7 +15556,7 @@ static void _pack_group(dt_iop_module_t *module,
                    G_CALLBACK(_group_block_release), module);
 
   // highlight the whole group block when its group is the selected one
-  if(dt_is_valid_maskid(bd->panel_selected_group_cid)
+  if(!is_root && dt_is_valid_maskid(bd->panel_selected_group_cid)
      && (dt_mask_id_t)cid == bd->panel_selected_group_cid)
     dt_gui_add_class(group_block, "mask-list-row-selected");
 
@@ -15784,6 +15568,7 @@ static void _pack_group(dt_iop_module_t *module,
   gtk_widget_set_name(elem_box, "mask-group-elements");
   dt_gui_add_class(elem_box, "masks-list");
   dt_gui_add_class(elem_box, "mask-group-elements");
+  if(is_root) dt_gui_add_class(elem_box, "mask-root-elements");
   gtk_widget_set_visible(elem_box, empty || group_expanded);
   if(group_expand_toggle)
     g_object_set_data(G_OBJECT(group_expand_toggle), "elem-box", elem_box);
@@ -15928,6 +15713,7 @@ static void _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp)
 
   _update_add_target_sensitivity(module);
   _update_refine_sensitivity(module);
+  _root_op_update(module);
   _sync_solo_canvas_highlight(module);
   // badges are built hidden and revealed from the current opacities -- after the
   // show_all pass above (which cannot force them on, they carry no_show_all) and
@@ -16163,31 +15949,26 @@ static void _pack_group_elements(dt_iop_module_t *module,
   }
   g_list_free(fids);
 
-  // fold same-kind elements into expand/collapse clusters to cut clutter: any drawn
-  // kind with >= 3 members becomes a single cluster gathering all of its members
-  // (even when they are not adjacent in the run). Kinds with fewer members -- and
-  // parametric masks, which are never clustered (each has its own inline editor) --
-  // stay as individual rows. A cluster (or a lone row) is emitted at the position of
-  // the kind's first (bottom-most, since fids is bottom-up) member; pack_end keeps
-  // the bottom member at the bottom, reproducing the run order.
+  // fold runs of >= 3 adjacent same-kind drawn elements into expand/collapse
+  // clusters to cut clutter. Only adjacent ones: a group folds its members in
+  // list order, so gathering scattered members would either misstate that order
+  // or have to reorder the group. Dragging a member next to another kind thus
+  // takes it out of its cluster. Parametric and raster forms are never
+  // clustered (each has its own inline editor), nor are nested groups. pack_end
+  // keeps the bottom member at the bottom.
   const int cluster_min = 3;
-  gboolean *emitted = g_malloc0_n(nr, sizeof(gboolean));
-  for(int i = 0; i < nr; i++)
+  for(int i = 0; i < nr;)
   {
-    if(emitted[i]) continue;
     const guint kind = kinds[i];
-    int count = 0;
-    for(int k = i; k < nr; k++)
-      if(kinds[k] == kind) count++;
+    int count = 1;
+    while(i + count < nr && kinds[i + count] == kind) count++;
 
     // kind 0 is a nested group (see _form_kind): each shows its own groups
     if(count < cluster_min || kind == DT_MASKS_PARAMETRIC || kind == DT_MASKS_RASTER
        || kind == 0)
     {
-      // a sparse (or parametric/raster/nested group) kind: this member is a
-      // plain row; the rest land at their own spots
       gtk_box_pack_end(GTK_BOX(container), rows[i], FALSE, FALSE, 0);
-      emitted[i] = TRUE;
+      i++;
       continue;
     }
 
@@ -16200,22 +15981,15 @@ static void _pack_group_elements(dt_iop_module_t *module,
     gtk_widget_set_name(inner, "mask-cluster-elements");
     dt_gui_add_class(inner, "mask-cluster-elements");
     GList *member_fids = NULL;
-    dt_mask_id_t *cluster_fids = g_malloc_n(count, sizeof(dt_mask_id_t));
-    int ci = 0;
     gboolean contains_selected = FALSE;
-    for(int k = i; k < nr; k++)
+    for(int k = i; k < i + count; k++)
     {
-      if(kinds[k] != kind) continue;
       gtk_box_pack_end(GTK_BOX(inner), rows[k], FALSE, FALSE, 0);
-      emitted[k] = TRUE;
       member_fids = g_list_prepend(member_fids, GINT_TO_POINTER(fid_of[k]));
-      cluster_fids[ci++] = fid_of[k];
       if(dt_is_valid_maskid(bd->panel_selected_formid)
          && fid_of[k] == bd->panel_selected_formid)
         contains_selected = TRUE;
     }
-    _consolidate_cluster_in_group(grp, cluster_fids, count);
-    g_free(cluster_fids);
 
     // a same-kind cluster: a header that only expands/collapses (no actions). Keyed
     // by its first member fid so the expanded state survives a rebuild. Clusters
@@ -16334,8 +16108,8 @@ static void _pack_group_elements(dt_iop_module_t *module,
       g_signal_connect(G_OBJECT(cbox), "drag-leave", G_CALLBACK(_group_drop_leave),
                        group_frame);
     }
+    i += count;
   }
-  g_free(emitted);
 
   g_free(rows);
   g_free(kinds);
@@ -16467,6 +16241,27 @@ static void _rebuild_param_channel_buttons(dt_iop_module_t *module)
   if(bd->param_channels_csp == (int)bd->csp) return; // already built for this csp
   bd->param_channels_csp = (int)bd->csp;
 
+  // dt_action_define_iop below keeps a per-instance referral to each button in
+  // module->widget_list, with nothing to drop it again. Left in place, the old
+  // buttons' referrals dangle, and the next dt_accel_connect_instance_iop (a
+  // history step toggling the module, say) crashes on them. They are plain
+  // buttons, so they sit ahead of the bauhaus tail at widget_list_bh
+  GList *old = gtk_container_get_children(GTK_CONTAINER(bd->masks_param_channels_inner));
+  for(GSList **link = &module->widget_list; *link && *link != module->widget_list_bh;)
+  {
+    dt_action_target_t *referral = (*link)->data;
+    if(g_list_find(old, referral->target))
+    {
+      GSList *dead = *link;
+      *link = dead->next;
+      g_free(referral);
+      g_slist_free_1(dead);
+    }
+    else
+      link = &(*link)->next;
+  }
+  g_list_free(old);
+
   dt_gui_container_destroy_children(GTK_CONTAINER(bd->masks_param_channels_inner));
 
   const dt_iop_gui_blendif_channel_t *channels =
@@ -16573,7 +16368,7 @@ static void _shortcut_add_group_above_selected(dt_action_t *action)
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd->masks_support || !bd->masks_inited) return;
-  _stage_new_group(module, bd->masks_new_group_op, FALSE);
+  _stage_new_group(module, bd->masks_new_group_op);
 }
 
 static void _shortcut_invert_selected_group(dt_action_t *action)
@@ -16616,8 +16411,7 @@ static void _shortcut_change_group_mode(dt_action_t *action)
   dt_masks_form_t *grp = _module_mask_group(module);
   if(!grp || !dt_is_valid_maskid(bd->panel_selected_group_cid)) return;
   GtkWidget *anchor = bd->masks_list_box ? GTK_WIDGET(bd->masks_list_box) : module->widget;
-  _build_group_between_op_menu(anchor, module, bd->panel_selected_group_cid,
-                               _group_is_base(grp, bd->panel_selected_group_cid));
+  _build_within_menu(anchor, module, bd->panel_selected_group_cid);
 }
 
 // toggle "bypass" on the selected group: the keyboard counterpart of the bypass
@@ -16819,8 +16613,19 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_toolbar_row2 = toolbar_row2;
     dt_gui_box_add(toolbar, toolbar_row2);
 
+    // the mask's own operator: row 1, leftmost
+    bd->masks_root_op_box = _make_op_combo(&bd->masks_root_op, dtgtk_cairo_paint_masks_union,
+                                           G_CALLBACK(_root_op_press));
+    dt_gui_remove_class(bd->masks_root_op_box, "mask-op-combo");
+    dt_gui_add_class(bd->masks_root_op_box, "mask-within-combo");
+    g_object_set_data(G_OBJECT(bd->masks_root_op), "module", module);
+    // its icon follows the mask from the first panel build on (_root_op_update)
+    gtk_widget_show(bd->masks_root_op_box);
+    dt_gui_box_add(toolbar_row1, bd->masks_root_op_box);
+
     // "add group": a plain "+" that opens the operator chooser (its icon is a
-    // fixed add affordance, it never reflects the selection). Row 1, leftmost.
+    // fixed add affordance, it never reflects the selection). Row 1, right
+    // after the shape buttons: it adds to the mask as they do
     bd->masks_new_op_box = _make_op_combo(&bd->masks_new_op, dtgtk_cairo_paint_plus,
                                           G_CALLBACK(_new_shape_op_press));
     // the add-group button is a plain "+" icon, not a bordered chooser: drop the
@@ -16829,15 +16634,12 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     g_object_set_data(G_OBJECT(bd->masks_new_op), "module", module);
     _new_shape_op_update(bd->masks_new_op);
     gtk_widget_set_tooltip_text(bd->masks_new_op_box,
-                                _("add a new group above the selected group\n"
-                                  "(or above everything, if none is selected)\n"
-                                  "ctrl+click to add it below instead\n"
-                                  "shift+click to add it inside the selected group\n"
+                                _("add a new group inside the selected group\n"
+                                  "(or at the top of the mask, if none is selected)\n"
                                   "click to pick its operator\n"
                                   "right-click for group layout presets, which"
                                   " build a whole set of groups at once"));
     gtk_widget_show(bd->masks_new_op_box);
-    dt_gui_box_add(toolbar_row1, bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
 
     // clusters are separated by a single expanding stretch so the gap grows
@@ -16845,6 +16647,9 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // this one ends up on shapes_box's *left* once
     // _masks_toolbar_place_shapes_box reorders shapes_box in between.
     _toolbar_pack_stretch(toolbar_row1);
+    // the add-group button follows shapes_box, which is reordered in right
+    // before it (index 2)
+    dt_gui_box_add(toolbar_row1, bd->masks_new_op_box);
 
     // reserves row 1's position right after shapes_box (which does not exist
     // as a toolbar child yet -- it starts out in masks_shapes_row, classic

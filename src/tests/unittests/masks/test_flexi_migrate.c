@@ -257,7 +257,7 @@ static void test_a_modifier_is_not_an_operator(void **state)
       }
       p = next;
     }
-    dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE);
+    dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
     assert_int_equal(_group_cid_of_form(grp, head->formid),
                      _group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
@@ -278,14 +278,14 @@ static void test_a_modifier_is_not_an_operator(void **state)
    tree when the history slider goes back past the newest mask edit.
 
    Two items here, each with its own deep copy of the forms, the older one NOT
-   the snapshot owner. Both must come out with the run boundary marked. */
+   the snapshot owner. Both must come out converted. */
 static void test_every_history_snapshot_is_normalized(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   dt_masks_form_t *grp = flexi_group();
 
-  // a member carrying a non-union operator: the split has to give it its own
-  // run, and the classic tree does not say so
+  // a member carrying a non-union operator: the group has to fold with it, and
+  // the classic tree does not say so
   dt_masks_point_group_t *above = grp->points->next->data;
   above->state = (above->state & ~(int)DT_MASKS_STATE_OP_COMBINE)
                  | (int)DT_MASKS_STATE_DIFFERENCE;
@@ -329,10 +329,8 @@ static void test_every_history_snapshot_is_normalized(void **state)
     dt_masks_form_t *g = dt_masks_get_from_id_ext(it->forms, flexi_bp.mask_id);
     assert_non_null(g);
     assert_true((g->type & DT_MASKS_GROUP) != 0);
-    // two groups, each its marker and its member
-    assert_int_equal(4, g_list_length(g->points));
-    assert_true(dt_is_valid_maskid(_group_cid_of_form(g, 1)));
-    assert_int_not_equal(_group_cid_of_form(g, 1), _group_cid_of_form(g, 2));
+    // one difference group: its marker, its base and the shape it subtracts
+    assert_tree(g, "d{1,2}");
   }
 
   g_list_free_full(older.forms, (void (*)(void *))dt_masks_free_form);
@@ -397,7 +395,7 @@ static void test_a_duplicate_is_kept_when_a_sibling_is_not_a_union(void **state)
 
   _migrate();
 
-  assert_int_equal(_refs_to(grp, 1), 2);
+  assert_tree(grp, "u{d{1,2},1}");
 }
 
 // a faded repeat adds nothing either: in a union, max(x, o * x) is x, so the
@@ -1272,13 +1270,8 @@ static int _refs_below(const dt_masks_form_t *grp, const dt_mask_id_t fid, const
   return n;
 }
 
-static int _op_of(const dt_masks_point_group_t *mk)
-{
-  return mk->state & DT_MASKS_STATE_OP_COMBINE;
-}
-
-// a nested union group in a union run is only more shapes for that run
-static void test_nested_union_group_joins_its_run(void **state)
+// a nested union group in a union group is only more shapes for that group
+static void test_nested_union_group_joins_its_group(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1287,7 +1280,7 @@ static void test_nested_union_group_joins_its_run(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2,11,12");
+  assert_tree(flexi_group(), "u{1,2,11,12}");
   _free_nested(g);
 }
 
@@ -1303,21 +1296,15 @@ static void test_inverted_nested_group_becomes_an_inverted_group(void **state)
 
   _migrate();
 
-  const dt_masks_point_group_t *mk = _marker_of(11);
-  assert_non_null(mk);
-  assert_ptr_equal(mk, _marker_of(12));
-  assert_null(_marker_of(2000));
-  assert_int_equal(_op_of(mk), DT_MASKS_STATE_DIFFERENCE);
-  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
-  assert_false(_marker_of(1)->state & DT_MASKS_STATE_OP_INVERT);
+  // subtracted from the union below it, which becomes the difference's base
+  assert_tree(flexi_group(), "d{u{1,2},u~{11,12}}");
   _free_nested(g);
 }
 
-// a sum group whose members all carry the sum is one within-group sum, so it
-// becomes a single group and needs no nesting at all: it is spliced in as a
-// group of its own, the member's inversion becoming that group's
-// invert-output. 1 - min(1, a + b) unioned on is what classic folded
-static void test_a_sum_under_an_inverted_member_dissolves_inverted(void **state)
+// a sum group whose members all carry the sum is one sum group, the member's
+// inversion becoming that group's invert-output. 1 - min(1, a + b) unioned on
+// is what classic folded
+static void test_a_sum_under_an_inverted_member_is_an_inverted_group(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1327,12 +1314,8 @@ static void test_a_sum_under_an_inverted_member_dissolves_inverted(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2 | u:11,12");
-  const dt_masks_point_group_t *mk = _marker_of(11);
-  assert_non_null(mk);
   // the inversion the member carried is the group's now, not each shape's
-  assert_true(mk->state & DT_MASKS_STATE_OP_INVERT);
-  assert_false(mk->state & DT_MASKS_STATE_INVERSE);
+  assert_tree(flexi_group(), "u{1,2,s~{11,12}}");
   _free_nested(g);
 }
 
@@ -1377,10 +1360,9 @@ static void test_a_nested_intersection_group_becomes_one_isect_group(void **stat
   _free_nested(g);
 }
 
-// a hole is not order-free, so the run cannot simply join a within-group
-// fold: it becomes multiply { rest, inverted screen { holes } }, which is
-// classic's acc * (1 - o*x) with the opacity applied before the invert
-static void test_a_nested_difference_becomes_a_multiply_of_an_inverted_screen(void **state)
+// a nested difference is a difference group, its faded hole keeping its own
+// opacity: classic's acc * (1 - o*x), member by member
+static void test_a_nested_difference_is_a_difference_group(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1393,31 +1375,13 @@ static void test_a_nested_difference_becomes_a_multiply_of_an_inverted_screen(vo
 
   _migrate();
 
-  // the kept shape folds by multiply with the inverted hole group
-  const dt_masks_point_group_t *mk = _marker_of(11);
-  assert_non_null(mk);
-  assert_true(mk->state & DT_MASKS_STATE_WITHIN_MULTIPLY);
-  // the hole sits in a screen group with its output inverted. The rewrite
-  // refers to it inverted at full opacity, and the fold moves that onto the
-  // group's own marker, where the panel shows it: the reference is plain
-  const dt_masks_point_group_t *hole = _marker_of(12);
-  assert_non_null(hole);
-  assert_true(hole->state & DT_MASKS_STATE_SCREEN);
-  assert_true(hole->state & DT_MASKS_STATE_OP_INVERT);
-  assert_float_equal(hole->group_opacity, 1.0f, 1e-6);
-  assert_ptr_not_equal(hole, mk);
-  const dt_masks_form_t *root =
-    dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
-  const dt_masks_point_group_t *ref = _ref_in(root, hole->parentid, 0);
-  assert_non_null(ref);
-  assert_false(ref->state & DT_MASKS_STATE_INVERSE);
-  assert_float_equal(ref->opacity, 1.0f, 1e-6);
+  assert_tree(flexi_group(), "u{1,2,d~{11,12@0.7}}");
   _free_nested(g);
 }
 
-// at the bottom, the inversion goes into the nested groups by De Morgan:
-// 1 - a(1 - b) is the screen of 1 - a and b
-static void test_inverted_bottom_group_is_spliced_in(void **state)
+// at the bottom, an inverted nested group is the base of its holder, as an
+// inverted group of its own
+static void test_inverted_bottom_group_is_the_base(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1428,25 +1392,7 @@ static void test_inverted_bottom_group_is_spliced_in(void **state)
 
   _migrate();
 
-  // the nested group is gone: its hole became an inverted screen group, and
-  // the member's own inversion is the multiply group's invert-output -- the
-  // De Morgan this case has always been about, in the Q7 form
-  assert_null(_marker_of(2000));
-  const dt_masks_point_group_t *a = _marker_of(11);
-  const dt_masks_point_group_t *b = _marker_of(12);
-  const dt_masks_point_group_t *rest = _marker_of(1);
-  assert_non_null(a);
-  assert_non_null(b);
-  assert_ptr_equal(a, flexi_group()->points->data);
-  assert_true(a->state & DT_MASKS_STATE_WITHIN_MULTIPLY);
-  assert_true(a->state & DT_MASKS_STATE_OP_INVERT);
-  assert_true(b->state & DT_MASKS_STATE_SCREEN);
-  // the hole group's inversion is its own invert-output, folded off its reference
-  assert_true(b->state & DT_MASKS_STATE_OP_INVERT);
-  // the members that shared the nested group's run stay a union of their own
-  assert_ptr_not_equal(rest, b);
-  assert_ptr_equal(rest, _marker_of(2));
-  assert_int_equal(_op_of(rest), DT_MASKS_STATE_UNION);
+  assert_tree(flexi_group(), "u{d~{11,12@0.7},1,2}");
   _free_nested(g);
 }
 
@@ -1553,9 +1499,9 @@ static void test_nested_settings_become_their_groups(void **state)
   _free_nested(outer);
 }
 
-// an exclusion's operands each appear twice, once inverted: as an inverted
-// copy of the operand's group, not as an inverted reference to the same one
-static void test_a_nested_exclusion_has_no_inverted_reference(void **state)
+// a nested exclusion is an exclusion group: classic's own combiner, member by
+// member, with no operand repeated
+static void test_a_nested_exclusion_is_an_exclusion_group(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
   const dt_mask_id_t ids[] = { 11, 12 };
@@ -1567,14 +1513,8 @@ static void test_a_nested_exclusion_has_no_inverted_reference(void **state)
 
   const dt_masks_form_t *root = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
   _assert_only_groups_and_elements(root, 0);
-  // a x b is union { multiply { a, inverted b }, multiply { b, inverted a } }:
-  // each operand here is one shape, so no group is left holding just one
   _assert_no_one_element_group(root, 0);
-  const dt_masks_point_group_t *a = _ref_in(root, 11, 0), *b = _ref_in(root, 12, 0);
-  assert_non_null(a);
-  assert_non_null(b);
-  assert_int_equal(_refs_below(root, 11, 0), 2);
-  assert_int_equal(_refs_below(root, 12, 0), 2);
+  assert_tree(root, "u{1,2,x~{11,12}}");
   _free_nested(g);
 }
 
@@ -1593,9 +1533,9 @@ static void test_a_flexi_nested_group_stays_nested(void **state)
   _free_nested(g);
 }
 
-// drawn + parametric wraps the drawn group in a new top group. A one-run drawn
-// group dissolves back out of it, the drawn inversion onto its group
-static void test_drawn_and_parametric_dissolves_the_drawn_group(void **state)
+// drawn + parametric is a multiply group whose base is the drawn group, the
+// drawn inversion its group's
+static void test_drawn_and_parametric_multiplies_into_the_drawn_group(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL);
   flexi_bp.mask_combine |= DEVELOP_COMBINE_MASKS_POS;
@@ -1606,7 +1546,20 @@ static void test_drawn_and_parametric_dissolves_the_drawn_group(void **state)
   _migrate();
 
   assert_int_not_equal(flexi_bp.mask_id, drawn);
-  assert_null(_marker_of(drawn));
+  const dt_masks_form_t *root = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  const dt_masks_point_group_t *top = root->points->data;
+  assert_true(dt_masks_point_is_marker(top));
+  assert_int_equal(top->state & DT_MASKS_STATE_WITHIN, DT_MASKS_STATE_WITHIN_MULTIPLY);
+  // the base, then the channels
+  assert_int_equal(((dt_masks_point_group_t *)root->points->next->data)->formid, drawn);
+  assert_true(g_list_length(root->points) > 2);
+  for(const GList *l = root->points->next->next; l; l = g_list_next(l))
+  {
+    const dt_masks_form_t *f =
+      dt_masks_get_from_id_ext(flexi_dev.forms, ((dt_masks_point_group_t *)l->data)->formid);
+    assert_non_null(f);
+    assert_true(f->type & DT_MASKS_PARAMETRIC);
+  }
   const dt_masks_point_group_t *mk = _marker_of(1);
   assert_non_null(mk);
   assert_ptr_equal(mk, _marker_of(2));
@@ -1654,7 +1607,7 @@ static void test_a_group_nested_twice_dissolves_twice(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2,11,12,11,12");
+  assert_tree(flexi_group(), "u{1,2@0.5,11,12,11,12}");
   _free_nested(g);
   _free_nested(h);
 }
@@ -1687,7 +1640,7 @@ static void test_a_group_referenced_twice_is_pruned(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2,11,12");
+  assert_tree(flexi_group(), "u{1,2,11,12}");
   _free_nested(g);
   _free_nested(h);
 }
@@ -1747,9 +1700,7 @@ static void test_a_weaker_repeat_in_a_union_is_dropped(void **state)
 
   _migrate();
 
-  assert_layout("u:1,2");
-  assert_int_equal(_refs_to(flexi_group(), 1), 1);
-  assert_float_equal(_ref_in(flexi_group(), 1, 0)->opacity, 1.0f, 1e-6);
+  assert_tree(flexi_group(), "u{1,2}");
   _free_nested(g);
 }
 
@@ -1780,12 +1731,7 @@ static void test_a_shape_absorbed_by_a_sum_group_is_dropped(void **state)
 
   _migrate();
 
-  assert_int_equal(_refs_below(flexi_group(), 1, 0), 1);
-  const dt_masks_point_group_t *mk = _marker_of(1);
-  assert_non_null(mk);
-  assert_true(mk->state & DT_MASKS_STATE_WITHIN_SUM);
-  assert_ptr_equal(mk, _marker_of(12));
-  assert_non_null(_marker_of(2));
+  assert_tree(flexi_group(), "u{2,s{1,12}}");
   _free_nested(g);
 }
 
@@ -1953,21 +1899,21 @@ int main(void)
     cmocka_unit_test_teardown(test_no_masks_module_still_renders_a_flexi_group, _teardown),
     cmocka_unit_test_teardown(test_ordinary_module_always_renders_its_group, _teardown),
     cmocka_unit_test_teardown(test_parametric_on_no_masks_module_stays_renderable, _teardown),
-    cmocka_unit_test_teardown(test_nested_union_group_joins_its_run, _teardown),
+    cmocka_unit_test_teardown(test_nested_union_group_joins_its_group, _teardown),
     cmocka_unit_test_teardown(test_inverted_nested_group_becomes_an_inverted_group, _teardown),
-    cmocka_unit_test_teardown(test_a_sum_under_an_inverted_member_dissolves_inverted,
+    cmocka_unit_test_teardown(test_a_sum_under_an_inverted_member_is_an_inverted_group,
                               _teardown),
-    cmocka_unit_test_teardown(test_inverted_bottom_group_is_spliced_in, _teardown),
+    cmocka_unit_test_teardown(test_inverted_bottom_group_is_the_base, _teardown),
     cmocka_unit_test_teardown(test_a_flexi_nested_group_stays_nested, _teardown),
     cmocka_unit_test_teardown(test_nested_settings_become_their_groups, _teardown),
-    cmocka_unit_test_teardown(test_a_nested_exclusion_has_no_inverted_reference, _teardown),
+    cmocka_unit_test_teardown(test_a_nested_exclusion_is_an_exclusion_group, _teardown),
     cmocka_unit_test_teardown(test_a_nested_sum_group_becomes_one_within_sum_group,
                               _teardown),
     cmocka_unit_test_teardown(test_a_nested_intersection_group_becomes_one_isect_group,
                               _teardown),
     cmocka_unit_test_teardown(
-      test_a_nested_difference_becomes_a_multiply_of_an_inverted_screen, _teardown),
-    cmocka_unit_test_teardown(test_drawn_and_parametric_dissolves_the_drawn_group, _teardown),
+      test_a_nested_difference_is_a_difference_group, _teardown),
+    cmocka_unit_test_teardown(test_drawn_and_parametric_multiplies_into_the_drawn_group, _teardown),
     cmocka_unit_test_teardown(test_a_group_nested_twice_dissolves_twice, _teardown),
     cmocka_unit_test_teardown(test_a_group_kept_nested_twice_is_copied, _teardown),
     cmocka_unit_test_teardown(test_migration_is_idempotent, _teardown),

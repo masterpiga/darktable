@@ -234,6 +234,79 @@ char *flexi_layout_of(const dt_masks_form_t *g)
   return g_string_free(s, FALSE);
 }
 
+static char _letter_from_within(const int state)
+{
+  switch(state & DT_MASKS_STATE_WITHIN)
+  {
+    case 0: return 'u';
+    case DT_MASKS_STATE_ISECT: return 'i';
+    case DT_MASKS_STATE_WITHIN_DIFFERENCE: return 'd';
+    case DT_MASKS_STATE_WITHIN_EXCLUSION: return 'x';
+    case DT_MASKS_STATE_WITHIN_SUM: return 's';
+    case DT_MASKS_STATE_WITHIN_MULTIPLY: return 'm';
+    case DT_MASKS_STATE_SCREEN: return 'o';
+    default: return '?';
+  }
+}
+
+static void _append_settings(GString *s, const gboolean inverted, const float opacity)
+{
+  if(inverted) g_string_append_c(s, '~');
+  if(opacity != 1.0f) g_string_append_printf(s, "@%g", opacity);
+}
+
+static void _tree_into(GString *s, const dt_masks_form_t *g, const int depth)
+{
+  gboolean open = FALSE;  // a group's "{" is written
+  gboolean first = TRUE;  // nothing written in it yet
+  for(GList *l = g->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      if(open) g_string_append(s, "} | ");
+      g_string_append_c(s, _letter_from_within(pt->state));
+      _append_settings(s, (pt->state & DT_MASKS_STATE_OP_INVERT) != 0, pt->group_opacity);
+      g_string_append_c(s, '{');
+      open = TRUE;
+      first = TRUE;
+      continue;
+    }
+    if(!first) g_string_append_c(s, ',');
+    first = FALSE;
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(flexi_dev.forms, pt->formid);
+    if(f && f != g && (f->type & DT_MASKS_GROUP) && depth < DT_MASKS_NESTING_MAX)
+      _tree_into(s, f, depth + 1);
+    else
+      g_string_append_printf(s, "%d", (int)pt->formid);
+    _append_settings(s, (pt->state & DT_MASKS_STATE_INVERSE) != 0, pt->opacity);
+  }
+  if(open) g_string_append_c(s, '}');
+}
+
+char *flexi_tree_of(const dt_masks_form_t *g)
+{
+  GString *s = g_string_new(NULL);
+  if(g) _tree_into(s, g, 0);
+  return g_string_free(s, FALSE);
+}
+
+void flexi_assert_tree_(const dt_masks_form_t *g,
+                        const char *expect,
+                        const char *file,
+                        const int line)
+{
+  char *got = flexi_tree_of(g);
+  if(strcmp(got, expect) != 0)
+  {
+    print_error("%s:%d: tree mismatch\n  expected: %s\n  actual:   %s\n", file, line, expect,
+                got);
+    g_free(got);
+    fail();
+  }
+  g_free(got);
+}
+
 dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid)
 {
   const dt_masks_point_group_t *marker = _group_point(_grp, _group_cid_of_form(_grp, fid));

@@ -90,6 +90,22 @@ char *flexi_layout(void);
 /** the same for any group form, such as a nested group. Caller frees. */
 char *flexi_layout_of(const dt_masks_form_t *g);
 
+/** serialise group form `g` as a tree, the way a mask whose every group folds
+    its members with one operator holds it (masks_revamp_nested_groups.md,
+    Q8): "d{u{1,2},3}" is a difference group whose base is a union group of 1
+    and 2, with 3 subtracted. A group's letter is its within-group operator:
+    u(nion), i(ntersection), d(ifference), x = e(x)clusion, s(um),
+    m(ultiply), o = screen. A trailing "~" is an inverted group or element,
+    "@0.5" a group's or element's opacity. A list still holding several
+    groups shows them separated by " | ". Caller frees. */
+char *flexi_tree_of(const dt_masks_form_t *g);
+/** cmocka assertion: the tree of group form `g` equals `expect`. */
+void flexi_assert_tree_(const dt_masks_form_t *g,
+                        const char *expect,
+                        const char *file,
+                        const int line);
+#define assert_tree(g, expect) flexi_assert_tree_((g), (expect), __FILE__, __LINE__)
+
 /** the between-group operator of the group element `fid` is in */
 dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid);
 

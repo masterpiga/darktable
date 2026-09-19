@@ -1304,13 +1304,16 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // there. Its real operator is still in `group_op`, untouched, so
     // un-bypassing restores it.
     const gboolean bypassed = (group_op & DT_MASKS_STATE_OP_BYPASS) != 0;
-    // within-group combine mode (how members fold together): union (default),
-    // screen (soft union), intersect (min), multiply (true per-pixel product)
-    // or sum (min(1, a + b))
+    // within-group combine mode (how members fold together, in list order):
+    // union (default), screen (soft union), intersect (min), multiply (true
+    // per-pixel product), sum (min(1, a + b)), difference (the first member
+    // less the others) or exclusion
     const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
     const gboolean isect = (head->state & DT_MASKS_STATE_ISECT) != 0;
     const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
     const gboolean within_sum = (head->state & DT_MASKS_STATE_WITHIN_SUM) != 0;
+    const gboolean within_difference = (head->state & DT_MASKS_STATE_WITHIN_DIFFERENCE) != 0;
+    const gboolean within_exclusion = (head->state & DT_MASKS_STATE_WITHIN_EXCLUSION) != 0;
     // the group's own refinement. A member's ELEMENT one belongs to that
     // member alone and is applied to its own mask in the fold below
     dt_masks_refinement_t group_refine = { 0 };
@@ -1318,8 +1321,11 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
 
     // build the group sub-mask by folding its visible members. Intersect and
     // multiply seed at 1.0 (everything, then min/multiply each member in);
-    // union/screen/sum seed at 0.0 (nothing, then max/soft-union/add in). (a bypassed
-    // group folds nothing into `grp`, so it needs no seed either)
+    // union/screen/sum/exclusion seed at 0.0 (nothing, then max/soft-union/add/
+    // exclusion in, each of which copies its first member onto 0). Difference
+    // has no seed that copies, so its first member is copied explicitly below,
+    // as classic's fold copies its first visible shape. (a bypassed group folds
+    // nothing into `grp`, so it needs no seed either)
     if(!bypassed)
     {
       if(isect || within_multiply)
@@ -1328,6 +1334,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
         memset(grp, 0, npixels * sizeof(float));
     }
     int nb_members = 0; // members whose mask actually folded into `grp`
+    int nb_folded = 0;  // the same, counting no-op parametric channels too
     while(fpts)
     {
       dt_masks_point_group_t *const m = fpts->data;
@@ -1386,8 +1393,14 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
           _combine_masks_multiply(grp, bufs, npixels, op, inverted);
         else if(within_sum)
           _combine_masks_sum(grp, bufs, npixels, op, inverted);
+        else if(within_difference && nb_folded > 0)
+          _combine_masks_difference(grp, bufs, npixels, op, inverted);
+        else if(within_exclusion)
+          _combine_masks_exclusion(grp, bufs, npixels, op, inverted);
         else
+          // union, and the base of a difference: max onto the zero seed is a copy
           _combine_masks_union(grp, bufs, npixels, op, inverted);
+        nb_folded++;
         // a parametric channel still sitting at its base/full-range state (or
         // one whose refinement scope happens to cover nothing) renders as a
         // uniform, fully-opaque buffer -- exactly a no-op, indistinguishable
