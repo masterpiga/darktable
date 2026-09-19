@@ -318,82 +318,67 @@ static void test_ensure_a_group_gives_an_old_list_one_group(void **state)
   assert_false(_model_ensure_a_group(grp));
 }
 
-// the classic migration gives a classic list one group per run: at an
-// operator change, and at group_start, which old data can carry
-static void test_classic_marking_gives_each_run_a_group(void **state)
-{
-  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE));
-  assert_layout("u:1,2 | i:3 | i:4");
-  assert_false(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE));
-}
-
-// ...and with the split, a group to every member with a non-union operator
-static void test_classic_marking_splits_nonunion_members(void **state)
+// the classic migration folds a classic list into one group per run of
+// members sharing an operator, what came before becoming the next group's
+// first member. The first member is the base whatever operator it carries
+static void test_classic_marking_folds_each_run_into_a_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3,4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
-  assert_layout("u:1,2 | i:3 | i:4");
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_tree(grp, "i{u{1,2},3,4}");
+  assert_false(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
 }
 
-static gboolean _screens(dt_masks_form_t *grp, const dt_mask_id_t fid)
-{
-  const dt_masks_point_group_t *mk = _group_point(grp, _group_cid_of_form(grp, fid));
-  return (mk->state & DT_MASKS_STATE_SCREEN) != 0;
-}
-
-// ...except differences, which fold into one group by screen: exact, since
-// difference multiplies by 1 - x and screen gives 1 - x1 - x2 + x1 x2
-static void test_classic_marking_merges_difference_runs(void **state)
-{
-  dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3,4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
-  assert_layout("u:1 | d:2,3,4");
-  assert_true(_screens(grp, 2));
-  assert_false(_screens(grp, 1));
-}
-
-// the bottom group's operator is never applied, so nothing merges onto it
-static void test_difference_does_not_merge_onto_the_bottom_group(void **state)
+// one operator throughout is one group, the base's own operator ignored
+static void test_classic_marking_keeps_one_operator_one_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("d:1,2,3");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
-  assert_layout("d:1 | d:2,3");
-  assert_false(_screens(grp, 1));
-  assert_true(_screens(grp, 2));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_tree(grp, "d{1,2,3}");
 }
 
-// a faded difference applies its fade to its own shape only: it stays apart
-static void test_faded_difference_stays_its_own_group(void **state)
+// a lone base joins the run above it: `1 - 2 - 3 - 4` is one difference group
+static void test_classic_marking_puts_the_base_in_the_first_run(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3,4");
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_tree(grp, "d{1,2,3,4}");
+}
+
+// every operator change nests what came before, so the order classic applied
+// the members in is kept
+static void test_classic_marking_nests_at_each_operator_change(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | d:3 | u:4");
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_tree(grp, "u{d{u{1,2},3},4}");
+}
+
+// a faded member keeps its fade: the group applies it member by member, as
+// classic did
+static void test_a_faded_member_keeps_its_opacity(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3");
-  _group_point(grp, 3)->group_opacity = 0.5f;
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, TRUE));
-  assert_layout("u:1 | d:2 | d:3");
-  assert_false(_screens(grp, 2));
+  _group_point(grp, 3)->opacity = 0.5f;
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_tree(grp, "d{1,2,3@0.5}");
 }
 
-// ...holding the settings each run's first member carries
-static void test_marking_carries_the_group_settings(void **state)
+// a member becomes a plain element: it keeps its own opacity and inversion,
+// and nothing that belongs to a group
+static void test_marking_leaves_members_plain(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2,3");
-  dt_masks_point_group_t *head = _group_point(grp, 2);
-  head->state |= DT_MASKS_STATE_SCREEN;
-  head->group_opacity = 0.5f;
-  g_strlcpy(head->name, "sky", sizeof(head->name));
-  head->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
-                                              .blur_radius = 2.0f };
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
+  dt_masks_point_group_t *pt = _group_point(grp, 2);
+  pt->state |= DT_MASKS_STATE_SCREEN | DT_MASKS_STATE_INVERSE;
+  pt->opacity = 0.7f;
+  pt->group_opacity = 0.5f;
+  g_strlcpy(pt->name, "sky", sizeof(pt->name));
+  pt->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
+                                            .blur_radius = 2.0f };
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
+  assert_tree(grp, "i{1,2~@0.7,3}");
 
-  const dt_masks_point_group_t *marker = _group_point(grp, _group_cid_of_form(grp, 3));
-  assert_true(dt_masks_point_is_marker(marker));
-  assert_int_equal(marker->state & DT_MASKS_STATE_OP_COMBINE, DT_MASKS_STATE_INTERSECTION);
-  assert_true(marker->state & DT_MASKS_STATE_SCREEN);
-  assert_float_equal(marker->group_opacity, 0.5f, 1e-6f);
-  assert_string_equal(marker->name, "sky");
-  assert_int_equal(marker->refinement.enabled, DT_MASKS_REFINE_GROUP);
-
-  // ...and the member keeps none of them: it is a plain union element
   const dt_masks_point_group_t *member = _group_point(grp, 2);
   assert_int_equal(member->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_UNION);
   assert_int_equal(member->state & DT_MASKS_STATE_WITHIN, 0);
@@ -408,12 +393,12 @@ static void test_marking_carries_the_group_settings(void **state)
 static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
   const dt_mask_id_t first = _group_cid_of_form(grp, 2);
   flexi_teardown();
 
   grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
   assert_int_equal(_group_cid_of_form(grp, 2), first);
 }
 
@@ -2366,9 +2351,9 @@ int main(void)
     cmocka_unit_test_teardown(test_lost_members_leave_their_groups, _teardown),
     cmocka_unit_test_teardown(test_ensure_a_group_on_an_empty_list, _teardown),
     cmocka_unit_test_teardown(test_ensure_a_group_gives_an_old_list_one_group, _teardown),
-    cmocka_unit_test_teardown(test_classic_marking_gives_each_run_a_group, _teardown),
-    cmocka_unit_test_teardown(test_classic_marking_splits_nonunion_members, _teardown),
-    cmocka_unit_test_teardown(test_marking_carries_the_group_settings, _teardown),
+    cmocka_unit_test_teardown(test_classic_marking_folds_each_run_into_a_group, _teardown),
+    cmocka_unit_test_teardown(test_classic_marking_keeps_one_operator_one_group, _teardown),
+    cmocka_unit_test_teardown(test_marking_leaves_members_plain, _teardown),
     cmocka_unit_test_teardown(test_marking_the_same_run_twice_gives_the_same_id, _teardown),
     cmocka_unit_test_teardown(test_drop_onto_self_is_rejected, _teardown),
     cmocka_unit_test_teardown(test_drop_of_unknown_element_is_rejected, _teardown),
@@ -2480,10 +2465,10 @@ int main(void)
     cmocka_unit_test_teardown(test_nested_groups_are_counted_and_numbered, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_shapes_are_listed_and_signed, _teardown_nested),
     cmocka_unit_test_teardown(test_lost_member_leaves_a_nested_group, _teardown_nested),
-    cmocka_unit_test_teardown(test_classic_marking_merges_difference_runs, _teardown),
-    cmocka_unit_test_teardown(test_difference_does_not_merge_onto_the_bottom_group,
+    cmocka_unit_test_teardown(test_classic_marking_puts_the_base_in_the_first_run, _teardown),
+    cmocka_unit_test_teardown(test_classic_marking_nests_at_each_operator_change,
                               _teardown),
-    cmocka_unit_test_teardown(test_faded_difference_stays_its_own_group, _teardown),
+    cmocka_unit_test_teardown(test_a_faded_member_keeps_its_opacity, _teardown),
     cmocka_unit_test_teardown(test_unlink_one_reference_leaves_the_others_linked,
                               _teardown_linking),
     cmocka_unit_test_teardown(test_unlink_the_last_reference_carries_the_selection,

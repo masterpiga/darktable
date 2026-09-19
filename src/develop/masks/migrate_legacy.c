@@ -42,10 +42,9 @@
  *    form elements.
  *
  *  - DEVELOP_MASK_MASK_CONDITIONAL (drawn AND parametric, combined by
- *    multiplication in the classic renderer) synthesizes a new parametric
- *    element and stacks it onto the *existing*, untouched drawn group via
- *    DT_MASKS_STATE_MULTIPLY -- the between-group operator built for exactly
- *    this purpose (see its comment in masks.h).
+ *    multiplication in the classic renderer) synthesizes parametric channel
+ *    elements and a group multiplying them into the *existing* drawn group,
+ *    referenced as that group's base member.
  *
  *  - One way: every classic mask_mode becomes a flexi one (or a plain
  *    uniform blend where classic collapses to a constant). There is no classic
@@ -193,44 +192,17 @@ static void _repair_base_case_overwrite(GList *forms,
   }
 }
 
-/* Classic applies a shape's combine operator once per SHAPE; the flexi fold
- * applies it once per RUN.
- *
- * Migration makes a group of each maximal same-operator run of a classic list
- * (dt_masks_group_mark_classic_runs in masks.c). The flexi fold
- * (_group_get_mask_roi_flexi in group.c) folds a group's members together with
- * its *within-group* mode (SCREEN/ISECT/WITHIN_MULTIPLY; none set = union,
- * i.e. max) and composites the finished sub-mask onto the accumulator with the
- * group's between-group operator -- once. The classic sequential fold instead
- * walks the list applying each member's own operator to the accumulator
- * directly. Same operators (DT_MASKS_STATE_OP_COMBINE is exactly the classic
- * set), applied a different number of times.
- *
- * That is invisible for union, because max is idempotent as well as
- * associative: max'ing a run together and then max'ing it in once equals
- * max'ing each member in individually. It is very visible for the others --
- * SUM (a+b) compounds per application, and INTERSECTION is min(acc, max(e1,e2))
- * one way and min(acc, e1, e2) the other. A real 48-brush mask at 0.1 opacity
- * reached 0.6202 under classic and 0.1723 after migration.
- *
- * Giving every non-union member its own run restores per-member application
- * exactly (verified: the 27 edits in the harvested corpus that diverged all
- * became identical, worst residual 2.98e-08). Consecutive union members are
- * deliberately left merged -- they are already equivalent, and splitting them
- * would turn a 48-stroke mask into 48 one-shape groups in the panel for no
- * behavioural gain. Consecutive difference members are merged back into one
- * group folding them by screen, which is exact too (see
- * _merge_difference_runs in masks.c): an AI object's holes are one group.
- *
- * MULTIPLY is deliberately not split: no classic drawn shape carries it (it is
- * the operator migration itself attaches to a synthesized parametric run),
- * and that run is built already-correct by _migrate_drawn_and_parametric.
+/* Classic applies each member's own operator to the accumulator in turn; a
+ * flexi group folds its members in order with one operator. Migration makes a
+ * group of each run of members sharing an operator, the groups before it
+ * becoming its first member (dt_masks_group_mark_classic_runs in masks.c), so
+ * every member is still applied once, by the same combiner (group.c
+ * _combine_masks_*), in the same order.
  *
  * A member can itself be a group, and rendering one recurses back into
  * dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
- * now flexi, so the nested group is folded by the run algebra too and needs
- * the same treatment. Missing this left 4 of the 27 corpus divergences
- * unfixed when the split was applied only to the top-level group.
+ * now flexi, so the nested group is folded by the flexi fold too and needs
+ * the same conversion.
  *
  * The repair runs first, since it decides which members are live, and the
  * no-op duplicate prune next, reading that same live list. Idempotent: a
@@ -381,7 +353,7 @@ static void _normalize_group(GList **forms, dt_masks_form_t *grp)
 {
   _repair_base_case_overwrite(*forms, grp, 0);
   _prune_noop_duplicate_refs(*forms, grp);
-  dt_masks_group_mark_classic_runs(forms, grp, TRUE);
+  dt_masks_group_mark_classic_runs(forms, grp);
 }
 
 /* Queue a reused classic drawn group for the normalization above, and do it
@@ -530,27 +502,19 @@ static GList *_build_channel_forms(dt_iop_module_t *module,
   return out;
 }
 
-// appends one dt_masks_point_group_t per form in `forms` to `*points`,
-// broadcasting DT_MASKS_STATE_WITHIN_MULTIPLY across all of them when there
-// is more than one (their own run's *within*-run fold, see
-// _build_channel_forms). `extra_state` is ORed onto every point on top of
-// that -- e.g. DT_MASKS_STATE_MULTIPLY, the *between*-group operator a
-// caller needs when these channels' own run must itself multiply into a
-// pre-existing member outside this list (see
-// _migrate_drawn_and_parametric's drawn_pt).
-static void _append_channel_points(GList *forms,
-                                   const dt_mask_id_t parentid,
-                                   const int extra_state,
-                                   GList **points)
+// appends one dt_masks_point_group_t per form in `forms` to `*points`, each
+// carrying DT_MASKS_STATE_MULTIPLY: classic multiplies its channels together
+// (`mask *= factor` per channel, see _build_channel_forms), and into the drawn
+// mask when there is one. Converting the list (dt_masks_group_mark_classic_runs)
+// makes that one group folding by multiplication
+static void _append_channel_points(GList *forms, const dt_mask_id_t parentid, GList **points)
 {
-  const gboolean within_multiply = forms && forms->next;
   GList *added = NULL;
   for(GList *l = forms; l; l = g_list_next(l))
   {
     const dt_masks_form_t *form = l->data;
     dt_masks_point_group_t *pt = _new_group_point(
-      form->formid, DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | extra_state
-                      | (within_multiply ? DT_MASKS_STATE_WITHIN_MULTIPLY : 0));
+      form->formid, DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_MULTIPLY);
     pt->parentid = parentid;
     added = g_list_append(added, pt);
   }
@@ -763,12 +727,12 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
   GList *param_forms =
     _build_channel_forms(module, o->blend_cst, flipped_blendif, o->blendif_parameters,
                          o->blendif_boost_factors);
-  _append_channel_points(param_forms, grp->formid, 0, &grp->points);
+  _append_channel_points(param_forms, grp->formid, &grp->points);
 
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
-  dt_masks_group_mark_classic_runs(&module->dev->forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&module->dev->forms, grp);
   _persist_form(module, grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -845,7 +809,7 @@ static void _migrate_raster(dt_iop_module_t *module,
   dt_masks_point_group_t *pt = _new_group_point(raster_form->formid, state);
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
-  dt_masks_group_mark_classic_runs(&module->dev->forms, grp, FALSE);
+  dt_masks_group_mark_classic_runs(&module->dev->forms, grp);
 
   _persist_form(module, raster_form, history_num);
   _persist_form(module, grp, history_num);
@@ -1056,14 +1020,9 @@ static void _migrate_drawn_and_parametric(dt_iop_module_t *module,
   drawn_pt->parentid = top_grp->formid;
   top_grp->points = g_list_append(top_grp->points, drawn_pt);
 
-  // the channel elements form their own run, separate from drawn_pt's (a
-  // different operator always starts a new run, see the run-boundary test
-  // in _group_get_mask_roi_flexi) -- DT_MASKS_STATE_MULTIPLY is that run's
-  // *between*-group operator, multiplying its own (possibly multi-channel,
-  // WITHIN_MULTIPLY-folded) result into the accumulator drawn_pt already
-  // copied in as the first run.
-  _append_channel_points(param_forms, top_grp->formid, DT_MASKS_STATE_MULTIPLY,
-                         &top_grp->points);
+  // the channels multiply into the drawn mask, which is the list's base: the
+  // top group becomes one group folding by multiplication
+  _append_channel_points(param_forms, top_grp->formid, &top_grp->points);
 
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
@@ -1073,12 +1032,10 @@ static void _migrate_drawn_and_parametric(dt_iop_module_t *module,
   // drawn_pt references the *original* classic drawn group, which is rendered
   // by recursing back into dt_masks_group_get_mask_roi() -- and that recursion
   // reads the module's (now flexi) blend_params, so the inner group is folded
-  // by the flexi run algebra too. It therefore needs the same run-boundary
-  // normalization as the drawn-only case above. Normalizing from the top group
-  // marks both, and dissolves the drawn group into the top one wherever that
-  // renders the same (dt_masks_group_mark_classic_runs). The split of
-  // non-union runs leaves the top group's own runs as they are: its channel
-  // run is MULTIPLY, see _normalize_group
+  // by the flexi fold too. It therefore needs the same conversion as the
+  // drawn-only case above. Converting from the top group converts both, and
+  // merges the drawn group into the top one wherever that renders the same
+  // (dt_masks_group_mark_classic_runs)
   _queue_group_split(module, top_grp->formid);
 
   _clear_toplevel_blendif(n);

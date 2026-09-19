@@ -170,6 +170,14 @@ typedef enum dt_masks_state_t
   // SCREEN/ISECT/WITHIN_MULTIPLY (see DT_MASKS_STATE_WITHIN). Additive new
   // flag, so legacy edits (which never set it) render identically.
   DT_MASKS_STATE_WITHIN_SUM = 1 << 19,
+  // within-group difference: the first visible member is the base and every
+  // later one is subtracted from it in turn, exactly as classic's per-shape
+  // difference (masks_revamp_nested_groups.md, Q8). The only within-group
+  // mode where one member's place in the list is special
+  DT_MASKS_STATE_WITHIN_DIFFERENCE = 1 << 20,
+  // within-group exclusion: classic's own exclusion combiner, member by
+  // member in list order. It is not associative, so the order is part of it
+  DT_MASKS_STATE_WITHIN_EXCLUSION = 1 << 21,
   // the between-group combining operators: exactly one of these is set on a
   // group's members (disable/invert are modifiers on top, not one of these)
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
@@ -182,13 +190,15 @@ typedef enum dt_masks_state_t
   DT_MASKS_STATE_OP = DT_MASKS_STATE_OP_COMBINE
                      | DT_MASKS_STATE_OP_DISABLE
                      | DT_MASKS_STATE_OP_INVERT,
-  // within-group combine mode: how a group's own members fold together (before
-  // the finished sub-mask is composited onto the stack by the group's OP).
-  // The four bits are mutually exclusive; none set = union (max, the default).
+  // within-group combine mode: how a group's own members fold together, in
+  // list order. The bits are mutually exclusive; none set = union (max, the
+  // default).
   DT_MASKS_STATE_WITHIN = DT_MASKS_STATE_SCREEN
                         | DT_MASKS_STATE_ISECT
                         | DT_MASKS_STATE_WITHIN_MULTIPLY
                         | DT_MASKS_STATE_WITHIN_SUM
+                        | DT_MASKS_STATE_WITHIN_DIFFERENCE
+                        | DT_MASKS_STATE_WITHIN_EXCLUSION
 } dt_masks_state_t;
 
 // One `state` word carries three INDEPENDENT roles at once, so their bit sets
@@ -1087,20 +1097,18 @@ dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
     members before the list's first marker are what the flexi fold reads as
     one plain union group. TRUE if anything changed */
 gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp);
-/** give a classic group, and the groups nested in it, their markers: one in
-    front of each run, holding the settings its first shown, resolving member
-    carries. A run ends at an operator change and at a member with
-    group_start, and with `split_nonunion` every member with a non-union
-    operator is a run of its own. A marked list is left as it is. The
-    group's settings leave the members, which become plain union elements:
-    the classic fold cannot read the result. A nested group marked here is
-    then replaced by its own groups wherever that renders the same mask;
-    one that was marked already stays nested. A nested group the mask still
-    holds twice gets a copy for each reference past the first, so a group
-    has one parent within a mask. TRUE if anything changed */
-gboolean dt_masks_group_mark_classic_runs(GList **forms,
-                                          dt_masks_form_t *grp,
-                                          const gboolean split_nonunion);
+/** convert a classic group, and the classic groups nested in it, into flexi
+    groups, each holding one marker and folding its members in order with one
+    operator (masks_revamp_nested_groups.md, Q8). Where classic's operator
+    changes along a list, what comes before becomes the first member of a
+    new group; the last one keeps `grp`'s id. The members become plain
+    elements, keeping their own opacity and inversion: the classic fold
+    cannot read the result. A nested group converted here is replaced by its
+    own members wherever that renders the same mask; a flexi-authored one is
+    left as it is. A nested group the mask still holds twice gets a copy for
+    each reference past the first, so a group has one parent within a mask.
+    TRUE if anything changed */
+gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp);
 /** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when
     given, is set to the group form whose list holds it. NULL if none does */
 dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
