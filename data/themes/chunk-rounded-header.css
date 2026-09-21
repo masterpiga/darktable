@@ -54,14 +54,3 @@
 {
   border-top-left-radius: 15px;
 }
-
-/* the masks panel's rows and element header lines round their top-left
-   corner along with the module headers (darktable.css leaves it square). The
-   selected rule names both classes to outrank .mask-list-row-selected's own
-   radius */
-.mask-panel-row,
-.mask-panel-row.mask-list-row-selected,
-.mask-element-header
-{
-  border-top-left-radius: 15px;
-}
