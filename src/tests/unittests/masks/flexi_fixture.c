@@ -152,6 +152,7 @@ dt_masks_form_t *flexi_build(const char *layout)
   flexi_module.blend_params = &flexi_bp;
   flexi_module.blend_data = &flexi_bd;
   flexi_module.dev = &flexi_dev;
+  flexi_bd.module = &flexi_module;
   // every mask-id field starts INVALID, not zero -- a zeroed blend_data would
   // read as "element 0 is soloed" (see the matching initialisation in
   // blend_gui.c's panel setup)

@@ -1059,8 +1059,9 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* the rows of buttons in the masks panel: the two toolbar rows and the
-   "elements" header. They all space their children the same way, so a run of
-   buttons and a .mask-row-gap between two runs measure the same on each */
+   right-hand side of the panel header. They all space their children the same
+   way, so a run of buttons and a .mask-row-gap between two runs measure the
+   same on each */
 .masks-btn-row > *
 {
   margin-right: 0px;
@@ -1079,15 +1080,6 @@ dialog .sidebar row:selected:hover label,
   border-left: 2px solid rgba(255, 255, 255, 0.22);
   margin-left: 6px;
   padding-left: 6px;
-}
-
-/* the mask's own group has no header of its own: what it holds sits at the top
-   of the panel, under the "elements" header, not indented under anything */
-.mask-root-elements
-{
-  border-left-width: 0;
-  margin-left: 0;
-  padding-left: 0;
 }
 
 .mask-group-block.mask-list-row-selected .mask-group-elements,
@@ -1124,6 +1116,15 @@ dialog .sidebar row:selected:hover label,
 .mask-panel-row.mask-group-header
 {
   background-color: rgba(255, 255, 255, 0.08);
+}
+
+/* the mask's own group, selected: its header row alone, since its block is the
+   whole list (see _paint_group_selection). The same look a selected group's
+   header gets from its block */
+.mask-panel-row.mask-group-header.mask-list-row-selected
+{
+  background-color: rgba(255, 255, 255, 0.18);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
 }
 
 /* an empty group's own header doubles as its drag-drop highlight frame (see
@@ -1485,18 +1486,13 @@ button.mask-row-expander:hover
   border-radius: 3px;
 }
 
-/* inverted components (shape drag handle, soloed badge, and whole-mask polarity
-   invert toggle) swap to light background / dark foreground for clear feedback
-   at a glance. The invert toggle needs its own :checked selector because
-   dt_ignore_fg_state (see dt_iop_gui_init_masks in blend_gui.c) suppresses the
-   generic checked-button highlight, which would otherwise leave it with no "on"
-   state at all. No padding here: this rule is only a colour swap, and the
-   toggle's checked state must not resize its box (the global button rule gives
-   every button 1px, and dropping it only while checked makes the header jump). */
+/* inverted components (shape drag handle, soloed badge) swap to light
+   background / dark foreground for clear feedback at a glance. No padding
+   here: this rule is only a colour swap, and must not resize the box it
+   colors */
 .mask-list-handle-inverted,
 .mask-power-solo,
-.mask-row-linked,
-.mask-invert-toggle:checked:not(:disabled)
+.mask-row-linked
 {
   background-color: #e8e8e8;
   color: #202020;
@@ -1545,13 +1541,6 @@ button.mask-row-expander:hover
 .mask-badge-stack
 {
   padding: 0px;
-}
-
-/* "mask elements" section label: margin instead of a spacer widget, so "edit
-   on canvas" (packed right after it) doesn't sit flush against the text */
-.mask-elements-label
-{
-  margin-right: 6px;
 }
 
 /* inline rename entry (mask list): replaces a plain label in place, so it must

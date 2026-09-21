@@ -454,7 +454,6 @@ typedef struct dt_iop_gui_blend_data_t
 
   dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
-  GtkWidget *suppress;
   GtkWidget *soloedit_mode;
   GtkWidget *masks_combine_combo;
   GtkWidget *blend_modes_combo;
@@ -502,7 +501,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_shapes[DEVELOP_MASKS_NB_SHAPES];
   int masks_type[DEVELOP_MASKS_NB_SHAPES];
   GtkWidget *masks_edit;
-  GtkWidget *masks_polarity;
   dt_masks_edit_mode_t masks_shown;
   // what masks_shown was when the masking panel was last folded away (see
   // dt_iop_gui_blend_masks_panel_collapsed): collapsing turns on-canvas
@@ -538,29 +536,14 @@ typedef struct dt_iop_gui_blend_data_t
   // enough to scroll, which is not always the case).
   GtkWidget *masks_new_op;
   GtkWidget *masks_new_op_box;
-  // masks_root_op: the mask's own operator, how the elements and groups at the
-  // top of the mask combine (flexi-only, on the "elements" header, right of
-  // the label). The mask is one group whose header the panel does not show,
-  // so this is that group's operator (masks_revamp_nested_groups.md, Q8).
-  // masks_root_op_box wraps it
-  GtkWidget *masks_root_op;
-  GtkWidget *masks_root_op_box;
   // masks_new_op_label: the "new group" caption next to the add-group button.
   // masks_new_group_op: the operator state the next added group will use. It is
   // driven ONLY by the user picking an operator from the add-group menu, never by
   // the current selection, so the add-group icon stays put until explicitly changed.
   GtkWidget *masks_new_op_label;
   int masks_new_group_op;
-  // masks_reset_mask_btn: "reset mask" action on the import-shape row (clears all
-  // shapes + re-seeds the scaffold). masks_import_label is unused (the combo label).
-  GtkWidget *masks_reset_mask_btn;
-  // the "elements" section divider, below the toolbar and above the list. It
-  // carries every whole-mask control: the mask's operator, invert, edit on
-  // canvas, solo edit, visibility and reset (see _pack_masks_header).
-  GtkWidget *masks_groups_header;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
-  // mask" action, at the top of the panel, above masks_groups_header and
-  // masks_list_box. A plain vertical GtkBox with exactly two fixed,
+  // mask" action, at the top of the panel, above masks_list_box. A plain vertical GtkBox with exactly two fixed,
   // non-wrapping rows (masks_toolbar_row1/row2) -- no dynamic reflow. Several
   // dynamic wrapping schemes (GtkFlowBox; destroy-and-rebuild rows driven by
   // "size-allocate"; a careful in-place reflow of individually-flowing
@@ -584,13 +567,17 @@ typedef struct dt_iop_gui_blend_data_t
   // the "blend mask" section header -- unrelated to the "mask elements" header
   // above. Reading order:
   //
-  //   expander | title | <space> | show_mask_overlay | preferences | toggle
+  //   expander | title | <space> | show_mask_overlay | edit run | toggle
   //
-  // (mirrored to preferences | title | <space> | show_mask_overlay | toggle | expander
-  // when docked in the separate right panel -- see _masks_header_apply_side).
+  // (the expander moves to the far right when docked in the separate right
+  // panel -- see _masks_header_apply_side).
   GtkWidget *masks_blend_header;
-  // show_mask_overlay + preferences + toggle, packed END
+  // show_mask_overlay + edit run + preferences (hidden) + toggle, packed END
   GtkWidget *masks_right_cluster;
+  // the edit run on the panel header: edit on canvas and solo edit between two
+  // fixed gaps (see _pack_header_edit_run). Whole-mask canvas controls, so on
+  // the header wherever the panel is hosted, never on the mask's own group
+  GtkWidget *masks_header_edit_box;
   // the on/off toggle's home box -- the utility position lends the toggle to
   // that lib's header and _masks_flexi_release hands it back here
   GtkWidget *masks_left_cluster;
@@ -630,13 +617,9 @@ typedef struct dt_iop_gui_blend_data_t
   // panel_selected_group_cid: the group currently selected by clicking its
   // header, identified by its marker's id (see DT_MASKS_STATE_GROUP_MARKER). A
   // selected group is where the next drawn shape lands and what the refinement
-  // controls target. INVALID = no group selected.
+  // controls target. Never INVALID while the mask has a group: with no other
+  // group selected, the mask's own is (see _select_mask_group_if_none).
   dt_mask_id_t panel_selected_group_cid;
-  // one-shot: default-select the sole group so the panel opens ready to add
-  // elements without an extra click, without forcing reselection on every
-  // rebuild (which would make the sole group impossible to deselect). Reset
-  // wherever the mask/selection state is wiped.
-  gboolean masks_selection_seeded;
   // insertion hint read by dt_masks_group_insert_point (flexi only): when a
   // group is the active target, the next element is inserted right after the
   // point insert_after_fid, the group's top member or, for an empty group, its
