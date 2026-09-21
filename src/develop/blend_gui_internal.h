@@ -435,6 +435,7 @@ void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *mo
 void _reparent_into(GtkWidget *w, GtkWidget *parent,
                     const gboolean at_end, const gboolean expand);
 
+
 // ---------------------------------------------------------------------------
 // masks_gui_panel_host.c -> blend_gui.c
 // ---------------------------------------------------------------------------
