@@ -650,18 +650,44 @@ Still to do:
     first member; converted groups with plain settings and their holder's
     operator merge back in (difference and exclusion only as the base). Q7's
     rewrites, the run marking and the dissolve rules are gone;
-  - panel: the root group has no header; the mask operator sits leftmost in
-    the toolbar, the add-group button right after the shape buttons; a
-    group's lead handle is its operator; "add group" nests into the selected
-    group or the mask. The between-group operator menu is gone.
+  - panel: a group's lead handle is its operator; "add group" nests into the
+    selected group or the mask. The between-group operator menu is gone.
+  - the mask's own group (2026-09-21) has a group header like any other:
+    operator, opacity, the same actions menu minus "delete group" and
+    "rename"; it is labeled "whole mask", takes no group number, and its
+    contents are indented under it like any group's. It cannot be deleted,
+    moved or deselected: one group is always selected,
+    and a deselect lands on it (`_select_mask_group_if_none`,
+    `_model_click_group`). Selecting it targets the whole-mask (module)
+    refinement, not its marker's group refinement, so migrated edits keep
+    theirs editable. The "elements" header, the mask-level operator and the
+    whole-mask invert / disable / reset buttons are gone: the mask group's
+    invert output / disable / empty group replace them. Edit on canvas and
+    solo edit moved to the panel header (the utility lib's header in that
+    position): label, stretch, overlay, gap, edit, solo, gap, on/off.
+  - migration (2026-09-21): classic's whole-mask invert, MASKS_POS, becomes
+    the mask group's OP_INVERT (`_invert_root`, migrate_legacy.c). Exact at
+    100% group opacity, which migration always gives it; the one difference
+    is a mask where nothing contributes (MASKS_POS turned the full fallback
+    empty). On the darkroom-load path each forms snapshot is inverted by the
+    params that render with it (`_move_history_polarity`); moving it item by
+    item lost the invert on export, which renders the live tree without
+    popping. A mask group another mask nests (classic allows it, 0081) keeps
+    MASKS_POS. Flexi suite and the mask integration tests render identically
+    to before (J5-J7, 0081, 0119, 0120 fail the same way at HEAD).
   - same-kind clusters fold only adjacent runs (3 or more) and no longer
     reorder the group (`_consolidate_cluster_in_group` is gone): gathering
     scattered members rewrote the fold order on every panel build and kept a
     member from leaving its cluster. Dragging a member next to another kind
     takes it out.
-  - Known gaps: the group layout presets (right-click on add group) still
-    build old-shape top-level runs; drag-and-drop still carries the
-    top-level-run code paths, unused by new-shape masks.
+  - group layout presets (right-click on add group, 2026-09-21) store the
+    tree: the mask group's operator and opacity, then every nested group in
+    pre-order with its holder's index (preset version 4). Built-ins are the
+    three classic mask types as they migrate: drawn (union), parametric
+    (multiply), drawn + parametric (multiply over "shapes" and "parametric"
+    groups). Older flat presets (v1-v3) are no longer listed.
+  - Known gap: drag-and-drop still carries the top-level-run code paths,
+    unused by new-shape masks.
   Original proposal: Drop the between-group operator. Every group
   folds its members in order with one operator from the full vocabulary
   (union, intersection, difference, exclusion, sum, plus multiply and

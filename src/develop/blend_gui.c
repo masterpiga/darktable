@@ -6214,15 +6214,18 @@ static void _paint_group_selection(GtkWidget *header, gpointer sel)
 {
   GtkWidget *target = g_object_get_data(G_OBJECT(header), "header-widget");
   if(!target) target = header;
-  // the mask's own group lights up its header row alone: its block is the
-  // whole list, and a selected block shades every group header inside it
+  const dt_mask_id_t cid = GPOINTER_TO_INT(sel);
+  const gboolean selected = dt_is_valid_maskid(cid) && _header_cid(header) == cid;
+  // the mask's own group lights up its header row and its rail alone: its
+  // block is the whole list, and shading it would shade everything in it
   if(g_object_get_data(G_OBJECT(target), "is-root"))
   {
+    if(selected) dt_gui_add_class(target, "mask-root-selected");
+    else dt_gui_remove_class(target, "mask-root-selected");
     GtkWidget *row = g_object_get_data(G_OBJECT(header), "group-header-widget");
     if(row) target = row;
   }
-  const dt_mask_id_t cid = GPOINTER_TO_INT(sel);
-  if(dt_is_valid_maskid(cid) && _header_cid(header) == cid)
+  if(selected)
     dt_gui_add_class(target, "mask-list-row-selected");
   else
     dt_gui_remove_class(target, "mask-list-row-selected");
@@ -6525,7 +6528,7 @@ static GtkWidget *_make_solo_status_badge(void)
   GtkWidget *badge = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(badge), TRUE);
   gtk_widget_set_app_paintable(badge, TRUE);
-  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(11), DT_PIXEL_APPLY_DPI(11));
+  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(8), DT_PIXEL_APPLY_DPI(8));
   dt_gui_add_class(badge, "mask-power-solo");
   g_signal_connect(G_OBJECT(badge), "draw", G_CALLBACK(_solo_status_badge_draw), NULL);
   return badge;
@@ -6589,7 +6592,7 @@ static GtkWidget *_make_lowop_badge(void)
   GtkWidget *badge = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(badge), TRUE);
   gtk_widget_set_app_paintable(badge, TRUE);
-  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(11), DT_PIXEL_APPLY_DPI(11));
+  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(8), DT_PIXEL_APPLY_DPI(8));
   dt_gui_add_class(badge, "mask-lowop-warn");
   g_signal_connect(G_OBJECT(badge), "draw", G_CALLBACK(_lowop_badge_draw), NULL);
   return badge;
@@ -6603,12 +6606,12 @@ static GtkWidget *_make_lowop_badge(void)
 // while inactive (see the badge-active/badge-status comments above
 // _set_badge_active/_set_solo_status_badge), this stack's own size never
 // changes as badges turn on and off, so it reserves a constant slot and
-// nothing else in the row shifts. `spacing` (DPI-scaled) is left as a small
-// gap between the two squares.
+// nothing else in the row shifts. The two squares and the gap between them
+// (.mask-badge-stack in darktable.css) add up to no more than the lead
+// handle's height, so the stack never makes a header taller than its handle.
 static GtkWidget *_make_badge_stack(GtkWidget *lowop_badge, GtkWidget *solo_status_badge)
 {
   GtkWidget *stack = dt_gui_vbox();
-  gtk_box_set_spacing(GTK_BOX(stack), DT_PIXEL_APPLY_DPI(2));
   gtk_widget_set_valign(stack, GTK_ALIGN_CENTER);
   dt_gui_add_class(stack, "mask-badge-stack");
   if(lowop_badge) dt_gui_box_add(stack, lowop_badge);
@@ -14152,6 +14155,25 @@ static void _append_object_path_rows(dt_iop_module_t *module,
   }
 }
 
+// an element row's header line squares off onto its editor's rail while any
+// of its editors shows (.mask-row-open in darktable.css), as a group's header
+// does onto its elements' rail (see _sync_group_open)
+static void _sync_element_open(GtkWidget *editor, GParamSpec *pspec, gpointer row_vbox)
+{
+  static const char *const keys[] = { "param-editor-box", "props-editor-box",
+                                      "subgroup-box" };
+  gboolean open = FALSE;
+  for(size_t i = 0; i < G_N_ELEMENTS(keys); i++)
+  {
+    GtkWidget *e = g_object_get_data(G_OBJECT(row_vbox), keys[i]);
+    if(e && gtk_widget_get_visible(e)) open = TRUE;
+  }
+  if(open)
+    dt_gui_add_class(GTK_WIDGET(row_vbox), "mask-row-open");
+  else
+    dt_gui_remove_class(GTK_WIDGET(row_vbox), "mask-row-open");
+}
+
 static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                                   dt_masks_point_group_t *fpt,
                                   dt_masks_form_t *form,
@@ -14192,6 +14214,9 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // since its slider only appears once the row is actually expanded.
   const gboolean opacity_sliders = _opacity_sliders();
   const gboolean expandable = _model_row_is_expandable(form->type, opacity_sliders);
+  // the header line alone, which an open row shades like a group's header
+  // (see _sync_element_open)
+  dt_gui_add_class(row, "mask-element-header");
   // one shared tooltip -- and, further down, one shared pair of click
   // handlers (_row_click_press/_row_click_release) -- for every one of this
   // row's "non-specific" click surfaces: the lead icon, the name, and the
@@ -14732,7 +14757,19 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // indented under the row by the rail every group's elements have (see
   // .mask-group-elements in darktable.css). Its groups are selected, dropped
   // onto and dimmed through their own headers, as the top list's are
-  if(subgroup_box) dt_gui_box_add(row_vbox, subgroup_box);
+  if(subgroup_box)
+  {
+    dt_gui_box_add(row_vbox, subgroup_box);
+    g_object_set_data(G_OBJECT(row_vbox), "subgroup-box", subgroup_box);
+  }
+
+  // disconnected with row_vbox, which is destroyed together with its editors
+  GtkWidget *const editors[] = { param_editor, props_editor_box, subgroup_box };
+  for(size_t i = 0; i < G_N_ELEMENTS(editors); i++)
+    if(editors[i])
+      g_signal_connect_object(editors[i], "notify::visible",
+                              G_CALLBACK(_sync_element_open), row_vbox, 0);
+  _sync_element_open(NULL, NULL, row_vbox);
 
   // this element contributes nothing to the mask -- it is disabled, it is
   // suppressed by a solo, or the group holding it is bypassed -- so none of
@@ -14929,6 +14966,20 @@ static gboolean _masks_panel_reconcile(dt_iop_module_t *module,
   // Idempotent/side-effect-free to call twice in one pass.
   _recompute_insert_hint(module);
   return TRUE;
+}
+
+// a group header squares its bottom-left corner onto the rail below it while
+// its elements show (.mask-group-open in darktable.css). Every route that
+// opens or closes a group shows or hides its element box, so following that
+// box covers them all
+static void _sync_group_open(GtkWidget *elem_box, GParamSpec *pspec, gpointer hdr)
+{
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(elem_box));
+  if(gtk_widget_get_visible(elem_box) && kids)
+    dt_gui_add_class(GTK_WIDGET(hdr), "mask-group-open");
+  else
+    dt_gui_remove_class(GTK_WIDGET(hdr), "mask-group-open");
+  g_list_free(kids);
 }
 
 // one group of the panel: its header, and its element rows nested under it.
@@ -15445,7 +15496,11 @@ static void _pack_group(dt_iop_module_t *module,
   // mask's own, only its header row (see _paint_group_selection)
   if(dt_is_valid_maskid(bd->panel_selected_group_cid)
      && (dt_mask_id_t)cid == bd->panel_selected_group_cid)
+  {
     dt_gui_add_class(is_root ? hdr : group_block, "mask-list-row-selected");
+    // the rail under it lights up with the header (see _paint_group_selection)
+    if(is_root) dt_gui_add_class(group_block, "mask-root-selected");
+  }
 
   GtkWidget *elem_box = dt_gui_vbox();
   // indent/inset entirely via CSS (.mask-group-elements's margin-left/
@@ -15510,6 +15565,9 @@ static void _pack_group(dt_iop_module_t *module,
     dt_gui_box_add(elem_box, _make_pending_shape_row(module, pending_form));
 
   dt_gui_box_add(block_inner, elem_box);
+  // disconnected with hdr, which the block destroys together with elem_box
+  g_signal_connect_object(elem_box, "notify::visible", G_CALLBACK(_sync_group_open), hdr, 0);
+  _sync_group_open(elem_box, NULL, hdr);
 
   gtk_box_pack_end(GTK_BOX(container), group_block, FALSE, FALSE, 0);
 
@@ -16626,7 +16684,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // unique id for the panel's own top-level list container, alongside the
     // existing "masks-list" class every nested list box in the panel shares
     gtk_widget_set_name(GTK_WIDGET(bd->masks_list_box), "masks-list-box");
-    dt_gui_add_class(GTK_WIDGET(bd->masks_list_box), "masks-list"); // gap above the list
+    dt_gui_add_class(GTK_WIDGET(bd->masks_list_box), "masks-list");
 
     // layout: toolbar -> element list. The list opens on the mask's own
     // group, whose header carries the whole-mask actions
