@@ -152,6 +152,20 @@ static int _count_forms(const dt_masks_type_t type)
   return n;
 }
 
+// the whole-mask invert after migration: the mask group's own "invert
+// output", never the module's MASKS_POS, which nothing in flexi can show
+static gboolean _root_inverted(void)
+{
+  if(flexi_bp.mask_combine & DEVELOP_COMBINE_MASKS_POS)
+    fail_msg("MASKS_POS survived migration (mask_combine 0x%x)", flexi_bp.mask_combine);
+  const dt_masks_form_t *root = dt_masks_get_from_id_ext(flexi_dev.forms, flexi_bp.mask_id);
+  assert_non_null(root);
+  assert_non_null(root->points);
+  const dt_masks_point_group_t *marker = root->points->data;
+  assert_true(dt_masks_point_is_marker(marker));
+  return (marker->state & DT_MASKS_STATE_OP_INVERT) != 0;
+}
+
 static void _assert_flexi(void)
 {
   if(!(flexi_bp.mask_mode & DEVELOP_MASK_FLEXI))
@@ -196,6 +210,54 @@ static void test_drawn_only_reuses_the_group(void **state)
   _assert_flexi();
   assert_int_equal(flexi_bp.mask_id, before);
   assert_int_equal((int)g_list_length(flexi_dev.forms), forms_before);
+}
+
+// classic's drawn-mask invert is the whole mask's in drawn-only mode, so it
+// becomes the mask group's "invert output"
+static void test_drawn_only_invert_moves_onto_the_mask_group(void **state)
+{
+  for(int pos = 0; pos < 2; pos++)
+  {
+    _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+    if(pos) flexi_bp.mask_combine |= DEVELOP_COMBINE_MASKS_POS;
+    _migrate();
+    _assert_flexi();
+    assert_int_equal(_root_inverted(), pos);
+    flexi_teardown();
+  }
+}
+
+// classic lets another mask hold this mask's whole group; its marker is then
+// not this mask's alone, so the invert stays on the module
+static void test_invert_of_a_shared_group_stays_on_the_module(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  flexi_bp.mask_combine |= DEVELOP_COMBINE_MASKS_POS;
+  const dt_mask_id_t shared = flexi_bp.mask_id;
+
+  dt_masks_form_t *other = calloc(1, sizeof(dt_masks_form_t));
+  other->formid = 3000;
+  other->type = DT_MASKS_GROUP;
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = shared;
+  pt->parentid = other->formid;
+  pt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  other->points = g_list_append(NULL, pt);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, other);
+
+  _migrate();
+  _assert_flexi();
+  assert_true(flexi_bp.mask_combine & DEVELOP_COMBINE_MASKS_POS);
+  const dt_masks_form_t *root = dt_masks_get_from_id_ext(flexi_dev.forms, shared);
+  const dt_masks_point_group_t *marker = root->points->data;
+  assert_true(dt_masks_point_is_marker(marker));
+  assert_false(marker->state & DT_MASKS_STATE_OP_INVERT);
+
+  flexi_dev.forms = g_list_remove(flexi_dev.forms, other);
+  g_list_free_full(other->points, free);
+  free(other);
 }
 
 // A group inherited from a classic edit has no combine operator on its bottom
@@ -933,10 +995,10 @@ static void test_migration_never_leaves_inv_or_incl_set(void **state)
 }
 
 // Parametric-only, reaching DT_COND_REAL: the whole of INV and INCL folds onto
-// MASKS_POS as their inequality. INCL pre-flips each channel's own polarity
+// the mask group's "invert output" as their inequality. INCL pre-flips each channel's own polarity
 // bit, which accounts for its contribution, leaving INV to be re-expressed;
 // with both set they cancel.
-static void test_parametric_only_folds_inv_and_incl_onto_masks_pos(void **state)
+static void test_parametric_only_folds_inv_and_incl_onto_the_mask_group(void **state)
 {
   for(uint32_t combine = 0; combine < 8; combine++)
   {
@@ -950,12 +1012,11 @@ static void test_parametric_only_folds_inv_and_incl_onto_masks_pos(void **state)
     _migrate();
 
     const gboolean expect = (incl != inv);
-    const gboolean got =
-      (flexi_bp.mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
+    const gboolean got = _root_inverted();
 
     if(got != expect)
       fail_msg("parametric-only combine 0x%x (incl=%d inv=%d): expected "
-               "MASKS_POS=%d after migration, got %d",
+               "the mask group inverted=%d after migration, got %d",
                combine, incl, inv, expect, got);
 
     flexi_teardown();
@@ -997,14 +1058,15 @@ static void test_inclusive_with_partial_channels_collapses_to_a_constant(void **
 }
 
 // Drawn AND parametric, reaching DT_COND_REAL: the composite inversion is
-// INV xor INCL, and that is what lands on MASKS_POS. The drawn side's own
+// INV xor INCL, and that is what lands on the mask group's "invert output".
+// The drawn side's own
 // inversion (MASKS_POS xor INCL) is carried separately, on the drawn element's
 // state bit -- invert(d)*p is not invert(d*p), so the two cannot share a flag.
 //
 // Expectations are computed from the mask_combine that survives
 // _apply_legacy_combine_fix(), not from the raw loop value: with a drawn mask
 // present, INV has already been rewritten before migration ever sees it.
-static void test_drawn_and_parametric_folds_composite_invert_onto_masks_pos(void **state)
+static void test_drawn_and_parametric_folds_composite_invert_onto_the_mask_group(void **state)
 {
   for(uint32_t combine = 0; combine < 8; combine++)
   {
@@ -1019,12 +1081,12 @@ static void test_drawn_and_parametric_folds_composite_invert_onto_masks_pos(void
     _migrate();
 
     const gboolean expect = (eff_inv != incl);
-    const gboolean got =
-      (flexi_bp.mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
+    const gboolean got = _root_inverted();
 
     if(got != expect)
       fail_msg("drawn+parametric combine 0x%x -> effective 0x%x (incl=%d "
-               "inv=%d): expected MASKS_POS=%d after migration, got %d",
+               "inv=%d): expected the mask group inverted=%d after migration,"
+               " got %d",
                combine, effective, incl, eff_inv, expect, got);
 
     flexi_teardown();
@@ -1891,9 +1953,11 @@ int main(void)
     cmocka_unit_test_teardown(test_already_flexi_passes_through, _teardown),
     cmocka_unit_test_teardown(test_every_bit_combination_lands_in_a_valid_state, _teardown),
     cmocka_unit_test_teardown(test_migration_never_leaves_inv_or_incl_set, _teardown),
-    cmocka_unit_test_teardown(test_parametric_only_folds_inv_and_incl_onto_masks_pos, _teardown),
+    cmocka_unit_test_teardown(test_parametric_only_folds_inv_and_incl_onto_the_mask_group, _teardown),
     cmocka_unit_test_teardown(test_inclusive_with_partial_channels_collapses_to_a_constant, _teardown),
-    cmocka_unit_test_teardown(test_drawn_and_parametric_folds_composite_invert_onto_masks_pos, _teardown),
+    cmocka_unit_test_teardown(test_drawn_and_parametric_folds_composite_invert_onto_the_mask_group, _teardown),
+    cmocka_unit_test_teardown(test_drawn_only_invert_moves_onto_the_mask_group, _teardown),
+    cmocka_unit_test_teardown(test_invert_of_a_shared_group_stays_on_the_module, _teardown),
     cmocka_unit_test_teardown(test_every_combine_value_lands_in_a_valid_state, _teardown),
     cmocka_unit_test_teardown(test_no_masks_module_blocks_a_classic_drawn_group, _teardown),
     cmocka_unit_test_teardown(test_no_masks_module_still_renders_a_flexi_group, _teardown),

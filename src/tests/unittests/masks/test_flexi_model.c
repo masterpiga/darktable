@@ -476,6 +476,17 @@ static void test_click_selected_group_clears_selection(void **state)
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
 }
 
+// the mask's own group, its list's only group, cannot be deselected: one
+// group is always selected
+static void test_click_mask_group_again_keeps_it_selected(void **state)
+{
+  flexi_build("u:1,2");
+  _click_group(FLEXI_GID(0));
+  _click_group(FLEXI_GID(0));
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
+  assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
+}
+
 // selecting an element selects its group too -- the two levels are nested,
 // not independent
 static void test_click_element_selects_element_and_its_group(void **state)
@@ -1413,6 +1424,19 @@ static void test_refine_scope_with_nothing_left_is_the_whole_mask(void **state)
   assert_int_equal(flexi_bd.masks_refine_scope_formid, INVALID_MASKID);
 }
 
+// the mask's own group refines the whole mask, the module-wide refinement,
+// not its marker's own group refinement
+static void test_refine_scope_of_the_mask_group_is_the_whole_mask(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,2");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
+  _model_refine_scope_from_selection(&flexi_module);
+  assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GLOBAL);
+  assert_int_equal(flexi_bd.masks_refine_scope_formid, INVALID_MASKID);
+}
+
 static void test_refine_scope_of_present_element_is_kept(void **state)
 {
   flexi_conf_init();
@@ -1808,6 +1832,25 @@ static void _free_nested_points(dt_masks_form_t *g)
   g->points = NULL;
 }
 
+// deselecting a group nested in the mask's own selects the mask's own
+static void test_click_selected_nested_group_selects_the_mask_group(void **state)
+{
+  flexi_build("u:1,2");
+  dt_masks_form_t *c = calloc(1, sizeof(dt_masks_form_t));
+  c->formid = 11;
+  c->type = DT_MASKS_CIRCLE;
+  flexi_dev.forms = g_list_append(flexi_dev.forms, c);
+  const dt_mask_id_t members[] = { 11 };
+  dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
+
+  _click_group(2500);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, 2500);
+  _click_group(2500);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
+
+  _free_nested_points(sub);
+}
+
 // a group's marker is found at any depth, with the group holding it
 static void test_find_marker_reaches_a_subgroup(void **state)
 {
@@ -1939,6 +1982,21 @@ static dt_masks_form_t *_two_levels(void)
   assert_layout("u:1,2 | i:3,2000");
   assert_layout_of(_sub, "u:11,12 | d:13");
   return flexi_group();
+}
+
+// the mask's own group is "whole mask" and takes no number, so the first
+// group nested in it of the same mode is number 1
+static void test_mask_group_takes_no_number(void **state)
+{
+  flexi_build("u:1,2");
+  _circle(11);
+  const dt_mask_id_t members[] = { 11 };
+  dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
+
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 0);
+  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2500), 1);
+
+  _free_nested_points(sub);
 }
 
 static void test_nested_points_are_found_with_their_group(void **state)
@@ -2360,6 +2418,7 @@ int main(void)
     cmocka_unit_test_teardown(test_drop_keeps_element_selected_in_new_group, _teardown),
     cmocka_unit_test_teardown(test_click_group_selects_it, _teardown),
     cmocka_unit_test_teardown(test_click_selected_group_clears_selection, _teardown),
+    cmocka_unit_test_teardown(test_click_mask_group_again_keeps_it_selected, _teardown),
     cmocka_unit_test_teardown(test_click_element_selects_element_and_its_group, _teardown),
     cmocka_unit_test_teardown(test_click_selected_element_falls_back_to_its_group, _teardown),
     cmocka_unit_test_teardown(test_element_then_group_reaches_empty_selection, _teardown),
@@ -2415,6 +2474,7 @@ int main(void)
     cmocka_unit_test_teardown(test_refine_scope_with_nothing_left_is_the_whole_mask,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_of_present_element_is_kept, _teardown_objects),
+    cmocka_unit_test_teardown(test_refine_scope_of_the_mask_group_is_the_whole_mask, _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_follows_the_selection, _teardown_objects),
     cmocka_unit_test_teardown(test_raster_element_follows_its_source_name, _teardown_raster),
     cmocka_unit_test_teardown(test_renamed_raster_element_keeps_its_name, _teardown_raster),
@@ -2439,6 +2499,7 @@ int main(void)
     cmocka_unit_test_teardown(test_copy_of_a_group_keeps_its_markers, _teardown_linking),
     cmocka_unit_test_teardown(test_prune_spares_markers, _teardown),
     cmocka_unit_test_teardown(test_find_marker_reaches_a_subgroup, _teardown),
+    cmocka_unit_test_teardown(test_click_selected_nested_group_selects_the_mask_group, _teardown),
     cmocka_unit_test_teardown(test_a_raster_element_in_a_subgroup_is_found, _teardown),
     cmocka_unit_test_teardown(test_a_cyclic_tree_ends_every_walk, _teardown),
     cmocka_unit_test_teardown(test_nested_points_are_found_with_their_group, _teardown_nested),
@@ -2463,6 +2524,7 @@ int main(void)
     cmocka_unit_test_teardown(test_solo_of_a_nested_group_clears_inside_it,
                               _teardown_nested),
     cmocka_unit_test_teardown(test_nested_groups_are_counted_and_numbered, _teardown_nested),
+    cmocka_unit_test_teardown(test_mask_group_takes_no_number, _teardown),
     cmocka_unit_test_teardown(test_nested_shapes_are_listed_and_signed, _teardown_nested),
     cmocka_unit_test_teardown(test_lost_member_leaves_a_nested_group, _teardown_nested),
     cmocka_unit_test_teardown(test_classic_marking_puts_the_base_in_the_first_run, _teardown),
