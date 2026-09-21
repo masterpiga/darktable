@@ -102,6 +102,9 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
   {
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
+    // the canvas list can be rebuilt between a press and its release (a
+    // selection change narrowing solo edit, say): the index then names nothing
+    if(!fpt) return 0;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel || !sel->functions) return 0;
 
@@ -205,6 +208,18 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
   return 0;
 }
 
+static int _group_events_mouse_moved(dt_iop_module_t *module,
+                                     const float pzx,
+                                     const float pzy,
+                                     const double pressure,
+                                     const int which,
+                                     const float zoom_scale,
+                                     dt_masks_form_t *form,
+                                     const int unused1,
+                                     dt_masks_form_gui_t *gui,
+                                     const int unused2);
+static inline gboolean _is_handling_form(dt_masks_form_gui_t *gui);
+
 static int _group_events_button_pressed(dt_iop_module_t *module,
                                         const float pzx,
                                         const float pzy,
@@ -217,6 +232,14 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
                                         dt_masks_form_gui_t *gui,
                                         const int unused2)
 {
+  // the shape under the pointer is only picked as the pointer moves, so a
+  // canvas rebuilt since knows none: the panel's rebuild after stepping into
+  // an object is one. Pick it here, or the press lands on empty canvas, steps
+  // out of the object and the next press drags the whole object
+  if(gui->group_selected < 0 && !_is_handling_form(gui))
+    _group_events_mouse_moved(module, pzx, pzy, pressure, state,
+                              dt_dev_get_zoom_scale_full(), form, 0, gui, 0);
+
   // double-click on an AI object steps into it: its paths are then picked,
   // edited and removed one by one (see dt_masks_bundle_of). A click anywhere
   // else steps back out, and still does what it would have done
@@ -274,6 +297,7 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
   {
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
+    if(!fpt) return 0;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return 0;
     if(sel->functions)
@@ -322,6 +346,7 @@ static int _group_events_button_released(dt_iop_module_t *module,
   {
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
+    if(!fpt) return 0;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel || !sel->functions) return 0;
 
@@ -472,6 +497,13 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
 {
   const float as = dt_masks_sensitive_dist(zoom_scale);
 
+  // the outlines hit-testing reads are made when the canvas is drawn: after a
+  // rebuild (dt_masks_change_form_gui, the panel's rebuild after stepping into
+  // an AI object among them) there are none until the next draw, and a hover
+  // or press before it would find nothing under the pointer. A no-op while
+  // they are current
+  if(!gui->creation) dt_masks_gui_form_test_create(form, gui, module);
+
   // we first don't do anything if we are inside a scrolling session
 
   if(gui->scrollx != 0.0f && gui->scrolly != 0.0f)
@@ -489,6 +521,7 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   {
     // we get the form
     dt_masks_point_group_t *fpt = g_list_nth_data(form->points, gui->group_edited);
+    if(!fpt) return 0;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return 0;
 

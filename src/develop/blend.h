@@ -753,6 +753,18 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_refine_toggle_btn;
   GtkBox *masks_refine_sliders_box;
   GHashTable *masks_refine_expanded;
+  // "shape properties in subpanel": the selected shape's properties, or the
+  // creation controls of a shape being drawn, in a collapsible of their own
+  // between the mask list and the refinements (see _props_panel_sync).
+  // props_panel_box is the wrapped section, props_panel_content the box the
+  // editor goes in, props_panel_formid the shape it holds the editor of, and
+  // pending_props_box the creation controls a pending row built for it
+  GtkBox *props_panel_box;
+  GtkWidget *props_panel_expander;
+  GtkWidget *props_panel_content;
+  GtkWidget *props_panel_toggle_btn;
+  dt_mask_id_t props_panel_formid;
+  GtkWidget *pending_props_box;
   // transient (non-serialized, flexi-only) refinement bypass set: which
   // refinement passes the user is previewing "off". Keyed by
   // dt_masks_refine_key_*() below. Owned and mutated on the GTK

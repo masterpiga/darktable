@@ -1090,8 +1090,10 @@ _register_vectorized_forms(dt_iop_module_t *module,
   }
 
   // register the bundle (history item added by caller after blend mask
-  // assignment)
+  // assignment), then head it with its group's marker, whose id must not
+  // collide with the bundle's own
   dev->forms = g_list_append(dev->forms, bundle);
+  dt_masks_object_ensure_marker(dev->forms, bundle);
 
   g_list_free(forms);
   g_list_free(signs);

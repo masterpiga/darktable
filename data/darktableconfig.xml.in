@@ -3693,6 +3693,13 @@
     <longdescription>while enabled, opacity moves out of the row and group headers and becomes a full slider at the top of every expanded panel; raster masks, whose only property is opacity, become expandable as a result. only takes effect while auto-expand is also enabled, which is what keeps the panel holding the slider open</longdescription>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/masks/shape_props_subpanel</name>
+    <type>bool</type>
+    <default>false</default>
+    <shortdescription>shape properties in subpanel</shortdescription>
+    <longdescription>while enabled, the properties of the selected shape are shown in a collapsible section of their own between the mask list and the refinements instead of under the shape's row, and so are the creation controls of a shape being drawn; the section is empty and disabled while anything but a shape is selected</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/show_panel_handle</name>
     <type>bool</type>
     <default>true</default>

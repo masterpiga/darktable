@@ -1097,6 +1097,10 @@ dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
     members before the list's first marker are what the flexi fold reads as
     one plain union group. TRUE if anything changed */
 gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp);
+/** give an AI object the marker of the group it is: a difference group, its
+    outline less its holes, or a union group when it has no holes. TRUE if
+    anything changed */
+gboolean dt_masks_object_ensure_marker(GList *forms, dt_masks_form_t *obj);
 /** convert a classic group, and the classic groups nested in it, into flexi
     groups, each holding one marker and folding its members in order with one
     operator (masks_revamp_nested_groups.md, Q8). Where classic's operator

@@ -1494,6 +1494,19 @@ static void _normalize_history_item(dt_dev_history_item_t *h)
 
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 {
+  // every AI object renders as the group it is, a difference group, whatever
+  // the edit: one stored before objects had markers folds its holes in as a
+  // union. On every load, since an edit already in flexi queues nothing; the
+  // marker is idempotent
+  for(GList *l = dev->forms; l; l = g_list_next(l))
+    dt_masks_object_ensure_marker(dev->forms, l->data);
+  for(GList *h = dev->history; h; h = g_list_next(h))
+  {
+    dt_dev_history_item_t *item = h->data;
+    for(GList *l = item->forms; l; l = g_list_next(l))
+      dt_masks_object_ensure_marker(item->forms, l->data);
+  }
+
   if(!dev->pending_flexi_group_splits) return;
 
   for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))

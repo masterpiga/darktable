@@ -341,6 +341,9 @@ char *_model_masks_panel_header_markup(const char *module_name,
 /** the shape solo-edit mode should be isolating, given the panel's selection,
     or INVALID_MASKID if the mode must stand down */
 dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd);
+/** the shape the "shape properties in subpanel" section shows the editor of:
+    the selected element when it is a shape, else INVALID_MASKID */
+dt_mask_id_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd);
 
 /** geometry for _model_whisker_popup_rect, all in root (screen) coordinates */
 typedef struct dt_masks_whisker_geom_t

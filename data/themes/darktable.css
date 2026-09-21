@@ -881,16 +881,15 @@ dialog .sidebar row:selected:hover label,
    #mask-cluster-header-row -- but shares this .mask-panel-row class for base
    styling and state washes that apply identically to every kind, so none of
    that has to be repeated per id. A transparent border keeps the box model
-   stable across states (drag indicators colour one edge of it, see below). A
-   small bottom margin keeps consecutive rows' borders from touching --
-   otherwise two adjacent selected/hovered rows read as one fused block. */
+   stable across states (drag indicators colour one edge of it, see below).
+   The top margin is the one gap between a row and whatever is above it: a
+   row, its group's header, or the end of a rail. It matches the gap between
+   a rail and the rail nested in it (.mask-group-elements's padding-left) */
 .mask-panel-row
 {
   border: 2px solid transparent;
-  /* the top-left corner is square unless the theme rounds module headers
-     (chunk-rounded-header.css rounds it with them) */
-  border-radius: 0 3px 3px 3px;
-  margin-bottom: 2px;
+  border-radius: 3px;
+  margin-top: 6px;
   /* a background image starts at the padding box by default and repeats into
      the transparent border above, where the far end of the selection
      gradient showed as a frame around every selected row */
@@ -924,7 +923,7 @@ dialog .sidebar row:selected:hover label,
 .mask-element-header
 {
   border: 2px solid transparent;
-  border-radius: 0 3px 3px 3px;
+  border-radius: 3px;
   background-origin: border-box;
 }
 
@@ -937,7 +936,7 @@ dialog .sidebar row:selected:hover label,
 .mask-list-row-selected
 {
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.10));
-  border-radius: 0 3px 3px 3px;
+  border-radius: 3px;
 }
 
 
@@ -1003,22 +1002,6 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.06);
 }
 
-/* the caption above a stepped-into AI object's paths: quieter than a section
-   label, since it sits among the object's own properties */
-.mask-object-paths-caption
-{
-  font-size: 0.85em;
-  opacity: 0.6;
-  margin-top: 4px;
-}
-
-/* a path in a stepped-into AI object's "paths" section, hovered in the panel
-   or on the canvas */
-.mask-object-path-row.mask-list-row-hover
-{
-  background-color: rgba(255, 255, 255, 0.10);
-}
-
 /* persistent solo / solo-edit wash: driven by state (bd->solo_formid /
    soloedit_formid / solo_cluster_key) rather than the pointer, so it survives
    hovering elsewhere in the panel or canvas (see _update_shape_row_state /
@@ -1052,17 +1035,14 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* each group (header + its element rows) is one visual block, separated from
-   its neighbours by a small consistent gap above -- no divider line, since
-   the group header's own background (.mask-group-header) already reads as
-   the start of a new group on its own. */
+   its neighbours by its header's top margin (see .mask-panel-row) -- no
+   divider line, since the group header's own background (.mask-group-header)
+   already reads as the start of a new group on its own. */
 .mask-group-block
 {
-  /* the gap between groups is these two transparent borders (2px + 2px),
-     not a margin: reserving the insertion line's border up front means
-     showing it only colours an existing edge, instead of adding one and
-     growing the block by 2px -- which shifted every group below it every
-     time the drop indicator moved. Same trick .mask-panel-row already
-     uses for the row-level indicator above. */
+  /* the insertion line's transparent borders, reserved up front so showing
+     it only colours an existing edge. The block is an event box, which
+     reserves no room for them: the line overlaps the gap instead */
   margin-top: 0;
   border-top: 2px solid transparent;
   border-bottom: 2px solid transparent;
@@ -1117,14 +1097,10 @@ dialog .sidebar row:selected:hover label,
    (.mask-group-open) meets the rail, and the two read as one piece */
 .mask-group-elements
 {
-  border-left: 4px solid rgba(255, 255, 255, 0.08);
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
   margin-left: 0;
+  /* the gap between two nested rails, and between rows (.mask-panel-row) */
   padding-left: 6px;
-  /* keeps the first header inside off its group's header, inside the rail so
-     the rail still meets the header. The block's own transparent top border
-     cannot do it: the block is an event box, which reserves no room for CSS
-     borders */
-  padding-top: 2px;
 }
 
 /* the header's bottom, where the rail meets it: its 0.18 background under the
@@ -1174,12 +1150,11 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.08);
 }
 
-/* an open group's header sits on its rail (.mask-group-elements): no gap, and
-   no rounding where the two meet */
+/* an open group's header sits on its rail (.mask-group-elements): no rounding
+   where the two meet */
 .mask-panel-row.mask-group-header.mask-group-open
 {
   border-bottom-left-radius: 0;
-  margin-bottom: 0;
 }
 
 /* an open element's header: the resting shade of a group header, squared
@@ -1242,9 +1217,8 @@ dialog .sidebar row:selected:hover label,
   /* the header's color and width of a group's rail (.mask-group-elements),
      starting right under the header: padding, not margin, keeps the controls
      off the header without breaking the rail */
-  border-left: 4px solid rgba(255, 255, 255, 0.08);
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
   padding-top: 3px;
-  margin-bottom: 3px;
   /* the rail runs down the row's own left edge */
   margin-left: 0;
   /* no right margin, unlike the left rail: this puts the editor's right edge
@@ -1299,12 +1273,21 @@ dialog .sidebar row:selected:hover label,
 .mask-props-row-editor
 {
   /* see .mask-param-row-editor */
-  border-left: 4px solid rgba(255, 255, 255, 0.08);
+  border-left: 2px solid rgba(255, 255, 255, 0.08);
   padding-top: 3px;
-  margin-bottom: 3px;
   margin-left: 0;
   margin-right: 22px;
   padding-left: 6px;
+}
+
+/* the shape properties subpanel holds one shape's editor, or a pending
+   shape's creation controls, as the refinements' section holds its sliders:
+   no rail and no inset, since no row header sits above them there */
+.mask-props-panel .mask-props-row-editor
+{
+  border-left-width: 0;
+  padding: 0;
+  margin: 0;
 }
 
 /* a selected element's rails: the color its header ends on, as for a group
@@ -1312,18 +1295,18 @@ dialog .sidebar row:selected:hover label,
    light up the rails of the elements it holds */
 .mask-list-row-selected > * > .mask-param-row-editor,
 .mask-list-row-selected > * > .mask-props-row-editor,
-#mask-shape-row.mask-list-row-selected > .mask-group-elements
+#mask-shape-row.mask-list-row-selected > * > .mask-group-elements
 {
   border-left-color: rgba(255, 255, 255, 0.295);
 }
 
 /* "use sliders for opacity": the slider leading a group's expanded contents.
    It sits inside .mask-group-elements, which already draws the left rail and
-   indent, so this only spaces it off the member rows below */
+   indent, so this only spaces it off its header (the member rows below space
+   themselves, see .mask-panel-row) */
 .mask-group-opacity-editor
 {
   margin-top: 3px;
-  margin-bottom: 3px;
   margin-right: 22px;
 }
 
@@ -1674,14 +1657,6 @@ button.mask-lead-static
   background: transparent;
   border-color: transparent;
   box-shadow: none;
-}
-
-/* spacing between the toolbar and the mask list. Only the top list: every
-   group's elements box is a masks-list too, and must start right under its
-   header for the rail to meet it */
-#masks-list-box
-{
-  margin-top: 3px;
 }
 
 /* Collapsible sections on lib & iop modules */

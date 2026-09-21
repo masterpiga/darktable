@@ -1382,6 +1382,137 @@ static void test_canvas_path_selects_its_object_row(void **state)
   assert_int_equal(_model_panel_formid_for(&flexi_module, INVALID_MASKID), INVALID_MASKID);
 }
 
+// stepped into, the object shows as its group and its paths as its rows
+static void test_canvas_path_of_entered_object_selects_its_own_row(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+  _with_gui(5);
+  assert_int_equal(_model_panel_formid_for(&flexi_module, 22), 22);
+  assert_int_equal(_model_panel_formid_for(&flexi_module, 5), 5);
+  _with_gui(6);
+  assert_int_equal(_model_panel_formid_for(&flexi_module, 22), 5);
+}
+
+// those rows act on their points through the same lookup every row uses
+static void test_points_of_entered_object_are_found(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+  _with_gui(INVALID_MASKID);
+  assert_null(_group_point(grp, 22));
+  _with_gui(5);
+  const dt_masks_point_group_t *pt = _group_point(grp, 22);
+  assert_non_null(pt);
+  assert_int_equal(pt->formid, 22);
+  // an object the mask does not hold stays out of reach
+  _with_gui(6);
+  assert_null(_group_point(grp, 22));
+}
+
+// the group an object is: its outline less its holes
+static void test_object_with_holes_is_a_difference_group(void **state)
+{
+  flexi_build("u:1,5");
+  dt_masks_form_t *obj = _make_object(5, 21, 3);
+  for(int k = 1; k < 3; k++)
+    ((dt_masks_point_group_t *)g_list_nth_data(obj->points, k))->state =
+      DT_MASKS_STATE_DIFFERENCE | DT_MASKS_STATE_USE;
+
+  assert_true(dt_masks_object_ensure_marker(flexi_dev.forms, obj));
+  const dt_masks_point_group_t *head = obj->points->data;
+  assert_true(dt_masks_point_is_marker(head));
+  assert_true(head->state & DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  assert_int_equal(head->parentid, 5);
+  assert_int_equal(g_list_length(obj->points), 4);
+  assert_int_equal(((dt_masks_point_group_t *)obj->points->next->data)->formid, 21);
+  // once is enough
+  assert_false(dt_masks_object_ensure_marker(flexi_dev.forms, obj));
+  assert_int_equal(g_list_length(obj->points), 4);
+}
+
+static void test_object_without_holes_is_a_union_group(void **state)
+{
+  flexi_build("u:1,5");
+  dt_masks_form_t *obj = _make_object(5, 21, 2);
+  assert_true(dt_masks_object_ensure_marker(flexi_dev.forms, obj));
+  const dt_masks_point_group_t *head = obj->points->data;
+  assert_true(dt_masks_point_is_marker(head));
+  assert_false(head->state & DT_MASKS_STATE_WITHIN);
+  // and only an object gets one this way
+  assert_false(dt_masks_object_ensure_marker(flexi_dev.forms, flexi_group()));
+}
+
+// stepping in or out turns the object's row into its group and back, so the
+// panel must not skip that rebuild as unchanged
+static void test_stepping_in_moves_the_panel_signature(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+  _with_gui(INVALID_MASKID);
+  const dt_hash_t outside = _masks_list_signature(&flexi_module);
+  _with_gui(5);
+  assert_true(_masks_list_signature(&flexi_module) != outside);
+  _with_gui(INVALID_MASKID);
+  assert_true(_masks_list_signature(&flexi_module) == outside);
+}
+
+// the shape properties subpanel holds a shape's editor, and nothing else's
+static void test_props_panel_shows_shapes_only(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+  _with_gui(INVALID_MASKID);
+  flexi_bd.panel_selected_formid = 1;
+  assert_int_equal(_model_props_panel_target(&flexi_bd), 1);
+  // an AI object is edited as one shape
+  flexi_bd.panel_selected_formid = 5;
+  assert_int_equal(_model_props_panel_target(&flexi_bd), 5);
+  // stepped into, it is a group, and its paths are the shapes
+  _with_gui(5);
+  assert_int_equal(_model_props_panel_target(&flexi_bd), INVALID_MASKID);
+  flexi_bd.panel_selected_formid = 22;
+  assert_int_equal(_model_props_panel_target(&flexi_bd), 22);
+  // a group selection alone shows nothing
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  assert_int_equal(_model_props_panel_target(&flexi_bd), INVALID_MASKID);
+}
+
+// solo edit inside the object keeps the object: narrowing to the pressed path
+// rebuilt the canvas under the press and crashed its release
+static void test_soloedit_inside_entered_object_isolates_the_object(void **state)
+{
+  flexi_conf_init();
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", TRUE);
+  flexi_build("u:1,5");
+  _make_object(5, 21, 2);
+  flexi_bd.panel_selected_formid = 22;
+  _with_gui(5);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 5);
+  // outside it, a shape isolates itself as always
+  flexi_bd.panel_selected_formid = 1;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 1);
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
+}
+
+// its marker is no path: inside, the last path still takes the object away
+static void test_marker_is_not_counted_as_a_path(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  dt_masks_form_t *obj = _make_object(5, 21, 1);
+  dt_masks_object_ensure_marker(flexi_dev.forms, obj);
+  _with_gui(5);
+  dt_mask_id_t taken, from;
+  assert_int_equal(_removes(21, 5, FALSE, &taken, &from), DT_MASKS_REMOVE_ELEMENT);
+  assert_int_equal(taken, 5);
+  _make_object(5, 22, 1);
+  assert_int_equal(_removes(21, 5, FALSE, &taken, &from), DT_MASKS_REMOVE_PATH);
+}
+
 // ---------------------------------------------------------------------------
 // the refinement panel's target when its element disappears
 // ---------------------------------------------------------------------------
@@ -2469,6 +2600,16 @@ int main(void)
     cmocka_unit_test_teardown(test_canvas_delete_of_shape_is_the_panel_delete,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_canvas_path_selects_its_object_row, _teardown_objects),
+    cmocka_unit_test_teardown(test_canvas_path_of_entered_object_selects_its_own_row,
+                              _teardown_objects),
+    cmocka_unit_test_teardown(test_points_of_entered_object_are_found, _teardown_objects),
+    cmocka_unit_test_teardown(test_object_with_holes_is_a_difference_group, _teardown_objects),
+    cmocka_unit_test_teardown(test_object_without_holes_is_a_union_group, _teardown_objects),
+    cmocka_unit_test_teardown(test_marker_is_not_counted_as_a_path, _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_shows_shapes_only, _teardown_objects),
+    cmocka_unit_test_teardown(test_stepping_in_moves_the_panel_signature, _teardown_objects),
+    cmocka_unit_test_teardown(test_soloedit_inside_entered_object_isolates_the_object,
+                              _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_of_removed_element_falls_back_to_its_group,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_with_nothing_left_is_the_whole_mask,

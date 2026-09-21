@@ -375,6 +375,21 @@ Still to do:
   About 40 `DT_MASKS_OBJECT` special cases go (blend_gui.c 17, masks.c 16,
   others 7). This fits after phase 2, since it needs the nested display and
   the group transform. Open: keep an AI icon on such groups, or not.
+
+  **Landed 2026-09-21, the display half only.** An object stays a
+  `DT_MASKS_OBJECT`, but its list now starts with the marker of the group it
+  is: within-group difference when it has holes, union otherwise
+  (`dt_masks_object_ensure_marker`). Creation adds it (object.c), and
+  `dt_masks_normalize_flexi_groups` adds it on every load, to the live forms
+  and every history snapshot, so older objects render with their holes cut
+  out too. A flat difference group equals classic's outline-less-holes
+  because holes never overlap; an object with several outlines (possible
+  only with DenseCRF refinement, which runs after the seed-region filter)
+  would subtract every outline after the first. Stepped into on the canvas,
+  the object's panel row is its group's row (`is_subgroup` in
+  `_make_shape_row`), its paths ordinary element rows; the custom "paths"
+  list is gone. `_point_node_owner` reaches the points of the entered object
+  only, so those rows act on their points. Not verified in the GUI.
 - **Q7. What a nested group is: decided 2026-09-14, order-free half
   implemented 2026-09-16.**
   Phases 0 to 3 built a nested group as a list of groups, a small mask of

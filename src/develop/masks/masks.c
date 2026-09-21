@@ -157,6 +157,8 @@ static void _set_hinter_message(const dt_masks_form_gui_t *gui,
   {
     // we get the selected form
     fpt = g_list_nth_data(form->points, gui->group_edited);
+    // group_edited can outlive a rebuild of form_visible that shortened it
+    if(!fpt) return;
     sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return;
 
@@ -1144,6 +1146,23 @@ gboolean dt_masks_group_ensure_marker(GList *forms, dt_masks_form_t *grp)
   dt_masks_point_group_t *m = dt_masks_marker_new(forms, grp, DT_MASKS_STATE_UNION);
   if(!m) return FALSE;
   grp->points = g_list_prepend(grp->points, m);
+  return TRUE;
+}
+
+gboolean dt_masks_object_ensure_marker(GList *forms, dt_masks_form_t *obj)
+{
+  if(!obj || !(obj->type & DT_MASKS_OBJECT)) return FALSE;
+  if(obj->points && dt_masks_point_is_marker(obj->points->data)) return FALSE;
+  // its holes are the members classic subtracts (see _register_vectorized_forms
+  // in masks/object.c), and they follow the outline they are cut from
+  gboolean holes = FALSE;
+  for(const GList *l = obj->points; l; l = g_list_next(l))
+    if(((const dt_masks_point_group_t *)l->data)->state & DT_MASKS_STATE_DIFFERENCE)
+      holes = TRUE;
+  dt_masks_point_group_t *m = dt_masks_marker_new(
+    forms, obj, DT_MASKS_STATE_UNION | (holes ? DT_MASKS_STATE_WITHIN_DIFFERENCE : 0));
+  if(!m) return FALSE;
+  obj->points = g_list_prepend(obj->points, m);
   return TRUE;
 }
 
@@ -3054,7 +3073,11 @@ dt_masks_remove_target_t dt_masks_remove_shape_target(const dt_iop_module_t *mod
   {
     const dt_masks_form_gui_t *gui = darktable.develop->form_gui;
     const gboolean one_path = !whole || (gui && gui->entered_object == object->formid);
-    if(one_path && !g_list_shorter_than(object->points, 2)) return DT_MASKS_REMOVE_PATH;
+    // its marker is no path
+    int paths = 0;
+    for(const GList *l = object->points; l; l = g_list_next(l))
+      if(!dt_masks_point_is_marker(l->data)) paths++;
+    if(one_path && paths >= 2) return DT_MASKS_REMOVE_PATH;
     *form = object;
     *parentid = module->blend_params->mask_id;
   }
