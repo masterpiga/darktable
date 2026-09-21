@@ -539,9 +539,10 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_new_op;
   GtkWidget *masks_new_op_box;
   // masks_root_op: the mask's own operator, how the elements and groups at the
-  // top of the mask combine (flexi-only, leftmost in masks_toolbar). The mask is
-  // one group whose header the panel does not show, so this is that group's
-  // operator (masks_revamp_nested_groups.md, Q8). masks_root_op_box wraps it
+  // top of the mask combine (flexi-only, on the "elements" header, right of
+  // the label). The mask is one group whose header the panel does not show,
+  // so this is that group's operator (masks_revamp_nested_groups.md, Q8).
+  // masks_root_op_box wraps it
   GtkWidget *masks_root_op;
   GtkWidget *masks_root_op_box;
   // masks_new_op_label: the "new group" caption next to the add-group button.
@@ -553,17 +554,12 @@ typedef struct dt_iop_gui_blend_data_t
   // masks_reset_mask_btn: "reset mask" action on the import-shape row (clears all
   // shapes + re-seeds the scaffold). masks_import_label is unused (the combo label).
   GtkWidget *masks_reset_mask_btn;
-  // flexi-only "groups" section divider (above the toolbar/list; holds reset).
+  // the "elements" section divider, below the toolbar and above the list. It
+  // carries every whole-mask control: the mask's operator, invert, edit on
+  // canvas, solo edit, visibility and reset (see _pack_masks_header).
   GtkWidget *masks_groups_header;
-  // shared rows re-homed between the classic two-row toolbar and the compact flexi
-  // layout (see _masks_apply_layout): masks_combo_row = classic header
-  // ([invert]); masks_shapes_row = classic shapes row ([edit][shapes_box]).
-  // In flexi, "edit" and "invert" move onto masks_groups_header, and
-  // masks_shapes_box itself moves into masks_toolbar_row1.
-  GtkWidget *masks_combo_row;
-  GtkWidget *masks_shapes_row;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
-  // mask" action, directly below masks_groups_header and above
+  // mask" action, at the top of the panel, above masks_groups_header and
   // masks_list_box. A plain vertical GtkBox with exactly two fixed,
   // non-wrapping rows (masks_toolbar_row1/row2) -- no dynamic reflow. Several
   // dynamic wrapping schemes (GtkFlowBox; destroy-and-rebuild rows driven by
@@ -575,19 +571,15 @@ typedef struct dt_iop_gui_blend_data_t
   // possibly-clipping-if-the-panel-is-extremely-narrow two-row layout is far
   // more reliable. masks_toolbar_row1: add-group (masks_new_op_box) | shape
   // buttons (masks_shapes_box) | import (masks_import_btn).
-  // masks_toolbar_row2: parametric channel buttons
-  // (masks_param_channels_box), centered. Of these,
-  // only masks_shapes_box is shared with classic mode (via masks_shapes_row)
-  // and needs re-homing on every layout pass; the rest are flexi-only and
-  // are inserted here once, at construction (parametric buttons lazily,
-  // once the csp is known), and never moved again -- switching to classic
-  // just hides the whole toolbar (and everything in it) as a unit.
+  // masks_toolbar_row2: the parametric channel buttons
+  // (masks_param_channels_box), right-aligned. Every one of them is inserted
+  // here once, at construction (the parametric buttons lazily, once the csp
+  // is known), and never moved again.
   GtkWidget *masks_toolbar;
   GtkWidget *masks_toolbar_row1;
   GtkWidget *masks_toolbar_row2;
-  // masks_shapes_box: the shape buttons' shared home, re-homed as a unit
-  // between masks_shapes_row (classic) and masks_toolbar_row1 (flexi) by
-  // _masks_toolbar_place_shapes_box / _masks_apply_layout in blend_gui.c.
+  // masks_shapes_box: the shape buttons, wrapped as one group so
+  // masks_toolbar_row1 can space them as a unit.
   GtkWidget *masks_shapes_box;
   // the "blend mask" section header -- unrelated to the "mask elements" header
   // above. Reading order:

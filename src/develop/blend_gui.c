@@ -545,9 +545,11 @@ static void _box_set_visible(GtkBox *box, gboolean visible)
   gtk_revealer_set_reveal_child(revealer, visible);
 }
 
+
+
 // re-home a widget into a new parent (no-op if already there), preserving its
-// shown state. Used to share widgets between the classic and flexi mask
-// layouts.
+// shown state. Used by the panel host to move the whole flexi panel between
+// its possible homes (see masks_gui_panel_host.c)
 void _reparent_into(GtkWidget *w,
                     GtkWidget *parent,
                     const gboolean at_end,
@@ -574,36 +576,25 @@ void _reparent_into(GtkWidget *w,
   g_object_unref(w);
 }
 
-// masks_toolbar (see its field comment in blend.h) is a plain, fixed
-// two-row layout -- no dynamic wrap/reflow. Several dynamic approaches
-// (GtkFlowBox, destroy-and-rebuild rows, per-widget reflow driven by
-// "size-allocate") were each tried and rejected: GtkFlowBox's row/column
-// space-distribution model spaced items apart instead of packing them
-// tightly; destroying and recreating row GtkBoxes from inside a
-// size-allocate handler raced with GTK's own layout pass and left the
-// toolbar blank; and even a careful reflow-in-place scheme left several
-// icon-drawn buttons (togglebuttons/dtgtk buttons using a custom cairo
-// paint function, as opposed to plain-text GtkButtons) invisible until an
-// unrelated event forced a redraw, for reasons that didn't resolve after
-// several rounds of instrumentation. Row 1: add-group | shape buttons
-// (masks_shapes_box) | import. Row 2: parametric channel buttons
-// (masks_param_channels_box), centered. If the panel is made
-// extremely narrow, a row can clip -- that's preferable to any of the
-// above failure modes.
-static void _masks_toolbar_place_shapes_box(dt_iop_gui_blend_data_t *bd)
-{
-  _reparent_into(bd->masks_shapes_box, bd->masks_toolbar_row1, FALSE, FALSE);
-  // slot 2: add-group(0) stretch(1) [shapes_box] stretch(3) import(4)
-  gtk_box_reorder_child(GTK_BOX(bd->masks_toolbar_row1), bd->masks_shapes_box, 2);
-}
-
-// an expanding, zero-content spacer: grows with the box so button clusters
-// stay apart proportionally to the panel's width instead of hugging the left
-static void _toolbar_pack_stretch(GtkWidget *box)
+// an expanding, zero-content spacer: takes whatever width the row has left
+// over, so the runs of buttons either side of it are pushed apart
+static GtkWidget *_pack_stretch(GtkWidget *box)
 {
   GtkWidget *stretch = dt_gui_hbox();
   gtk_widget_show(stretch);
   dt_gui_box_add(box, dt_gui_expand(stretch));
+  return stretch;
+}
+
+// a fixed spacer that only separates two runs of buttons, without competing
+// for the row's slack: one icon wide, from .mask-row-gap in darktable.css
+static GtkWidget *_pack_gap(GtkWidget *box)
+{
+  GtkWidget *gap = dt_gui_hbox();
+  dt_gui_add_class(gap, "mask-row-gap");
+  gtk_widget_show(gap);
+  dt_gui_box_add(box, gap);
+  return gap;
 }
 
 // defined much further down (grouping shape rows / naming clusters); forward
@@ -1364,55 +1355,38 @@ _masks_import_btn_press(GtkWidget *btn, GdkEventButton *ev, dt_iop_module_t *mod
   return TRUE;
 }
 
-// apply the mask toolbar layout for the current mode. Classic restores the master
-// two-row toolbar: header row [invert], shapes row [edit][shapes].
-// Flexi is compact: masks_toolbar takes over every "add an element" action
-// (see its field comment in blend.h), while "edit on canvas" and the
-// whole-mask "invert" toggle move up into the "mask elements" header. Every
-// shared widget is simply re-homed, so neither layout duplicates state.
-// Called on every blending update (idempotent).
-static void _masks_apply_layout(dt_iop_gui_blend_data_t *bd, const gboolean flexi)
+// lay the "elements" header out, once: the label, then runs of controls
+// separated by spacers -- what the mask is (operator, invert), how it is
+// edited (edit on canvas, solo edit), and whether it applies at all
+// (visibility). Only the first spacer takes the header's slack, so the
+// controls stay together on the right; "reset" is packed at the far right
+// (pack_end) and keeps a spacer clear of visibility, so a mis-click cannot
+// land on it. Every control here is a permanent child of the header
+static void _pack_masks_header(dt_iop_gui_blend_data_t *bd)
 {
-  if(!bd->masks_combo_row || !bd->masks_shapes_row || !bd->masks_toolbar
-     || !bd->masks_shapes_box)
-    return;
-  if(flexi)
-  {
-    _masks_toolbar_place_shapes_box(bd);
-    // the header's tool run, left to right after the "mask elements" label:
-    // bypass, edit on canvas, solo edit, invert. All well clear of "reset"
-    // (packed separately, at the header's far right), so a mis-click can't
-    // land on "reset" by mistake.
-    if(bd->masks_groups_header)
-    {
-      _reparent_into(bd->suppress, bd->masks_groups_header, FALSE, FALSE);
-      _reparent_into(bd->soloedit_mode, bd->masks_groups_header, FALSE, FALSE);
-      _reparent_into(bd->masks_edit, bd->masks_groups_header, FALSE, FALSE);
-      _reparent_into(bd->masks_polarity, bd->masks_groups_header, FALSE, FALSE);
-      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->suppress, 1);
-      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->masks_edit, 2);
-      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->soloedit_mode, 3);
-      gtk_box_reorder_child(GTK_BOX(bd->masks_groups_header), bd->masks_polarity, 4);
-    }
-    if(bd->suppress) gtk_widget_set_visible(bd->suppress, TRUE);
-    if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, TRUE);
-    gtk_widget_set_visible(bd->masks_toolbar, TRUE);
-    gtk_widget_set_visible(bd->masks_combo_row, FALSE);
-    gtk_widget_set_visible(bd->masks_shapes_row, FALSE);
-  }
-  else
-  {
-    _reparent_into(bd->masks_polarity, bd->masks_combo_row, TRUE, FALSE);
-    _reparent_into(bd->masks_edit, bd->masks_shapes_row, FALSE, FALSE);
-    _reparent_into(bd->masks_shapes_box, bd->masks_shapes_row, FALSE, FALSE);
-    // keep "edit" leftmost, the shapes box right of it
-    gtk_box_reorder_child(GTK_BOX(bd->masks_shapes_row), bd->masks_edit, 0);
-    if(bd->suppress) gtk_widget_set_visible(bd->suppress, FALSE);
-    if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, FALSE);
-    gtk_widget_set_visible(bd->masks_toolbar, FALSE);
-    gtk_widget_set_visible(bd->masks_combo_row, TRUE);
-    gtk_widget_set_visible(bd->masks_shapes_row, TRUE);
-  }
+  if(!bd->masks_groups_header) return;
+  GtkBox *hdr = GTK_BOX(bd->masks_groups_header);
+  // the header is every one of these controls' only home
+  dt_gui_box_add(bd->masks_groups_header, bd->masks_root_op_box, bd->masks_polarity,
+                 bd->masks_edit, bd->soloedit_mode, bd->suppress);
+  // suppress and soloedit_mode carry no_show_all and are shown by the mask-mode
+  // update instead; these two are always on the header once it is up
+  gtk_widget_show(bd->masks_polarity);
+  gtk_widget_show(bd->masks_edit);
+  GtkWidget *slack = _pack_stretch(bd->masks_groups_header);
+  GtkWidget *gap[3];
+  for(int k = 0; k < 3; k++) gap[k] = _pack_gap(bd->masks_groups_header);
+  // ascending target order, so each reorder lands before the next one moves
+  // anything past it. The label keeps slot 0
+  gtk_box_reorder_child(hdr, slack, 1);
+  gtk_box_reorder_child(hdr, bd->masks_root_op_box, 2);
+  gtk_box_reorder_child(hdr, bd->masks_polarity, 3);
+  gtk_box_reorder_child(hdr, gap[0], 4);
+  gtk_box_reorder_child(hdr, bd->masks_edit, 5);
+  gtk_box_reorder_child(hdr, bd->soloedit_mode, 6);
+  gtk_box_reorder_child(hdr, gap[1], 7);
+  gtk_box_reorder_child(hdr, bd->suppress, 8);
+  gtk_box_reorder_child(hdr, gap[2], 9);
 }
 
 // per-row parametric mask editor: every parametric channel row owns its own
@@ -1586,10 +1560,8 @@ static void _masks_panel_apply_enabled_state(dt_iop_gui_blend_data_t *data,
   }
 
   // the rest are header controls. Sensitivity is set on the widgets
-  // themselves, not on the cluster holding them, both because the hamburger
-  // shares that cluster and because flexi re-homes masks_edit/masks_polarity
-  // between the header and the shapes row (see _masks_apply_layout) -- this
-  // way the state follows them wherever the layout puts them.
+  // themselves, not on the cluster holding them, because the hamburger shares
+  // that cluster and must stay usable while the mask is off.
   if(data->suppress) gtk_widget_set_sensitive(data->suppress, mask_enabled);
   const gboolean has_drawn = _module_has_drawn_shapes(data->module);
   if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, mask_enabled && has_drawn);
@@ -1697,7 +1669,9 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
                              show_flexi_ui && data->blendif_support);
     if(data->masks_groups_header)
       gtk_widget_set_visible(data->masks_groups_header, show_flexi_ui);
-    _masks_apply_layout(data, show_flexi_ui);
+    gtk_widget_set_visible(data->masks_toolbar, show_flexi_ui);
+    if(data->suppress) gtk_widget_set_visible(data->suppress, show_flexi_ui);
+    if(data->soloedit_mode) gtk_widget_set_visible(data->soloedit_mode, show_flexi_ui);
     gtk_widget_set_visible(GTK_WIDGET(data->masks_list_box), show_flexi_ui);
     // only for a live mask: with the mask off the list keeps whatever it last
     // held, greyed out, rather than being rebuilt from a group nothing is
@@ -1724,9 +1698,6 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->masks_shapes[n]), FALSE);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(data->masks_edit), FALSE);
     dt_masks_set_edit_mode(data->module, DT_MASKS_EDIT_OFF);
-    // restore classic homes so invert / edit on canvas don't linger in the mask
-    // elements header of the parametric/raster panels after leaving flexi
-    _masks_apply_layout(data, FALSE);
     _box_set_visible(data->masks_box, FALSE);
   }
   else if(data->masks_support)
@@ -16547,14 +16518,8 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     g_signal_connect(G_OBJECT(bd->masks_import_btn), "button-press-event",
                      G_CALLBACK(_masks_import_btn_press), module);
 
-    // ---- header row (classic two-row toolbar): the whole-mask "invert"
-    // toggle. In flexi this row is hidden by _masks_apply_layout (invert moves
-    // onto the "mask elements" header instead). Section-label styling = text
-    // with a line below, matching every other section header.
-    GtkWidget *hbox = dt_gui_hbox();
-    dt_gui_add_class(hbox, "dt_section_label");
-    bd->masks_combo_row = hbox;
-
+    // the whole-mask "invert" toggle, packed onto the "elements" header by
+    // _pack_masks_header below
     bd->masks_polarity =
       dt_iop_togglebutton_new(module, "blend`tools", N_("invert mask"), NULL,
                               G_CALLBACK(_blendop_masks_polarity_callback), FALSE, 0, 0,
@@ -16569,22 +16534,23 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // inverted, .mask-power-solo), so "invert mask" reads the same way those do
     // rather than giving no visual feedback at all when active.
     dt_gui_add_class(bd->masks_polarity, "mask-invert-toggle");
-    // classic home: right end of the combo row. In flexi it moves onto the "mask
-    // elements" header instead (see _masks_apply_layout).
-    gtk_box_pack_end(GTK_BOX(hbox), bd->masks_polarity, FALSE, FALSE, 0);
 
-    // ---- groups header (flexi-only): a section divider labelled "mask elements",
-    // with "edit on canvas" right after the label, and "invert"/"reset" on the far
-    // right (re-homed here by _masks_apply_layout / packed below). Section-label
-    // styling (text above, line below), like the other headers. The label does NOT
-    // expand, so "edit on canvas" sits immediately to its right; the line still
-    // spans the full width (the border is on the hbox, not the label).
+    // ---- the "elements" header: a section divider labelled "elements" that
+    // carries the whole-mask controls (see _pack_masks_header, which packs
+    // them once every one of them exists). Section-label styling (text above,
+    // line below), like the other headers. The label does NOT expand; the
+    // line still spans the full width (the border is on the hbox, not the
+    // label).
     GtkWidget *groups_label = dt_ui_label_new(_("elements"));
     gtk_widget_show(groups_label);
-    // spacing before "edit on canvas" (packed here later by _masks_apply_layout)
-    // so it doesn't sit flush against the label -- see .mask-elements-label
+    // spacing after the label, so the controls don't sit flush against it
+    // -- see .mask-elements-label
     dt_gui_add_class(groups_label, "mask-elements-label");
     GtkWidget *groups_hdr = dt_gui_hbox(groups_label);
+    // shares the toolbar rows' child spacing, so a run of buttons and a
+    // .mask-row-gap between two runs measure the same on the header as on
+    // the rows below it (see .masks-btn-row in darktable.css)
+    dt_gui_add_class(groups_hdr, "masks-btn-row");
     dt_gui_add_class(groups_hdr, "dt_section_label");
     gtk_widget_set_no_show_all(groups_hdr, TRUE);
     bd->masks_groups_header = groups_hdr;
@@ -16598,22 +16564,23 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // below has somewhere to go; the rest of its permanent (flexi-only)
     // children are appended further down, as each is built.
     GtkWidget *toolbar = dt_gui_vbox();
-    gtk_box_set_spacing(GTK_BOX(toolbar), DT_PIXEL_APPLY_DPI(3));
     gtk_widget_set_no_show_all(toolbar, TRUE);
     dt_gui_add_class(toolbar, "masks-toolbar");
     bd->masks_toolbar = toolbar;
     GtkWidget *toolbar_row1 = dt_gui_hbox();
-    gtk_box_set_spacing(GTK_BOX(toolbar_row1), DT_PIXEL_APPLY_DPI(3));
+    dt_gui_add_class(toolbar_row1, "masks-btn-row");
     gtk_widget_show(toolbar_row1);
     bd->masks_toolbar_row1 = toolbar_row1;
     dt_gui_box_add(toolbar, toolbar_row1);
     GtkWidget *toolbar_row2 = dt_gui_hbox();
-    gtk_box_set_spacing(GTK_BOX(toolbar_row2), DT_PIXEL_APPLY_DPI(3));
+    dt_gui_add_class(toolbar_row2, "masks-btn-row");
     gtk_widget_show(toolbar_row2);
     bd->masks_toolbar_row2 = toolbar_row2;
     dt_gui_box_add(toolbar, toolbar_row2);
 
-    // the mask's own operator: row 1, leftmost
+    // the mask's own operator: on the "elements" header, right after the
+    // label, where it reads as the operator of everything the header
+    // introduces (a group's own operator sits on its header the same way)
     bd->masks_root_op_box = _make_op_combo(&bd->masks_root_op, dtgtk_cairo_paint_masks_union,
                                            G_CALLBACK(_root_op_press));
     dt_gui_remove_class(bd->masks_root_op_box, "mask-op-combo");
@@ -16621,7 +16588,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     g_object_set_data(G_OBJECT(bd->masks_root_op), "module", module);
     // its icon follows the mask from the first panel build on (_root_op_update)
     gtk_widget_show(bd->masks_root_op_box);
-    dt_gui_box_add(toolbar_row1, bd->masks_root_op_box);
 
     // "add group": a plain "+" that opens the operator chooser (its icon is a
     // fixed add affordance, it never reflects the selection). Row 1, right
@@ -16642,23 +16608,19 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     gtk_widget_show(bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
 
-    // clusters are separated by a single expanding stretch so the gap grows
-    // with the panel instead of the buttons just sitting at the left edge.
-    // this one ends up on shapes_box's *left* once
-    // _masks_toolbar_place_shapes_box reorders shapes_box in between.
-    _toolbar_pack_stretch(toolbar_row1);
-    // the add-group button follows shapes_box, which is reordered in right
-    // before it (index 2)
+    // row 1's slack sits in front of everything, so its buttons keep together
+    // at the right edge and only the leading gap grows with the panel
+    _pack_stretch(toolbar_row1);
+
+    // the runs that add to the mask, each a fixed gap apart: add a group,
+    // add a shape, then import one from another module
     dt_gui_box_add(toolbar_row1, bd->masks_new_op_box);
+    _pack_gap(toolbar_row1);
 
-    // reserves row 1's position right after shapes_box (which does not exist
-    // as a toolbar child yet -- it starts out in masks_shapes_row, classic
-    // default -- and only moves here once flexi mode is entered; see
-    // _masks_toolbar_place_shapes_box). this stretch ends up on shapes_box's
-    // *right*.
-    _toolbar_pack_stretch(toolbar_row1);
-
-    // "import": row 1, rightmost, after the stretch that follows shapes_box
+    // reserves row 1's position for shapes_box, which does not exist as a
+    // toolbar child yet: it is built below and slotted in between these two
+    // gaps (see the reorder there)
+    _pack_gap(toolbar_row1);
     gtk_widget_show(bd->masks_import_btn);
     dt_gui_box_add(toolbar_row1, bd->masks_import_btn);
 
@@ -16708,15 +16670,13 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // header inside masks_list_box (built by _build_masks_list /
     // _pack_group_elements); there is no separate "elements" section.
 
-    // ---- shapes box: the shape-add buttons, wrapped so the whole group is
-    // re-homed as a unit between the classic shapes row and the flexi
-    // toolbar (see _masks_toolbar_place_shapes_box).
+    // ---- shapes box: the shape-add buttons, wrapped as one group so the
+    // toolbar row can space them as a unit (packed into toolbar_row1 below)
     GtkWidget *shapes_box = dt_gui_hbox();
     bd->masks_shapes_box = shapes_box;
 
-    // "edit on canvas": toggles the on-canvas editing overlay (the shape controls).
-    // classic puts it leftmost on the shapes row; flexi moves it onto the "groups"
-    // header. Created parentless and re-homed by _masks_apply_layout.
+    // "edit on canvas": toggles the on-canvas editing overlay (the shape
+    // controls). Packed onto the "elements" header by _pack_masks_header.
     bd->masks_edit = dt_iop_togglebutton_new(
       module, "blend`tools", N_("edit on canvas"),
       N_("edit on canvas in restricted mode (no moving or resizing of shapes)"),
@@ -16806,17 +16766,18 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_param_channels_inner = dt_gui_hbox();
     dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    // centered on its own row
-    _toolbar_pack_stretch(toolbar_row2);
+    // right-aligned on its own row
+    _pack_stretch(toolbar_row2);
     dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
-    _toolbar_pack_stretch(toolbar_row2);
 
-    // ---- shapes row (classic two-row toolbar): "show & edit elements" leftmost,
-    // then the shapes box. The initial (classic) home; _masks_apply_layout re-homes
-    // edit + shapes_box for flexi.
-    GtkWidget *abox = dt_gui_hbox();
-    bd->masks_shapes_row = abox;
-    dt_gui_box_add(abox, bd->masks_edit, shapes_box);
+    // the shape buttons take the slot reserved for them in row 1:
+    // stretch(0) add-group(1) gap(2) [shapes_box] gap(4) import(5)
+    gtk_widget_show(shapes_box);
+    dt_gui_box_add(toolbar_row1, shapes_box);
+    gtk_box_reorder_child(GTK_BOX(toolbar_row1), shapes_box, 3);
+
+    // every control the "elements" header carries now exists: lay it out
+    _pack_masks_header(bd);
 
     // per-shape composition list (the groups), populated by _build_masks_list()
     // whenever the module is in flexi-mask mode.
@@ -16827,15 +16788,11 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     gtk_widget_set_name(GTK_WIDGET(bd->masks_list_box), "masks-list-box");
     dt_gui_add_class(GTK_WIDGET(bd->masks_list_box), "masks-list"); // gap above the list
 
-    // layout: "mask elements" header → toolbar → group list → classic combo
-    // row → classic shapes row. The toolbar sits right under the header,
-    // above the group list, so a freshly added element's row is right below
-    // where it was added. _masks_apply_layout re-homes the shared widgets and
-    // toggles row visibility per mode, so classic shows the master two-row
-    // toolbar (combo row + shapes row) and flexi shows the header + toolbar +
-    // group list.
-    bd->masks_box = GTK_BOX(
-      dt_gui_vbox(groups_hdr, toolbar, GTK_WIDGET(bd->masks_list_box), hbox, abox));
+    // layout: toolbar -> "elements" header -> element list. The header
+    // introduces the list it sits on, and its whole-mask controls read as
+    // applying to the elements below it
+    bd->masks_box =
+      GTK_BOX(dt_gui_vbox(toolbar, groups_hdr, GTK_WIDGET(bd->masks_list_box)));
     _add_wrapped_box(blendw, bd->masks_box, "masks_drawn");
 
     bd->masks_inited = TRUE;
@@ -17186,7 +17143,8 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
                              show_flexi_ui && bd->blendif_support);
     if(bd->masks_groups_header)
       gtk_widget_set_visible(bd->masks_groups_header, show_flexi_ui);
-    _masks_apply_layout(bd, show_flexi_ui);
+    gtk_widget_set_visible(bd->masks_toolbar, show_flexi_ui);
+    if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, show_flexi_ui);
     gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), show_flexi_ui);
     _box_set_visible(bd->masks_box, TRUE);
     // (re)build the per-shape composition list for this module's group -- only
@@ -17205,10 +17163,6 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   else if(bd->masks_inited)
   {
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
-
-    // restore the classic homes so "invert" / "edit on canvas" never linger in the
-    // "mask elements" header of a parametric/raster-only panel after leaving flexi
-    _masks_apply_layout(bd, FALSE);
     _box_set_visible(bd->masks_box, FALSE);
   }
   else
@@ -17520,8 +17474,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // blending-tabs-embedded"); _masks_flexi_relocate toggles this off for
     // the two hosted positions, which already provide their own inset
     dt_gui_add_class(gbox, "blending-tabs-embedded");
-    // flexi re-homes the whole-mask "invert" + "show & edit elements" toggles into
-    // this header (see _masks_apply_layout)
+    // the blending tabs' own header; the panel can host it (see
+    // _masks_flexi_relocate)
     bd->masks_blend_header = gbox;
 
     GtkWidget *presets_button = bd->masks_options_btn =

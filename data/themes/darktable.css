@@ -1050,6 +1050,28 @@ dialog .sidebar row:selected:hover label,
   background-color: rgba(255, 255, 255, 0.20);
 }
 
+/* fixed separator between two runs of buttons in the masks toolbar and the
+   "elements" header: one icon wide, so the runs read as runs without
+   competing with the row's own expanding spacer for the leftover width */
+.mask-row-gap
+{
+  min-width: 4px;
+}
+
+/* the rows of buttons in the masks panel: the two toolbar rows and the
+   "elements" header. They all space their children the same way, so a run of
+   buttons and a .mask-row-gap between two runs measure the same on each */
+.masks-btn-row > *
+{
+  margin-right: 0px;
+}
+
+/* and the toolbar's two rows sit the same distance apart */
+.masks-toolbar > *
+{
+  margin-bottom: 3px;
+}
+
 /* a group's element rows and expanded clusters sit under their header with a subtle left rail */
 .mask-group-elements,
 .mask-cluster-elements
@@ -1059,8 +1081,8 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
-/* the mask's own group has no header: what it holds sits at the top of the
-   panel, not indented under anything */
+/* the mask's own group has no header of its own: what it holds sits at the top
+   of the panel, under the "elements" header, not indented under anything */
 .mask-root-elements
 {
   border-left-width: 0;
@@ -1566,7 +1588,7 @@ button.mask-lead-static
   box-shadow: none;
 }
 
-/* spacing between the add-shapes toolbar and the group / element lists */
+/* spacing between the "elements" header and the group / element lists */
 .masks-list
 {
   margin-top: 3px;
