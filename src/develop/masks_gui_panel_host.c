@@ -263,16 +263,22 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
 // The header's reading order is:
 //
 // Embedded (left):
-//   expander | caption | <space> | overlay | toggle
+//   expander | caption | <space> | overlay | edit | toggle
 //
 // Embedded (mirrored):
-//   caption | <space> | overlay | toggle | expander
+//   caption | <space> | overlay | edit | toggle | expander
 //
 // Utility and canvas positions:
-//   caption | <space> | overlay | toggle
+//   caption | <space> | overlay | edit | toggle
 //
-// with two controls on the right in every case: the mask overlay, and the mask
-// on/off toggle at the very end. The old preferences button is gone from all of
+// (in the utility position those three sit on the lib's own header, which
+// stands in for this one)
+//
+// with the same controls on the right in every case: the mask overlay, the
+// edit run (edit on canvas and solo edit, between two gaps, see
+// masks_header_edit_box), and the mask on/off toggle at the very end. They act
+// on the canvas, so they stay wherever the panel is hosted. The old
+// preferences button is gone from all of
 // them -- the blending options open on a right-click of the on/off toggle now
 // (see _blendop_mask_enable_right_click), the way guide settings hang off the
 // guides icon. The expander is embedded-only: the utility position already has
@@ -293,8 +299,12 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   _reparent_into(showmask, bd->masks_right_cluster, FALSE, FALSE);
   _reparent_into(toggle, bd->masks_right_cluster, FALSE, FALSE);
 
+  // the edit run comes back from the utility lib's header with the overlay
+  GtkWidget *edit = bd->masks_header_edit_box;
+  if(edit) _reparent_into(edit, bd->masks_right_cluster, FALSE, FALSE);
   gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), showmask, 0);
-  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, 1);
+  if(edit) gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), edit, 1);
+  gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, -1);
 
   // the expander belongs to the embedded position alone
   const gboolean show_pin = _masks_panel_position() == MASKS_PANEL_POS_EMBEDDED;
@@ -305,7 +315,7 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
     dt_gui_remove_class(pin, "flexi-pin-left");
     dt_gui_add_class(pin, "flexi-pin-right");
     _reparent_into(pin, bd->masks_right_cluster, FALSE, FALSE);
-    gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pin, 2);
+    gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), pin, -1);
   }
   else
   {
@@ -1047,6 +1057,14 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     {
       _reparent_into(bd->showmask, GTK_WIDGET(actions_box), FALSE, FALSE);
       gtk_widget_set_valign(bd->showmask, GTK_ALIGN_CENTER);
+      // the edit run follows the overlay, since this header replaces the
+      // panel's own (hidden below): edit on canvas and solo edit stay on the
+      // header wherever the panel is hosted
+      if(bd->masks_header_edit_box)
+      {
+        _reparent_into(bd->masks_header_edit_box, GTK_WIDGET(actions_box), FALSE, FALSE);
+        gtk_widget_set_valign(bd->masks_header_edit_box, GTK_ALIGN_CENTER);
+      }
       const gboolean is_mask_enabled = (module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
       gtk_widget_set_visible(bd->showmask, is_mask_enabled && !module->hide_enable_button);
       gtk_widget_show(GTK_WIDGET(actions_box));

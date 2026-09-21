@@ -34,12 +34,12 @@
 #include <sqlite3.h>
 
 // ---- group-layout presets --------------------------------------------------
-// A "layout" is just the skeleton of a flexi mask: for each group (real or
-// still-empty), its between-group operator, within-group combine mode, name and
-// opacity -- nothing else -- no shapes, no channel/raster elements. Captured/
-// applied as a plain array of _flexi_group_entry_t, one entry per group,
-// bottom-to-top (index 0 is the foundation group), matching the bottom-up
-// convention of grp->points.
+// A "layout" is the skeleton of a flexi mask: the mask's own group and the
+// groups nested in it, each with its within-group operator, name and opacity
+// -- nothing else: no shapes, no channel or raster elements. Captured and
+// applied as an array of _flexi_layout_node_t in pre-order, the mask's own
+// group first and every group's nested groups bottom-up after it, each naming
+// its holder by index.
 //
 // Presets are stored in the regular presets database table (reusing its schema
 // and INSERT/DELETE machinery directly) under a fixed, fake operation name that
@@ -50,108 +50,147 @@
 // params blob, which is not what a group-layout preset means (it never touches
 // mask elements, let alone the rest of a module's parameters).
 #define FLEXI_GROUP_PRESET_OP "flexi_mask_groups"
-// v1 stored a plain dt_masks_state_t per group (no opacity); v2 added opacity;
-// v3 added the group name. See _flexi_preset_list_load's version-gated blob
-// decoding.
-#define FLEXI_GROUP_PRESET_VERSION 3
+// v1-v3 stored a flat list of groups joined by between-group operators, which
+// masks no longer have (masks_revamp_nested_groups.md, Q8): those are not
+// listed any more. v4 stores the tree.
+#define FLEXI_GROUP_PRESET_VERSION 4
 
-// one captured/restored group: its between-group + within-group state bits, its
-// name, and its group opacity.
-typedef struct _flexi_group_entry_t
+// one group of a layout. Written to the database verbatim, as one blob of
+// these, so every field is fixed-size
+typedef struct _flexi_layout_node_t
 {
-  dt_masks_state_t state;
+  // within-group operator bits (DT_MASKS_STATE_WITHIN)
+  dt_masks_state_t within;
   float opacity;
   // same width as dt_masks_point_group_t.name, the group's marker's name.
-  // Inline rather than a pointer because the entry array is written to the
-  // database verbatim as one blob.
+  // Unused for the mask's own group, which is always "whole mask"
   char name[128];
-} _flexi_group_entry_t;
+  // index of the holding group's node, -1 for the mask's own group
+  int32_t parent;
+} _flexi_layout_node_t;
 
-// the v2 blob's element, kept for reading presets saved before names existed
-typedef struct _flexi_group_entry_v2_t
+// the groups nested in `list`'s groups, as nodes under `parent`, bottom-up
+static void _flexi_layout_capture_nested(GArray *out,
+                                         const dt_masks_form_t *list,
+                                         const int32_t parent,
+                                         const int depth)
 {
-  dt_masks_state_t state;
-  float opacity;
-} _flexi_group_entry_v2_t;
-
-// bottom-to-top snapshot of the module's group skeleton: one entry per group
-// marker. Caller frees the returned array.
-static _flexi_group_entry_t *_flexi_layout_capture(dt_iop_module_t *module, int *n_out)
-{
-  dt_masks_form_t *grp = _module_mask_group(module);
-  GArray *out = g_array_new(FALSE, FALSE, sizeof(_flexi_group_entry_t));
-
-  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
+  if(!list || depth > DT_MASKS_NESTING_MAX) return;
+  for(const GList *l = list->points; l; l = g_list_next(l))
   {
-    if(!_starts_group(l)) continue;
-    const dt_masks_point_group_t *marker = l->data;
-    _flexi_group_entry_t ent = {
-      .state = marker->state & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN),
-      .opacity = marker->group_opacity
-    };
-    g_strlcpy(ent.name, marker->name, sizeof(ent.name));
-    g_array_append_val(out, ent);
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *sub = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(!sub || sub == list || !(sub->type & DT_MASKS_GROUP)) continue;
+    // a nested group is one group: its marker heads its list
+    const dt_masks_point_group_t *marker = sub->points ? sub->points->data : NULL;
+    if(!marker || !dt_masks_point_is_marker(marker)) continue;
+    _flexi_layout_node_t node = { .within = marker->state & DT_MASKS_STATE_WITHIN,
+                                  .opacity = marker->group_opacity,
+                                  .parent = parent };
+    g_strlcpy(node.name, marker->name, sizeof(node.name));
+    g_array_append_val(out, node);
+    _flexi_layout_capture_nested(out, sub, (int32_t)out->len - 1, depth + 1);
   }
-  // a mask with no group form yet has the one group the panel shows for it
-  if(out->len == 0)
-  {
-    const _flexi_group_entry_t ent = { .state = DT_MASKS_STATE_UNION, .opacity = 1.0f };
-    g_array_append_val(out, ent);
-  }
-
-  *n_out = out->len;
-  return (_flexi_group_entry_t *)g_array_free(out, FALSE);
 }
 
-// replaces the module's whole mask -- elements and groups alike -- with empty
-// groups matching `entries` (same bottom-to-top encoding as capture). Never
-// asks for confirmation itself; callers that might be discarding elements
-// confirm first (see _flexi_preset_apply_confirmed).
+// the module's group skeleton, in pre-order (see _flexi_layout_node_t).
+// Caller frees the returned array
+static _flexi_layout_node_t *_flexi_layout_capture(dt_iop_module_t *module, int *n_out)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  GArray *out = g_array_new(FALSE, FALSE, sizeof(_flexi_layout_node_t));
+
+  // a mask with no group form yet has the one group the panel shows for it
+  const dt_masks_point_group_t *root =
+    grp && grp->points && dt_masks_point_is_marker(grp->points->data) ? grp->points->data
+                                                                       : NULL;
+  const _flexi_layout_node_t node = {
+    .within = root ? root->state & DT_MASKS_STATE_WITHIN : 0,
+    .opacity = root ? root->group_opacity : 1.0f,
+    .parent = -1
+  };
+  g_array_append_val(out, node);
+  _flexi_layout_capture_nested(out, grp, 0, 1);
+
+  *n_out = out->len;
+  return (_flexi_layout_node_t *)g_array_free(out, FALSE);
+}
+
+// replaces the module's whole mask -- elements and groups alike -- with the
+// empty groups of the layout `nodes`. Never asks for confirmation itself;
+// callers that might be discarding elements confirm first (see
+// _flexi_preset_apply_confirmed).
 static void
-_flexi_layout_apply(dt_iop_module_t *module, const _flexi_group_entry_t *entries, int n)
+_flexi_layout_apply(dt_iop_module_t *module, const _flexi_layout_node_t *nodes, int n)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   _masks_reset_mask_core(module);
-  dt_masks_form_t *grp = _module_flexi_group(module, NULL);
-  if(!grp || n <= 0) return;
-  // the reset left the mask's one empty group, which the layout replaces
-  g_list_free_full(grp->points, free);
-  grp->points = NULL;
-  for(int i = 0; i < n; i++)
+  dt_mask_id_t root_cid = INVALID_MASKID;
+  dt_masks_form_t *grp = _module_flexi_group(module, &root_cid);
+  if(!grp || n <= 0 || nodes[0].parent != -1) return;
+  // the reset left the mask's own group, empty: the layout's first node
+  dt_masks_point_group_t *root = grp->points ? grp->points->data : NULL;
+  if(!root || !dt_masks_point_is_marker(root)) return;
+  root->state = (root->state & ~DT_MASKS_STATE_WITHIN)
+                | (nodes[0].within & DT_MASKS_STATE_WITHIN);
+  root->group_opacity = nodes[0].opacity;
+
+  dt_mask_id_t *cids = g_new(dt_mask_id_t, n);
+  cids[0] = root->formid;
+  dt_mask_id_t first_nested = INVALID_MASKID;
+  for(int i = 1; i < n; i++)
   {
-    dt_masks_point_group_t *marker =
-      dt_masks_marker_new(darktable.develop->forms, grp, entries[i].state);
+    cids[i] = INVALID_MASKID;
+    // pre-order: a holder always comes before what it holds
+    const int32_t parent = nodes[i].parent;
+    if(parent < 0 || parent >= i || !dt_is_valid_maskid(cids[parent])) continue;
+    cids[i] = _model_nest_new_group(grp, nodes[i].within, cids[parent]);
+    dt_masks_point_group_t *marker = _group_point(grp, cids[i]);
     if(!marker) continue;
-    marker->group_opacity = entries[i].opacity;
-    g_strlcpy(marker->name, entries[i].name, sizeof(marker->name));
-    grp->points = g_list_append(grp->points, marker);
+    marker->group_opacity = nodes[i].opacity;
+    g_strlcpy(marker->name, nodes[i].name, sizeof(marker->name));
+    if(!dt_is_valid_maskid(first_nested)) first_nested = cids[i];
   }
-  dt_masks_group_ensure_marker(darktable.develop->forms, grp);
-  // give the panel an immediate, unambiguous starting point -- with more than
-  // one group, nothing would otherwise be selected until the user clicks one.
-  // Index 0 is the bottom (foundation) group
+  g_free(cids);
+
+  // start where the next element most likely goes: the bottom nested group,
+  // or the mask's own group when the layout nests none
   bd->panel_selected_formid = INVALID_MASKID;
-  bd->panel_selected_group_cid = ((dt_masks_point_group_t *)grp->points->data)->formid;
+  bd->panel_selected_group_cid =
+    dt_is_valid_maskid(first_nested) ? first_nested : root->formid;
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _build_masks_list(module);
   _refresh_canvas_edit(module);
 }
 
-// does the mask have elements an applied layout would discard?
-static gboolean _flexi_layout_has_content(dt_iop_module_t *module)
+// does `list` hold, at any depth, an element an applied layout would discard?
+// Its nested groups themselves are not: the layout replaces those anyway
+static gboolean _flexi_list_has_content(const dt_masks_form_t *list, const int depth)
 {
-  dt_masks_form_t *grp = _module_mask_group(module);
-  for(GList *l = grp ? grp->points : NULL; l; l = g_list_next(l))
-    if(!_starts_group(l)) return TRUE;
+  if(!list || depth > DT_MASKS_NESTING_MAX) return FALSE;
+  for(const GList *l = list->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(!f || f == list || !(f->type & DT_MASKS_GROUP)) return TRUE;
+    if(_flexi_list_has_content(f, depth + 1)) return TRUE;
+  }
   return FALSE;
 }
 
-// reads back every user-saved layout preset's name + entry array. Caller frees
+static gboolean _flexi_layout_has_content(dt_iop_module_t *module)
+{
+  return _flexi_list_has_content(_module_mask_group(module), 0);
+}
+
+// reads back every user-saved layout preset's name + node array. Caller frees
 // with _flexi_preset_list_free.
 typedef struct _flexi_preset_t
 {
   gchar *name;
-  _flexi_group_entry_t *entries;
+  _flexi_layout_node_t *nodes;
   int n;
 } _flexi_preset_t;
 
@@ -159,61 +198,24 @@ static GList *_flexi_preset_list_load(void)
 {
   GList *out = NULL;
   sqlite3_stmt *stmt;
+  // only the tree format: older presets describe a mask shape masks no longer
+  // have, and stay in the database unlisted
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "SELECT name, op_params, op_version FROM data.presets"
-                              " WHERE operation = ?1 AND writeprotect = 0 ORDER BY name",
+                              "SELECT name, op_params FROM data.presets"
+                              " WHERE operation = ?1 AND writeprotect = 0"
+                              "   AND op_version = ?2"
+                              " ORDER BY name",
                               -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, FLEXI_GROUP_PRESET_VERSION);
   while(sqlite3_step(stmt) == SQLITE_ROW)
   {
-    const int blob_size = sqlite3_column_bytes(stmt, 1);
-    const int version = sqlite3_column_int(stmt, 2);
-    _flexi_group_entry_t *entries = NULL;
-    int n = 0;
-    if(version >= 3)
-    {
-      // current format: a plain array of _flexi_group_entry_t
-      n = blob_size / (int)sizeof(_flexi_group_entry_t);
-      if(n > 0)
-      {
-        entries = malloc(n * sizeof(_flexi_group_entry_t));
-        memcpy(entries, sqlite3_column_blob(stmt, 1), n * sizeof(_flexi_group_entry_t));
-      }
-    }
-    else if(version == 2)
-    {
-      // v2: state + opacity, no name -- the groups come back unnamed
-      n = blob_size / (int)sizeof(_flexi_group_entry_v2_t);
-      if(n > 0)
-      {
-        const _flexi_group_entry_v2_t *old = sqlite3_column_blob(stmt, 1);
-        entries = calloc(n, sizeof(_flexi_group_entry_t));
-        for(int i = 0; i < n; i++)
-        {
-          entries[i].state = old[i].state;
-          entries[i].opacity = old[i].opacity;
-        }
-      }
-    }
-    else
-    {
-      // v1: a plain array of dt_masks_state_t, no opacity -- default to fully opaque
-      n = blob_size / (int)sizeof(dt_masks_state_t);
-      if(n > 0)
-      {
-        const dt_masks_state_t *old = sqlite3_column_blob(stmt, 1);
-        entries = calloc(n, sizeof(_flexi_group_entry_t));
-        for(int i = 0; i < n; i++)
-        {
-          entries[i].state = old[i];
-          entries[i].opacity = 1.0f;
-        }
-      }
-    }
-    if(!entries) continue;
+    const int n = sqlite3_column_bytes(stmt, 1) / (int)sizeof(_flexi_layout_node_t);
+    if(n <= 0) continue;
     _flexi_preset_t *p = malloc(sizeof(_flexi_preset_t));
     p->name = g_strdup((const gchar *)sqlite3_column_text(stmt, 0));
-    p->entries = entries;
+    p->nodes = malloc(n * sizeof(_flexi_layout_node_t));
+    memcpy(p->nodes, sqlite3_column_blob(stmt, 1), n * sizeof(_flexi_layout_node_t));
     p->n = n;
     out = g_list_append(out, p);
   }
@@ -225,7 +227,7 @@ static void _flexi_preset_free(gpointer data)
 {
   _flexi_preset_t *p = data;
   g_free(p->name);
-  free(p->entries);
+  free(p->nodes);
   free(p);
 }
 
@@ -235,7 +237,7 @@ static void _flexi_preset_list_free(GList *presets)
 }
 
 static void
-_flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry_t *entries, int n)
+_flexi_preset_save_to_db(const gchar *name, const _flexi_layout_node_t *nodes, int n)
 {
   sqlite3_stmt *stmt;
   // clang-format off
@@ -253,7 +255,7 @@ _flexi_preset_save_to_db(const gchar *name, const _flexi_group_entry_t *entries,
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 1, name, -1, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_TEXT(stmt, 2, FLEXI_GROUP_PRESET_OP, -1, SQLITE_TRANSIENT);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 3, FLEXI_GROUP_PRESET_VERSION);
-  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 4, entries, (int)(n * sizeof(_flexi_group_entry_t)),
+  DT_DEBUG_SQLITE3_BIND_BLOB(stmt, 4, nodes, (int)(n * sizeof(_flexi_layout_node_t)),
                              SQLITE_TRANSIENT);
   sqlite3_step(stmt);
   sqlite3_finalize(stmt);
@@ -276,7 +278,7 @@ static void _flexi_preset_delete_from_db(const gchar *name)
 // ever restores the group skeleton) -- confirm first, same as the plain reset
 // button, whenever there is anything to lose.
 static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
-                                          const _flexi_group_entry_t *entries,
+                                          const _flexi_layout_node_t *nodes,
                                           int n)
 {
   if(_flexi_layout_has_content(module)
@@ -285,78 +287,66 @@ static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
        _("this replaces the group layout and removes every shape "
          "currently in this mask. continue?")))
     return;
-  _flexi_layout_apply(module, entries, n);
+  _flexi_layout_apply(module, nodes, n);
 }
 
 
 // ---- built-in layouts ------------------------------------------------------
 // Listed above the user's own presets, and their names are reserved so a user
-// preset cannot shadow one. The last three exist to make classic masks
-// translate onto the panel in one click: classic composed its drawn shapes with
-// each other, its parametric channels with each other, and then multiplied the
-// two results together -- which here is a screened group of shapes intersected
-// with a multiplied group of channels.
+// preset cannot shadow one. One for each classic mask type, as the mask it
+// migrates to: classic combined its drawn shapes by union, multiplied its
+// parametric channels together, and multiplied the two results.
 typedef struct _flexi_group_spec_t
 {
-  dt_masks_state_t state; // between-group operator | within-group combine mode
-  const char *name;       // untranslated group name, NULL to leave it unnamed
+  dt_masks_state_t within; // within-group operator
+  const char *name;        // untranslated group name, NULL to leave it unnamed
+  int parent;              // holder's index, -1 for the mask's own group
 } _flexi_group_spec_t;
 
 typedef struct _flexi_builtin_t
 {
   const char *name;                  // untranslated preset name
-  const char *tooltip;               // untranslated, NULL for none
-  const _flexi_group_spec_t *groups; // bottom-to-top, as everywhere else here
+  const _flexi_group_spec_t *groups; // pre-order, as _flexi_layout_node_t
   int n;
 } _flexi_builtin_t;
 
-
-static const _flexi_group_spec_t _spec_ops3[] = { { DT_MASKS_STATE_UNION, NULL },
-                                                  { DT_MASKS_STATE_DIFFERENCE, NULL },
-                                                  { DT_MASKS_STATE_INTERSECTION, NULL } };
-
 static const _flexi_group_spec_t _spec_drawn[] = {
-  { DT_MASKS_STATE_UNION | DT_MASKS_STATE_SCREEN, N_("shapes") }
+  { 0, NULL, -1 }
 };
 
 static const _flexi_group_spec_t _spec_parametric[] = {
-  { DT_MASKS_STATE_UNION | DT_MASKS_STATE_WITHIN_MULTIPLY, N_("parametric") }
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, NULL, -1 }
 };
 
-// bottom-to-top: parametric is the foundation, shapes sits on top of it and
-// carries the between-group operator that joins the two
+// the shapes are the base the channels multiply into, as migration builds it
 static const _flexi_group_spec_t _spec_drawn_parametric[] = {
-  { DT_MASKS_STATE_UNION | DT_MASKS_STATE_WITHIN_MULTIPLY, N_("parametric") },
-  { DT_MASKS_STATE_INTERSECTION | DT_MASKS_STATE_SCREEN, N_("shapes") }
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, NULL, -1 },
+  { 0, N_("shapes"), 0 },
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, N_("parametric"), 0 }
 };
 
 static const _flexi_builtin_t _flexi_builtins[] = {
-  { N_("add + subtract + intersect"), NULL, _spec_ops3, G_N_ELEMENTS(_spec_ops3) },
-  { N_("drawn mask"), N_("one group of shapes, combined with each other by screen"),
-    _spec_drawn, G_N_ELEMENTS(_spec_drawn) },
-  { N_("parametric"),
-    N_("one group of parametric channels, combined with each other by multiply"),
-    _spec_parametric, G_N_ELEMENTS(_spec_parametric) },
-  { N_("drawn + parametric"),
-    N_("shapes above parametric channels, the two intersected -- how classic drawn"
-       " and parametric masks combined"),
-    _spec_drawn_parametric, G_N_ELEMENTS(_spec_drawn_parametric) }
+  { N_("drawn (classic)"), _spec_drawn, G_N_ELEMENTS(_spec_drawn) },
+  { N_("parametric (classic)"), _spec_parametric, G_N_ELEMENTS(_spec_parametric) },
+  { N_("drawn + parametric (classic)"), _spec_drawn_parametric,
+    G_N_ELEMENTS(_spec_drawn_parametric) }
 };
 
-// materializes one built-in into the entry array the apply path takes. Caller
+// materializes one built-in into the node array the apply path takes. Caller
 // frees. Group names are translated here rather than stored translated, since
-// the built-ins are static and the entries are not.
-static _flexi_group_entry_t *_flexi_builtin_entries(const _flexi_builtin_t *b)
+// the built-ins are static and the nodes are not.
+static _flexi_layout_node_t *_flexi_builtin_nodes(const _flexi_builtin_t *b)
 {
-  _flexi_group_entry_t *entries = calloc(b->n, sizeof(_flexi_group_entry_t));
+  _flexi_layout_node_t *nodes = calloc(b->n, sizeof(_flexi_layout_node_t));
   for(int i = 0; i < b->n; i++)
   {
-    entries[i].state = b->groups[i].state;
-    entries[i].opacity = 1.0f;
+    nodes[i].within = b->groups[i].within;
+    nodes[i].opacity = 1.0f;
+    nodes[i].parent = b->groups[i].parent;
     if(b->groups[i].name)
-      g_strlcpy(entries[i].name, _(b->groups[i].name), sizeof(entries[i].name));
+      g_strlcpy(nodes[i].name, _(b->groups[i].name), sizeof(nodes[i].name));
   }
-  return entries;
+  return nodes;
 }
 
 static void _flexi_preset_save_clicked(dt_iop_module_t *module)
@@ -377,9 +367,9 @@ static void _flexi_preset_save_clicked(dt_iop_module_t *module)
   else
   {
     int n = 0;
-    _flexi_group_entry_t *entries = _flexi_layout_capture(module, &n);
-    if(n > 0) _flexi_preset_save_to_db(name, entries, n);
-    free(entries);
+    _flexi_layout_node_t *nodes = _flexi_layout_capture(module, &n);
+    if(n > 0) _flexi_preset_save_to_db(name, nodes, n);
+    free(nodes);
   }
   g_free(name);
 }
@@ -395,9 +385,9 @@ static void _flexi_preset_builtin_action(GSimpleAction *action,
   if(idx >= 0 && idx < (int)G_N_ELEMENTS(_flexi_builtins))
   {
     const _flexi_builtin_t *b = &_flexi_builtins[idx];
-    _flexi_group_entry_t *entries = _flexi_builtin_entries(b);
-    _flexi_preset_apply_confirmed(module, entries, b->n);
-    free(entries);
+    _flexi_layout_node_t *nodes = _flexi_builtin_nodes(b);
+    _flexi_preset_apply_confirmed(module, nodes, b->n);
+    free(nodes);
   }
 }
 
@@ -417,7 +407,7 @@ static void _flexi_preset_user_action(GSimpleAction *action,
       _flexi_preset_t *preset = p->data;
       if(!g_strcmp0(preset->name, name))
       {
-        _flexi_preset_apply_confirmed(module, preset->entries, preset->n);
+        _flexi_preset_apply_confirmed(module, preset->nodes, preset->n);
         break;
       }
     }

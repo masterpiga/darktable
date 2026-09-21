@@ -356,6 +356,62 @@ static void _normalize_group(GList **forms, dt_masks_form_t *grp)
   dt_masks_group_mark_classic_runs(forms, grp);
 }
 
+/* Classic's whole-mask invert, DEVELOP_COMBINE_MASKS_POS, becomes the mask
+ * group's own "invert output" (DT_MASKS_STATE_OP_INVERT on its marker): in
+ * flexi the mask is one group, and that group's actions are the only
+ * whole-mask controls the panel offers.
+ *
+ * The two render the same while the group's opacity is 100%, which it always
+ * is here: classic has no group opacity and migration starts every group at
+ * 1.0 (_new_group_point). MASKS_POS inverts after that opacity, OP_INVERT
+ * before it; everything else (the group's refinement before, the module's
+ * feathering and details after) sits on the same side of both. The one
+ * difference left is a mask where nothing contributes at all (every member
+ * hidden): MASKS_POS turns classic's full fallback into an empty mask, while
+ * a group with nothing to invert is skipped, OP_INVERT and all.
+ *
+ * TRUE when `grp` holds a root marker, which is then inverted */
+static gboolean _invert_root(dt_masks_form_t *grp)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP) || !grp->points) return FALSE;
+  dt_masks_point_group_t *marker = grp->points->data;
+  if(!dt_masks_point_is_marker(marker)) return FALSE;
+  marker->state ^= DT_MASKS_STATE_OP_INVERT;
+  return TRUE;
+}
+
+// is group `id` a member of some group in `forms`? Classic lets one module's
+// mask hold another's whole group, which flexi cannot express (only shapes are
+// linked between masks): inverting such a group's marker would invert it
+// inside the other mask as well, so its MASKS_POS stays where it is
+static gboolean _group_is_nested(GList *forms, const dt_mask_id_t id)
+{
+  for(const GList *l = forms; l; l = g_list_next(l))
+  {
+    const dt_masks_form_t *f = l->data;
+    if(!(f->type & DT_MASKS_GROUP)) continue;
+    for(const GList *p = f->points; p; p = g_list_next(p))
+    {
+      const dt_masks_point_group_t *pt = p->data;
+      if(!dt_masks_point_is_marker(pt) && pt->formid == id) return TRUE;
+    }
+  }
+  return FALSE;
+}
+
+// moves `bp`'s MASKS_POS onto the root marker of the mask it names in
+// `forms` (see _invert_root). The bit is cleared only once the marker has
+// taken it, so this runs once per params/forms pair however often it is
+// called, and a mask whose group is not in `forms` keeps rendering inverted
+static void _move_polarity_to_root(GList *forms, dt_develop_blend_params_t *bp)
+{
+  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return;
+  if(!(bp->mask_combine & DEVELOP_COMBINE_MASKS_POS)) return;
+  if(!dt_is_valid_maskid(bp->mask_id) || _group_is_nested(forms, bp->mask_id)) return;
+  if(_invert_root(dt_masks_get_from_id_ext(forms, bp->mask_id)))
+    bp->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
+}
+
 /* Queue a reused classic drawn group for the normalization above, and do it
  * once now.
  *
@@ -733,6 +789,10 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
   dt_masks_group_mark_classic_runs(&module->dev->forms, grp);
+  // the composite-level invert (see the end of this function), on the group
+  // before it is persisted: this path never reaches the normalization that
+  // moves it for the others (_move_polarity_to_root)
+  if(incl != inv) _invert_root(grp);
   _persist_form(module, grp, history_num);
 
   _clear_toplevel_blendif(n);
@@ -743,20 +803,14 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
   // *after* the per-channel computation, inverting the whole result (see
   // e.g. dt_develop_blendif_rgb_jzczhz_make_mask() in
   // blendif_rgb_jzczhz.c: `mask = opacity * (1 - mask)` vs `mask = opacity *
-  // mask`). That composite-level invert goes on the module's own
-  // DEVELOP_COMBINE_MASKS_POS (dt_develop_blend_process()'s post-fold check
-  // in blend.c, applied once to the whole rendered group) rather than any
-  // one channel's own membership -- inverting a single channel before the
-  // product is not the same as inverting the product itself. This bit is
-  // never read by _parametric_get_mask_roi() (parametric.c)'s own scratch
-  // copy of blend_params -- unlike DEVELOP_COMBINE_INV/_INCL, no
-  // blendif_*_make_mask() variant ever tests DEVELOP_COMBINE_MASKS_POS -- so
-  // there is no risk of inheriting it a second time here. INCL and INV turn
-  // out to be interchangeable at this final step too -- toggling either one
-  // alone inverts the classic result, and toggling both together cancels
-  // back to normal -- so this is driven by their XOR, not INV alone.
+  // mask`). That composite-level invert goes on the whole group, as its
+  // "invert output" (set above, before the group is persisted), rather than
+  // on any one channel's own membership -- inverting a single channel before
+  // the product is not the same as inverting the product itself. INCL and
+  // INV turn out to be interchangeable at this final step too -- toggling
+  // either one alone inverts the classic result, and toggling both together
+  // cancels back to normal -- so this is driven by their XOR, not INV alone.
   n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
-  if(incl != inv) n->mask_combine |= DEVELOP_COMBINE_MASKS_POS;
 }
 
 // DEVELOP_MASK_RASTER: one group holding one DT_MASKS_RASTER element,
@@ -1102,6 +1156,12 @@ static void _dispatch(dt_iop_module_t *module,
   // path, so this can only ever add a bit that was already implicitly in
   // effect, never change behavior).
   n->mask_mode |= DEVELOP_MASK_ENABLED;
+
+  // the whole-mask invert onto the mask group, now that the group has its
+  // marker. Only where nothing re-reads the forms afterwards: on the
+  // darkroom-load path dt_masks_read_masks_history() replaces them, so
+  // dt_masks_normalize_flexi_groups() does it there, per history item
+  if(history_num < 0) _move_polarity_to_root(module->dev->forms, n);
 }
 
 // a queued dt_masks_migrate_classic_to_flexi() that needs real form
@@ -1311,6 +1371,115 @@ static void _sync_forms_to_history(dt_develop_t *dev)
    migration would have applied to that state had it been the current one, and
    its params have already been rewritten to say FLEXI. Leaving it is the
    half-migrated state we know to be wrong. */
+/* The params a module renders with at history position `limit`: its last
+   item below it. NULL when it has none there, and it then renders its defaults */
+static dt_develop_blend_params_t *_params_at(GList *history,
+                                             const dt_iop_module_t *module,
+                                             const int limit)
+{
+  dt_develop_blend_params_t *bp = NULL;
+  int k = 0;
+  for(GList *l = history; l && k < limit; l = g_list_next(l), k++)
+  {
+    dt_dev_history_item_t *h = l->data;
+    if(h->module == module && h->blend_params) bp = h->blend_params;
+  }
+  return bp;
+}
+
+// can the whole-mask invert of `bp`, rendered with `forms` at position
+// `limit`, move onto its mask group? Not when another module renders the same
+// group at that position, nor when some mask nests it (_group_is_nested):
+// either way its marker is not this module's alone
+static gboolean _polarity_movable(dt_develop_t *dev,
+                                  GList *forms,
+                                  const dt_develop_blend_params_t *bp,
+                                  const int limit)
+{
+  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return FALSE;
+  if(!dt_is_valid_maskid(bp->mask_id)) return FALSE;
+  if(!dt_masks_get_from_id_ext(forms, bp->mask_id)) return FALSE;
+  if(_group_is_nested(forms, bp->mask_id)) return FALSE;
+  int users = 0;
+  for(GList *m = dev->iop; m; m = g_list_next(m))
+  {
+    const dt_develop_blend_params_t *other = _params_at(dev->history, m->data, limit);
+    if(other && (other->mask_mode & DEVELOP_MASK_FLEXI) && other->mask_id == bp->mask_id)
+      users++;
+  }
+  return users == 1;
+}
+
+// inverts the mask group `bp` names in `forms`, if `bp` carries MASKS_POS and
+// it can move there. `bp` is left alone: _move_history_polarity clears it once
+// every tree rendered with it has been inverted
+static void _invert_root_for(dt_develop_t *dev,
+                             GList *forms,
+                             const dt_develop_blend_params_t *bp,
+                             const int limit)
+{
+  if(!bp || !(bp->mask_combine & DEVELOP_COMBINE_MASKS_POS)) return;
+  if(_polarity_movable(dev, forms, bp, limit))
+    _invert_root(dt_masks_get_from_id_ext(forms, bp->mask_id));
+}
+
+/* Move the whole-mask invert of every stored state onto its mask group (see
+   _invert_root), on the darkroom-load path.
+
+   A forms snapshot and the params it renders with are not stored together:
+   each history item holds its module's params, and only some items hold a
+   snapshot, which then serves every position up to the next one. Moving the
+   invert item by item missed exactly that: a module whose last item carries
+   no snapshot kept MASKS_POS nowhere and inverted nothing. So each tree is
+   inverted by the params that render with it:
+
+   - the live tree, by each module's params at history_end. Export renders it
+     straight after this load without popping the history (dt_dev_load_image
+     in dt_imageio_export_with_flags), with the pipe taking each module's
+     params from its items, so this is the state that has to be exact
+   - every stored snapshot, by the params at the end of the span it serves
+     (at history_end for the current one), which is where undoing onto it
+     lands
+
+   and MASKS_POS then goes from every item rendered with an inverted tree. A
+   module that toggled its invert between two snapshots, with no snapshot in
+   between, renders one side of that toggle inverted wrongly, as undoing to
+   such a position always could. A mask group that is not the module's alone
+   keeps MASKS_POS instead (see _polarity_movable). */
+static void _move_history_polarity(dt_develop_t *dev)
+{
+  const int n = g_list_length(dev->history);
+  dt_dev_history_item_t **items = g_new0(dt_dev_history_item_t *, MAX(n, 1));
+  int k = 0;
+  for(GList *l = dev->history; l; l = g_list_next(l)) items[k++] = l->data;
+
+  for(GList *m = dev->iop; m; m = g_list_next(m))
+    _invert_root_for(dev, dev->forms, _params_at(dev->history, m->data, dev->history_end),
+                     dev->history_end);
+
+  for(int i = 0; i < n; i++)
+  {
+    if(!items[i]->forms) continue;
+    int next = i + 1;
+    while(next < n && !items[next]->forms) next++;
+    const int limit = i < dev->history_end ? MIN(next, dev->history_end) : next;
+    for(GList *m = dev->iop; m; m = g_list_next(m))
+      _invert_root_for(dev, items[i]->forms, _params_at(dev->history, m->data, limit), limit);
+  }
+
+  // clear the bit where the tree it renders with took it, so that tree was
+  // the one inverted; elsewhere it keeps inverting on its own
+  const dt_dev_history_item_t *owner = NULL;
+  for(int j = 0; j < n; j++)
+  {
+    if(items[j]->forms) owner = items[j];
+    dt_develop_blend_params_t *bp = items[j]->blend_params;
+    if(owner && _polarity_movable(dev, owner->forms, bp, j + 1))
+      bp->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
+  }
+  g_free(items);
+}
+
 static void _normalize_history_item(dt_dev_history_item_t *h)
 {
   if(!h->forms || !h->blend_params) return;
@@ -1341,6 +1510,10 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
   _sync_forms_to_history(dev);
   for(GList *l = dev->history; l; l = g_list_next(l))
     _normalize_history_item(l->data);
+
+  // after the sync above, which gave the owner item its own copy of the tree:
+  // the live tree and that copy are inverted separately, once each
+  _move_history_polarity(dev);
 
   // only on a load that actually migrated -- the queue is populated by
   // migration alone. An already-flexi edit reaches here with nothing queued and
