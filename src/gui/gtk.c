@@ -4288,9 +4288,14 @@ static gboolean _flexi_sliver_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
   {
     if(_flexi_shape_highlighted()) return FALSE;
     const gboolean point_right = !_flexi_sliver_is_right(ui, w);
+    const GtkStateFlags state = gtk_style_context_get_state(ctx);
+
+    // both glyphs go to a group first, so they can be outlined as one shape:
+    // they sit over the picture, and a light patch there swallows them
+    cairo_push_group(cr);
 
     GdkRGBA fg;
-    gtk_style_context_get_color(ctx, gtk_style_context_get_state(ctx), &fg);
+    gtk_style_context_get_color(ctx, state, &fg);
     gdk_cairo_set_source_rgba(cr, &fg);
 
     // s is the arrow's width and half its height, giving the same 1:2 wedge the
@@ -4318,6 +4323,38 @@ static gboolean _flexi_sliver_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
     cairo_rel_line_to(cr, dir * s, -s);
     cairo_close_path(cr);
     cairo_fill(cr);
+
+    cairo_pattern_t *glyphs = cairo_pop_group(cr);
+
+    // the outline is the glyphs dilated by outline-width in eight directions,
+    // themed via #flexi-halo's outline-color and outline-width (outline-style
+    // must not be none, or GTK computes the width as 0)
+    GdkRGBA *outline = NULL;
+    int ow = 0;
+    gtk_style_context_get(ctx, state, "outline-color", &outline, "outline-width", &ow, NULL);
+    if(outline && ow > 0 && outline->alpha > 0.0)
+    {
+      cairo_push_group(cr);
+      cairo_set_source_rgb(cr, outline->red, outline->green, outline->blue);
+      for(int dy = -1; dy <= 1; dy++)
+        for(int dx = -1; dx <= 1; dx++)
+        {
+          if(!dx && !dy) continue;
+          cairo_save(cr);
+          cairo_translate(cr, dx * ow, dy * ow);
+          cairo_mask(cr, glyphs);
+          cairo_restore(cr);
+        }
+      // painted opaque and faded as a whole, so the overlapping passes do not
+      // stack up where they cross
+      cairo_pop_group_to_source(cr);
+      cairo_paint_with_alpha(cr, outline->alpha);
+    }
+    if(outline) gdk_rgba_free(outline);
+
+    cairo_set_source(cr, glyphs);
+    cairo_paint(cr);
+    cairo_pattern_destroy(glyphs);
   }
   return FALSE;
 }

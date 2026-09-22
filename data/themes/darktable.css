@@ -2940,6 +2940,11 @@ button.flexi-toolbar-panel:checked
   background-color: transparent;
   min-width: 26px;
   min-height: 10px;
+  /* the outline _flexi_sliver_draw puts round the icon and arrow, so they stay
+     visible over light patches of the picture */
+  outline-style: solid; /* the global outline-style: none makes GTK compute the width as 0 */
+  outline-color: alpha(@bg_color, 0.85);
+  outline-width: 1px;
 }
 
 #flexi-halo.flexi-halo-left
