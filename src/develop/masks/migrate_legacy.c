@@ -349,11 +349,40 @@ static void _prune_noop_duplicate_refs(GList *forms, dt_masks_form_t *grp)
   g_hash_table_destroy(seen);
 }
 
-static void _normalize_group(GList **forms, dt_masks_form_t *grp)
+// every group some module renders as its mask, live or at any position of the
+// history. A nested group one of them names is shared, so converting the mask
+// that nests it must not move settings onto it (dt_masks_group_mark_classic_runs)
+static GHashTable *_module_mask_ids(const dt_develop_t *dev)
+{
+  GHashTable *ids = g_hash_table_new(NULL, NULL);
+  if(!dev) return ids;
+  for(const GList *m = dev->iop; m; m = g_list_next(m))
+  {
+    const dt_develop_blend_params_t *bp = ((const dt_iop_module_t *)m->data)->blend_params;
+    if(bp && dt_is_valid_maskid(bp->mask_id))
+      g_hash_table_add(ids, GINT_TO_POINTER(bp->mask_id));
+  }
+  for(const GList *h = dev->history; h; h = g_list_next(h))
+  {
+    const dt_develop_blend_params_t *bp = ((const dt_dev_history_item_t *)h->data)->blend_params;
+    if(bp && dt_is_valid_maskid(bp->mask_id))
+      g_hash_table_add(ids, GINT_TO_POINTER(bp->mask_id));
+  }
+  return ids;
+}
+
+static void _mark_classic_runs(const dt_develop_t *dev, GList **forms, dt_masks_form_t *grp)
+{
+  GHashTable *roots = _module_mask_ids(dev);
+  dt_masks_group_mark_classic_runs(forms, grp, roots);
+  g_hash_table_destroy(roots);
+}
+
+static void _normalize_group(const dt_develop_t *dev, GList **forms, dt_masks_form_t *grp)
 {
   _repair_base_case_overwrite(*forms, grp, 0);
   _prune_noop_duplicate_refs(*forms, grp);
-  dt_masks_group_mark_classic_runs(forms, grp);
+  _mark_classic_runs(dev, forms, grp);
 }
 
 /* Classic's whole-mask invert, DEVELOP_COMBINE_MASKS_POS, becomes the mask
@@ -432,7 +461,7 @@ static void _queue_group_split(dt_iop_module_t *module, const dt_mask_id_t mask_
 {
   if(!module->dev || !dt_is_valid_maskid(mask_id)) return;
 
-  _normalize_group(&module->dev->forms, dt_masks_get_from_id(module->dev, mask_id));
+  _normalize_group(module->dev, &module->dev->forms, dt_masks_get_from_id(module->dev, mask_id));
 
   const gpointer key = GINT_TO_POINTER(mask_id);
   if(!g_list_find(module->dev->pending_flexi_group_splits, key))
@@ -788,7 +817,7 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
   for(GList *l = param_forms; l; l = g_list_next(l))
     _persist_form(module, l->data, history_num);
   g_list_free(param_forms);
-  dt_masks_group_mark_classic_runs(&module->dev->forms, grp);
+  _mark_classic_runs(module->dev, &module->dev->forms, grp);
   // the composite-level invert (see the end of this function), on the group
   // before it is persisted: this path never reaches the normalization that
   // moves it for the others (_move_polarity_to_root)
@@ -862,7 +891,7 @@ static void _migrate_raster(dt_iop_module_t *module,
   dt_masks_point_group_t *pt = _new_group_point(raster_form->formid, state);
   pt->parentid = grp->formid;
   grp->points = g_list_append(grp->points, pt);
-  dt_masks_group_mark_classic_runs(&module->dev->forms, grp);
+  _mark_classic_runs(module->dev, &module->dev->forms, grp);
 
   _persist_form(module, raster_form, history_num);
   _persist_form(module, grp, history_num);
@@ -1479,7 +1508,7 @@ static void _move_history_polarity(dt_develop_t *dev)
   g_free(items);
 }
 
-static void _normalize_history_item(dt_dev_history_item_t *h)
+static void _normalize_history_item(const dt_develop_t *dev, dt_dev_history_item_t *h)
 {
   if(!h->forms || !h->blend_params) return;
   if(!(h->blend_params->mask_mode & DEVELOP_MASK_FLEXI)) return;
@@ -1488,7 +1517,7 @@ static void _normalize_history_item(dt_dev_history_item_t *h)
   dt_masks_form_t *grp = dt_masks_get_from_id_ext(h->forms, h->blend_params->mask_id);
   if(!grp) return;
 
-  _normalize_group(&h->forms, grp);
+  _normalize_group(dev, &h->forms, grp);
 }
 
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
@@ -1510,7 +1539,7 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 
   for(GList *l = dev->pending_flexi_group_splits; l; l = g_list_next(l))
   {
-    _normalize_group(&dev->forms, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)));
+    _normalize_group(dev, &dev->forms, dt_masks_get_from_id(dev, GPOINTER_TO_INT(l->data)));
   }
 
   // The live tree onto the item that owns it, so the current state is stored
@@ -1521,7 +1550,7 @@ void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
   // being covered twice costs nothing.
   _sync_forms_to_history(dev);
   for(GList *l = dev->history; l; l = g_list_next(l))
-    _normalize_history_item(l->data);
+    _normalize_history_item(dev, l->data);
 
   // after the sync above, which gave the owner item its own copy of the tree:
   // the live tree and that copy are inverted separately, once each

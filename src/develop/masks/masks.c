@@ -1343,14 +1343,17 @@ static void _fold_classic_list(GList **forms, dt_masks_form_t *grp, GHashTable *
     if(live && seeded)
     {
       const int op = _combine_op(pt->state);
-      if(!cur.op)
-        cur.op = op;
-      else if(op != cur.op)
+      // a flexi edit stored before markers set its own run boundaries
+      // (group_start), which are groupings of their own even where the
+      // operator does not change
+      if(pt->group_start || (cur.op && op != cur.op))
       {
         g_array_append_val(runs, cur);
         cur.op = op;
         cur.members = NULL;
       }
+      else if(!cur.op)
+        cur.op = op;
     }
     seeded |= live;
     cur.members = g_list_append(cur.members, pt);
@@ -1378,6 +1381,14 @@ static void _fold_classic_list(GList **forms, dt_masks_form_t *grp, GHashTable *
       mk->formid = _run_marker_id(*forms, grp->formid, head);
       grp->points = g_list_append(NULL, mk);
     }
+    // classic broadcast a group-scope refinement onto every member of the run
+    // and read it off the run head. It is the new group's own now, so it moves
+    // to the group's marker before _plain_element drops it from the members
+    const dt_masks_point_group_t *run_head = r->members ? r->members->data : NULL;
+    dt_masks_point_group_t *into_mk = into->points ? into->points->data : NULL;
+    if(run_head && into_mk && run_head->refinement.enabled == DT_MASKS_REFINE_GROUP)
+      into_mk->refinement = run_head->refinement;
+
     if(prev) into->points = g_list_append(into->points, _synth_ref(prev->formid, into->formid));
     for(GList *m = r->members; m; m = g_list_next(m))
     {
@@ -1571,14 +1582,23 @@ static int _ref_count(GList *forms, const dt_mask_id_t fid)
   return n;
 }
 
+// 1 when a module renders group `fid` as its mask, a use no group reference
+// counts: `roots` holds every such id (dt_masks_group_mark_classic_runs)
+static int _root_uses(GHashTable *roots, const dt_mask_id_t fid)
+{
+  return roots && g_hash_table_contains(roots, GINT_TO_POINTER(fid)) ? 1 : 0;
+}
+
 // Within one mask a group has one parent: the panel keys a group's rows on its
 // id, and editing one place of it would edit the other. Classic can hold the
 // same nested group twice, so each reference past the first gets a copy. With
-// `classic_elsewhere`, a classic group another form refers to as well gets a
-// copy too, since converting it moves this reference's settings onto it
+// `classic_elsewhere`, a classic group another form refers to as well, or a
+// module renders as its mask, gets a copy too, since converting it moves this
+// reference's settings onto it
 static gboolean _unshare_nested(GList **forms,
                                 dt_masks_form_t *grp,
                                 GHashTable *seen,
+                                GHashTable *roots,
                                 const int depth,
                                 const gboolean classic_elsewhere)
 {
@@ -1593,14 +1613,15 @@ static gboolean _unshare_nested(GList **forms,
        || (child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
       continue;
     if(g_hash_table_contains(seen, GINT_TO_POINTER(child->formid))
-       || (classic_elsewhere && !_has_marker(child) && _ref_count(*forms, child->formid) > 1))
+       || (classic_elsewhere && !_has_marker(child)
+           && _ref_count(*forms, child->formid) + _root_uses(roots, child->formid) > 1))
     {
       child = _copy_group(forms, child, grp->formid);
       pt->formid = child->formid;
       changed = TRUE;
     }
     g_hash_table_add(seen, GINT_TO_POINTER(child->formid));
-    changed |= _unshare_nested(forms, child, seen, depth + 1, classic_elsewhere);
+    changed |= _unshare_nested(forms, child, seen, roots, depth + 1, classic_elsewhere);
   }
   return changed;
 }
@@ -1684,6 +1705,7 @@ static gboolean _fold_nested_refs(GList *forms,
                                   dt_masks_form_t *grp,
                                   GHashTable *classic,
                                   GHashTable *reachable,
+                                  GHashTable *roots,
                                   const int depth)
 {
   if(depth > DT_MASKS_NESTING_MAX) return FALSE;
@@ -1696,14 +1718,17 @@ static gboolean _fold_nested_refs(GList *forms,
     if(!child || child == grp || !(child->type & DT_MASKS_GROUP)
        || (child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
       continue;
-    changed |= _fold_nested_refs(forms, child, classic, reachable, depth + 1);
+    changed |= _fold_nested_refs(forms, child, classic, reachable, roots, depth + 1);
 
     const gboolean inverted = (pt->state & DT_MASKS_STATE_INVERSE) != 0;
     if(pt->opacity == 1.0f && !inverted) continue;
     if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
     if(pt->refinement.enabled != DT_MASKS_REFINE_OFF) continue;
     dt_masks_point_group_t *mk = _sole_marker(child);
-    if(!mk || _live_refs(forms, child->formid, classic, reachable) != 1) continue;
+    if(!mk
+       || _live_refs(forms, child->formid, classic, reachable)
+            + _root_uses(roots, child->formid) != 1)
+      continue;
     if(!_has_visible_member(forms, child)) continue;
     if(inverted && mk->group_opacity != 1.0f) continue;
 
@@ -1947,6 +1972,21 @@ static gboolean _is_module_mask(const dt_mask_id_t fid)
   return FALSE;
 }
 
+// the id of every group some module renders as its mask, the set
+// _fold_nested_refs takes as `roots`
+static GHashTable *_module_masks(void)
+{
+  GHashTable *ids = g_hash_table_new(NULL, NULL);
+  const dt_develop_t *dev = darktable.develop;
+  for(const GList *m = dev ? dev->iop : NULL; m; m = g_list_next(m))
+  {
+    const dt_iop_module_t *mod = m->data;
+    if(mod->blend_params && dt_is_valid_maskid(mod->blend_params->mask_id))
+      g_hash_table_add(ids, GINT_TO_POINTER(mod->blend_params->mask_id));
+  }
+  return ids;
+}
+
 // can the group `child` give its members away? Only when nothing else refers
 // to it, since every other holder would lose them too
 static gboolean _is_sole_owner_of(GList *forms, const dt_masks_form_t *child)
@@ -2080,13 +2120,14 @@ gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp)
 {
   if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
   GHashTable *none = g_hash_table_new(NULL, NULL);
+  GHashTable *roots = _module_masks();
   gboolean changed = FALSE;
   // each pass can open the way for another: a dropped empty group leaves a
   // one-member wrapper, a collapsed wrapper a group that splices
   for(int pass = 0; pass <= DT_MASKS_NESTING_MAX; pass++)
   {
     gboolean again = _drop_empty_groups(forms, grp, 0);
-    again |= _fold_nested_refs(forms, grp, none, none, 0);
+    again |= _fold_nested_refs(forms, grp, none, none, roots, 0);
     again |= _splice_sole_refs(forms, grp, 0);
     again |= _collapse_single_members(forms, grp, 0);
     again |= _collapse_plain_wrappers(forms, grp, 0);
@@ -2094,16 +2135,19 @@ gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp)
     changed |= again;
     if(!again) break;
   }
+  g_hash_table_destroy(roots);
   g_hash_table_destroy(none);
   return changed;
 }
 
-gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp)
+gboolean dt_masks_group_mark_classic_runs(GList **forms,
+                                          dt_masks_form_t *grp,
+                                          GHashTable *roots)
 {
   // a classic group gets one reference before it is converted, since its
   // reference's settings move onto it
   GHashTable *seen = g_hash_table_new(NULL, NULL);
-  gboolean changed = _unshare_nested(forms, grp, seen, 0, TRUE);
+  gboolean changed = _unshare_nested(forms, grp, seen, roots, 0, TRUE);
   g_hash_table_destroy(seen);
 
   GHashTable *classic = g_hash_table_new(NULL, NULL);
@@ -2112,7 +2156,7 @@ gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp)
   changed |= _convert_classic(forms, grp, NULL, 0, made);
 
   seen = g_hash_table_new(NULL, NULL);
-  changed |= _unshare_nested(forms, grp, seen, 0, FALSE);
+  changed |= _unshare_nested(forms, grp, seen, roots, 0, FALSE);
   g_hash_table_destroy(seen);
 
   // only a tree converted here: a flexi-authored one keeps what its author set
@@ -2121,7 +2165,7 @@ gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp)
     _splice_nested(forms, grp, made, classic, 0);
     GHashTable *reachable = g_hash_table_new(NULL, NULL);
     _collect_reachable(*forms, grp, reachable, 0);
-    _fold_nested_refs(*forms, grp, classic, reachable, 0);
+    _fold_nested_refs(*forms, grp, classic, reachable, roots, 0);
     g_hash_table_destroy(reachable);
     _collapse_single_members(*forms, grp, 0);
     _simplify_unions(*forms, grp, 0);
