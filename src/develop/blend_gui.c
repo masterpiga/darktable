@@ -4089,6 +4089,156 @@ gboolean _model_nest_group(dt_masks_form_t *grp,
   return _wrap_group(grp, sowner, src, downer, _group_last_node(dst)->data);
 }
 
+// a new nested group folding with `within`, holding nothing but its marker
+static dt_masks_form_t *_new_empty_nested_group(const dt_masks_state_t within)
+{
+  dt_masks_form_t *sub = _new_nested_group();
+  if(!sub) return NULL;
+  sub->points = g_list_append(NULL, dt_masks_marker_new(darktable.develop->forms, sub,
+                                                        within & DT_MASKS_STATE_WITHIN));
+  return sub;
+}
+
+// the marker of an empty group on top of the list of `owner`: what "compose"
+// gives the user to fill
+static dt_mask_id_t _add_empty_on_top(dt_masks_form_t *owner)
+{
+  dt_masks_form_t *e = _new_empty_nested_group(0);
+  if(!e) return INVALID_MASKID;
+  _add_nested_ref(owner, g_list_last(owner->points), e);
+  return ((dt_masks_point_group_t *)e->points->data)->formid;
+}
+
+dt_mask_id_t _model_compose(dt_masks_form_t *grp,
+                            const dt_masks_point_group_t *pt,
+                            const dt_masks_state_t within)
+{
+  dt_masks_form_t *owner = NULL;
+  GList *node = _point_node_at(grp, pt, &owner, 0);
+  // the paths of an AI object move as the object, and a list of several
+  // groups is only in an edit stored before one-group masks
+  if(!node || !(owner->type & DT_MASKS_GROUP) || (owner->type & DT_MASKS_OBJECT)
+     || (_starts_group(node) && _list_group_count(owner) != 1))
+    return INVALID_MASKID;
+
+  if(owner == grp && _starts_group(node))
+  {
+    // the mask's own group stays the mask: its members and settings move into
+    // a new group at its bottom, and it starts over with `within` and none
+    if(_form_nesting(grp, 0) > DT_MASKS_NESTING_MAX) return INVALID_MASKID;
+    dt_masks_point_group_t *root = node->data;
+    dt_masks_form_t *sub = _new_nested_group();
+    if(!sub) return INVALID_MASKID;
+    dt_masks_point_group_t *mk = malloc(sizeof(dt_masks_point_group_t));
+    memcpy(mk, root, sizeof(dt_masks_point_group_t));
+    mk->formid = dt_masks_new_marker_id(darktable.develop->forms);
+    mk->parentid = sub->formid;
+    // a bypassed mask offers no compose, and the bypass is the mask's anyway
+    mk->state &= ~DT_MASKS_STATE_OP_DISABLE;
+    GList *members = node->next;
+    node->next = NULL;
+    if(members) members->prev = NULL;
+    for(GList *l = members; l; l = g_list_next(l))
+      ((dt_masks_point_group_t *)l->data)->parentid = sub->formid;
+    sub->points = g_list_prepend(members, mk);
+    root->state = (root->state & ~(DT_MASKS_STATE_WITHIN | DT_MASKS_STATE_OP_INVERT))
+                  | (within & DT_MASKS_STATE_WITHIN);
+    root->group_opacity = 1.0f;
+    memset(&root->refinement, 0, sizeof(root->refinement));
+    _add_nested_ref(grp, node, sub);
+    return _add_empty_on_top(grp);
+  }
+
+  // a group is composed through the reference its holder has to it
+  if(_starts_group(node))
+  {
+    const dt_mask_id_t gid = owner->formid;
+    node = _point_node_owner(grp, gid, &owner);
+    if(!node) return INVALID_MASKID;
+  }
+  const dt_masks_point_group_t *ref = node->data;
+  const int depth = _list_depth(grp, owner) + 1;
+  const int below = _form_nesting(dt_masks_get_from_id(darktable.develop, ref->formid), 0);
+  if(depth + MAX(1, below) > DT_MASKS_NESTING_MAX) return INVALID_MASKID;
+
+  // the reference moves as it is, keeping its own settings, into a new group
+  // that takes its place and applies nothing
+  dt_masks_form_t *wrap = _new_empty_nested_group(within);
+  if(!wrap) return INVALID_MASKID;
+  _add_nested_ref(owner, node, wrap);
+  owner->points = g_list_remove_link(owner->points, node);
+  ((dt_masks_point_group_t *)node->data)->parentid = wrap->formid;
+  wrap->points = g_list_concat(wrap->points, node);
+  return _add_empty_on_top(wrap);
+}
+
+// the one member of the mask's own group, when that is a plain nested group
+// nothing else holds, or NULL
+static dt_masks_form_t *_sole_held_group(dt_masks_form_t *grp, dt_masks_point_group_t **ref)
+{
+  if(!grp || !grp->points || !dt_masks_point_is_marker(grp->points->data)
+     || !grp->points->next || grp->points->next->next)
+    return NULL;
+  *ref = grp->points->next->data;
+  dt_masks_form_t *sub = dt_masks_get_from_id(darktable.develop, (*ref)->formid);
+  if(!sub || sub == grp || !(sub->type & DT_MASKS_GROUP)
+     || (sub->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)) || !sub->points
+     || !dt_masks_point_is_marker(sub->points->data))
+    return NULL;
+  // another module's mask keeps its members whoever holds it
+  for(GList *m = darktable.develop->iop; m; m = g_list_next(m))
+  {
+    const dt_iop_module_t *mod = m->data;
+    if(mod->blend_params && mod->blend_params->mask_id == sub->formid) return NULL;
+  }
+  int refs = 0;
+  for(GList *f = darktable.develop->forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *g = f->data;
+    if(!(g->type & DT_MASKS_GROUP)) continue;
+    for(GList *l = g->points; l; l = g_list_next(l))
+      if(((dt_masks_point_group_t *)l->data)->formid == sub->formid) refs++;
+  }
+  return refs == 1 ? sub : NULL;
+}
+
+gboolean _model_hoist_sole_group(dt_masks_form_t *grp, dt_masks_refinement_t *whole)
+{
+  dt_masks_point_group_t *ref = NULL;
+  dt_masks_form_t *sub = _sole_held_group(grp, &ref);
+  if(!sub || _list_group_count(sub) != 1) return FALSE;
+  dt_masks_point_group_t *root = grp->points->data;
+  dt_masks_point_group_t *mk = sub->points->data;
+  // the mask's own group applies nothing, and the reference nothing
+  if((root->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT))
+     || root->group_opacity != 1.0f || root->refinement.enabled != DT_MASKS_REFINE_OFF
+     || ref->opacity != 1.0f || ref->refinement.enabled != DT_MASKS_REFINE_OFF
+     || (ref->state & (DT_MASKS_STATE_INVERSE | DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+    return FALSE;
+  // the mask's own group takes no name, and the group's bypass has nowhere to go
+  if(mk->name[0] || (mk->state & DT_MASKS_STATE_OP_DISABLE)) return FALSE;
+  // the group's refinement becomes the whole mask's, which runs after the
+  // mask's invert and opacity where the group's ran before its own
+  const gboolean refined = mk->refinement.enabled != DT_MASKS_REFINE_OFF;
+  if(refined
+     && (whole->enabled || (mk->state & DT_MASKS_STATE_OP_INVERT) || mk->group_opacity != 1.0f))
+    return FALSE;
+
+  root->state = (root->state & ~(DT_MASKS_STATE_WITHIN | DT_MASKS_STATE_OP_INVERT))
+                | (mk->state & (DT_MASKS_STATE_WITHIN | DT_MASKS_STATE_OP_INVERT));
+  root->group_opacity = mk->group_opacity;
+  if(refined) *whole = mk->refinement;
+  free(ref);
+  grp->points = g_list_delete_link(grp->points, grp->points->next);
+  GList *members = sub->points->next;
+  sub->points->next = NULL;
+  if(members) members->prev = NULL;
+  for(GList *l = members; l; l = g_list_next(l))
+    ((dt_masks_point_group_t *)l->data)->parentid = grp->formid;
+  grp->points = g_list_concat(grp->points, members);
+  return TRUE;
+}
+
 // take the members of the group whose marker node is `marker` out of the
 // list, and the marker too with `with_marker`. Returns the members' ids,
 // bottom-up
@@ -11120,6 +11270,185 @@ static void _group_act_delete(GSimpleAction *action, GVariant *param, gpointer u
   if(module) _group_delete(module, cid);
 }
 
+// the module's own ("whole mask") refinement, as a group holds one
+static dt_masks_refinement_t _refine_of_module(dt_iop_module_t *module)
+{
+  const dt_develop_blend_params_t *bp = module->blend_params;
+  dt_masks_refinement_t r = { 0 };
+  r.enabled = _refine_global_is_set(module) ? DT_MASKS_REFINE_GROUP : DT_MASKS_REFINE_OFF;
+  r.details = bp->details;
+  r.feathering_guide = bp->feathering_guide;
+  r.feathering_radius = bp->feathering_radius;
+  r.blur_radius = bp->blur_radius;
+  r.brightness = bp->brightness;
+  r.contrast = bp->contrast;
+  return r;
+}
+
+// "compose": the element or group of `pt` goes into a new group folding with
+// `within`, under a new empty group, which is selected so the next shape
+// drawn lands in it
+static void _compose(dt_iop_module_t *module,
+                     const dt_masks_point_group_t *pt,
+                     const dt_masks_state_t within)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(!grp || !pt) return;
+  const gboolean whole = dt_masks_point_is_marker(pt) && pt->formid == _mask_group_cid(module);
+  dt_masks_clear_form_gui(darktable.develop);
+  const dt_mask_id_t eid = _model_compose(grp, pt, within);
+  if(!dt_is_valid_maskid(eid))
+  {
+    dt_control_log(_("this group is nested as deep as groups go"));
+    return;
+  }
+
+  // the whole mask's refinement refined what is now the group at its bottom,
+  // and goes with it: the whole mask starts over. A refinement that group
+  // already holds, which only a migrated edit can give the mask's own group,
+  // leaves it where it is
+  gboolean had_details = FALSE;
+  if(whole && _refine_global_is_set(module))
+  {
+    const dt_masks_point_group_t *ref = grp->points->next->data;
+    dt_masks_form_t *sub = dt_masks_get_from_id(darktable.develop, ref->formid);
+    dt_masks_point_group_t *mk = sub ? sub->points->data : NULL;
+    if(mk && mk->refinement.enabled == DT_MASKS_REFINE_OFF)
+    {
+      mk->refinement = _refine_of_module(module);
+      had_details = _refine_clear_global(module);
+    }
+  }
+
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = eid;
+  // the list rebuild keeps the refinement controls on their old scope
+  _flexi_refine_follow_selection(bd);
+  dt_print(DT_DEBUG_MASKS, "[masks] compose %d within=0x%x, empty group %d", pt->formid,
+           within, eid);
+  // with the module: a moved whole-mask refinement is in its blend params
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+  if(had_details) // see _refine_clear_global
+  {
+    dt_dev_reprocess_all(module->dev);
+    dt_control_queue_redraw();
+  }
+  _queue_masks_list_rebuild(module);
+  _refresh_canvas_edit(module);
+}
+
+// the group form whose tree compose and simplify restructure for group `cid`:
+// the mask's own, or a nested group's. NULL for an AI object, whose paths
+// move as one
+static dt_masks_form_t *_restructurable_group(dt_iop_module_t *module, const dt_mask_id_t cid)
+{
+  dt_masks_form_t *grp = _module_mask_group(module);
+  dt_masks_form_t *g = cid == _mask_group_cid(module) ? grp : _model_nested_group_of(grp, cid);
+  return g && (g->type & DT_MASKS_GROUP) && !(g->type & DT_MASKS_OBJECT) ? g : NULL;
+}
+
+// "simplify": make the tree under group `cid` shallower where that renders
+// the same mask (dt_masks_group_simplify). The whole mask also takes over a
+// lone group it holds
+static void _simplify(dt_iop_module_t *module, const dt_mask_id_t cid)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(!grp) return;
+  const gboolean whole = cid == _mask_group_cid(module);
+  dt_masks_form_t *target = _restructurable_group(module, cid);
+  if(!target) return;
+
+  dt_masks_clear_form_gui(darktable.develop);
+  dt_masks_refinement_t r = _refine_of_module(module);
+  const gboolean had_refine = r.enabled != DT_MASKS_REFINE_OFF;
+  gboolean changed = FALSE;
+  for(int pass = 0; pass <= DT_MASKS_NESTING_MAX; pass++)
+  {
+    gboolean again = dt_masks_group_simplify(darktable.develop->forms, target);
+    if(whole) again |= _model_hoist_sole_group(grp, &r);
+    changed |= again;
+    if(!again) break;
+  }
+  if(!changed)
+  {
+    dt_control_log(_("nothing to simplify"));
+    return;
+  }
+
+  // a hoisted group's refinement is the whole mask's now
+  if(!had_refine && r.enabled != DT_MASKS_REFINE_OFF)
+  {
+    dt_develop_blend_params_t *bp = module->blend_params;
+    bp->details = r.details;
+    bp->feathering_guide = r.feathering_guide;
+    bp->feathering_radius = r.feathering_radius;
+    bp->blur_radius = r.blur_radius;
+    bp->brightness = r.brightness;
+    bp->contrast = r.contrast;
+  }
+
+  bd->panel_selected_formid = INVALID_MASKID;
+  bd->panel_selected_group_cid = cid;
+  // a hoist moved a refinement into the whole mask's, which may be on screen
+  _flexi_refine_follow_selection(bd);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+  _queue_masks_list_rebuild(module);
+  _refresh_canvas_edit(module);
+}
+
+// the "compose" entry opening `compose`, which it takes
+static void _append_compose_submenu(GMenu *section, GMenu *compose)
+{
+  GMenuItem *it = g_menu_item_new_submenu(_("compose"), G_MENU_MODEL(compose));
+  g_menu_item_set_attribute(it, "tooltip", "s",
+                            _("use this as a building block for a larger mask, for example\n"
+                              "to subtract from it or to intersect it with something else:\n"
+                              "it goes into a new group of the chosen operator,\n"
+                              "with an empty group on top to draw into"));
+  g_menu_append_item(section, it);
+  g_object_unref(it);
+  g_object_unref(compose);
+}
+
+static void _group_act_compose(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  dt_mask_id_t cid;
+  dt_iop_module_t *module = _group_act_target(u, &cid);
+  if(module)
+    _compose(module, _group_point(_module_mask_group(module), cid),
+             (dt_masks_state_t)g_variant_get_int32(param));
+}
+
+static void _group_act_simplify(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  dt_mask_id_t cid;
+  dt_iop_module_t *module = _group_act_target(u, &cid);
+  if(module) _simplify(module, cid);
+}
+
+// the "compose" submenu: every operator but `current`, whose group composing
+// would only add one more member to. `keep_current` offers it anyway, for a
+// member past the base of a group folding in order: `a - (b - c)` is no
+// `a - b - c`
+static GMenu *_compose_menu(const char *action,
+                            const dt_masks_state_t current,
+                            const gboolean keep_current)
+{
+  GMenu *sub = g_menu_new();
+  for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
+  {
+    if(_within_modes[i].bit == (current & DT_MASKS_STATE_WITHIN) && !keep_current) continue;
+    GMenuItem *it = _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
+                                          _within_modes[i].tooltip, action,
+                                          _within_modes[i].bit);
+    g_menu_append_item(sub, it);
+    g_object_unref(it);
+  }
+  return sub;
+}
+
 static void _build_group_actions_menu(GtkWidget *anchor,
                                       dt_iop_module_t *module,
                                       const dt_mask_id_t cid,
@@ -11158,6 +11487,8 @@ static void _build_group_actions_menu(GtkWidget *anchor,
   GActionEntry action_entries[] =
   {
     { "invert_elems", _group_act_invert_elems, NULL, NULL },
+    { "compose",      _group_act_compose,      "i",  NULL },
+    { "simplify",     _group_act_simplify,     NULL, NULL },
     { "rename",       _group_act_rename,       NULL, NULL },
     { "merge_down",   _group_act_merge_down,   NULL, NULL },
     { "empty",        _group_act_empty,        NULL, NULL },
@@ -11188,6 +11519,18 @@ static void _build_group_actions_menu(GtkWidget *anchor,
     GMenu *sec_ops = g_menu_new();
     g_menu_append(sec_ops, _("invert output"), "masks_group_act.invert_output");
     g_menu_append(sec_ops, _("invert all elements"), "masks_group_act.invert_elems");
+    if(_restructurable_group(module, cid))
+    {
+      GMenu *compose = _compose_menu("masks_group_act.compose", marker->state, FALSE);
+      _append_compose_submenu(sec_ops, compose);
+      GMenuItem *simplify = g_menu_item_new(_("simplify"), "masks_group_act.simplify");
+      g_menu_item_set_attribute(simplify, "tooltip", "s",
+                                _("remove the groups inside this one that change nothing:\n"
+                                  "empty groups, groups holding a single element,\n"
+                                  "and groups using the operator of the group holding them"));
+      g_menu_append_item(sec_ops, simplify);
+      g_object_unref(simplify);
+    }
     g_menu_append_section(menu, _("mask operations"), G_MENU_MODEL(sec_ops));
     g_object_unref(sec_ops);
   }
@@ -12161,6 +12504,45 @@ static void _shape_act_delete(GSimpleAction *action, GVariant *param, gpointer u
   if(module) _delete_single_shape(module, id);
 }
 
+// the member point a shape actions menu acts on: the row's own, where it has one
+static const dt_masks_point_group_t *_shape_act_point(GtkWidget *anchor,
+                                                      dt_iop_module_t *module,
+                                                      const dt_mask_id_t id)
+{
+  const dt_masks_point_group_t *pt = g_object_get_data(G_OBJECT(anchor), "shape_act_point");
+  return pt ? pt : _group_point(_module_mask_group(module), id);
+}
+
+static void _shape_act_compose(GSimpleAction *action, GVariant *param, gpointer u)
+{
+  GtkWidget *anchor = GTK_WIDGET(u);
+  dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  if(darktable.gui->active_popover_menu)
+    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  if(module)
+    _compose(module, _shape_act_point(anchor, module, id),
+             (dt_masks_state_t)g_variant_get_int32(param));
+}
+
+// the "compose" submenu of member `pt`, or NULL where it cannot be composed:
+// a path of an AI object moves with the object
+static GMenu *_shape_compose_menu(dt_masks_form_t *grp, const dt_masks_point_group_t *pt)
+{
+  dt_masks_form_t *owner = NULL;
+  GList *node = pt ? _point_node_at(grp, pt, &owner, 0) : NULL;
+  if(!node || !(owner->type & DT_MASKS_GROUP) || (owner->type & DT_MASKS_OBJECT)) return NULL;
+  GList *marker = _group_marker_node(node);
+  const int within = marker ? ((dt_masks_point_group_t *)marker->data)->state & DT_MASKS_STATE_WITHIN
+                            : 0;
+  // composing the base with its group's operator adds a member, as it does
+  // anywhere in a group whose members fold in any order
+  const gboolean ordered =
+    within & (DT_MASKS_STATE_WITHIN_DIFFERENCE | DT_MASKS_STATE_WITHIN_EXCLUSION);
+  return _compose_menu("masks_shape_act.compose", within,
+                       ordered && marker && marker->next != node);
+}
+
 static void _build_shape_actions_menu(GtkWidget *anchor,
                                       dt_iop_module_t *module,
                                       const dt_mask_id_t id,
@@ -12205,6 +12587,7 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   {
     { "rename",      _shape_act_rename,      NULL, NULL },
     { "edit_source", _shape_act_edit_source, NULL, NULL },
+    { "compose",     _shape_act_compose,     "i",  NULL },
     { "unlink",      _shape_act_unlink,      NULL, NULL },
     { "edit_paths",  _shape_act_edit_paths,  NULL, NULL },
     { "delete",      _shape_act_delete,      NULL, NULL },
@@ -12232,6 +12615,8 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   {
     GMenu *sec_ops = g_menu_new();
     g_menu_append(sec_ops, _("invert"), "masks_shape_act.invert");
+    GMenu *compose = _shape_compose_menu(grp, pt);
+    if(compose) _append_compose_submenu(sec_ops, compose);
     g_menu_append_section(menu, _("mask operations"), G_MENU_MODEL(sec_ops));
     g_object_unref(sec_ops);
   }
