@@ -262,17 +262,13 @@ typedef enum dt_masks_badge_kind_t
 dt_masks_badge_kind_t _model_badge_kind(const float opacity, const gboolean is_noop);
 
 /** does an element row of this kind carry an expander chevron of its own?
-    `opacity_sliders` is "use sliders for opacity" as actually in effect (see
-    _model_opacity_sliders_in_effect), which is what gives a raster mask --
-    whose only property is opacity -- something to expand. */
+    `opacity_sliders` is "use sliders for opacity", which is what gives a
+    raster mask -- whose only property is opacity -- something to expand.
+    `props_subpanel` is "element properties in subpanel", which leaves only a
+    parametric row's in/out chevron. */
 gboolean _model_row_is_expandable(const dt_masks_type_t type,
-                                  const gboolean opacity_sliders);
-
-/** is "use sliders for opacity" actually in effect? It only takes hold while
-    "auto-expand selected" is on, which is what keeps the expanded panel
-    holding the slider open. */
-gboolean _model_opacity_sliders_in_effect(const gboolean auto_expand,
-                                          const gboolean use_sliders);
+                                  const gboolean opacity_sliders,
+                                  const gboolean props_subpanel);
 
 /** which element "auto-expand selected" keeps open: the selection if it can be
     expanded at all, else whatever was expanded last. Resolves the form's kind
@@ -320,7 +316,8 @@ dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
                                                  const gboolean in_used,
                                                  const gboolean out_used,
                                                  const gboolean boost_enabled,
-                                                 const gboolean opacity_slider_enabled);
+                                                 const gboolean opacity_slider_enabled,
+                                                 const gboolean props_subpanel);
 
 /** state transition decisions for the mask panel and corner icon */
 typedef struct dt_masks_panel_state_t
@@ -355,9 +352,23 @@ char *_model_masks_panel_header_markup(const char *module_name,
 /** the shape solo-edit mode should be isolating, given the panel's selection,
     or INVALID_MASKID if the mode must stand down */
 dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd);
-/** the shape the "shape properties in subpanel" section shows the editor of:
-    the selected element when it is a shape, else INVALID_MASKID */
-dt_mask_id_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd);
+/** what the "element properties in subpanel" section shows, and whose */
+typedef struct dt_masks_props_target_t
+{
+  /** the selected element, or else the selected group; INVALID_MASKID when
+      it has nothing to show there */
+  dt_mask_id_t id;
+  gboolean is_group;
+  /** a drawn shape's size, feather and the rest */
+  gboolean shape;
+  /** a full opacity slider, with "use sliders for opacity" */
+  gboolean opacity;
+  /** a parametric channel's boost factor, for a channel that has one */
+  gboolean boost;
+} dt_masks_props_target_t;
+
+dt_masks_props_target_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd,
+                                                  const gboolean opacity_sliders);
 
 /** the collapsible sections of the mask panel below the list. Each keeps one
     folded state, the same for every module and target */
@@ -366,12 +377,15 @@ typedef enum dt_masks_section_t
   DT_MASKS_SECTION_REFINE,
   DT_MASKS_SECTION_PROPS,
   DT_MASKS_SECTION_CONSUMERS,
+  /** the expander holding the properties and refinement of the selection */
+  DT_MASKS_SECTION_DETAILS,
   DT_MASKS_SECTION_COUNT
 } dt_masks_section_t;
 
-/** whether a section shows unfolded: its saved state, except that the shape
-    properties section opens while it holds the creation controls of a shape
-    being drawn, without that being saved */
+/** whether a section shows unfolded: its saved state, except that the
+    properties section, and the details expander holding it, open while it
+    holds the creation controls of a shape being drawn, without that being
+    saved */
 gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing);
 /** save a section's folded state, as a click on its toggle does */
 void _model_section_save(const dt_masks_section_t section, const gboolean expanded);
