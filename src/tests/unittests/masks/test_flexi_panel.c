@@ -474,12 +474,76 @@ static void test_expandability_ignores_the_non_kind_type_bits(void **state)
   assert_true(_model_row_is_expandable(DT_MASKS_CIRCLE | DT_MASKS_CLONE, FALSE));
 }
 
-static void test_collapse_refinements_preference_roundtrips(void **state)
+// ---------------------------------------------------------------------------
+// section fold states
+// ---------------------------------------------------------------------------
+
+// nothing saved yet: every section starts unfolded, from the defaults in
+// darktableconfig.xml
+static void test_sections_start_expanded(void **state)
+{
+  for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
+  {
+    assert_true(_model_section_expanded(s, FALSE));
+    assert_true(_model_section_expanded(s, TRUE));
+  }
+}
+
+// each section keeps its own state: folding one leaves the others alone
+static void test_sections_fold_independently(void **state)
+{
+  for(dt_masks_section_t folded = 0; folded < DT_MASKS_SECTION_COUNT; folded++)
+  {
+    _model_section_save(folded, FALSE);
+    for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
+      assert_int_equal(_model_section_expanded(s, FALSE), s != folded);
+    _model_section_save(folded, TRUE);
+    for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
+      assert_true(_model_section_expanded(s, FALSE));
+  }
+}
+
+// the state lives in the config, not in any module's panel, so it is the same
+// for every module and survives a restart
+static void test_section_state_is_one_config_key_each(void **state)
+{
+  _model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
+  _model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
+  _model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/refinements_collapsed"));
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/shape_properties_collapsed"));
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/consumers_collapsed"));
+
+  dt_conf_set_bool("plugins/darkroom/masks/consumers_collapsed", FALSE);
+  assert_true(_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, FALSE));
+}
+
+// drawing a shape opens its creation controls in a folded shape properties
+// section, and does not save that: once the drawing ends, the section folds
+// back
+static void test_drawing_opens_shape_properties_without_saving(void **state)
+{
+  _model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
+  assert_true(_model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
+  assert_false(_model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE));
+  assert_true(dt_conf_get_bool("plugins/darkroom/masks/shape_properties_collapsed"));
+}
+
+// drawing concerns the shape properties only
+static void test_drawing_leaves_the_other_sections_folded(void **state)
+{
+  _model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
+  _model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
+  assert_false(_model_section_expanded(DT_MASKS_SECTION_REFINE, TRUE));
+  assert_false(_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, TRUE));
+}
+
+// the removed "collapse refinements by default" option must not linger in an
+// old config and fold the refinements behind the user's back
+static void test_old_collapse_refinements_option_is_ignored(void **state)
 {
   dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default", TRUE);
-  assert_true(dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"));
-  dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default", FALSE);
-  assert_false(dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"));
+  assert_true(_model_section_expanded(DT_MASKS_SECTION_REFINE, FALSE));
 }
 
 // the panel's default operator for new groups is a string key; an unset or
@@ -782,7 +846,17 @@ int main(void)
                               _teardown),
     cmocka_unit_test_teardown(test_expandability_ignores_the_non_kind_type_bits,
                               _teardown),
-    cmocka_unit_test_setup_teardown(test_collapse_refinements_preference_roundtrips,
+    cmocka_unit_test_setup_teardown(test_sections_start_expanded,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_sections_fold_independently,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_section_state_is_one_config_key_each,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_drawing_opens_shape_properties_without_saving,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_drawing_leaves_the_other_sections_folded,
+                                    _conf_setup, _conf_teardown),
+    cmocka_unit_test_setup_teardown(test_old_collapse_refinements_option_is_ignored,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_default_operator_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
