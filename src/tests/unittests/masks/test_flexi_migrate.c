@@ -319,12 +319,84 @@ static void test_a_modifier_is_not_an_operator(void **state)
       }
       p = next;
     }
-    dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
+    dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
     assert_int_equal(_group_cid_of_form(grp, head->formid),
                      _group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
     above->state &= ~modifiers[m];
   }
+}
+
+// a flexi edit stored before markers bounds its runs with group_start, where
+// the operator need not change, and stores a group-scope refinement broadcast
+// on the run's members. The conversion has to keep the runs apart and move
+// the refinement onto the run's own group: merged or dropped, a refinement of
+// the first run only applies to the wrong pixels or to none
+static void test_a_group_break_keeps_its_run_and_refinement(void **state)
+{
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | u:3");
+  const dt_masks_refinement_t refine = { .enabled = DT_MASKS_REFINE_GROUP,
+                                         .blur_radius = 9.0f };
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    if(pt->formid == 1 || pt->formid == 2) pt->refinement = refine;
+  }
+
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
+
+  const dt_mask_id_t first = _group_cid_of_form(grp, 1);
+  const dt_mask_id_t second = _group_cid_of_form(grp, 3);
+  assert_int_equal(_group_cid_of_form(grp, 2), first);
+  assert_int_not_equal(first, second);
+
+  const dt_masks_point_group_t *mk = _group_point(grp, first);
+  assert_non_null(mk);
+  assert_int_equal(mk->refinement.enabled, DT_MASKS_REFINE_GROUP);
+  assert_float_equal(mk->refinement.blur_radius, 9.0f, 1e-6);
+  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(_group_point(grp, second)->refinement.enabled, DT_MASKS_REFINE_OFF);
+}
+
+// one module renders a classic group as its mask, another nests it at 35%
+// (integration test 0081). Converting the nesting mask moved the reference's
+// opacity onto the group itself, dimming the first module's mask too: a
+// module's own use counts as a reference, so the group is copied instead
+static void test_a_group_another_module_renders_keeps_its_settings(void **state)
+{
+  dt_masks_form_t *shared = flexi_build_classic("u:1,2");
+
+  dt_masks_form_t *other = calloc(1, sizeof(dt_masks_form_t));
+  other->formid = 3000;
+  other->type = DT_MASKS_GROUP;
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = shared->formid;
+  pt->parentid = other->formid;
+  pt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
+  pt->opacity = 0.35f;
+  pt->group_opacity = 1.0f;
+  other->points = g_list_append(NULL, pt);
+  flexi_dev.forms = g_list_append(flexi_dev.forms, other);
+
+  GHashTable *roots = g_hash_table_new(NULL, NULL);
+  g_hash_table_add(roots, GINT_TO_POINTER(shared->formid));
+  g_hash_table_add(roots, GINT_TO_POINTER(other->formid));
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, other, roots);
+  g_hash_table_destroy(roots);
+
+  // the group the first module renders carries none of the 35%
+  for(const GList *l = shared->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *p = l->data;
+    if(dt_masks_point_is_marker(p))
+      assert_float_equal(p->group_opacity, 1.0f, 1e-6);
+    else
+      assert_float_equal(p->opacity, 1.0f, 1e-6);
+  }
+
+  flexi_dev.forms = g_list_remove(flexi_dev.forms, other);
+  g_list_free_full(other->points, free);
+  free(other);
 }
 
 // defensive: a mask_id that resolves to nothing must still migrate cleanly --
@@ -1929,6 +2001,9 @@ int main(void)
     cmocka_unit_test_teardown(test_classic_head_without_an_operator_keeps_its_group,
                               _teardown),
     cmocka_unit_test_teardown(test_a_modifier_is_not_an_operator, _teardown),
+    cmocka_unit_test_teardown(test_a_group_break_keeps_its_run_and_refinement, _teardown),
+    cmocka_unit_test_teardown(test_a_group_another_module_renders_keeps_its_settings,
+                              _teardown),
     cmocka_unit_test_teardown(test_every_history_snapshot_is_normalized, _teardown),
     cmocka_unit_test_teardown(test_drawn_with_dangling_mask_id, _teardown),
     cmocka_unit_test_teardown(test_parametric_only_synthesizes_a_parametric_form, _teardown),

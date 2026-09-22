@@ -1111,13 +1111,18 @@ gboolean dt_masks_object_ensure_marker(GList *forms, dt_masks_form_t *obj);
     own members wherever that renders the same mask; a flexi-authored one is
     left as it is. A nested group the mask still holds twice gets a copy for
     each reference past the first, so a group has one parent within a mask.
-    TRUE if anything changed */
-gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp);
+    `roots` holds the id of every group a module renders as its mask, or is
+    NULL: a nested group one of them names is shared, so the settings of the
+    reference to it stay on that reference. TRUE if anything changed */
+gboolean dt_masks_group_mark_classic_runs(GList **forms,
+                                          dt_masks_form_t *grp,
+                                          GHashTable *roots);
 /** make the tree of flexi group `grp` shallower where that renders the same
     mask: empty nested groups go, a nested group folding with its holder's
     operator is replaced by its members, a group applying nothing to its one
     member by that member, and so on. A group with a name, or settings that
-    change its result, stays. TRUE if anything changed */
+    change its result, stays, and one another module renders as its mask
+    keeps its own settings. TRUE if anything changed */
 gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp);
 /** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when
     given, is set to the group form whose list holds it. NULL if none does */
