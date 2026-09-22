@@ -701,6 +701,28 @@ Still to do:
     three classic mask types as they migrate: drawn (union), parametric
     (multiply), drawn + parametric (multiply over "shapes" and "parametric"
     groups). Older flat presets (v1-v3) are no longer listed.
+  - compose and simplify (2026-09-22), under "mask operations" in the group
+    and element actions menus. Compose (`_model_compose`) puts the element or
+    group into a new group of the chosen operator where it was, with a new
+    empty group on top, which gets selected so the next shape lands there.
+    The submenu leaves out the operator already in force (the group's own, or
+    for an element its group's), except difference/exclusion on an element
+    past the base, where `a - (b - c)` is a real edit. The mask's own group
+    cannot move: its members, operator, invert, opacity and group refinement
+    go into a new bottom group, the module-wide ("whole mask") refinement
+    moves onto that group's marker, and the whole mask starts neutral with
+    the new operator. Compose alone renders the same (an empty group is no
+    group). Simplify (`dt_masks_group_simplify`, masks.c) runs render-
+    preserving passes on the group's subtree until nothing changes: drop
+    unnamed empty groups, fold reference settings onto the marker, splice a
+    same-operator group referenced once (ordered ones only as the base),
+    collapse one-member groups (`_collapse_single_members`, plus
+    `_collapse_plain_wrappers` for a neutral group around a nested group),
+    and the union dedup passes. On the whole mask it also hoists a lone
+    neutral held group back (`_model_hoist_sole_group`), its refinement
+    returning to the module's when that stays render-equal. Named groups and
+    groups with settings stay. Not GUI-tried yet; the model is covered in
+    test_flexi_model.c (8 tests).
   - Known gap: drag-and-drop still carries the top-level-run code paths,
     unused by new-shape masks.
   Original proposal: Drop the between-group operator. Every group

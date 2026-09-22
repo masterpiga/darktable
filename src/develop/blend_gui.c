@@ -7359,6 +7359,19 @@ void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
 // cleared the moment the mouse moves elsewhere), this must survive the user
 // working anywhere else in the panel or canvas, so it lives in its own list,
 // recomputed here whenever solo state changes.
+// what solo edit leaves on the canvas: the isolated shape, or every member of
+// the isolated group
+static GList *_soloedit_formids(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !dt_is_valid_maskid(bd->soloedit_formid)) return NULL;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const dt_masks_point_group_t *pt = grp ? _group_point(grp, bd->soloedit_formid) : NULL;
+  if(pt && dt_masks_point_is_marker(pt))
+    return _selected_group_formids(grp, bd->soloedit_formid);
+  return g_list_prepend(NULL, GINT_TO_POINTER(bd->soloedit_formid));
+}
+
 static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -7367,8 +7380,7 @@ static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
   GList *ids = NULL;
   if(dt_is_valid_maskid(bd->solo_formid))
     ids = g_list_prepend(ids, GINT_TO_POINTER(bd->solo_formid));
-  if(dt_is_valid_maskid(bd->soloedit_formid))
-    ids = g_list_prepend(ids, GINT_TO_POINTER(bd->soloedit_formid));
+  ids = g_list_concat(ids, _soloedit_formids(module));
   if(bd->solo_group_key != 0)
   {
     dt_masks_form_t *grp = _module_mask_group(module);
@@ -7390,9 +7402,9 @@ static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
 static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd);
 
 // solo-edit is a mode rather than a per-element action: while it is on, canvas
-// editing follows the list selection, so only the selected shape's nodes and
-// handles are grabbable and clicking down the list walks the isolation along
-// with it. The state it drives (bd->soloedit_formid) and the way it is applied
+// editing follows the list selection, so only the selected shape, or the
+// shapes of the selected group, are shown and grabbable, and clicking down the
+// list walks the isolation along with it. The state it drives (bd->soloedit_formid) and the way it is applied
 // are unchanged -- this only replaces the trigger, so it goes through
 // _toggle_soloedit rather than setting the canvas up itself. The header toggle
 // is the whole indication that the mode is on; rows carry no solo-edit badge,
@@ -7405,20 +7417,25 @@ static gboolean _soloedit_mode_is_on(void)
 }
 
 // what the mode would isolate for the current selection: the selected element,
-// as long as it is a drawn shape. A parametric channel or a raster mask has no
-// canvas geometry of its own to isolate (same carve-out the menu item had), and
-// a group selection means "edit the whole group", which is the mode's own off
-// state anyway.
+// as long as it is a drawn shape, or the selected group, whose members are then
+// the only shapes left on the canvas. A parametric channel or a raster mask has
+// no canvas geometry of its own to isolate (same carve-out the menu item had).
+// The mask's own group holds every shape, so selecting it is the mode's own off
+// state.
 dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
 {
-  if(!_soloedit_mode_is_on() || !dt_is_valid_maskid(bd->panel_selected_formid))
-    return INVALID_MASKID;
+  if(!_soloedit_mode_is_on()) return INVALID_MASKID;
   // solo and solo-edit stay mutually exclusive: while something is soloed the
   // mode stands down rather than cancelling the solo behind the user's back
   // (_model_toggle_soloedit would clear it). It re-applies on the next
   // selection change once the solo is off.
   if(dt_is_valid_maskid(bd->solo_formid) || bd->solo_group_key != 0)
     return INVALID_MASKID;
+
+  const dt_mask_id_t cid = _explicit_group_cid(bd);
+  if(dt_is_valid_maskid(cid))
+    return cid != _mask_group_cid(bd->module) ? cid : INVALID_MASKID;
+  if(!dt_is_valid_maskid(bd->panel_selected_formid)) return INVALID_MASKID;
 
   const dt_masks_form_t *form =
     dt_masks_get_from_id(darktable.develop, bd->panel_selected_formid);
@@ -10507,9 +10524,9 @@ static void _set_group_target_ext(dt_iop_module_t *module,
   // selection change while it's active.
   if(dt_is_valid_maskid(bd->soloedit_formid))
   {
-    GList *one = g_list_prepend(NULL, GINT_TO_POINTER(bd->soloedit_formid));
-    dt_masks_set_edit_mode_forms(module, one, DT_MASKS_EDIT_FULL);
-    g_list_free(one);
+    GList *ids = _soloedit_formids(module);
+    dt_masks_set_edit_mode_forms(module, ids, DT_MASKS_EDIT_FULL);
+    g_list_free(ids);
   }
   _update_row_selection(bd);
   _update_add_target_sensitivity(module);
@@ -11678,9 +11695,9 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
 
   if(canvas == DT_MASKS_SOLO_CANVAS_ONE)
   {
-    GList *one = g_list_prepend(NULL, GINT_TO_POINTER(id));
-    dt_masks_set_edit_mode_forms(module, one, DT_MASKS_EDIT_FULL);
-    g_list_free(one);
+    GList *ids = _soloedit_formids(module);
+    dt_masks_set_edit_mode_forms(module, ids, DT_MASKS_EDIT_FULL);
+    g_list_free(ids);
     if(had_solo) _sync_hidden_to_form_visible(module);
   }
   else
@@ -17228,14 +17245,15 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // preview is a set-once mode, so it lives in the panel options menu instead
     // (see _add_masks_panel_options_menu).
     bd->soloedit_mode = dt_iop_togglebutton_new(
-      module, "blend`tools", N_("solo edit the selected element"), NULL,
+      module, "blend`tools", N_("solo edit the selection"), NULL,
       G_CALLBACK(_soloedit_mode_toggled), FALSE, 0, 0,
       dtgtk_cairo_paint_soloedit, NULL);
     gtk_widget_set_tooltip_text
       (bd->soloedit_mode,
-       _("solo edit the selected element\n"
-         "while enabled, only the selected element's nodes and handles are\n"
-         "editable on canvas; the other elements still contribute to the mask"));
+       _("solo edit the selection\n"
+         "while enabled, only the selected shape, or the shapes of the selected\n"
+         "group, are shown and editable on canvas; the other elements still\n"
+         "contribute to the mask"));
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->soloedit_mode),
                                  _soloedit_mode_is_on());
     gtk_widget_set_no_show_all(bd->soloedit_mode, TRUE);
