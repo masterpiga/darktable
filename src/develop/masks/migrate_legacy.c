@@ -815,11 +815,10 @@ static void _migrate_parametric_only(dt_iop_module_t *module,
 
 // DEVELOP_MASK_RASTER: one group holding one DT_MASKS_RASTER element,
 // referencing the same source the classic raster_mask_* fields already
-// describe. Those fields are deliberately left untouched -- the pipe's
-// raster-mask dependency registration (dt_iop_commit_blend_params() /
-// _reconcile_raster_form_users() in imageop.c) already walks the flexi form
-// tree independently of mask_mode, and rendering a DT_MASKS_RASTER form
-// (masks/raster.c) reads them directly too.
+// describe. Those fields are left untouched and unused: the element carries
+// its own source, which _reconcile_raster_form_users() (imageop.c) registers
+// and masks/raster.c renders from, while dt_iop_commit_blend_params() only
+// reads the fields in classic raster mode, which a flexi mask never is.
 static void _migrate_raster(dt_iop_module_t *module,
                             const dt_develop_blend_params_t *const o,
                             dt_develop_blend_params_t *n,
