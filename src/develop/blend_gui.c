@@ -1520,8 +1520,12 @@ static DTGTKCairoPaintIconFunc _op_paint_for_state(const int state);
 static GtkWidget *_make_channel_handle(const char *code, const char *tooltip);
 static const char *_form_type_prefix(const dt_masks_form_t *form);
 static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form_t *form);
-static gboolean _shape_props_subpanel(void);
+static gboolean _props_subpanel(void);
 static void _props_panel_show(dt_iop_gui_blend_data_t *bd);
+static GtkWidget *_build_group_opacity_editor(dt_iop_module_t *module,
+                                              const dt_mask_id_t cid,
+                                              const gboolean in_list);
+static GtkWidget *_build_param_boost_editor(dt_iop_module_t *module, const dt_mask_id_t formid);
 
 // with the mask off there is nothing for the panel's controls to act on, so
 // the whole panel body goes insensitive rather than merely inert -- the panel
@@ -1552,6 +1556,10 @@ static void _masks_panel_apply_enabled_state(dt_iop_gui_blend_data_t *data,
   // that cluster and must stay usable while the mask is off.
   const gboolean has_drawn = _module_has_drawn_shapes(data->module);
   if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, mask_enabled && has_drawn);
+  // edit on canvas and solo edit act on a mask being rendered: an off mask
+  // shows neither, rather than two buttons that can do nothing
+  if(data->masks_header_edit_box)
+    gtk_widget_set_visible(data->masks_header_edit_box, mask_enabled);
 }
 
 static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
@@ -2501,22 +2509,20 @@ static gboolean _auto_expand_selected(void)
   return dt_conf_get_bool("plugins/darkroom/masks/auto_expand_selected");
 }
 
-// "use sliders for opacity" (nested under auto-expand in the same menu):
-// opacity leaves every row and group header and becomes a full slider at the
-// top of each expanded panel instead. Defaults off, and is in effect only
-// while auto-expand is on -- see _model_opacity_sliders_in_effect, which is
-// also what greys the checkbox out.
+// "use sliders for opacity" (same menu): opacity leaves every row and group
+// header and becomes a full slider at the top of each expanded panel instead,
+// or in the properties subpanel when that is on. Defaults off
 static gboolean _opacity_sliders(void)
 {
-  return _model_opacity_sliders_in_effect(
-    _auto_expand_selected(), dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders"));
+  return dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders");
 }
 
-// "shape properties in subpanel" (same menu): a drawn shape's properties leave
-// its row for a collapsible section of their own (see _props_panel_sync)
-static gboolean _shape_props_subpanel(void)
+// "element properties in subpanel" (same menu): the selected element's or
+// group's properties leave the list for a collapsible section of their own
+// (see _props_panel_sync)
+static gboolean _props_subpanel(void)
 {
-  return dt_conf_get_bool("plugins/darkroom/masks/shape_props_subpanel");
+  return dt_conf_get_bool("plugins/darkroom/masks/properties_subpanel");
 }
 
 // the expander options below are all read at row-build time from a conf key,
@@ -2544,11 +2550,6 @@ static void _masks_auto_expand_selected_toggled(GtkToggleButton *mi,
   // with a parametric element selected has to expand it here and now.
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(on && bd) _auto_expand_selected_row(module, bd->panel_selected_formid);
-  // "use sliders for opacity" only means anything while this is on, and says so
-  // by greying out -- keep that live while the menu is open, rather than only
-  // correcting itself the next time it is built
-  GtkWidget *child = g_object_get_data(G_OBJECT(mi), "dependent-option");
-  if(child) gtk_widget_set_sensitive(child, on);
   _masks_rebuild_for_option(module);
 }
 
@@ -2560,10 +2561,10 @@ static void _masks_opacity_sliders_toggled(GtkToggleButton *mi,
   _masks_rebuild_for_option(module);
 }
 
-static void _masks_shape_props_subpanel_toggled(GtkToggleButton *mi,
+static void _masks_props_subpanel_toggled(GtkToggleButton *mi,
                                                 dt_iop_module_t *module)
 {
-  dt_conf_set_bool("plugins/darkroom/masks/shape_props_subpanel",
+  dt_conf_set_bool("plugins/darkroom/masks/properties_subpanel",
                    gtk_toggle_button_get_active(mi));
   // the rebuild refills the subpanel, and shows or hides it (see _props_panel_sync)
   _masks_rebuild_for_option(module);
@@ -2625,62 +2626,39 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
       " its elements; selecting an element shows its controls, and its group"
       " with it. applies to every element that can be expanded -- shapes and"
       " parametric elements, plus raster masks once \"use sliders for opacity\""
-      " below gives them a slider to show.\n"
+      " gives them a slider to show.\n"
       "selecting something with nothing to expand leaves whatever is open"
       " open, rather than collapsing the panel down to nothing.\n"
       "when disabled, everything is expanded and collapsed by hand."),
     _auto_expand_selected(), _masks_auto_expand_selected_toggled)
 
-  // "use sliders for opacity" hangs off auto-expand above: it is only in
-  // effect while that is on (see _opacity_sliders), so it is indented under it
-  // and goes insensitive with it rather than sitting there as an equal that
-  // silently does nothing. An insensitive widget receives no events and so
-  // shows no tooltip of its own -- the event box around it does, which is the
-  // one moment the explanation matters most.
-  GtkWidget *opacity_sliders = gtk_check_button_new_with_label(
-    _("use sliders for opacity"));
-  gtk_toggle_button_set_active(
-    GTK_TOGGLE_BUTTON(opacity_sliders),
-    dt_conf_get_bool("plugins/darkroom/masks/opacity_sliders"));
-  gtk_widget_set_sensitive(opacity_sliders, dt_conf_get_bool(
-                             "plugins/darkroom/masks/auto_expand_selected"));
-  g_signal_connect(G_OBJECT(opacity_sliders), "toggled",
-                   G_CALLBACK(_masks_opacity_sliders_toggled), module);
-  g_object_set_data(G_OBJECT(autoexpand), "dependent-option", opacity_sliders);
-
-  GtkWidget *opacity_sliders_slot = gtk_event_box_new();
-  gtk_container_add(GTK_CONTAINER(opacity_sliders_slot), opacity_sliders);
-  // indented in code rather than by a css class: GtkEventBox allocates itself
-  // without a css gadget, so it is one of the widgets GTK3 silently ignores a
-  // css margin on. Same indent the dependent check buttons in
-  // export_metadata.c use
-  gtk_widget_set_margin_start(opacity_sliders_slot, DT_PIXEL_APPLY_DPI(10));
-  gtk_widget_set_tooltip_text(
-    opacity_sliders_slot,
-    _("requires auto-expand above, which is what keeps the panel holding the"
-      " slider open.\n"
-      "when enabled, opacity leaves the row and group headers and becomes a"
+  _MASKS_OPT_CHECK(
+    opacity_sliders, _("use sliders for opacity"),
+    _("when enabled, opacity leaves the row and group headers and becomes a"
       " full slider at the top of every expanded panel, elements and groups"
-      " alike.\n"
+      " alike, or in the properties section with \"element properties in"
+      " subpanel\" below.\n"
       "opacity is a raster mask's only property, so this is also what makes"
       " raster masks expandable at all: with it enabled they carry the same"
       " chevron as every other element.\n"
-      "disabled by default."));
-  dt_gui_box_add(box, opacity_sliders_slot);
+      "disabled by default."),
+    _opacity_sliders(), _masks_opacity_sliders_toggled)
 
   _MASKS_OPT_CHECK(
-    props_subpanel, _("shape properties in subpanel"),
-    _("when enabled, the properties of the selected shape (size, feather,"
-      " hardness, rotation and the like) are shown in a collapsible section of"
-      " their own, between the mask list and the refinements, instead of"
-      " expanding under the shape's row. while a shape is being drawn, the"
-      " section holds its creation controls and opens by itself; its"
-      " placeholder row still shows the group it lands in.\n"
-      "the section is empty and disabled while anything but a shape is"
-      " selected: parametric elements, raster masks and groups keep their"
-      " controls in the list.\n"
+    props_subpanel, _("element properties in subpanel"),
+    _("when enabled, the properties of the selected element or group are"
+      " shown in a collapsible section of their own, between the mask list and"
+      " the refinements, instead of expanding in the list: a shape's size,"
+      " feather, hardness, rotation and the like, a parametric element's boost"
+      " factor, and with \"use sliders for opacity\" the opacity of any element"
+      " or group. a parametric element keeps its input and output sliders in"
+      " the list.\n"
+      "while a shape is being drawn, the section holds its creation controls"
+      " and opens by itself; its placeholder row still shows the group it"
+      " lands in.\n"
+      "the section is hidden while the selection has nothing to show there.\n"
       "disabled by default."),
-    _shape_props_subpanel(), _masks_shape_props_subpanel_toggled)
+    _props_subpanel(), _masks_props_subpanel_toggled)
 
   _MASKS_OPT_CHECK(
     hover, _("preview channel under cursor"),
@@ -4386,13 +4364,16 @@ static inline gpointer _refine_scope_key(dt_iop_gui_blend_data_t *bd)
 
 static const char *const _masks_section_collapsed_key[DT_MASKS_SECTION_COUNT] = {
   "plugins/darkroom/masks/refinements_collapsed",
-  "plugins/darkroom/masks/shape_properties_collapsed",
+  "plugins/darkroom/masks/properties_collapsed",
   "plugins/darkroom/masks/consumers_collapsed",
+  "plugins/darkroom/masks/element_details_collapsed",
 };
 
 gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing)
 {
-  if(section == DT_MASKS_SECTION_PROPS && drawing) return TRUE;
+  // the creation controls sit in the properties, inside the details
+  if((section == DT_MASKS_SECTION_PROPS || section == DT_MASKS_SECTION_DETAILS) && drawing)
+    return TRUE;
   return !dt_conf_get_bool(_masks_section_collapsed_key[section]);
 }
 
@@ -4419,6 +4400,11 @@ static void _section_widgets(dt_iop_gui_blend_data_t *bd, const dt_masks_section
       *toggle = bd->props_panel_toggle_btn;
       *expander = bd->props_panel_expander;
       *content = bd->props_panel_content;
+      break;
+    case DT_MASKS_SECTION_DETAILS:
+      *toggle = bd->details_toggle_btn;
+      *expander = bd->details_expander;
+      *content = bd->details_content;
       break;
     default:
       *toggle = bd->consumers_toggle_btn;
@@ -4744,22 +4730,14 @@ static GtkWidget *_make_icon_widget(DTGTKCairoPaintIconFunc paint)
   return da;
 }
 
-// the refinement section caption mirrors the row being refined:
-// Expander header shows "(element|group|whole mask) refinement",
-// and when expanded, inner header row shows <icon> <label> <actions>.
+// the details expander's header names what the properties and the refinement
+// inside it act on: <icon> <name> of the selected element or group, or the
+// mask's own icon and "whole mask"
 static void _refine_update_header(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(!bd) return;
 
-  const char *section_title = _("whole mask refinement");
-  if(bd->masks_refine_scope_kind == REFINE_SCOPE_ELEMENT)
-    section_title = _("element refinement");
-  else if(bd->masks_refine_scope_kind == REFINE_SCOPE_GROUP)
-    section_title = _("group refinement");
-
-  if(bd->masks_refine_section_label)
-    gtk_label_set_text(GTK_LABEL(bd->masks_refine_section_label), section_title);
 
   if(bd->masks_refine_icon_box)
   {
@@ -4816,7 +4794,8 @@ static void _refine_update_header(dt_iop_module_t *module)
   else
   {
     name = g_strdup(_("whole mask"));
-    icon_w = _make_icon_widget(dtgtk_cairo_paint_masks_eye);
+    // the icon of the darkroom toolbar's mask panel button
+    icon_w = _make_icon_widget(dtgtk_cairo_paint_masks_panel);
   }
 
   if(icon_w && bd->masks_refine_icon_box)
@@ -4826,7 +4805,12 @@ static void _refine_update_header(dt_iop_module_t *module)
   }
 
   if(bd->masks_refine_name_label)
-    gtk_label_set_text(GTK_LABEL(bd->masks_refine_name_label), name ? name : "");
+  {
+    // what the section holds the details of, e.g. "#1 details"
+    gchar *caption = g_strdup_printf(_("%s details"), name ? name : "");
+    gtk_label_set_text(GTK_LABEL(bd->masks_refine_name_label), caption);
+    g_free(caption);
+  }
   g_free(name);
 
   // Update bypass button state
@@ -4840,18 +4824,15 @@ static void _refine_update_header(dt_iop_module_t *module)
                                  bypassed);
   bd->masks_refine_updating = FALSE;
 
-  // Update indicator icon (shows whether current target has active refinements)
+  // nothing to reset or bypass without a refinement, which is how the header
+  // says there is none. The bypass keeps its state, for when one comes back
   dt_masks_refinement_t r = { 0 };
   _refine_read_controls(bd, &r);
   const gboolean has_refinement = (r.enabled != 0);
-  if(bd->masks_refine_indicator_icon)
-  {
-    gtk_widget_set_opacity(bd->masks_refine_indicator_icon, has_refinement ? 1.0 : 0.25);
-    gtk_widget_set_tooltip_text(bd->masks_refine_indicator_icon,
-                                has_refinement
-                                  ? _("refinements are active for this target")
-                                  : _("no refinements for this target"));
-  }
+  if(bd->masks_refine_reset_btn)
+    gtk_widget_set_sensitive(bd->masks_refine_reset_btn, has_refinement);
+  if(bd->masks_refine_bypass_btn)
+    gtk_widget_set_sensitive(bd->masks_refine_bypass_btn, has_refinement);
 }
 
 // (re)build the refinement-header group selector from the current mask group:
@@ -4939,20 +4920,6 @@ static const struct
   [DT_MASKS_PROPERTY_REFINE] = { N_("refine mask boundary"), "", 0, 1, FALSE, TRUE },
 };
 
-// "use sliders for opacity" only takes effect while "auto-expand selected" is
-// also on: the slider lives at the top of an expanded panel, and auto-expand is
-// what guarantees the panel you are working in is the one open. Without it, the
-// list starts collapsed, so moving opacity there would put it out of sight
-// everywhere. The panel says so by nesting the checkbox under auto-expand and
-// greying it out (see _add_masks_panel_options_box); this is the same rule
-// applied to the layout itself, so a conf value left over from a session with
-// auto-expand on cannot leak a half-applied layout.
-gboolean _model_opacity_sliders_in_effect(const gboolean auto_expand,
-                                          const gboolean use_sliders)
-{
-  return auto_expand && use_sliders;
-}
-
 // does an element row of this kind carry an expander of its own?
 //
 // A drawn shape (circle/path/... and AI objects alike) always has properties
@@ -4961,12 +4928,17 @@ gboolean _model_opacity_sliders_in_effect(const gboolean auto_expand,
 // NULL -- which its row header shows inline, so it has nothing to expand and
 // gets no chevron; "use sliders for opacity" moves that one property into the
 // expanded panel, which is what gives a raster row something to show and, with
-// it, a chevron like every other element's. Groups never come through here:
-// their chevron reveals their members, not properties (see
+// it, a chevron like every other element's. "element properties in subpanel"
+// moves all of that to its own section, leaving only a parametric row's in/out
+// chevron, which shows its input and output sliders. Groups never come through
+// here: their chevron reveals their members, not properties (see
 // _group_expand_toggled).
 gboolean _model_row_is_expandable(const dt_masks_type_t type,
-                                  const gboolean opacity_sliders)
+                                  const gboolean opacity_sliders,
+                                  const gboolean props_subpanel)
 {
+  if(type & DT_MASKS_PARAMETRIC) return TRUE;
+  if(props_subpanel) return FALSE;
   if(type & DT_MASKS_RASTER) return opacity_sliders;
   return TRUE;
 }
@@ -5596,21 +5568,71 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
   return box;
 }
 
-// ---- "shape properties in subpanel" ----------------------------------------
+// ---- "element properties in subpanel" --------------------------------------
 
-// what the subpanel holds the editor of: the selected element, if it is a
-// shape, one with geometry of its own. A parametric channel, a raster mask
-// and a group are none, and neither is the AI object stepped into, which then
-// shows as its group
-dt_mask_id_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd)
+// does this parametric channel have a boost factor? Not every channel does
+static gboolean _param_form_has_boost(const dt_masks_form_t *f)
 {
-  const dt_mask_id_t id = bd->panel_selected_formid;
-  const dt_masks_form_t *f =
-    dt_is_valid_maskid(id) ? dt_masks_get_from_id(darktable.develop, id) : NULL;
-  if(!f || (f->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER | DT_MASKS_GROUP)))
-    return INVALID_MASKID;
-  if((f->type & DT_MASKS_OBJECT) && _entered_object() == id) return INVALID_MASKID;
-  return id;
+  const dt_masks_point_parametric_t *p = f->points ? f->points->data : NULL;
+  const dt_iop_gui_blendif_channel_t *channels =
+    p ? dt_develop_blendif_channels_for_csp(p->colorspace) : NULL;
+  return channels && channels[p->channel].boost_factor_enabled;
+}
+
+// what the subpanel holds the editor of, following the selection as the
+// refinements do: the selected element, or else the selected group. A shape's
+// geometry goes there, a parametric channel's boost factor, and with "use
+// sliders for opacity" the opacity of anything. The AI object stepped into is
+// no shape any more but its group, so only its opacity goes there
+dt_masks_props_target_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd,
+                                                  const gboolean opacity_sliders)
+{
+  dt_masks_props_target_t t = { INVALID_MASKID, FALSE, FALSE, FALSE, FALSE };
+  dt_mask_id_t id = bd->panel_selected_formid;
+  if(dt_is_valid_maskid(id))
+  {
+    const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, id);
+    if(!f) return t;
+    if(f->type & DT_MASKS_PARAMETRIC)
+      t.boost = _param_form_has_boost(f);
+    else if(!(f->type & (DT_MASKS_RASTER | DT_MASKS_GROUP))
+            && !((f->type & DT_MASKS_OBJECT) && _entered_object() == id))
+      t.shape = TRUE;
+  }
+  else if(dt_is_valid_maskid(bd->panel_selected_group_cid))
+  {
+    id = bd->panel_selected_group_cid;
+    t.is_group = TRUE;
+  }
+  else
+    return t;
+  t.opacity = opacity_sliders;
+  if(t.shape || t.opacity || t.boost) t.id = id;
+  return t;
+}
+
+// the subpanel's editor for its target (see _model_props_panel_target)
+static GtkWidget *_build_props_panel_editor(dt_iop_module_t *module,
+                                            const dt_masks_props_target_t *t)
+{
+  GtkWidget *box = dt_gui_vbox();
+  if(t->is_group)
+    dt_gui_box_add(box, _build_group_opacity_editor(module, t->id, FALSE));
+  else if(t->shape || t->opacity)
+    dt_gui_box_add(box, _build_props_row_editor(module, t->id, FALSE, !t->shape, !t->opacity));
+  if(t->boost) dt_gui_box_add(box, _build_param_boost_editor(module, t->id));
+  // the props editor inside is no_show_all, and already shown
+  gtk_widget_show_all(box);
+  return box;
+}
+
+static void _details_header_clicked(
+  GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
+{
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  dt_iop_gui_blend_data_t *bd = user_data;
+  GtkToggleButton *btn = GTK_TOGGLE_BUTTON(bd->details_toggle_btn);
+  gtk_toggle_button_set_active(btn, !gtk_toggle_button_get_active(btn));
 }
 
 static void _props_panel_header_clicked(
@@ -5623,57 +5645,67 @@ static void _props_panel_header_clicked(
 }
 
 // the subpanel shows only while it holds something: with the option on, with
-// the mask list shown, and with a shape selected or being drawn
+// the mask list shown, and with a shape being drawn or a selection having
+// properties to show there
 static void _props_panel_show(dt_iop_gui_blend_data_t *bd)
 {
   GtkWidget *pending = bd->pending_props_box;
   const gboolean filled = (pending && gtk_widget_get_parent(pending) == bd->props_panel_content)
                           || dt_is_valid_maskid(bd->props_panel_formid);
   _box_set_visible(bd->props_panel_box,
-                   _shape_props_subpanel() && filled && bd->masks_list_box
+                   _props_subpanel() && filled && bd->masks_list_box
                    && gtk_widget_get_visible(GTK_WIDGET(bd->masks_list_box)));
 }
 
 // fill the subpanel from the selection: the creation controls of a shape being
-// drawn, opened, or else the selected shape's properties, or else nothing, and
-// hidden. Kept while it still holds what the selection asks for, since the
-// editor inside may be the one being dragged; `force` rebuilds it anyway, after
-// the list was rebuilt from changed data
+// drawn, opened, or else the selected element's or group's properties, or else
+// nothing, and hidden. Kept while it still holds what the selection asks for,
+// since the editor inside may be the one being dragged; `force` rebuilds it
+// anyway, after the list was rebuilt from changed data
 static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(!bd || !bd->props_panel_content) return;
-  const gboolean on = _shape_props_subpanel();
+  const gboolean on = _props_subpanel();
   GtkWidget *pending = on ? bd->pending_props_box : NULL;
-  const dt_mask_id_t target = pending || !on ? INVALID_MASKID : _model_props_panel_target(bd);
+  const dt_masks_props_target_t none = { INVALID_MASKID, FALSE, FALSE, FALSE, FALSE };
+  const dt_masks_props_target_t t =
+    pending || !on ? none : _model_props_panel_target(bd, _opacity_sliders());
   const gboolean placed = pending && gtk_widget_get_parent(pending) == bd->props_panel_content;
   // the section opens for the creation controls without saving that, so it
   // folds back once the shape is created or the drawing canceled. Only that
   // opening leaves it differing from its saved state
-  if(!pending
-     && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->props_panel_toggle_btn))
-          != _model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE))
-    _section_apply(bd, DT_MASKS_SECTION_PROPS);
-  if(!force && (pending ? placed : target == bd->props_panel_formid)) return;
+  if(!pending)
+  {
+    if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->props_panel_toggle_btn))
+       != _model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE))
+      _section_apply(bd, DT_MASKS_SECTION_PROPS);
+    if(bd->details_toggle_btn
+       && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->details_toggle_btn))
+            != _model_section_expanded(DT_MASKS_SECTION_DETAILS, FALSE))
+      _section_apply(bd, DT_MASKS_SECTION_DETAILS);
+  }
+  if(!force
+     && (pending ? placed
+                 : t.id == bd->props_panel_formid && t.is_group == bd->props_panel_is_group))
+    return;
 
   GList *kids = gtk_container_get_children(GTK_CONTAINER(bd->props_panel_content));
   for(GList *k = kids; k; k = g_list_next(k))
     if(k->data != pending) gtk_widget_destroy(k->data);
   g_list_free(kids);
-  bd->props_panel_formid = target;
+  bd->props_panel_formid = t.id;
+  bd->props_panel_is_group = t.is_group;
 
   if(pending)
   {
     if(!placed) dt_gui_box_add(bd->props_panel_content, pending);
     _section_set(bd, DT_MASKS_SECTION_PROPS, _model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
+    _section_set(bd, DT_MASKS_SECTION_DETAILS,
+                 _model_section_expanded(DT_MASKS_SECTION_DETAILS, TRUE));
   }
-  else if(dt_is_valid_maskid(target))
-  {
-    // opacity stays in the row header unless "use sliders for opacity" has
-    // moved it into the expanded controls, as for an expanded row
-    dt_gui_box_add(bd->props_panel_content,
-                   _build_props_row_editor(module, target, FALSE, FALSE, !_opacity_sliders()));
-  }
+  else if(dt_is_valid_maskid(t.id))
+    dt_gui_box_add(bd->props_panel_content, _build_props_panel_editor(module, &t));
   _props_panel_show(bd);
 }
 
@@ -5828,7 +5860,8 @@ dt_mask_id_t _model_auto_expand_anchor(const dt_iop_gui_blend_data_t *bd)
     const dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, sel);
     // a nested group's chevron shows groups, which follow the group half
     // (see _reveal_nesting), not properties
-    if(f && !(f->type & DT_MASKS_GROUP) && _model_row_is_expandable(f->type, _opacity_sliders()))
+    if(f && !(f->type & DT_MASKS_GROUP)
+       && _model_row_is_expandable(f->type, _opacity_sliders(), _props_subpanel()))
       return sel;
   }
   return bd->masks_last_expanded_elem;
@@ -7634,14 +7667,20 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t fo
 // canvas -> list hover sync: transiently highlight the row matching the shape
 // under the cursor, or its group's header as a fallback. An invalid id just
 // clears the hover wash.
+// defined with the rest of the list-row hover machinery further down
+static void _row_hover_wash(dt_iop_gui_blend_data_t *bd, GtkWidget *target);
+
 void dt_iop_gui_masks_hover_form(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   if(!module) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd || !bd->masks_list_box) return;
   GtkWidget *box = GTK_WIDGET(bd->masks_list_box);
-  _clear_hover_classes(box);
-  if(!dt_is_valid_maskid(formid)) return;
+  if(!dt_is_valid_maskid(formid))
+  {
+    _row_hover_wash(bd, NULL);
+    return;
+  }
   // prefer the shape's own (nested) row; fall back to the group header that contains
   // it
   GtkWidget *target = _masks_row_widget(bd, formid);
@@ -7652,7 +7691,7 @@ void dt_iop_gui_masks_hover_form(dt_iop_module_t *module, const dt_mask_id_t for
     if(row_fid != formid) target = _masks_row_widget(bd, row_fid);
   }
   if(!target) target = _find_collapsed_cluster_header(box, formid);
-  if(target) dt_gui_add_class(target, "mask-list-row-hover");
+  _row_hover_wash(bd, target);
 }
 
 void dt_iop_gui_masks_entered_object_changed(dt_iop_module_t *module)
@@ -9836,11 +9875,177 @@ static GtkWidget *_row_widget_for_hover(GtkWidget *w)
 // Also drives the row's own hover wash in the list (mirroring the canvas ->
 // list sync in dt_iop_gui_masks_hover_form), so hovering a row highlights it
 // exactly like hovering its shape on the canvas does.
+// the row the wash is on, weak since a list rebuild destroys it. Taking it off
+// that one row beats walking the list for every row a scroll passes over, and
+// the walk is only needed when this is unknown -- a leave is not always
+// reliably paired with the matching enter (the pointer can move from one row's
+// own GdkWindow straight onto an adjacent row's without a clean crossing
+// sequence for the first one), and a stale wash is easily mistaken for that row
+// being selected, since both look alike
+static GtkWidget *_hover_washed_row = NULL;
+
+static void _hover_washed_set(GtkWidget *row)
+{
+  if(_hover_washed_row)
+    g_object_remove_weak_pointer(G_OBJECT(_hover_washed_row),
+                                 (gpointer *)&_hover_washed_row);
+  _hover_washed_row = row;
+  if(_hover_washed_row)
+    g_object_add_weak_pointer(G_OBJECT(_hover_washed_row),
+                              (gpointer *)&_hover_washed_row);
+}
+
+// the hover wash in the list, on the row of `target` or on none. Cheap, so it
+// follows the pointer at once, unlike the canvas half below
+static void _row_hover_wash(dt_iop_gui_blend_data_t *bd, GtkWidget *target)
+{
+  if(_hover_washed_row)
+    dt_gui_remove_class(_hover_washed_row, "mask-list-row-hover");
+  else if(bd && bd->masks_list_box)
+    _clear_hover_classes(GTK_WIDGET(bd->masks_list_box));
+  if(target) dt_gui_add_class(target, "mask-list-row-hover");
+  _hover_washed_set(target);
+}
+
+// apply a hover: the wash in the list, and the shapes the canvas highlights
+static void _row_hover_apply(dt_iop_module_t *module, GtkWidget *w)
+{
+  dt_masks_form_gui_t *gui = darktable.develop ? darktable.develop->form_gui : NULL;
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!gui || !bd) return;
+  g_list_free(gui->panel_hover_formids);
+  gui->panel_hover_formids =
+    w ? g_list_copy(g_object_get_data(G_OBJECT(w), "hover-formids")) : NULL;
+  _row_hover_wash(bd, w ? _row_widget_for_hover(w) : NULL);
+  dt_control_queue_redraw_center();
+}
+
+// applying a hover costs a walk of the list and a canvas redraw, which draws
+// every shape of the mask (dt_group_events_post_expose) -- cheap once, but a
+// scroll drags row after row under a pointer that never moves, and with a
+// complex mask those redraws outpace the scrolling itself. So the first
+// crossing of a burst is applied at once and the rest at most this often,
+// with the last one always landing
+#define MASKS_HOVER_APPLY_MS 100
+// and while the list is actually scrolling, none is applied at all: what the
+// pointer passes over on the way is nothing the user is pointing at. The hover
+// settles this long after the scrolling stops
+#define MASKS_HOVER_SETTLE_MS 150
+static guint _hover_apply_source = 0;
+static gint64 _hover_apply_last = 0;
+static gint64 _hover_scroll_seen = 0;
+static gdouble _hover_scroll_pos = -1.0;
+static dt_iop_module_t *_hover_pending_module = NULL;
+// weak, since a list rebuild destroys the row while this waits on it. It then
+// reads as "no row", which is what a rebuild means for a hover anyway
+static GtkWidget *_hover_pending_row = NULL;
+
+static void _hover_pending_set(dt_iop_module_t *module, GtkWidget *w)
+{
+  if(_hover_pending_row)
+    g_object_remove_weak_pointer(G_OBJECT(_hover_pending_row),
+                                 (gpointer *)&_hover_pending_row);
+  _hover_pending_row = w;
+  if(_hover_pending_row)
+    g_object_add_weak_pointer(G_OBJECT(_hover_pending_row),
+                              (gpointer *)&_hover_pending_row);
+  _hover_pending_module = module;
+}
+
+// has the list scrolled since this was last asked? Read from the adjustment of
+// whichever scrolled window currently holds the panel, so it needs no signal of
+// its own and survives the panel moving between its hosts
+static gboolean _hover_list_scrolling(const gint64 now)
+{
+  dt_iop_gui_blend_data_t *bd =
+    _hover_pending_module ? _hover_pending_module->blend_data : NULL;
+  GtkWidget *list = bd && bd->masks_list_box ? GTK_WIDGET(bd->masks_list_box) : NULL;
+  GtkWidget *sw = list ? gtk_widget_get_ancestor(list, GTK_TYPE_SCROLLED_WINDOW) : NULL;
+  if(sw)
+  {
+    const gdouble pos =
+      gtk_adjustment_get_value(gtk_scrolled_window_get_vadjustment(GTK_SCROLLED_WINDOW(sw)));
+    if(pos != _hover_scroll_pos)
+    {
+      // the first sample is a reading, not a movement
+      if(_hover_scroll_pos >= 0.0) _hover_scroll_seen = now;
+      _hover_scroll_pos = pos;
+    }
+  }
+  return now < _hover_scroll_seen + MASKS_HOVER_SETTLE_MS * 1000;
+}
+
+// when the pending hover may be applied: not before the rate limit, and not
+// while the list is still scrolling
+static gint64 _row_hover_due(const gint64 now)
+{
+  gint64 due = _hover_apply_last + MASKS_HOVER_APPLY_MS * 1000;
+  if(_hover_list_scrolling(now))
+    due = MAX(due, _hover_scroll_seen + MASKS_HOVER_SETTLE_MS * 1000);
+  return due;
+}
+
+static gboolean _row_hover_deferred(gpointer user_data);
+
+static void _row_hover_arm(const gint64 delay)
+{
+  _hover_apply_source =
+    g_timeout_add((guint)(delay / 1000 + 1), _row_hover_deferred, NULL);
+}
+
+static gboolean _row_hover_deferred(gpointer user_data)
+{
+  _hover_apply_source = 0;
+  const gint64 now = g_get_monotonic_time();
+  const gint64 due = _row_hover_due(now);
+  if(due > now)
+  {
+    // still scrolling: come back once it has stopped
+    _row_hover_arm(due - now);
+    return G_SOURCE_REMOVE;
+  }
+  _hover_apply_last = now;
+  dt_iop_module_t *module = _hover_pending_module;
+  GtkWidget *w = _hover_pending_row;
+  _hover_pending_set(NULL, NULL);
+  if(module && module->blend_data) _row_hover_apply(module, w);
+  return G_SOURCE_REMOVE;
+}
+
+// the module's panel is going away: nothing pending may outlive it
+static void _row_hover_cancel(const dt_iop_module_t *module)
+{
+  if(_hover_pending_module != module) return;
+  if(_hover_apply_source) g_source_remove(_hover_apply_source);
+  _hover_apply_source = 0;
+  _hover_pending_set(NULL, NULL);
+}
+
+static void _row_hover_schedule(dt_iop_module_t *module, GtkWidget *w)
+{
+  _hover_pending_set(module, w);
+  if(_hover_apply_source) return; // the one on its way takes the latest target
+  const gint64 now = g_get_monotonic_time();
+  const gint64 due = _row_hover_due(now);
+  if(now >= due)
+    _row_hover_deferred(NULL);
+  else
+    _row_hover_arm(due - now);
+}
+
+// list -> canvas hover: hovering a mask-list row highlights its shape on the
+// canvas; hovering a cluster header highlights every member shape. The hover
+// target ids are carried on the event box as "hover-formids" (a one-element list
+// for a single row, the whole member set for a cluster header). The box has a
+// real window so crossings into its child buttons report GDK_NOTIFY_INFERIOR,
+// which we ignore so the hover stays stable across the row's controls.
+// Also drives the row's own hover wash in the list (mirroring the canvas ->
+// list sync in dt_iop_gui_masks_hover_form), so hovering a row highlights it
+// exactly like hovering its shape on the canvas does.
 static gboolean _row_crossing(GtkWidget *w, GdkEventCrossing *ev, dt_iop_module_t *module)
 {
   if(ev->detail == GDK_NOTIFY_INFERIOR) return FALSE;
-  dt_masks_form_gui_t *gui = darktable.develop->form_gui;
-  if(!gui) return FALSE;
+  if(!darktable.develop || !darktable.develop->form_gui) return FALSE;
   const gboolean entering = ev->type == GDK_ENTER_NOTIFY;
   // interacting with one of this row's controls must keep the shape highlighted
   // for as long as the interaction lasts, not just while the pointer happens to
@@ -9853,22 +10058,12 @@ static gboolean _row_crossing(GtkWidget *w, GdkEventCrossing *ev, dt_iop_module_
      && (ev->mode == GDK_CROSSING_GRAB || ev->mode == GDK_CROSSING_GTK_GRAB
          || (ev->state & (GDK_BUTTON1_MASK | GDK_BUTTON2_MASK | GDK_BUTTON3_MASK))))
     return FALSE;
-  g_list_free(gui->panel_hover_formids);
-  gui->panel_hover_formids = NULL;
-  if(entering)
-    gui->panel_hover_formids =
-      g_list_copy(g_object_get_data(G_OBJECT(w), "hover-formids"));
-  // a leave is not always reliably paired with the matching enter (the pointer
-  // can move from one row's own GdkWindow straight onto an adjacent row's
-  // without a clean crossing sequence for the first one), which could leave a
-  // stale hover wash stuck on a row indefinitely -- easily mistaken for that
-  // row still being "selected", since both washes look alike. Unconditionally
-  // clear every hover class first, then (re)apply it to the current target.
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(bd && bd->masks_list_box) _clear_hover_classes(GTK_WIDGET(bd->masks_list_box));
-  GtkWidget *target = _row_widget_for_hover(w);
-  if(target && entering) dt_gui_add_class(target, "mask-list-row-hover");
-  dt_control_queue_redraw_center();
+  // the wash is what the pointer expects to see immediately; the canvas, which
+  // redraws every shape of the mask, follows when it can. While the list is
+  // scrolling neither happens: the rows going past are not being pointed at
+  if(!_hover_list_scrolling(g_get_monotonic_time()))
+    _row_hover_wash(module->blend_data, entering ? _row_widget_for_hover(w) : NULL);
+  _row_hover_schedule(module, entering ? w : NULL);
   return FALSE;
 }
 
@@ -11380,6 +11575,46 @@ static void _group_opacity_changed(GtkWidget *w, dt_iop_module_t *module)
   _refresh_lowop_badges(module);
 }
 
+// the group's opacity as a full labeled slider, leading its expanded contents
+// or in the properties subpanel under "use sliders for opacity". Drives the
+// same persisted group_opacity through _group_opacity_changed the header's
+// compact value does. `in_list` is for the one in the list, under the group's
+// header, which a press must not deselect (see _group_opacity_press)
+static GtkWidget *_build_group_opacity_editor(dt_iop_module_t *module,
+                                              const dt_mask_id_t cid,
+                                              const gboolean in_list)
+{
+  const dt_masks_point_group_t *head_pt = _group_point(_module_mask_group(module), cid);
+  const float go = head_pt ? head_pt->group_opacity : 1.0f;
+
+  GtkWidget *ex_op = dt_bauhaus_slider_new_with_range(
+    module, _blend_masks_properties[DT_MASKS_PROPERTY_OPACITY].min,
+    _blend_masks_properties[DT_MASKS_PROPERTY_OPACITY].max, 0, 1.0f, 2);
+  dt_bauhaus_widget_set_label(ex_op, N_("blend"), N_("opacity"));
+  dt_bauhaus_slider_set_format(ex_op, "%");
+  dt_bauhaus_slider_set_digits(ex_op, 2);
+  dt_bauhaus_widget_set_quad_visibility(ex_op, FALSE);
+  dt_gui_add_class(ex_op, "mask-props-slider");
+  _style_opacity_gradient(ex_op);
+  DT_ENTER_GUI_UPDATE(); // populate only -- must not fire _group_opacity_changed
+  dt_bauhaus_slider_set(ex_op, go);
+  DT_LEAVE_GUI_UPDATE();
+  _group_opacity_update_tooltip(ex_op, go);
+  g_object_set_data(G_OBJECT(ex_op), "group-key", GUINT_TO_POINTER(cid));
+  g_signal_connect(G_OBJECT(ex_op), "value-changed",
+                   G_CALLBACK(_group_opacity_changed), module);
+  if(in_list)
+    g_signal_connect(G_OBJECT(ex_op), "button-press-event",
+                     G_CALLBACK(_group_opacity_press), module);
+  // a bypassed group contributes nothing, see the header's own sensitivity
+  if(head_pt && _op_is_bypassed((int)_eff_group_op(head_pt->state)))
+    gtk_widget_set_sensitive(ex_op, FALSE);
+
+  GtkWidget *ex_op_box = dt_gui_vbox(ex_op);
+  dt_gui_add_class(ex_op_box, "mask-group-opacity-editor");
+  return ex_op_box;
+}
+
 // the group an actions-menu item acts on, and its module
 static dt_iop_module_t *_group_act_target(gpointer u, dt_mask_id_t *cid)
 {
@@ -12430,10 +12665,10 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
     dt_gui_box_add(props_box, smoothing);
   }
 
-  // with "shape properties in subpanel" the row keeps only its header, in the
+  // with "element properties in subpanel" the row keeps only its header, in the
   // group the shape lands in, and the controls go to the subpanel, which the
   // rebuild building this row fills right after (see _props_panel_sync)
-  if(_shape_props_subpanel())
+  if(_props_subpanel())
   {
     gtk_widget_show_all(props_box);
     ((dt_iop_gui_blend_data_t *)module->blend_data)->pending_props_box = props_box;
@@ -13116,12 +13351,17 @@ static GtkWidget *_make_channel_handle(const char *code, const char *tooltip)
 
 // the single-channel form this editor owns, or NULL if it no longer exists
 // (e.g. deleted from under it before the next rebuild tears the row down).
+static dt_masks_point_parametric_t *_param_point(const dt_mask_id_t formid)
+{
+  dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, formid);
+  if(!form || !(form->type & DT_MASKS_PARAMETRIC) || !form->points) return NULL;
+  return form->points->data;
+}
+
 static dt_masks_point_parametric_t *
 _param_row_point(const dt_masks_param_row_editor_t *ed)
 {
-  dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, ed->formid);
-  if(!form || !(form->type & DT_MASKS_PARAMETRIC) || !form->points) return NULL;
-  return form->points->data;
+  return _param_point(ed->formid);
 }
 
 // is this row's own shape inverted? (the per-shape ctrl+click invert,
@@ -13161,26 +13401,28 @@ gboolean _param_channel_is_used(const dt_masks_point_parametric_t *p,
 // row always shows both. Split from the widget update below so the rule can be
 // tested without a row -- see test_flexi_panel.c.
 //
-// `opacity_slider_enabled` is the "show opacity slider in expanded elements"
-// option. A parametric row's opacity control follows the same rule every other
-// element row's does: the compact value in the row header is always there, and
-// the full slider leading the expanded controls appears only when the option
-// asks for it -- so, here, only when the row is expanded *and* it is on.
+// `opacity_slider_enabled` is "use sliders for opacity". A parametric row's
+// opacity control follows the same rule every other element row's does: the
+// full slider leading the expanded controls appears only when the option asks
+// for it -- so, here, only when the row is expanded *and* it is on.
+// `props_subpanel` is "element properties in subpanel", which takes the boost
+// factor and that opacity slider out of the row and into its own section.
 dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
                                                  const gboolean in_used,
                                                  const gboolean out_used,
                                                  const gboolean boost_enabled,
-                                                 const gboolean opacity_slider_enabled)
+                                                 const gboolean opacity_slider_enabled,
+                                                 const gboolean props_subpanel)
 {
   dt_masks_param_vis_t v = { TRUE, FALSE, FALSE, FALSE, FALSE };
 
-  v.opacity = expanded && opacity_slider_enabled;
+  v.opacity = expanded && opacity_slider_enabled && !props_subpanel;
 
   if(expanded)
   {
     v.input = TRUE;
     v.output = TRUE;
-    v.boost = boost_enabled;
+    v.boost = boost_enabled && !props_subpanel;
   }
   else if(in_used && out_used)
   {
@@ -13219,7 +13461,7 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
   const dt_masks_param_vis_t vis =
     _model_param_row_visibility(p->in_out != 0, in_used, out_used,
                                 channel && channel->boost_factor_enabled,
-                                _opacity_sliders());
+                                _opacity_sliders(), _props_subpanel());
   const gboolean show_input = vis.input;
   const gboolean show_output = vis.output;
   const gboolean show_boost = vis.boost;
@@ -14088,18 +14330,20 @@ _param_row_slider_precise_press(GtkWidget *widget, GdkEventButton *ev, gpointer 
   return TRUE;
 }
 
-static void _param_row_boost_factor_callback(GtkWidget *slider,
-                                             dt_masks_param_row_editor_t *ed)
+// set a parametric channel's boost factor, rescaling its ranges so they keep
+// selecting the same values. Shared by the row's own boost slider and the
+// properties subpanel's (see _build_param_boost_editor)
+static void _param_boost_apply(dt_iop_module_t *module,
+                               const dt_mask_id_t formid,
+                               const float value)
 {
-  if(DT_IN_GUI_UPDATE()) return;
-  dt_masks_point_parametric_t *p = _param_row_point(ed);
+  dt_masks_point_parametric_t *p = _param_point(formid);
   if(!p) return;
   const dt_iop_gui_blendif_channel_t *channels =
     dt_develop_blendif_channels_for_csp(p->colorspace);
   if(!channels) return;
   const dt_iop_gui_blendif_channel_t *channel = &channels[p->channel];
 
-  const float value = dt_bauhaus_slider_get(slider);
   for(int in_out = 1; in_out >= 0; in_out--)
   {
     const int ch = channel->param_channels[in_out];
@@ -14119,8 +14363,65 @@ static void _param_row_boost_factor_callback(GtkWidget *slider,
     if(parameters[1] == 0.0f && parameters[2] == 1.0f) p->blendif &= ~(1 << ch);
     p->blendif_boost_factors[ch] = new_value;
   }
-  _param_form_commit(ed->module, ed->formid);
+  _param_form_commit(module, formid);
+}
+
+static void _param_row_boost_factor_callback(GtkWidget *slider,
+                                             dt_masks_param_row_editor_t *ed)
+{
+  if(DT_IN_GUI_UPDATE()) return;
+  _param_boost_apply(ed->module, ed->formid, dt_bauhaus_slider_get(slider));
   _update_param_row_display(ed);
+}
+
+// the subpanel's boost slider: the row's input and output sliders read their
+// values through the boost factor, so they are refreshed with it
+static void _param_panel_boost_changed(GtkWidget *slider, dt_iop_module_t *module)
+{
+  if(DT_IN_GUI_UPDATE()) return;
+  const dt_mask_id_t formid =
+    GPOINTER_TO_INT(g_object_get_data(G_OBJECT(slider), "param-formid"));
+  _param_boost_apply(module, formid, dt_bauhaus_slider_get(slider));
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  GtkWidget *row_vbox = bd ? _masks_row_widget(bd, formid) : NULL;
+  GtkWidget *editor_box =
+    row_vbox ? g_object_get_data(G_OBJECT(row_vbox), "param-editor-box") : NULL;
+  dt_masks_param_row_editor_t *ed =
+    editor_box ? g_object_get_data(G_OBJECT(editor_box), "param-editor") : NULL;
+  if(ed) _update_param_row_display(ed);
+}
+
+// a parametric channel's boost factor, for the properties subpanel: built like
+// the row's own (see _build_param_row_editor), bound to the form by id
+static GtkWidget *_build_param_boost_editor(dt_iop_module_t *module, const dt_mask_id_t formid)
+{
+  const dt_masks_point_parametric_t *p = _param_point(formid);
+  const dt_iop_gui_blendif_channel_t *channels =
+    p ? dt_develop_blendif_channels_for_csp(p->colorspace) : NULL;
+
+  GtkWidget *slider = dt_bauhaus_slider_new_with_range(module, 0.0f, 18.0f, 0, 0.0f, 3);
+  dt_bauhaus_slider_set_format(slider, _(" EV"));
+  dt_bauhaus_widget_set_label(slider, N_("blend"), N_("boost factor"));
+  dt_bauhaus_slider_set_soft_range(slider, 0.0, 3.0);
+  dt_bauhaus_widget_set_quad_visibility(slider, FALSE);
+  gtk_widget_set_tooltip_text(
+    slider,
+    _("adjust the channel boost factor.\nincrease to allow matching values over 100%"));
+  dt_gui_add_class(slider, "mask-boost-factor-slider");
+  if(channels)
+  {
+    const dt_iop_gui_blendif_channel_t *channel = &channels[p->channel];
+    DT_ENTER_GUI_UPDATE();
+    dt_bauhaus_slider_set(slider, p->blendif_boost_factors[channel->param_channels[0]]
+                                    - channel->boost_factor_offset);
+    DT_LEAVE_GUI_UPDATE();
+  }
+  g_object_set_data(G_OBJECT(slider), "param-formid", GINT_TO_POINTER(formid));
+  g_signal_connect(G_OBJECT(slider), "value-changed",
+                   G_CALLBACK(_param_panel_boost_changed), module);
+  GtkWidget *box = dt_gui_vbox(slider);
+  dt_gui_add_class(box, "mask-boost-factor-box");
+  return box;
 }
 
 // the parametric row's own opacity slider (packed alongside output/boost,
@@ -15020,7 +15321,9 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // row's own copy of this decision is applied in _model_param_row_visibility,
   // since its slider only appears once the row is actually expanded.
   const gboolean opacity_sliders = _opacity_sliders();
-  const gboolean expandable = _model_row_is_expandable(form->type, opacity_sliders);
+  const gboolean props_subpanel = _props_subpanel();
+  const gboolean expandable =
+    _model_row_is_expandable(form->type, opacity_sliders, props_subpanel);
   // the header line alone, which an open row shades like a group's header
   // (see _sync_element_open)
   dt_gui_add_class(row, "mask-element-header");
@@ -15219,16 +15522,17 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
     gtk_widget_set_name(subgroup_box, "mask-subgroup-elements");
     dt_gui_add_class(subgroup_box, "masks-list");
     dt_gui_add_class(subgroup_box, "mask-group-elements");
-    if(opacity_sliders)
+    // with the subpanel, its opacity slider is there while it is selected
+    if(!opacity_sliders)
+    {
+      inline_opacity_editor = _build_props_row_editor(module, fid, FALSE, TRUE, FALSE);
+      opacity_box = _style_inline_opacity_box(inline_opacity_editor, module);
+    }
+    else if(!props_subpanel)
     {
       GtkWidget *ex_op = _build_props_row_editor(module, fid, FALSE, TRUE, FALSE);
       dt_gui_add_class(ex_op, "mask-group-opacity-editor");
       dt_gui_box_add(subgroup_box, ex_op);
-    }
-    else
-    {
-      inline_opacity_editor = _build_props_row_editor(module, fid, FALSE, TRUE, FALSE);
-      opacity_box = _style_inline_opacity_box(inline_opacity_editor, module);
     }
     _pack_subgroup(module, form, subgroup_box);
 
@@ -15306,9 +15610,10 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
       opacity_box = _style_inline_opacity_box(inline_opacity_editor, module);
     }
     // that inline value is all a raster row has, so by default there is
-    // nothing behind an expander and the row carries no chevron. "show
-    // opacity slider in expanded elements" gives it a full slider to show,
-    // and with it the same expander every other element row has.
+    // nothing behind an expander and the row carries no chevron. "use
+    // sliders for opacity" gives it a full slider to show, and with it the
+    // same expander every other element row has, unless the slider goes in
+    // the properties subpanel.
     if(expandable)
     {
       props_toggle = _make_props_row_toggle(
@@ -15338,9 +15643,9 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
       inline_opacity_editor = _build_props_row_editor(module, fid, FALSE, TRUE, FALSE);
       opacity_box = _style_inline_opacity_box(inline_opacity_editor, module);
     }
-    // "shape properties in subpanel" shows them there instead, for the
+    // "element properties in subpanel" shows them there instead, for the
     // selected shape (see _props_panel_sync), so the row has nothing to expand
-    if(!_shape_props_subpanel())
+    if(expandable)
     {
       const char *props_tip =
         (form->type & DT_MASKS_OBJECT)
@@ -16360,40 +16665,12 @@ static void _pack_group(dt_iop_module_t *module,
 
   // "use sliders for opacity": the group's opacity, as a full labeled slider
   // leading its expanded contents instead of the compact value its header
-  // would otherwise carry. Packed before anything else, so it stays above
-  // both the member rows (packed from the bottom, see _pack_group_elements)
-  // and the pending-shape placeholder below. Drives the same persisted
-  // group_opacity through _group_opacity_changed the header value does.
-  if(show_group_opacity_slider)
-  {
-    GtkWidget *ex_op = dt_bauhaus_slider_new_with_range(
-      module, _blend_masks_properties[DT_MASKS_PROPERTY_OPACITY].min,
-      _blend_masks_properties[DT_MASKS_PROPERTY_OPACITY].max, 0, 1.0f, 2);
-    dt_bauhaus_widget_set_label(ex_op, N_("blend"), N_("opacity"));
-    dt_bauhaus_slider_set_format(ex_op, "%");
-    dt_bauhaus_slider_set_digits(ex_op, 2);
-    dt_bauhaus_widget_set_quad_visibility(ex_op, FALSE);
-    dt_gui_add_class(ex_op, "mask-props-slider");
-    _style_opacity_gradient(ex_op);
-    {
-      const dt_masks_point_group_t *head_pt = _group_point(grp, (dt_mask_id_t)cid);
-      const float go = head_pt ? head_pt->group_opacity : 1.0f;
-      DT_ENTER_GUI_UPDATE(); // populate only -- must not fire _group_opacity_changed
-      dt_bauhaus_slider_set(ex_op, go);
-      DT_LEAVE_GUI_UPDATE();
-      _group_opacity_update_tooltip(ex_op, go);
-    }
-    g_object_set_data(G_OBJECT(ex_op), "group-key", GUINT_TO_POINTER(cid));
-    g_signal_connect(G_OBJECT(ex_op), "value-changed",
-                     G_CALLBACK(_group_opacity_changed), module);
-    g_signal_connect(G_OBJECT(ex_op), "button-press-event",
-                     G_CALLBACK(_group_opacity_press), module);
-    if(group_bypassed) gtk_widget_set_sensitive(ex_op, FALSE);
-
-    GtkWidget *ex_op_box = dt_gui_vbox(ex_op);
-    dt_gui_add_class(ex_op_box, "mask-group-opacity-editor");
-    dt_gui_box_add(elem_box, ex_op_box);
-  }
+  // would otherwise carry, or in the properties subpanel while the group is
+  // selected. Packed before anything else, so it stays above both the member
+  // rows (packed from the bottom, see _pack_group_elements) and the
+  // pending-shape placeholder below
+  if(show_group_opacity_slider && !_props_subpanel())
+    dt_gui_box_add(elem_box, _build_group_opacity_editor(module, cid, TRUE));
 
   _pack_group_elements(module, grp, elem_box, g_list_reverse(g_list_copy(formids)),
                        formids, group_block);
@@ -17577,6 +17854,7 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
   }
 
   _preview_on_hover_cancel_dwell(bd);
+  _row_hover_cancel(module);
   // not only on module teardown: the shortcut registration in imageop.c builds
   // and drops blending on a scratch instance
   DT_CONTROL_SIGNAL_DISCONNECT(_consumers_history_changed, module);
@@ -18421,33 +18699,21 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     g_signal_connect(G_OBJECT(bd->contrast_slider), "value-changed",
                      G_CALLBACK(_refine_control_changed), bd);
 
-    // Expander header bar (darktable standard section expander):
-    // shows "(element|group|whole mask) refinement" centered, and the solid arrow toggle
-    // on the right.
+    // Expander header bar (darktable standard section expander): the
+    // reset button on the left, "refinement" centered on the whole bar, and on
+    // the right the bypass button and the solid arrow toggle. Both buttons go
+    // insensitive while there is nothing to reset or bypass, which is what says
+    // there are no refinements. What it refines is named by the details
+    // header above it (see _refine_update_header)
     GtkWidget *destdisp_head = dt_gui_hbox();
     gtk_box_set_spacing(GTK_BOX(destdisp_head), DT_BAUHAUS_SPACE);
     dt_gui_add_class(destdisp_head, "dt_section_expander");
     dt_gui_add_class(destdisp_head, "mask-refine-section-expander");
 
-    bd->masks_refine_indicator_icon =
-      _make_icon_widget(dtgtk_cairo_paint_masks_vertgradient);
-    gtk_widget_set_size_request(bd->masks_refine_indicator_icon, DT_PIXEL_APPLY_DPI(14),
-                                DT_PIXEL_APPLY_DPI(14));
-    gtk_widget_set_valign(bd->masks_refine_indicator_icon, GTK_ALIGN_CENTER);
-    gtk_widget_set_halign(bd->masks_refine_indicator_icon, GTK_ALIGN_CENTER);
-    gtk_widget_set_opacity(bd->masks_refine_indicator_icon, 0.25);
-    gtk_widget_set_tooltip_text(bd->masks_refine_indicator_icon,
-                                _("no refinements for this target"));
-
-    GtkWidget *icon_evb = gtk_event_box_new();
-    dt_gui_add_class(icon_evb, "mask-refine-indicator-box");
-    gtk_container_add(GTK_CONTAINER(icon_evb), bd->masks_refine_indicator_icon);
-    dt_gui_connect_click(icon_evb, _refine_header_clicked, NULL, bd);
-
-    bd->masks_refine_section_label = dt_ui_section_label_new(_("whole mask refinement"));
+    bd->masks_refine_section_label = dt_ui_section_label_new(_("refinement"));
     gtk_widget_set_tooltip_text(bd->masks_refine_section_label,
-                                _("refinements follow the panel selection: an element, a "
-                                  "group, or the whole mask if nothing is selected."));
+                                _("the refinement of the selected element or group, or of"
+                                  " the whole mask if nothing is selected."));
     _stash_base_tooltip(bd->masks_refine_section_label);
 
     GtkWidget *header_evb = gtk_event_box_new();
@@ -18464,28 +18730,53 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     g_signal_connect(G_OBJECT(bd->masks_refine_toggle_btn), "toggled",
                      G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_REFINE));
 
-    dt_gui_box_add(destdisp_head, icon_evb, dt_gui_expand(header_evb));
+    // the center widget stays centered on the bar whatever sits on either side
+    gtk_box_set_center_widget(GTK_BOX(destdisp_head), header_evb);
     gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_toggle_btn, FALSE, FALSE,
                      0);
 
-    // Inside the expanded section:
-    // Top row showing: <icon> <label> <actions>
-    GtkWidget *inner_header_row = dt_gui_hbox();
-    gtk_box_set_spacing(GTK_BOX(inner_header_row), 4);
-    dt_gui_add_class(inner_header_row, "mask-refine-inner-header");
+    // the details expander, holding the properties and refinement sections
+    // that both act on what its header names: <icon> <name> of the selected
+    // element or group, or of the whole mask (see _refine_update_header)
+    GtkWidget *details_head = dt_gui_hbox();
+    gtk_box_set_spacing(GTK_BOX(details_head), DT_BAUHAUS_SPACE);
+    dt_gui_add_class(details_head, "dt_section_expander");
+    dt_gui_add_class(details_head, "mask-refine-section-expander");
 
     bd->masks_refine_icon_box = dt_gui_hbox();
     gtk_widget_set_valign(bd->masks_refine_icon_box, GTK_ALIGN_CENTER);
 
     bd->masks_refine_name_label = gtk_label_new(_("whole mask"));
-    gtk_label_set_xalign(GTK_LABEL(bd->masks_refine_name_label), 0.0f);
+    gtk_label_set_xalign(GTK_LABEL(bd->masks_refine_name_label), 0.5f);
     gtk_label_set_ellipsize(GTK_LABEL(bd->masks_refine_name_label), PANGO_ELLIPSIZE_END);
-    gtk_widget_set_hexpand(bd->masks_refine_name_label, TRUE);
+    // centered, the label sizes to its text: a long element name would push
+    // the bar wider than the panel without a bound to ellipsize against
+    gtk_label_set_max_width_chars(GTK_LABEL(bd->masks_refine_name_label), 24);
     dt_gui_add_class(bd->masks_refine_name_label, "mask-refine-header-name");
+    gtk_widget_set_tooltip_text(bd->masks_refine_name_label,
+                                _("the properties and refinement of the selected element or"
+                                  " group, or of the whole mask if nothing is selected"));
 
-    dt_gui_box_add(inner_header_row, bd->masks_refine_icon_box, dt_gui_expand(bd->masks_refine_name_label));
+    GtkWidget *details_evb = gtk_event_box_new();
+    gtk_container_add(GTK_CONTAINER(details_evb),
+                      dt_gui_hbox(bd->masks_refine_icon_box,
+                                  bd->masks_refine_name_label));
+    dt_gui_connect_click(details_evb, _details_header_clicked, NULL, bd);
 
-    // Actions on the right of the inner header: [reset] [bypass toggle]
+    bd->details_toggle_btn =
+      dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->details_toggle_btn), TRUE);
+    dt_gui_add_class(bd->details_toggle_btn, "dt_ignore_fg_state");
+    dt_gui_add_class(bd->details_toggle_btn, "dt_transparent_background");
+    gtk_widget_set_tooltip_text(bd->details_toggle_btn, _("toggle element details section"));
+    g_signal_connect(G_OBJECT(bd->details_toggle_btn), "toggled",
+                     G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_DETAILS));
+    // icon and caption centered together on the bar, as the refinement's
+    // caption is (see gtk_box_set_center_widget above)
+    gtk_box_set_center_widget(GTK_BOX(details_head), details_evb);
+    gtk_box_pack_end(GTK_BOX(details_head), bd->details_toggle_btn, FALSE, FALSE, 0);
+
+    // actions on the refinement header: reset on the left, bypass on the right
     bd->masks_refine_reset_btn = dtgtk_button_new(dtgtk_cairo_paint_reset, 0, NULL);
     gtk_widget_set_tooltip_text(bd->masks_refine_reset_btn,
                                 _("reset the refinement of the current target"));
@@ -18493,8 +18784,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                      G_CALLBACK(_refine_reset_clicked), bd);
     gtk_widget_set_no_show_all(bd->masks_refine_reset_btn, TRUE);
     gtk_widget_set_visible(bd->masks_refine_reset_btn, FALSE);
-    gtk_box_pack_end(GTK_BOX(inner_header_row), bd->masks_refine_reset_btn, FALSE, FALSE,
-                     0);
+    gtk_box_pack_start(GTK_BOX(destdisp_head), bd->masks_refine_reset_btn, FALSE, FALSE, 0);
 
     bd->masks_refine_bypass_btn =
       dtgtk_togglebutton_new(dtgtk_cairo_paint_eye_toggle, 0, NULL);
@@ -18504,8 +18794,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       _("temporarily disable the effect of refinements for this target"));
     g_signal_connect(G_OBJECT(bd->masks_refine_bypass_btn), "toggled",
                      G_CALLBACK(_refine_bypass_toggled), module);
-    gtk_box_pack_end(GTK_BOX(inner_header_row), bd->masks_refine_bypass_btn, FALSE, FALSE,
-                     0);
+    gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_bypass_btn, FALSE, FALSE, 0);
 
     bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
     bd->masks_refine_scope_formid = INVALID_MASKID;
@@ -18539,18 +18828,19 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_box_add(mask_panel, box);
     dt_iop_gui_init_masks(mask_panel, module);
 
-    // "shape properties in subpanel": a collapsible like the refinements', its
-    // content filled from the selection (see _props_panel_sync). Built always,
-    // shown only while the option is on (see _blendop_masks_mode_callback)
+    // "element properties in subpanel": a collapsible like the refinements',
+    // its content following the selection (see _props_panel_sync), packed
+    // with them under the selection header below. Built always, shown only
+    // while the option is on (see _blendop_masks_mode_callback)
     {
       GtkWidget *head = dt_gui_hbox();
       gtk_box_set_spacing(GTK_BOX(head), DT_BAUHAUS_SPACE);
       dt_gui_add_class(head, "dt_section_expander");
       dt_gui_add_class(head, "mask-refine-section-expander");
-      GtkWidget *label = dt_ui_section_label_new(_("shape properties"));
+      GtkWidget *label = dt_ui_section_label_new(_("properties"));
       gtk_widget_set_tooltip_text(
-        label, _("the properties of the selected shape, or the creation controls of a"
-                 " shape being drawn. empty while anything but a shape is selected."));
+        label, _("the properties of the selected element or group, or the creation"
+                 " controls of a shape being drawn"));
       GtkWidget *label_evb = gtk_event_box_new();
       gtk_container_add(GTK_CONTAINER(label_evb), label);
       dt_gui_connect_click(label_evb, _props_panel_header_clicked, NULL, bd);
@@ -18560,7 +18850,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       dt_gui_add_class(bd->props_panel_toggle_btn, "dt_ignore_fg_state");
       dt_gui_add_class(bd->props_panel_toggle_btn, "dt_transparent_background");
       gtk_widget_set_tooltip_text(bd->props_panel_toggle_btn,
-                                  _("toggle shape properties section"));
+                                  _("toggle properties section"));
       g_signal_connect(G_OBJECT(bd->props_panel_toggle_btn), "toggled",
                        G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_PROPS));
       dt_gui_box_add(head, dt_gui_expand(label_evb));
@@ -18573,12 +18863,12 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->props_panel_expander), TRUE);
       gtk_widget_set_name(bd->props_panel_expander, "collapse-block");
       bd->props_panel_formid = INVALID_MASKID;
+      bd->props_panel_is_group = FALSE;
       bd->props_panel_box = GTK_BOX(dt_gui_vbox(bd->props_panel_expander));
-      _add_wrapped_box(mask_panel, bd->props_panel_box, "masks_drawn");
     }
 
     bd->masks_refine_sliders_box = GTK_BOX(
-      dt_gui_vbox(inner_header_row, bd->details_slider, bd->masks_feathering_guide_combo,
+      dt_gui_vbox(bd->details_slider, bd->masks_feathering_guide_combo,
                   bd->feathering_radius_slider, bd->blur_radius_slider,
                   bd->brightness_slider, bd->contrast_slider));
     gtk_widget_set_name(GTK_WIDGET(bd->masks_refine_sliders_box), "collapsible");
@@ -18588,7 +18878,18 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->masks_refine_expander), TRUE);
     gtk_widget_set_name(bd->masks_refine_expander, "collapse-block");
 
-    bd->refine_box = GTK_BOX(dt_gui_vbox(bd->masks_refine_expander));
+    // the properties keep their own revealer inside, since they show only while
+    // the option is on and the selection has some (see _props_panel_show)
+    bd->details_content = dt_gui_vbox();
+    gtk_widget_set_name(bd->details_content, "collapsible");
+    dt_gui_add_class(bd->details_content, "mask-details");
+    _add_wrapped_box(bd->details_content, bd->props_panel_box, "masks_drawn");
+    dt_gui_box_add(bd->details_content, bd->masks_refine_expander);
+    bd->details_expander = dtgtk_expander_new(details_head, bd->details_content);
+    dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->details_expander), TRUE);
+    gtk_widget_set_name(bd->details_expander, "collapse-block");
+
+    bd->refine_box = GTK_BOX(dt_gui_vbox(bd->details_expander));
     _add_wrapped_box(mask_panel, bd->refine_box, "masks_refinement");
 
     // "mask consumers": the modules reading this one's raster mask, shown only

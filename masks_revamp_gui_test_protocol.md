@@ -172,10 +172,38 @@ After each check, switch images and back: the setting and the render stay.
     section stays folded everywhere, including in a second module showing its
     mask panel at the same time. Unfold one: it unfolds everywhere. Restart:
     the states are kept. The masks options menu has no "collapse refinements
-    by default". With "shape properties in subpanel" on and that section
+    by default". With "element properties in subpanel" on and that section
     folded, start drawing a circle: the section opens with the creation
     controls, and folds again once the circle is placed, or the drawing
     canceled.
+
+5.9 Turn "auto-expand selected" off and "use sliders for opacity" on. The
+    sliders option stays clickable, and opacity leaves every row and group
+    header: expanding a shape, raster or parametric row, or a group, by hand
+    shows its opacity slider at the top.
+
+5.10 Turn "element properties in subpanel" on as well. Shape and raster rows
+     have no chevron; a parametric row keeps its chevron, which shows only
+     its input and output sliders; groups show no opacity slider in the list.
+     Below the list, an expander's header shows the selection's icon and
+     name, and "properties" and "refinement" sit inside it; with only the
+     mask's own group selected it shows the mask panel icon (as on the
+     darkroom toolbar) and "whole mask". Fold it: it stays folded for other
+     selections, other modules, and after a restart. With it folded, start
+     drawing a circle: it opens with the creation controls, and folds again
+     once the circle is placed or the drawing canceled. On the refinement header, "refinement" is
+     centered, reset is on the left and the eye left of the arrow; both work
+     with the section folded, and both are greyed out while the target has no
+     refinement, turning active as soon as a slider moves off zero.
+     Select in turn: a shape (geometry and opacity), a raster element
+     (opacity), a parametric L or g channel (opacity and boost factor; moving
+     the boost factor rescales the row's sliders), a hue channel (opacity
+     only, no boost factor), a nested group row (opacity), a group header
+     alone ("selected group": the group's opacity, greyed out while the group
+     is disabled). Each slider
+     changes the render, and undo restores it. Turn the sliders option off:
+     only a shape and a parametric channel with a boost factor still fill the
+     section; anything else hides it.
 
 ## 6. Presets and reset
 

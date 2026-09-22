@@ -1473,26 +1473,138 @@ static void test_stepping_in_moves_the_panel_signature(void **state)
   assert_true(_masks_list_signature(&flexi_module) == outside);
 }
 
-// the shape properties subpanel holds a shape's editor, and nothing else's
-static void test_props_panel_shows_shapes_only(void **state)
+// the properties subpanel follows the selection: a shape's geometry, and with
+// opacity sliders its opacity
+static void test_props_panel_shows_a_shapes_geometry(void **state)
 {
   flexi_conf_init();
   flexi_build("u:1,5");
   _make_object(5, 21, 2);
   _with_gui(INVALID_MASKID);
   flexi_bd.panel_selected_formid = 1;
-  assert_int_equal(_model_props_panel_target(&flexi_bd), 1);
+  dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd, FALSE);
+  assert_int_equal(t.id, 1);
+  assert_false(t.is_group);
+  assert_true(t.shape);
+  assert_false(t.opacity);
+  assert_false(t.boost);
+  assert_true(_model_props_panel_target(&flexi_bd, TRUE).opacity);
   // an AI object is edited as one shape
   flexi_bd.panel_selected_formid = 5;
-  assert_int_equal(_model_props_panel_target(&flexi_bd), 5);
-  // stepped into, it is a group, and its paths are the shapes
+  t = _model_props_panel_target(&flexi_bd, FALSE);
+  assert_int_equal(t.id, 5);
+  assert_true(t.shape);
+}
+
+// stepped into, the object is a group, and its paths are the shapes: only its
+// opacity is left to show
+static void test_props_panel_entered_object_has_only_opacity(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  _make_object(5, 21, 2);
   _with_gui(5);
-  assert_int_equal(_model_props_panel_target(&flexi_bd), INVALID_MASKID);
+  flexi_bd.panel_selected_formid = 5;
+  assert_int_equal(_model_props_panel_target(&flexi_bd, FALSE).id, INVALID_MASKID);
+  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd, TRUE);
+  assert_int_equal(t.id, 5);
+  assert_false(t.shape);
+  assert_true(t.opacity);
   flexi_bd.panel_selected_formid = 22;
-  assert_int_equal(_model_props_panel_target(&flexi_bd), 22);
-  // a group selection alone shows nothing
+  assert_true(_model_props_panel_target(&flexi_bd, FALSE).shape);
+}
+
+// a raster mask has only its opacity, so it shows there only with the sliders
+static void test_props_panel_raster_needs_opacity_sliders(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,2");
+  dt_masks_get_from_id(&flexi_dev, 2)->type = DT_MASKS_RASTER;
+  flexi_bd.panel_selected_formid = 2;
+  assert_int_equal(_model_props_panel_target(&flexi_bd, FALSE).id, INVALID_MASKID);
+  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd, TRUE);
+  assert_int_equal(t.id, 2);
+  assert_false(t.shape);
+  assert_true(t.opacity);
+}
+
+// the first channel of the scene-referred colorspace with a boost factor, or
+// without one when `boost` is FALSE
+static int _channel_with_boost(const gboolean boost)
+{
+  const dt_iop_gui_blendif_channel_t *ch =
+    dt_develop_blendif_channels_for_csp(DEVELOP_BLEND_CS_RGB_SCENE);
+  for(int k = 0; ch[k].label; k++)
+    if(ch[k].boost_factor_enabled == boost) return k;
+  return -1;
+}
+
+// a parametric channel's boost factor goes there whether or not opacity
+// sliders are in use, but only for a channel that has one
+static void test_props_panel_parametric_shows_its_boost_factor(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,2");
+  dt_masks_form_t *f = dt_masks_get_from_id(&flexi_dev, 2);
+  f->type = DT_MASKS_PARAMETRIC;
+  dt_masks_point_parametric_t p = { 0 };
+  p.colorspace = DEVELOP_BLEND_CS_RGB_SCENE;
+  p.channel = _channel_with_boost(TRUE);
+  assert_true(p.channel >= 0);
+  f->points = g_list_append(NULL, &p);
+  flexi_bd.panel_selected_formid = 2;
+
+  dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd, FALSE);
+  assert_int_equal(t.id, 2);
+  assert_true(t.boost);
+  assert_false(t.opacity);
+  assert_false(t.shape);
+  t = _model_props_panel_target(&flexi_bd, TRUE);
+  assert_true(t.boost);
+  assert_true(t.opacity);
+
+  // no boost factor: only the opacity slider is left to show
+  p.channel = _channel_with_boost(FALSE);
+  assert_true(p.channel >= 0);
+  assert_int_equal(_model_props_panel_target(&flexi_bd, FALSE).id, INVALID_MASKID);
+  t = _model_props_panel_target(&flexi_bd, TRUE);
+  assert_int_equal(t.id, 2);
+  assert_false(t.boost);
+  assert_true(t.opacity);
+
+  g_list_free(f->points);
+  f->points = NULL;
+}
+
+// a group selection alone shows the group's opacity, with the sliders; an
+// element selected in it wins, as for the refinements
+static void test_props_panel_shows_a_groups_opacity(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1,5");
+  const dt_masks_point_group_t *head = flexi_group()->points->data;
+  assert_true(dt_masks_point_is_marker(head));
   flexi_bd.panel_selected_formid = INVALID_MASKID;
-  assert_int_equal(_model_props_panel_target(&flexi_bd), INVALID_MASKID);
+  flexi_bd.panel_selected_group_cid = head->formid;
+  assert_int_equal(_model_props_panel_target(&flexi_bd, FALSE).id, INVALID_MASKID);
+  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd, TRUE);
+  assert_int_equal(t.id, head->formid);
+  assert_true(t.is_group);
+  assert_true(t.opacity);
+  assert_false(t.shape);
+  flexi_bd.panel_selected_formid = 1;
+  assert_false(_model_props_panel_target(&flexi_bd, TRUE).is_group);
+  assert_int_equal(_model_props_panel_target(&flexi_bd, TRUE).id, 1);
+}
+
+// nothing selected: nothing to show
+static void test_props_panel_empty_without_a_selection(void **state)
+{
+  flexi_conf_init();
+  flexi_build("u:1");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = INVALID_MASKID;
+  assert_int_equal(_model_props_panel_target(&flexi_bd, TRUE).id, INVALID_MASKID);
 }
 
 // solo edit inside the object keeps the object: narrowing to the pressed path
@@ -2900,7 +3012,14 @@ int main(void)
     cmocka_unit_test_teardown(test_object_with_holes_is_a_difference_group, _teardown_objects),
     cmocka_unit_test_teardown(test_object_without_holes_is_a_union_group, _teardown_objects),
     cmocka_unit_test_teardown(test_marker_is_not_counted_as_a_path, _teardown_objects),
-    cmocka_unit_test_teardown(test_props_panel_shows_shapes_only, _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_shows_a_shapes_geometry, _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_entered_object_has_only_opacity,
+                              _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_raster_needs_opacity_sliders, _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_parametric_shows_its_boost_factor,
+                              _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_shows_a_groups_opacity, _teardown_objects),
+    cmocka_unit_test_teardown(test_props_panel_empty_without_a_selection, _teardown_objects),
     cmocka_unit_test_teardown(test_stepping_in_moves_the_panel_signature, _teardown_objects),
     cmocka_unit_test_teardown(test_soloedit_inside_entered_object_isolates_the_object,
                               _teardown_objects),
