@@ -7913,7 +7913,15 @@ static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
       while(child_iter && !GTK_IS_MODEL_BUTTON(child_iter->data))
         child_iter = child_iter->next;
       if(child_iter)
+      {
+        char *tip = NULL;
+        if(g_menu_model_get_item_attribute(model, i, "tooltip", "s", &tip))
+        {
+          gtk_widget_set_tooltip_text(GTK_WIDGET(child_iter->data), tip);
+          g_free(tip);
+        }
         child_iter = child_iter->next;
+      }
       g_object_unref(submenu);
     }
     else

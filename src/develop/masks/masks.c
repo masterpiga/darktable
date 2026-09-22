@@ -1887,11 +1887,11 @@ static gboolean _drop_absorbed_members(GList *forms, dt_masks_form_t *grp)
 }
 
 // all of the above, on every list of the tree
-static void _simplify_unions(GList *forms, dt_masks_form_t *grp, const int depth)
+static gboolean _simplify_unions(GList *forms, dt_masks_form_t *grp, const int depth)
 {
-  if(depth > DT_MASKS_NESTING_MAX) return;
-  _drop_dominated_refs(forms, grp);
-  _drop_absorbed_members(forms, grp);
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  gboolean changed = _drop_dominated_refs(forms, grp);
+  changed |= _drop_absorbed_members(forms, grp);
   for(GList *l = grp->points; l; l = g_list_next(l))
   {
     const dt_masks_point_group_t *pt = l->data;
@@ -1899,8 +1899,203 @@ static void _simplify_unions(GList *forms, dt_masks_form_t *grp, const int depth
     dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
     if(child && child != grp && (child->type & DT_MASKS_GROUP)
        && !(child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT)))
-      _simplify_unions(forms, child, depth + 1);
+      changed |= _simplify_unions(forms, child, depth + 1);
   }
+  return changed;
+}
+
+// the plain nested group member `pt` refers to, or NULL: not a clone group or
+// an AI object, which act as elements
+static dt_masks_form_t *_plain_child(GList *forms,
+                                     const dt_masks_form_t *grp,
+                                     const dt_masks_point_group_t *pt)
+{
+  if(dt_masks_point_is_marker(pt)) return NULL;
+  dt_masks_form_t *child = dt_masks_get_from_id_ext(forms, pt->formid);
+  return child && child != grp && (child->type & DT_MASKS_GROUP)
+         && !(child->type & (DT_MASKS_CLONE | DT_MASKS_OBJECT))
+           ? child
+           : NULL;
+}
+
+// a reference that applies nothing of its own to what it refers to
+static gboolean _is_plain_ref(const dt_masks_point_group_t *ref)
+{
+  return ref->opacity == 1.0f && ref->refinement.enabled == DT_MASKS_REFINE_OFF
+         && !(ref->state & (DT_MASKS_STATE_INVERSE | DT_MASKS_STATE_HIDDEN
+                            | DT_MASKS_STATE_DISABLE));
+}
+
+// a group marker that applies nothing to its group's fold. A name counts: it
+// says someone meant the group to be there
+static gboolean _is_plain_marker(const dt_masks_point_group_t *mk)
+{
+  return !(mk->state & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT))
+         && mk->group_opacity == 1.0f && mk->refinement.enabled == DT_MASKS_REFINE_OFF
+         && !mk->name[0];
+}
+
+// is `fid` some module's own mask? Its list is that mask, whoever else holds it
+static gboolean _is_module_mask(const dt_mask_id_t fid)
+{
+  const dt_develop_t *dev = darktable.develop;
+  for(const GList *m = dev ? dev->iop : NULL; m; m = g_list_next(m))
+  {
+    const dt_iop_module_t *mod = m->data;
+    if(mod->blend_params && mod->blend_params->mask_id == fid) return TRUE;
+  }
+  return FALSE;
+}
+
+// can the group `child` give its members away? Only when nothing else refers
+// to it, since every other holder would lose them too
+static gboolean _is_sole_owner_of(GList *forms, const dt_masks_form_t *child)
+{
+  GHashTable *none = g_hash_table_new(NULL, NULL);
+  const gboolean sole = _live_refs(forms, child->formid, none, none) == 1
+                        && !_is_module_mask(child->formid);
+  g_hash_table_destroy(none);
+  return sole;
+}
+
+/* Drop every reference to an empty nested group: it renders as no group at all
+   (group.c, nb_groups == 0), wherever it sits, difference's base included,
+   since the next member that renders becomes the base. A named group stays */
+static gboolean _drop_empty_groups(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  gboolean changed = FALSE;
+  for(GList *l = grp->points; l;)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *pt = l->data;
+    dt_masks_form_t *child = _plain_child(forms, grp, pt);
+    if(child)
+    {
+      changed |= _drop_empty_groups(forms, child, depth + 1);
+      const dt_masks_point_group_t *mk = _sole_marker(child);
+      if(mk && !child->points->next && !mk->name[0])
+      {
+        free(pt);
+        grp->points = g_list_delete_link(grp->points, l);
+        changed = TRUE;
+      }
+    }
+    l = next;
+  }
+  return changed;
+}
+
+/* Replace a plain reference to a nested group by that group's members where
+   _splices_into says it renders the same. Unlike the migration's
+   _splice_nested, any group qualifies, not just one the migration made, but
+   only while this is its one reference: its members move, and the form stays
+   behind holding its marker alone, unreferenced, as a deleted group does */
+static gboolean _splice_sole_refs(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  const dt_masks_point_group_t *mk = _sole_marker(grp);
+  gboolean changed = FALSE;
+  gboolean base = TRUE; // nothing before this member renders
+  for(GList *l = grp->points; l;)
+  {
+    GList *next = g_list_next(l);
+    dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      l = next;
+      continue;
+    }
+    dt_masks_form_t *child = _plain_child(forms, grp, pt);
+    if(child)
+    {
+      changed |= _splice_sole_refs(forms, child, depth + 1);
+      if(mk && _splices_into(pt, child, mk->state & DT_MASKS_STATE_WITHIN, base)
+         && _is_sole_owner_of(forms, child))
+      {
+        base = base && !_has_visible_member(forms, child);
+        GList *members = g_list_next(child->points);
+        child->points->next = NULL;
+        for(GList *c = members; c; c = g_list_next(c))
+        {
+          dt_masks_point_group_t *cp = c->data;
+          cp->parentid = grp->formid;
+          grp->points = g_list_insert_before(grp->points, l, cp);
+        }
+        g_list_free(members);
+        free(pt);
+        grp->points = g_list_delete_link(grp->points, l);
+        changed = TRUE;
+        l = next;
+        continue;
+      }
+    }
+    if(dt_masks_get_from_id_ext(forms, pt->formid)
+       && !(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
+      base = FALSE;
+    l = next;
+  }
+  return changed;
+}
+
+/* Replace a plain reference to a plain nested group holding one member by
+   that member. A single member folds to itself under every operator, and
+   contributes `o * (inverted ? 1 - m : m)` of its own `m` wherever it sits,
+   so it renders the same one level up. _collapse_single_members covers a
+   group whose settings fold into its member; this one takes a nested group
+   member too, since the group applies nothing */
+static gboolean _collapse_plain_wrappers(GList *forms, dt_masks_form_t *grp, const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  gboolean changed = FALSE;
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *ref = l->data;
+    dt_masks_form_t *child = _plain_child(forms, grp, ref);
+    if(!child) continue;
+    changed |= _collapse_plain_wrappers(forms, child, depth + 1);
+
+    const dt_masks_point_group_t *mk = _sole_marker(child);
+    if(!_is_plain_ref(ref) || !mk || !_is_plain_marker(mk) || g_list_length(child->points) != 2)
+      continue;
+    const dt_masks_point_group_t *m = child->points->next->data;
+    // a parametric channel at its neutral range counts as no member, so its
+    // group renders as none, while the channel on its own still folds in; a
+    // raster element stays for the reason _collapse_single_members gives
+    const dt_masks_form_t *f = dt_masks_get_from_id_ext(forms, m->formid);
+    if(!f || (f->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))) continue;
+
+    // the member is copied: another reference to the group keeps it
+    dt_masks_point_group_t *e = malloc(sizeof(dt_masks_point_group_t));
+    memcpy(e, m, sizeof(dt_masks_point_group_t));
+    e->parentid = grp->formid;
+    free(ref);
+    l->data = e;
+    changed = TRUE;
+  }
+  return changed;
+}
+
+gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return FALSE;
+  GHashTable *none = g_hash_table_new(NULL, NULL);
+  gboolean changed = FALSE;
+  // each pass can open the way for another: a dropped empty group leaves a
+  // one-member wrapper, a collapsed wrapper a group that splices
+  for(int pass = 0; pass <= DT_MASKS_NESTING_MAX; pass++)
+  {
+    gboolean again = _drop_empty_groups(forms, grp, 0);
+    again |= _fold_nested_refs(forms, grp, none, none, 0);
+    again |= _splice_sole_refs(forms, grp, 0);
+    again |= _collapse_single_members(forms, grp, 0);
+    again |= _collapse_plain_wrappers(forms, grp, 0);
+    again |= _simplify_unions(forms, grp, 0);
+    changed |= again;
+    if(!again) break;
+  }
+  g_hash_table_destroy(none);
+  return changed;
 }
 
 gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp)

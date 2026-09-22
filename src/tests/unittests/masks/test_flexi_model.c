@@ -2299,6 +2299,200 @@ static void test_drop_a_group_inside_another(void **state)
   _free_nested_points(outer);
 }
 
+// ---------------------------------------------------------------------------
+// compose and simplify
+// ---------------------------------------------------------------------------
+
+// every nested group's points, _sub's included: compose and simplify make and
+// empty groups the test never names
+static int _teardown_composed(void **state)
+{
+  for(GList *l = flexi_dev.forms; l; l = g_list_next(l))
+    if(l->data != flexi_group() && (((dt_masks_form_t *)l->data)->type & DT_MASKS_GROUP))
+      _free_nested_points(l->data);
+  _sub = NULL;
+  flexi_teardown();
+  return 0;
+}
+
+// an element goes into a new group where it was, keeping its own settings,
+// under an empty group, which is what compose hands back to be selected
+static void test_compose_an_element(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2,3");
+  dt_masks_point_group_t *two = _group_point(grp, 2);
+  two->opacity = 0.5f;
+  two->state |= DT_MASKS_STATE_INVERSE;
+  const dt_mask_id_t eid = _model_compose(grp, two, DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  assert_true(dt_is_valid_maskid(eid));
+  assert_tree(grp, "u{1,d{2~@0.5,u{}},3}");
+  const dt_masks_point_group_t *empty = _group_point(grp, eid);
+  assert_non_null(empty);
+  assert_true(dt_masks_point_is_marker(empty));
+  assert_int_equal(two->parentid, _group_point(grp, _group_cid_of_form(grp, 2))->parentid);
+}
+
+// a group is composed through its holder's reference, keeping its settings
+static void test_compose_a_nested_group(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  const dt_mask_id_t m[] = { 11, 12 };
+  _sub = _nested_group(2000, 2500, m, 2);
+  _group_point(grp, 2500)->group_opacity = 0.5f;
+  assert_tree(grp, "u{1,u@0.5{11,12}}");
+
+  assert_true(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, 2500),
+                                                DT_MASKS_STATE_ISECT)));
+  assert_tree(grp, "u{1,i{u@0.5{11,12},u{}}}");
+}
+
+// the mask's own group stays the mask, with its id: its members and settings
+// move into a group at its bottom, and it keeps only the new operator
+static void test_compose_the_whole_mask(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_masks_point_group_t *root = grp->points->data;
+  root->state |= DT_MASKS_STATE_SCREEN | DT_MASKS_STATE_OP_INVERT;
+  root->group_opacity = 0.7f;
+  root->refinement.enabled = DT_MASKS_REFINE_GROUP;
+  root->refinement.blur_radius = 3.0f;
+
+  assert_true(dt_is_valid_maskid(_model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE)));
+  assert_tree(grp, "d{o~@0.7{1,2},u{}}");
+  assert_ptr_equal(grp->points->data, root);
+  assert_int_equal(root->formid, FLEXI_GID(0));
+  assert_int_equal(root->refinement.enabled, DT_MASKS_REFINE_OFF);
+  const dt_masks_form_t *sub =
+    dt_masks_get_from_id(&flexi_dev, ((dt_masks_point_group_t *)grp->points->next->data)->formid);
+  const dt_masks_point_group_t *mk = sub->points->data;
+  assert_int_equal(mk->refinement.enabled, DT_MASKS_REFINE_GROUP);
+  assert_true(mk->refinement.blur_radius == 3.0f);
+  assert_int_equal(((dt_masks_point_group_t *)sub->points->next->data)->parentid, sub->formid);
+}
+
+// compose adds a level, so it stops where nesting does, and a list of several
+// groups, from an edit stored before one-group masks, is not composed
+static void test_compose_stops_where_nesting_does(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  dt_mask_id_t cid = FLEXI_GID(0);
+  for(int depth = 1; depth <= DT_MASKS_NESTING_MAX; depth++)
+    cid = _model_nest_new_group(grp, 0, cid);
+  assert_false(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, cid), DT_MASKS_STATE_ISECT)));
+  assert_false(dt_is_valid_maskid(_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
+  assert_true(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, 1), DT_MASKS_STATE_ISECT)));
+
+  _teardown_composed(state);
+  grp = flexi_build("u:1 | i:2");
+  assert_false(dt_is_valid_maskid(_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
+}
+
+// compose, then simplify with the empty group still empty: back where it was
+static void test_simplify_undoes_a_compose(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2,3");
+  _model_compose(grp, _group_point(grp, 2), DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  assert_true(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "u{1,2,3}");
+  assert_int_equal(_group_point(grp, 2)->parentid, grp->formid);
+  assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
+}
+
+// the whole mask takes back what compose moved out of it, its refinement
+// going to the module's, and only where that renders the same
+static void test_hoist_undoes_a_whole_mask_compose(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+  dt_masks_point_group_t *root = grp->points->data;
+  root->state |= DT_MASKS_STATE_SCREEN;
+  root->group_opacity = 0.7f;
+  _model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  dt_masks_refinement_t whole = { 0 };
+  assert_false(_model_hoist_sole_group(grp, &whole)); // the empty group is still there
+  assert_true(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "d{o@0.7{1,2}}");
+  assert_true(_model_hoist_sole_group(grp, &whole));
+  assert_tree(grp, "o@0.7{1,2}");
+  assert_int_equal(whole.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(_group_point(grp, 1)->parentid, grp->formid);
+  assert_false(_model_hoist_sole_group(grp, &whole));
+  _teardown_composed(state);
+
+  // a group's refinement becomes the whole mask's, unless that has one
+  grp = flexi_build("u:1,2");
+  root = grp->points->data;
+  root->refinement.enabled = DT_MASKS_REFINE_GROUP;
+  root->refinement.details = 0.3f;
+  _model_compose(grp, root, DT_MASKS_STATE_ISECT);
+  dt_masks_group_simplify(flexi_dev.forms, grp);
+  whole.enabled = DT_MASKS_REFINE_GROUP;
+  assert_false(_model_hoist_sole_group(grp, &whole));
+  whole.enabled = DT_MASKS_REFINE_OFF;
+  assert_true(_model_hoist_sole_group(grp, &whole));
+  assert_int_equal(whole.enabled, DT_MASKS_REFINE_GROUP);
+  assert_true(whole.details == 0.3f);
+  _teardown_composed(state);
+
+  // after the mask's invert and opacity, a refinement is not the same
+  grp = flexi_build("u:1,2");
+  root = grp->points->data;
+  root->group_opacity = 0.5f;
+  root->refinement.enabled = DT_MASKS_REFINE_GROUP;
+  _model_compose(grp, root, DT_MASKS_STATE_ISECT);
+  dt_masks_group_simplify(flexi_dev.forms, grp);
+  whole.enabled = DT_MASKS_REFINE_OFF;
+  assert_false(_model_hoist_sole_group(grp, &whole));
+}
+
+// a group folding with its holder's operator gives the holder its members,
+// except in the middle of an ordered fold: `1 - (11 - 12)` is no `1 - 11 - 12`
+static void test_simplify_splices_same_operator_groups(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  const dt_mask_id_t m[] = { 11, 12 };
+  _sub = _nested_group(2000, 2500, m, 2);
+  assert_true(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "u{1,11,12}");
+  _teardown_composed(state);
+
+  grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  _sub = _nested_group(2000, 2500, m, 2);
+  ((dt_masks_point_group_t *)grp->points->data)->state |= DT_MASKS_STATE_WITHIN_DIFFERENCE;
+  _group_point(grp, 2500)->state |= DT_MASKS_STATE_WITHIN_DIFFERENCE;
+  assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "d{1,d{11,12}}");
+}
+
+// what simplify leaves: a named group, even empty, a group whose settings
+// change its result, and a group another reference shares
+static void test_simplify_keeps_what_changes_something(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  const dt_mask_id_t m[] = { 11, 12 };
+  _sub = _nested_group(2000, 2500, m, 2);
+  _group_point(grp, 2500)->group_opacity = 0.5f;
+  const dt_masks_form_t *named = _nested_group(3000, 3500, NULL, 0);
+  g_strlcpy(_group_point(grp, 3500)->name, "later", sizeof(((dt_masks_point_group_t *)0)->name));
+  assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "u{1,u@0.5{11,12},u{}}");
+  assert_non_null(named);
+  _teardown_composed(state);
+
+  grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  _sub = _nested_group(2000, 2500, m, 2);
+  // a second reference to the same group
+  dt_masks_point_group_t *again = malloc(sizeof(dt_masks_point_group_t));
+  memcpy(again, g_list_last(grp->points)->data, sizeof(dt_masks_point_group_t));
+  grp->points = g_list_append(grp->points, again);
+  assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
+  assert_tree(grp, "u{1,u{11,12},u{11,12}}");
+}
+
 // a nested group shown as its one group moves out to the top list as that
 // group, keeping its settings, and its reference goes. Its between-group
 // operator, unused while nested, becomes union
@@ -2667,6 +2861,14 @@ int main(void)
     cmocka_unit_test_teardown(test_group_reorders_across_levels, _teardown_nested),
     cmocka_unit_test_teardown(test_add_a_group_inside_a_group, _teardown_nested),
     cmocka_unit_test_teardown(test_drop_a_group_inside_another, _teardown_nested),
+    cmocka_unit_test_teardown(test_compose_an_element, _teardown_composed),
+    cmocka_unit_test_teardown(test_compose_a_nested_group, _teardown_composed),
+    cmocka_unit_test_teardown(test_compose_the_whole_mask, _teardown_composed),
+    cmocka_unit_test_teardown(test_compose_stops_where_nesting_does, _teardown_composed),
+    cmocka_unit_test_teardown(test_simplify_undoes_a_compose, _teardown_composed),
+    cmocka_unit_test_teardown(test_hoist_undoes_a_whole_mask_compose, _teardown_composed),
+    cmocka_unit_test_teardown(test_simplify_splices_same_operator_groups, _teardown_composed),
+    cmocka_unit_test_teardown(test_simplify_keeps_what_changes_something, _teardown_composed),
     cmocka_unit_test_teardown(test_a_nested_group_moves_out_as_its_group, _teardown_nested),
     cmocka_unit_test_teardown(test_a_faded_nested_group_stays_nested, _teardown_nested),
     cmocka_unit_test_teardown(test_a_group_beside_a_nested_group_is_nested, _teardown_nested),

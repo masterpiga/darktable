@@ -1113,6 +1113,12 @@ gboolean dt_masks_object_ensure_marker(GList *forms, dt_masks_form_t *obj);
     each reference past the first, so a group has one parent within a mask.
     TRUE if anything changed */
 gboolean dt_masks_group_mark_classic_runs(GList **forms, dt_masks_form_t *grp);
+/** make the tree of flexi group `grp` shallower where that renders the same
+    mask: empty nested groups go, a nested group folding with its holder's
+    operator is replaced by its members, a group applying nothing to its one
+    member by that member, and so on. A group with a name, or settings that
+    change its result, stays. TRUE if anything changed */
+gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp);
 /** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when
     given, is set to the group form whose list holds it. NULL if none does */
 dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
