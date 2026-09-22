@@ -1190,7 +1190,7 @@ void _combine_masks_multiply(float *const restrict dest,
   if(inverted)
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(int index = 0; index < npixels; index++)
+    for(size_t index = 0; index < npixels; index++)
     {
       const float mask = opacity * (1.0f - newmask[index]);
       dest[index] *= mask;
@@ -1199,7 +1199,7 @@ void _combine_masks_multiply(float *const restrict dest,
   else
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(int index = 0; index < npixels; index++)
+    for(size_t index = 0; index < npixels; index++)
     {
       const float mask = opacity * newmask[index];
       dest[index] *= mask;
@@ -1220,7 +1220,7 @@ void _combine_masks_screen(float *const restrict dest,
   if(inverted)
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(int index = 0; index < npixels; index++)
+    for(size_t index = 0; index < npixels; index++)
     {
       const float mask = opacity * (1.0f - newmask[index]);
       const float d = dest[index];
@@ -1230,7 +1230,7 @@ void _combine_masks_screen(float *const restrict dest,
   else
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
-    for(int index = 0; index < npixels; index++)
+    for(size_t index = 0; index < npixels; index++)
     {
       const float mask = opacity * newmask[index];
       const float d = dest[index];
