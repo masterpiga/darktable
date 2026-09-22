@@ -167,6 +167,16 @@ After each check, switch images and back: the setting and the render stay.
 5.7 A parametric element never shows a chain, and its menu has no "link" or
     "unlink": it can only be copied ("copy parametric channel").
 
+5.8 Fold the refinements, shape properties and mask consumers sections, then
+    select another element, another group, and another module's mask. Each
+    section stays folded everywhere, including in a second module showing its
+    mask panel at the same time. Unfold one: it unfolds everywhere. Restart:
+    the states are kept. The masks options menu has no "collapse refinements
+    by default". With "shape properties in subpanel" on and that section
+    folded, start drawing a circle: the section opens with the creation
+    controls, and folds again once the circle is placed, or the drawing
+    canceled.
+
 ## 6. Presets and reset
 
 6.1 Apply each built-in group layout preset ("add + subtract + intersect",

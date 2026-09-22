@@ -2569,13 +2569,6 @@ static void _masks_shape_props_subpanel_toggled(GtkToggleButton *mi,
   _masks_rebuild_for_option(module);
 }
 
-static void _masks_collapse_refinements_default_toggled(GtkToggleButton *mi,
-                                                        dt_iop_module_t *module)
-{
-  dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default",
-                   gtk_toggle_button_get_active(mi));
-}
-
 static void _masks_show_panel_handle_toggled(GtkToggleButton *mi,
                                              dt_iop_module_t *module)
 {
@@ -2709,14 +2702,6 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
       " resizes the panel by dragging and hides it on a click."),
     dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle"),
     _masks_show_panel_handle_toggled)
-
-  _MASKS_OPT_CHECK(
-    collapse, _("collapse refinements by default"),
-    _("when enabled, newly selected masks, groups, and elements start with their"
-      " refinements section collapsed by default.\n"
-      "disabled by default."),
-    dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"),
-    _masks_collapse_refinements_default_toggled)
 }
 #undef _MASKS_OPT_CHECK
 
@@ -4399,58 +4384,88 @@ static inline gpointer _refine_scope_key(dt_iop_gui_blend_data_t *bd)
     return GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL);
 }
 
-static void _refine_update_expanded_state(dt_iop_module_t *module)
+static const char *const _masks_section_collapsed_key[DT_MASKS_SECTION_COUNT] = {
+  "plugins/darkroom/masks/refinements_collapsed",
+  "plugins/darkroom/masks/shape_properties_collapsed",
+  "plugins/darkroom/masks/consumers_collapsed",
+};
+
+gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing)
 {
-  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
-  if(!bd || !bd->masks_refine_toggle_btn) return;
-
-  if(!bd->masks_refine_expanded)
-    bd->masks_refine_expanded = g_hash_table_new(g_direct_hash, g_direct_equal);
-
-  gpointer key = _refine_scope_key(bd);
-  gpointer val = NULL;
-  gboolean expanded =
-    !dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default");
-  if(g_hash_table_lookup_extended(bd->masks_refine_expanded, key, NULL, &val))
-    expanded = GPOINTER_TO_INT(val);
-
-  bd->masks_refine_updating = TRUE;
-  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_refine_toggle_btn), expanded);
-  dtgtk_togglebutton_set_paint(
-    DTGTK_TOGGLEBUTTON(bd->masks_refine_toggle_btn), dtgtk_cairo_paint_solid_arrow,
-    (expanded ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT), NULL);
-  if(bd->masks_refine_expander
-     && dtgtk_expander_get_expanded(DTGTK_EXPANDER(bd->masks_refine_expander))
-          != expanded)
-    dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->masks_refine_expander), expanded);
-  if(bd->masks_refine_sliders_box)
-    gtk_widget_set_visible(GTK_WIDGET(bd->masks_refine_sliders_box), expanded);
-  bd->masks_refine_updating = FALSE;
+  if(section == DT_MASKS_SECTION_PROPS && drawing) return TRUE;
+  return !dt_conf_get_bool(_masks_section_collapsed_key[section]);
 }
 
-static void _refine_toggle_toggled(GtkToggleButton *btn, gpointer user_data)
+void _model_section_save(const dt_masks_section_t section, const gboolean expanded)
 {
-  dt_iop_module_t *module = (dt_iop_module_t *)user_data;
-  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
-  if(!bd || bd->masks_refine_updating) return;
+  dt_conf_set_bool(_masks_section_collapsed_key[section], !expanded);
+}
 
-  const gboolean active = gtk_toggle_button_get_active(btn);
-  if(!bd->masks_refine_expanded)
-    bd->masks_refine_expanded = g_hash_table_new(g_direct_hash, g_direct_equal);
+// TRUE while _section_set flips a section's toggle itself, so that
+// _section_toggled does not take it for a click
+static gboolean _section_applying = FALSE;
 
-  gpointer key = _refine_scope_key(bd);
-  g_hash_table_insert(bd->masks_refine_expanded, key, GINT_TO_POINTER(active));
-
-  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(bd->masks_refine_toggle_btn),
-                               dtgtk_cairo_paint_solid_arrow,
-                               (active ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT), NULL);
-  if(bd->masks_refine_expander)
-    dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->masks_refine_expander), active);
-  if(bd->masks_refine_sliders_box)
+static void _section_widgets(dt_iop_gui_blend_data_t *bd, const dt_masks_section_t section,
+                             GtkWidget **toggle, GtkWidget **expander, GtkWidget **content)
+{
+  switch(section)
   {
-    gtk_widget_set_visible(GTK_WIDGET(bd->masks_refine_sliders_box), active);
-    gtk_widget_queue_resize(GTK_WIDGET(bd->masks_refine_sliders_box));
+    case DT_MASKS_SECTION_REFINE:
+      *toggle = bd->masks_refine_toggle_btn;
+      *expander = bd->masks_refine_expander;
+      *content = GTK_WIDGET(bd->masks_refine_sliders_box);
+      break;
+    case DT_MASKS_SECTION_PROPS:
+      *toggle = bd->props_panel_toggle_btn;
+      *expander = bd->props_panel_expander;
+      *content = bd->props_panel_content;
+      break;
+    default:
+      *toggle = bd->consumers_toggle_btn;
+      *expander = bd->consumers_expander;
+      *content = bd->consumers_content;
+      break;
   }
+}
+
+// fold or unfold a section without saving it as the section's state
+static void _section_set(dt_iop_gui_blend_data_t *bd, const dt_masks_section_t section,
+                         const gboolean expanded)
+{
+  GtkWidget *toggle = NULL, *expander = NULL, *content = NULL;
+  if(bd) _section_widgets(bd, section, &toggle, &expander, &content);
+  if(!toggle || !expander || !content) return;
+
+  _section_applying = TRUE;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(toggle), expanded);
+  _section_applying = FALSE;
+  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(toggle), dtgtk_cairo_paint_solid_arrow,
+                               expanded ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT, NULL);
+  if(dtgtk_expander_get_expanded(DTGTK_EXPANDER(expander)) != expanded)
+    dtgtk_expander_set_expanded(DTGTK_EXPANDER(expander), expanded);
+  gtk_widget_set_visible(content, expanded);
+  gtk_widget_queue_resize(content);
+}
+
+static void _section_apply(dt_iop_gui_blend_data_t *bd, const dt_masks_section_t section)
+{
+  _section_set(bd, section, _model_section_expanded(section, FALSE));
+}
+
+static void _sections_apply(dt_iop_gui_blend_data_t *bd)
+{
+  for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++) _section_apply(bd, s);
+}
+
+// a click on a section's toggle folds that section in every module, since
+// several modules can show their mask panel at once
+static void _section_toggled(GtkToggleButton *btn, gpointer user_data)
+{
+  if(_section_applying) return;
+  const dt_masks_section_t section = GPOINTER_TO_INT(user_data);
+  _model_section_save(section, gtk_toggle_button_get_active(btn));
+  for(GList *l = darktable.develop ? darktable.develop->iop : NULL; l; l = g_list_next(l))
+    _section_apply(((dt_iop_module_t *)l->data)->blend_data, section);
 }
 
 static void _refine_bypass_toggled(GtkToggleButton *btn, gpointer user_data)
@@ -4549,7 +4564,6 @@ static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd)
   // selection look like a no-op even though it did retarget the sliders.
   _refine_update_header(bd->module);
   _update_refine_sensitivity(bd->module);
-  _refine_update_expanded_state(bd->module);
 }
 
 // commit a control change in GLOBAL scope. This reproduces, field by field, the
@@ -4838,8 +4852,6 @@ static void _refine_update_header(dt_iop_module_t *module)
                                   ? _("refinements are active for this target")
                                   : _("no refinements for this target"));
   }
-
-  _refine_update_expanded_state(module);
 }
 
 // (re)build the refinement-header group selector from the current mask group:
@@ -5601,20 +5613,6 @@ dt_mask_id_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd)
   return id;
 }
 
-static void _props_panel_set_expanded(dt_iop_gui_blend_data_t *bd, const gboolean expanded)
-{
-  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(bd->props_panel_toggle_btn),
-                               dtgtk_cairo_paint_solid_arrow,
-                               expanded ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT, NULL);
-  dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->props_panel_expander), expanded);
-  gtk_widget_set_visible(bd->props_panel_content, expanded);
-}
-
-static void _props_panel_toggled(GtkToggleButton *btn, dt_iop_gui_blend_data_t *bd)
-{
-  _props_panel_set_expanded(bd, gtk_toggle_button_get_active(btn));
-}
-
 static void _props_panel_header_clicked(
   GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
 {
@@ -5649,6 +5647,13 @@ static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
   GtkWidget *pending = on ? bd->pending_props_box : NULL;
   const dt_mask_id_t target = pending || !on ? INVALID_MASKID : _model_props_panel_target(bd);
   const gboolean placed = pending && gtk_widget_get_parent(pending) == bd->props_panel_content;
+  // the section opens for the creation controls without saving that, so it
+  // folds back once the shape is created or the drawing canceled. Only that
+  // opening leaves it differing from its saved state
+  if(!pending
+     && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->props_panel_toggle_btn))
+          != _model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE))
+    _section_apply(bd, DT_MASKS_SECTION_PROPS);
   if(!force && (pending ? placed : target == bd->props_panel_formid)) return;
 
   GList *kids = gtk_container_get_children(GTK_CONTAINER(bd->props_panel_content));
@@ -5660,7 +5665,7 @@ static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
   if(pending)
   {
     if(!placed) dt_gui_box_add(bd->props_panel_content, pending);
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->props_panel_toggle_btn), TRUE);
+    _section_set(bd, DT_MASKS_SECTION_PROPS, _model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
   }
   else if(dt_is_valid_maskid(target))
   {
@@ -8262,10 +8267,9 @@ void _masks_reset_mask_core(dt_iop_module_t *module)
     }
   }
 
-  // the refinement panel's own per-formid scratch (which rows are bypassed,
-  // which are expanded) is keyed by ids that no longer exist after the wipe
+  // the per-formid scratch (which refinements are bypassed, which rows are
+  // expanded) is keyed by ids that no longer exist after the wipe
   if(bd->masks_refine_bypassed) g_hash_table_remove_all(bd->masks_refine_bypassed);
-  if(bd->masks_refine_expanded) g_hash_table_remove_all(bd->masks_refine_expanded);
   if(bd->masks_props_expanded) g_hash_table_remove_all(bd->masks_props_expanded);
   bd->masks_refine_scope_kind = REFINE_SCOPE_GLOBAL;
   bd->masks_refine_scope_formid = INVALID_MASKID;
@@ -12688,20 +12692,6 @@ static void _consumer_clicked(GtkButton *button, dt_iop_module_t *m)
   if(dt_dev_gui_module() == m) dt_iop_gui_blend_masks_panel_show();
 }
 
-static void _consumers_set_expanded(dt_iop_gui_blend_data_t *bd, const gboolean expanded)
-{
-  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(bd->consumers_toggle_btn),
-                               dtgtk_cairo_paint_solid_arrow,
-                               expanded ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT, NULL);
-  dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->consumers_expander), expanded);
-  gtk_widget_set_visible(bd->consumers_content, expanded);
-}
-
-static void _consumers_toggled(GtkToggleButton *btn, dt_iop_gui_blend_data_t *bd)
-{
-  _consumers_set_expanded(bd, gtk_toggle_button_get_active(btn));
-}
-
 static void _consumers_header_clicked(
   GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
 {
@@ -12763,8 +12753,7 @@ static void _consumers_sync(dt_iop_module_t *module)
       dt_gui_box_add(bd->consumers_content, row);
     }
     gtk_widget_show_all(bd->consumers_content);
-    _consumers_set_expanded(bd, gtk_toggle_button_get_active(
-                                  GTK_TOGGLE_BUTTON(bd->consumers_toggle_btn)));
+    _section_apply(bd, DT_MASKS_SECTION_CONSUMERS);
   }
   _box_set_visible(bd->consumers_box, consumers != NULL);
   g_list_free(consumers);
@@ -17286,13 +17275,6 @@ static void _shortcut_toggle_auto_expand_selected(dt_action_t *action)
   }
 }
 
-static void _shortcut_toggle_collapse_refinements(dt_action_t *action)
-{
-  dt_conf_set_bool(
-    "plugins/darkroom/masks/collapse_refinements_default",
-    !dt_conf_get_bool("plugins/darkroom/masks/collapse_refinements_default"));
-}
-
 // this one used to be a widget action bound to bd->flexi_inline_collapse_btn,
 // but that button is deliberately hidden in the utility-lib position (the lib's
 // own expander header collapses the panel there, see masks_gui_panel_host.c),
@@ -17341,8 +17323,6 @@ static void _register_masks_action_shortcuts(void)
                      _shortcut_toggle_sticky_opacity, 0, 0);
   dt_action_register(masks, N_("auto-expand selected"),
                      _shortcut_toggle_auto_expand_selected, 0, 0);
-  dt_action_register(masks, N_("collapse refinements by default"),
-                     _shortcut_toggle_collapse_refinements, 0, 0);
 }
 
 void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
@@ -17610,7 +17590,6 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
 
   if(bd->masks_cluster_expanded) g_hash_table_destroy(bd->masks_cluster_expanded);
   if(bd->masks_props_expanded) g_hash_table_destroy(bd->masks_props_expanded);
-  if(bd->masks_refine_expanded) g_hash_table_destroy(bd->masks_refine_expanded);
   if(bd->masks_refine_bypassed) g_hash_table_destroy(bd->masks_refine_bypassed);
   if(bd->masks_row_map) g_hash_table_destroy(bd->masks_row_map);
   if(bd->group_ordinals) g_hash_table_destroy(bd->group_ordinals);
@@ -18483,7 +18462,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     gtk_widget_set_tooltip_text(bd->masks_refine_toggle_btn,
                                 _("toggle refinements section"));
     g_signal_connect(G_OBJECT(bd->masks_refine_toggle_btn), "toggled",
-                     G_CALLBACK(_refine_toggle_toggled), module);
+                     G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_REFINE));
 
     dt_gui_box_add(destdisp_head, icon_evb, dt_gui_expand(header_evb));
     gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_toggle_btn, FALSE, FALSE,
@@ -18583,7 +18562,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       gtk_widget_set_tooltip_text(bd->props_panel_toggle_btn,
                                   _("toggle shape properties section"));
       g_signal_connect(G_OBJECT(bd->props_panel_toggle_btn), "toggled",
-                       G_CALLBACK(_props_panel_toggled), bd);
+                       G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_PROPS));
       dt_gui_box_add(head, dt_gui_expand(label_evb));
       gtk_box_pack_end(GTK_BOX(head), bd->props_panel_toggle_btn, FALSE, FALSE, 0);
 
@@ -18634,7 +18613,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       gtk_widget_set_tooltip_text(bd->consumers_toggle_btn,
                                   _("toggle mask consumers section"));
       g_signal_connect(G_OBJECT(bd->consumers_toggle_btn), "toggled",
-                       G_CALLBACK(_consumers_toggled), bd);
+                       G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_CONSUMERS));
       dt_gui_box_add(head, dt_gui_expand(label_evb));
       gtk_box_pack_end(GTK_BOX(head), bd->consumers_toggle_btn, FALSE, FALSE, 0);
 
@@ -18653,6 +18632,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       DT_CONTROL_SIGNAL_CONNECT(DT_SIGNAL_DEVELOP_HISTORY_CHANGE,
                                 _consumers_history_changed, module);
     }
+    _sections_apply(bd);
 
     // the standalone "element properties" panel that used to live here is
     // gone -- per-shape/raster/group/parametric properties are now inline
