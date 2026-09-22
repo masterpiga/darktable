@@ -52,6 +52,27 @@ Process at preview scale while dragging, full resolution on release.
 
 ---
 
+### U6 🎁 `[core]` Every mask-overlay toggle replays the whole history
+`dt_iop_refresh_center` sets `DT_DEV_PIPE_SYNCH` ([imageop.c:4532](src/develop/imageop.c#L4532))
+"so commit_params picks up GUI changes", and blend_gui uses it for pure display changes: the
+show-mask button, channel display, hover preview, and the focus hand-over (lose focus clears the
+overlay, gain focus carries it), so switching focus with the overlay on replayed history twice.
+Blending reads `request_mask_display` and `suppress_mask` at process time (blend.c:984, 999) and
+`pipe->mask_display` is reset per run (pixelpipe_hb.c:3529), so no commit is needed. Branch fix
+(2026-09-22): `_refresh_mask_display()` in blend_gui.c = invalidate from the module on + redraw,
+no synch. `master` has the same calls, so the same fix applies there.
+
+### U7 🎁 `[core]` A module that left raster mode keeps registering as a raster user
+`dt_iop_commit_blend_params` registered the module as a user of `raster_mask_source` whatever
+its `mask_mode`. The field outlives raster mode (and migration deliberately keeps it on flexi
+masks), so a flexi module that once used exposure's raster was re-registered as "new" on every
+commit, pruned again by the branch's `dt_dev_pixelpipe_prune_stale_raster_users` ("not in raster
+mode"), and each "new" could invalidate the source's cachelines ("blend new raster: N
+cachelines after ioporder=…"). Branch fix (2026-09-22): register the legacy sink only with
+`DEVELOP_MASK_RASTER`, and `_reconcile_raster_form_users` skips the legacy source only then.
+On `master` (no prune) the phantom user stays registered for good, so the source keeps
+publishing its raster mask every run.
+
 ## 2. Still missing (branch-only)
 
 ### N1 💡 `[masks]` `_reconcile_raster_form_users` runs once per replayed history item
@@ -103,6 +124,11 @@ cache budget**, by ~1.37×.
 Device buffers aren't copied back for the cache except the focused module's pinned input
 ([pixelpipe_hb.c:2483,2597,3176](src/develop/pixelpipe_hb.c#L2483)), so the pipe re-executes
 top-to-bottom on each edit. Cheap for GPU modules, expensive for the CPU-side mask work in U4.
+With the overlay on not even that input is kept: `important_input` requires
+`dt_pipe_no_mask_display(pipe)` ([pixelpipe_hb.c:2515](src/develop/pixelpipe_hb.c#L2515)), so
+switching the overlay between modules re-runs from rawprepare, and a CPU-only module at the
+focus (contrast & texture: 0.5 s at 26 MP) is paid in full on every switch (2026-09-22 trace).
+Keeping that input while the overlay is on is a candidate; not done.
 
 ---
 
