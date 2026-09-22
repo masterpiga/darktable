@@ -1512,6 +1512,37 @@ static void test_soloedit_inside_entered_object_isolates_the_object(void **state
   dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
 }
 
+// a group selected on its own isolates its members. The mask's own group holds
+// every shape, so selecting it leaves the whole mask on the canvas
+static void test_soloedit_isolates_a_selected_group(void **state)
+{
+  flexi_conf_init();
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", TRUE);
+  flexi_build("u:1,2 | i:3");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), FLEXI_GID(1));
+  GList *members = _selected_group_formids(flexi_group(), FLEXI_GID(1));
+  assert_int_equal(g_list_length(members), 1);
+  assert_int_equal(GPOINTER_TO_INT(members->data), 3);
+  g_list_free(members);
+  // an element of it selected isolates that element instead
+  flexi_bd.panel_selected_formid = 3;
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 3);
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
+}
+
+static void test_soloedit_off_for_the_mask_group(void **state)
+{
+  flexi_conf_init();
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", TRUE);
+  flexi_build("u:1,2");
+  flexi_bd.panel_selected_formid = INVALID_MASKID;
+  flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
+}
+
 // its marker is no path: inside, the last path still takes the object away
 static void test_marker_is_not_counted_as_a_path(void **state)
 {
@@ -2849,6 +2880,8 @@ int main(void)
     cmocka_unit_test_teardown(test_stepping_in_moves_the_panel_signature, _teardown_objects),
     cmocka_unit_test_teardown(test_soloedit_inside_entered_object_isolates_the_object,
                               _teardown_objects),
+    cmocka_unit_test_teardown(test_soloedit_isolates_a_selected_group, _teardown),
+    cmocka_unit_test_teardown(test_soloedit_off_for_the_mask_group, _teardown),
     cmocka_unit_test_teardown(test_refine_scope_of_removed_element_falls_back_to_its_group,
                               _teardown_objects),
     cmocka_unit_test_teardown(test_refine_scope_with_nothing_left_is_the_whole_mask,
