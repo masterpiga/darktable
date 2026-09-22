@@ -708,6 +708,46 @@ static void test_bypass_snapshot_is_searchable_at_scale(void **state)
   }
 }
 
+// a member of a nested group renders through the same fold, which looks up
+// its own key: the snapshot must reach into the groups the mask holds
+static void test_bypass_snapshot_reaches_nested_groups(void **state)
+{
+  dt_masks_form_t *top = flexi_build("u:1,2");
+  dt_masks_form_t *sub = calloc(1, sizeof(dt_masks_form_t));
+  sub->formid = 2000;
+  sub->type = DT_MASKS_GROUP;
+  const dt_mask_id_t ids[] = { 2500, 11 }; // its marker, then its one member
+  for(int k = 0; k < 2; k++)
+  {
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+    pt->formid = ids[k];
+    pt->parentid = sub->formid;
+    pt->state = (k == 0 ? DT_MASKS_STATE_GROUP_MARKER : DT_MASKS_STATE_USE)
+                | DT_MASKS_STATE_UNION;
+    pt->opacity = pt->group_opacity = 1.0f;
+    sub->points = g_list_append(sub->points, pt);
+  }
+  flexi_dev.forms = g_list_append(flexi_dev.forms, sub);
+  dt_masks_point_group_t *ref = calloc(1, sizeof(dt_masks_point_group_t));
+  ref->formid = sub->formid;
+  ref->parentid = top->formid;
+  ref->state = DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION;
+  ref->opacity = ref->group_opacity = 1.0f;
+  top->points = g_list_append(top->points, ref);
+
+  _bypass(dt_masks_refine_key_element(11));
+  _bypass(dt_masks_refine_key_group(2500));
+  _commit();
+
+  assert_true(dt_masks_refine_bypass_lookup(&_piece->refine_bypass,
+                                            dt_masks_refine_key_element(11)));
+  assert_true(dt_masks_refine_bypass_lookup(&_piece->refine_bypass,
+                                            dt_masks_refine_key_group(2500)));
+
+  g_list_free_full(sub->points, free);
+  sub->points = NULL;
+}
+
 static void test_bypass_lookup_on_an_empty_snapshot(void **state)
 {
   flexi_build("u:1,2");
@@ -819,6 +859,7 @@ int main(void)
     cmocka_unit_test_teardown(test_element_refinement_follows_a_move, _teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_finds_every_committed_key, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_is_searchable_at_scale, _bypass_teardown),
+    cmocka_unit_test_teardown(test_bypass_snapshot_reaches_nested_groups, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_lookup_on_an_empty_snapshot, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_snapshot_is_flexi_only, _bypass_teardown),
     cmocka_unit_test_teardown(test_bypass_hash_is_canonical, _bypass_teardown),
