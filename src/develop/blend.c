@@ -350,6 +350,32 @@ static int _refine_key_compare(const void *a, const void *b)
   return (ka > kb) - (ka < kb);
 }
 
+// the bypassed keys of `list`'s members and groups into `out`, and of the lists
+// they hold: nested groups and AI objects render their members through the same
+// fold, which looks up the same keys (see dt_masks_group_render_roi)
+static void _refine_bypass_collect(GHashTable *const set,
+                                   const dt_masks_form_t *const list,
+                                   GArray *const out,
+                                   const int depth)
+{
+  if(depth > DT_MASKS_NESTING_MAX) return;
+  for(const GList *l = list->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *const pt = l->data;
+    const guint32 ek = dt_masks_refine_key_element(pt->formid);
+    const guint32 gk = dt_masks_refine_key_group(pt->formid);
+    // a group is keyed by its marker, so only markers ever match the group
+    // key -- testing every member costs one lookup and needs no run boundary
+    // logic here
+    if(g_hash_table_lookup(set, GUINT_TO_POINTER(ek))) g_array_append_val(out, ek);
+    if(g_hash_table_lookup(set, GUINT_TO_POINTER(gk))) g_array_append_val(out, gk);
+    if(dt_masks_point_is_marker(pt)) continue;
+    const dt_masks_form_t *const f = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(f && f != list && (f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT)))
+      _refine_bypass_collect(set, f, out, depth + 1);
+  }
+}
+
 void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
                                    dt_dev_pixelpipe_iop_t *const piece)
 {
@@ -373,35 +399,21 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   GHashTable *const set = bd->masks_refine_bypassed;
   // Query the keys this mask can use rather than copying the whole table: it
   // holds entries for what the user bypassed in any mask. A group's key is
-  // its marker's id, which the loop below meets like a member's.
+  // its marker's id, which the walk below meets like a member's.
   dt_masks_form_t *const grp =
     dt_masks_get_from_id(darktable.develop, bp->mask_id);
-  const int nmembers = (grp && (grp->type & DT_MASKS_GROUP))
-    ? g_list_length(grp->points) : 0;
-
-  guint32 *keys = g_malloc_n(2 * nmembers + 1, sizeof(guint32));
-  int n = 0;
+  GArray *found = g_array_new(FALSE, FALSE, sizeof(guint32));
 
   if(g_hash_table_lookup(set, GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL)))
-    keys[n++] = DT_MASKS_REFINE_KEY_GLOBAL;
-
-  for(GList *l = nmembers ? grp->points : NULL; l; l = g_list_next(l))
   {
-    const dt_masks_point_group_t *const pt = l->data;
-    const guint32 ek = dt_masks_refine_key_element(pt->formid);
-    const guint32 gk = dt_masks_refine_key_group(pt->formid);
-    // a group is keyed by its bottom member, so only run heads ever match the
-    // group key -- testing every member costs one lookup and needs no run
-    // boundary logic here
-    if(g_hash_table_lookup(set, GUINT_TO_POINTER(ek))) keys[n++] = ek;
-    if(g_hash_table_lookup(set, GUINT_TO_POINTER(gk))) keys[n++] = gk;
+    const guint32 gk = DT_MASKS_REFINE_KEY_GLOBAL;
+    g_array_append_val(found, gk);
   }
+  if(grp && (grp->type & DT_MASKS_GROUP)) _refine_bypass_collect(set, grp, found, 0);
 
-  if(n == 0)
-  {
-    g_free(keys);
-    return;
-  }
+  const int n = found->len;
+  guint32 *keys = (guint32 *)g_array_free(found, n == 0);
+  if(n == 0) return;
 
   qsort(keys, n, sizeof(guint32), _refine_key_compare);
   piece->refine_bypass.keys = keys;
@@ -409,8 +421,8 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
 
   dt_print(DT_DEBUG_MASKS,
            "[masks] refine bypass '%s': %d of %d table entries apply to this"
-           " mask (mask_id=%d, %d members)",
-           module->op, n, g_hash_table_size(set), bp->mask_id, nmembers);
+           " mask (mask_id=%d)",
+           module->op, n, g_hash_table_size(set), bp->mask_id);
 }
 
 // flexi-only, transient: the GUI can temporarily bypass the whole-mask (global)
