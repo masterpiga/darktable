@@ -125,6 +125,20 @@ dt_mask_id_t _model_nest_new_group(dt_masks_form_t *grp,
 gboolean _model_nest_group(dt_masks_form_t *grp,
                            const dt_mask_id_t src_cid,
                            const dt_mask_id_t dst_cid);
+/** "compose": put the element or group of point `pt` (a member, or a group's
+    marker) into a new group folding with `within`, where it was, on top of
+    it a new empty group to fill. The mask's own group cannot move, so its
+    members and settings go into a new group instead, and it keeps nothing
+    but `within`. Returns the empty group's id, or INVALID_MASKID where
+    groups may not nest any deeper */
+dt_mask_id_t _model_compose(dt_masks_form_t *grp,
+                            const dt_masks_point_group_t *pt,
+                            const dt_masks_state_t within);
+/** the reverse for the mask's own group: when it applies nothing and holds
+    one plain nested group, that group's members and settings become its own.
+    `whole` is the module's refinement, which takes the group's. FALSE where
+    that would not render the same */
+gboolean _model_hoist_sole_group(dt_masks_form_t *grp, dt_masks_refinement_t *whole);
 /** remove group `cid`, its members with it. Returns the member ids, which the
     caller frees */
 GList *_model_delete_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
