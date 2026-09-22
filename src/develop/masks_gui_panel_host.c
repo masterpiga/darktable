@@ -147,6 +147,11 @@ void dt_iop_gui_blend_masks_panel_toggle(void)
   _flexi_inline_collapse_clicked(NULL, module);
 }
 
+void dt_iop_gui_blend_masks_panel_show(void)
+{
+  if(_masks_panel_collapsed_pref()) dt_iop_gui_blend_masks_panel_toggle();
+}
+
 void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
 {
   GtkWidget *btn = darktable.develop ? darktable.develop->masks_panel_button : NULL;

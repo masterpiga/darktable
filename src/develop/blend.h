@@ -769,6 +769,15 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *props_panel_toggle_btn;
   dt_mask_id_t props_panel_formid;
   GtkWidget *pending_props_box;
+  // "mask consumers": the modules downstream reading this module's raster
+  // mask, one row each, in a collapsible below the refinements (see
+  // _consumers_sync). consumers_sig hashes the rows shown, so an unchanged
+  // list is not rebuilt
+  GtkBox *consumers_box;
+  GtkWidget *consumers_expander;
+  GtkWidget *consumers_content;
+  GtkWidget *consumers_toggle_btn;
+  dt_hash_t consumers_sig;
   // transient (non-serialized, flexi-only) refinement bypass set: which
   // refinement passes the user is previewing "off". Keyed by
   // dt_masks_refine_key_*() below. Owned and mutated on the GTK
@@ -1090,6 +1099,8 @@ void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module);
 // and the darkroom toolbox button -- so all three cannot drift apart.
 // No-op unless a module whose mask panel is built currently has focus.
 void dt_iop_gui_blend_masks_panel_toggle(void);
+// open the focused module's mask panel where it is hosted, if it is folded
+void dt_iop_gui_blend_masks_panel_show(void);
 // point the darkroom toolbox button at the panel's current state: pressed
 // while the panel is showing, insensitive when the focused module has no mask
 // panel to show at all. Called wherever that state changes.

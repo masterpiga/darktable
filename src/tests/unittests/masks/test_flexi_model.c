@@ -1009,16 +1009,16 @@ static void test_link_shows_only_for_shared_elements_but_raster(void **state)
   assert_false(_model_form_is_linked(NULL));
 }
 
-// channels are only ever copied, but one shared by an older duplicate still
-// shows the link, so it can be unlinked
-static void test_shared_parametric_channel_shows_the_link(void **state)
+// channels are only ever copied, so even one another module holds never
+// shows the link nor offers "unlink"
+static void test_parametric_channel_never_shows_the_link(void **state)
 {
   flexi_conf_init();
   flexi_build("u:1,2");
   const dt_mask_id_t other[] = { 2 };
   _other_module(other, 1);
   dt_masks_get_from_id(&flexi_dev, 2)->type = DT_MASKS_PARAMETRIC;
-  assert_true(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
+  assert_false(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
 }
 
 // another module linking or unlinking an element of this mask leaves the mask
@@ -2869,7 +2869,7 @@ int main(void)
     cmocka_unit_test_teardown(test_unlink_leaves_the_group_alone, _teardown_linking),
     cmocka_unit_test_teardown(test_link_shows_only_for_shared_elements_but_raster,
                               _teardown_linking),
-    cmocka_unit_test_teardown(test_shared_parametric_channel_shows_the_link, _teardown_linking),
+    cmocka_unit_test_teardown(test_parametric_channel_never_shows_the_link, _teardown_linking),
     cmocka_unit_test_teardown(test_list_signature_follows_links_made_elsewhere,
                               _teardown_linking),
     cmocka_unit_test_teardown(test_list_signature_ignores_links_among_others, _teardown_linking),
