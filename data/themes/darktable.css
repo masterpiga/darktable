@@ -951,7 +951,8 @@ dialog .sidebar row:selected:hover label,
   border-color: rgba(255, 255, 255, 0.32);
 }
 
-.mask-group-block.mask-list-row-selected
+.mask-group-block.mask-list-row-selected,
+.mask-group-block.mask-list-row-implied
 {
   /* border-color, not "border: none": the block reserves a transparent 2px
      border for the drop indicator (see .mask-group-block below), and removing
@@ -959,22 +960,6 @@ dialog .sidebar row:selected:hover label,
      a group is selected. */
   border-color: transparent;
   background-image: none;
-}
-
-/* the same hover wash on a group header, which needs its own rule for two
-   reasons. It has to outrank the header's resting background further down
-   (.mask-panel-row.mask-group-header, same two-class specificity as the hover
-   rule below but declared later, so it used to swallow the wash entirely and a
-   hovered header lit up not at all), hence the third class. And the value is
-   the header's resting 0.08 lifted by the same amount 0.06 lifts a plain row,
-   not 0.06 itself, which would darken the header on hover.
-
-   Declared *above* the selected-header rule that follows, deliberately: the two
-   have equal specificity, so this placement is what makes selection win on a
-   header that is both selected and hovered. */
-.mask-panel-row.mask-group-header.mask-list-row-hover
-{
-  background-color: rgba(255, 255, 255, 0.13);
 }
 
 /* child selectors, here and on the rail below: a selected group shades its
@@ -985,21 +970,24 @@ dialog .sidebar row:selected:hover label,
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
 }
 
-/* transient hover wash (canvas <-> list sync): a soft neutral fill, distinct
-   from the persistent selection shade so both can show at once. Also applied
-   to a row/header while the pointer is over the list row itself (_row_crossing)
-   or over the docked parametric editor's own controls
-   (_parametric_wrap_crossing), so hovering the panel reads exactly like
-   hovering the matching shape on the canvas.
+/* selected by implication: a group or nested group holding the selection
+   (see _apply_ancestor_selection). Flat, and just under the selection, so
+   the selection itself still stands out. The same shade goes on every
+   implied header below, and 0.25 on their rails */
+.mask-group-block.mask-list-row-implied > box > * > .mask-group-header
+{
+  background-color: rgba(255, 255, 255, 0.16);
+}
 
-   Deliberately far weaker than the selection wash above: hover follows the
-   pointer and says nothing about state, so it only has to be noticeable, while
-   selection has to be unmistakable. At the 0.14 this used to be it fell right
-   inside the selected row's 0.20 -> 0.10 gradient, and a hovered row was
-   indistinguishable from the selected one. */
+/* transient hover wash (canvas <-> list sync). Also applied to a row/header
+   while the pointer is over the list row itself (_row_crossing) or over the
+   docked parametric editor's own controls (_parametric_wrap_crossing), so
+   hovering the panel reads exactly like hovering the matching shape on the
+   canvas. Brighter than the selection, and shown over it: see the id rules
+   after the group solo wash below, which outrank the selected shades */
 .mask-panel-row.mask-list-row-hover
 {
-  background-color: rgba(255, 255, 255, 0.06);
+  background-color: rgba(255, 255, 255, 0.26);
 }
 
 /* persistent solo / solo-edit wash: driven by state (bd->solo_formid /
@@ -1111,6 +1099,12 @@ dialog .sidebar row:selected:hover label,
   border-left-color: rgba(255, 255, 255, 0.295);
 }
 
+.mask-group-block.mask-list-row-implied > box > .mask-group-elements,
+.mask-root-implied > box > .mask-group-elements
+{
+  border-left-color: rgba(255, 255, 255, 0.25);
+}
+
 /* an expanded cluster's rows: a cluster header has no background of its own,
    so its rail stays a plain line, lined up with the header's left edge */
 .mask-cluster-elements
@@ -1187,6 +1181,12 @@ dialog .sidebar row:selected:hover label,
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
 }
 
+.mask-panel-row.mask-group-header.mask-list-row-implied,
+.mask-list-row-implied > * > .mask-element-header
+{
+  background-color: rgba(255, 255, 255, 0.16);
+}
+
 /* an empty group's own header doubles as its drag-drop highlight frame (see
    _group_drop_motion's `frame` argument for _pack_empty_group_header) -- a
    real group's frame is its group-block instead, so this collision (the drop
@@ -1209,6 +1209,25 @@ dialog .sidebar row:selected:hover label,
 #mask-group-header-row.mask-list-row-solo
 {
   background-color: rgba(255, 255, 255, 0.14);
+}
+
+/* hover over the selected and implied shades: ids, which outrank their class
+   selectors, and declared after the solo wash above. An element's row is
+   marked, but only its header line lights up, as for its selection. The
+   selection's gradient on a lighter base, so a hovered header is always the
+   brightest: the selected one composites to about 0.36 -> 0.29, this to
+   0.42 -> 0.36 */
+#mask-group-header-row.mask-list-row-hover,
+#mask-empty-header-row.mask-list-row-hover,
+#mask-shape-row.mask-list-row-hover > * > .mask-element-header
+{
+  background-color: rgba(255, 255, 255, 0.26);
+  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
+}
+
+#mask-shape-row.mask-list-row-hover
+{
+  background-color: transparent;
 }
 
 /* each parametric mask row's own permanently-visible editor with a subtle left rail */
@@ -1298,6 +1317,11 @@ dialog .sidebar row:selected:hover label,
 #mask-shape-row.mask-list-row-selected > * > .mask-group-elements
 {
   border-left-color: rgba(255, 255, 255, 0.295);
+}
+
+#mask-shape-row.mask-list-row-implied > * > .mask-group-elements
+{
+  border-left-color: rgba(255, 255, 255, 0.25);
 }
 
 /* "use sliders for opacity": the slider leading a group's expanded contents.

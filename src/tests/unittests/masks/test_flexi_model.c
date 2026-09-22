@@ -519,6 +519,20 @@ static void test_element_then_group_reaches_empty_selection(void **state)
   assert_int_equal(flexi_bd.panel_selected_group_cid, INVALID_MASKID);
 }
 
+// a group selected only because it holds the selected element is not
+// deselected by a click on it: the click selects it in the element's place
+static void test_click_group_of_selected_element_selects_the_group(void **state)
+{
+  flexi_build("u:1,2 | i:3,4");
+  _click_element(4);
+  _click_group(FLEXI_GID(1));
+  assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
+  assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
+  // and now that it is selected by itself, a second click deselects it
+  _click_group(FLEXI_GID(1));
+  assert_int_equal(flexi_bd.panel_selected_group_cid, INVALID_MASKID);
+}
+
 static void test_click_other_element_switches_directly(void **state)
 {
   flexi_build("u:1,2 | i:3,4");
@@ -2553,6 +2567,7 @@ int main(void)
     cmocka_unit_test_teardown(test_click_element_selects_element_and_its_group, _teardown),
     cmocka_unit_test_teardown(test_click_selected_element_falls_back_to_its_group, _teardown),
     cmocka_unit_test_teardown(test_element_then_group_reaches_empty_selection, _teardown),
+    cmocka_unit_test_teardown(test_click_group_of_selected_element_selects_the_group, _teardown),
     cmocka_unit_test_teardown(test_click_other_element_switches_directly, _teardown),
     cmocka_unit_test_teardown(test_click_other_group_switches_directly, _teardown),
     cmocka_unit_test_teardown(test_chevron_expand_collapses_previous, _teardown),
