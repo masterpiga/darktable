@@ -752,21 +752,29 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_refine_expander;
   GtkWidget *masks_refine_icon_box;
   GtkWidget *masks_refine_name_label;
-  GtkWidget *masks_refine_indicator_icon;
+  // the details expander holding the properties and refinement sections,
+  // its header naming what they act on with the two above (see
+  // _refine_update_header)
+  GtkWidget *details_toggle_btn;
+  GtkWidget *details_expander;
+  GtkWidget *details_content;
   GtkWidget *masks_refine_bypass_btn;
   GtkWidget *masks_refine_toggle_btn;
   GtkBox *masks_refine_sliders_box;
-  // "shape properties in subpanel": the selected shape's properties, or the
-  // creation controls of a shape being drawn, in a collapsible of their own
-  // between the mask list and the refinements (see _props_panel_sync).
-  // props_panel_box is the wrapped section, props_panel_content the box the
-  // editor goes in, props_panel_formid the shape it holds the editor of, and
-  // pending_props_box the creation controls a pending row built for it
+  // "element properties in subpanel": the selected element's or group's
+  // properties, or the creation controls of a shape being drawn, in a
+  // collapsible of their own in the details expander, above the
+  // refinements (see _props_panel_sync). props_panel_box is the wrapped
+  // section, props_panel_content the box the editor goes in,
+  // props_panel_formid the element or group (props_panel_is_group) it holds
+  // the editor of, and pending_props_box the creation controls a pending row
+  // built for it
   GtkBox *props_panel_box;
   GtkWidget *props_panel_expander;
   GtkWidget *props_panel_content;
   GtkWidget *props_panel_toggle_btn;
   dt_mask_id_t props_panel_formid;
+  gboolean props_panel_is_group;
   GtkWidget *pending_props_box;
   // "mask consumers": the modules downstream reading this module's raster
   // mask, one row each, in a collapsible below the refinements (see

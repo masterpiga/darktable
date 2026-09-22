@@ -1299,10 +1299,32 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
-/* the shape properties subpanel holds one shape's editor, or a pending
+/* the properties and the refinement are collapsibles inside the details
+   expander's own: one inset for the nesting, not two, so their controls use
+   the panel's full width however narrow it is hosted */
+.mask-details #collapsible
+{
+  padding-left: 0;
+  padding-right: 0;
+  border-left-width: 0;
+  border-right-width: 0;
+}
+
+/* the properties are wrapped for their own reveal, which names their box
+   #blending-box and so would inset them once more than the refinement beside
+   them (see #blending-box above) */
+.mask-details #blending-box
+{
+  padding-left: 0;
+  padding-right: 0;
+}
+
+/* the properties subpanel holds one element's or group's editor, or a pending
    shape's creation controls, as the refinements' section holds its sliders:
    no rail and no inset, since no row header sits above them there */
-.mask-props-panel .mask-props-row-editor
+.mask-props-panel .mask-props-row-editor,
+.mask-props-panel .mask-boost-factor-box,
+.mask-props-panel .mask-group-opacity-editor
 {
   border-left-width: 0;
   padding: 0;
@@ -1340,11 +1362,6 @@ dialog .sidebar row:selected:hover label,
   padding-left: 6px;
 }
 
-.mask-refine-indicator-box
-{
-  min-width: 16px;
-}
-
 .mask-refine-inner-header
 {
   padding: 2px 4px 4px 4px;
@@ -1367,18 +1384,17 @@ button.mask-refine-bypass-btn
   margin: 0;
   background-color: transparent;
   border: none;
-  opacity: 0.5;
   color: @button_fg;
 }
 
-button.mask-refine-bypass-btn:hover
+/* dimmed only where dimming means something: with no refinement to bypass */
+button.mask-refine-bypass-btn:disabled
 {
-  opacity: 0.85;
+  opacity: 0.4;
 }
 
 button.mask-refine-bypass-btn:checked
 {
-  opacity: 1.0;
   color: @field_active_fg;
 }
 
