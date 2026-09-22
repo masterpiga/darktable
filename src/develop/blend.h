@@ -756,7 +756,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_refine_bypass_btn;
   GtkWidget *masks_refine_toggle_btn;
   GtkBox *masks_refine_sliders_box;
-  GHashTable *masks_refine_expanded;
   // "shape properties in subpanel": the selected shape's properties, or the
   // creation controls of a shape being drawn, in a collapsible of their own
   // between the mask list and the refinements (see _props_panel_sync).

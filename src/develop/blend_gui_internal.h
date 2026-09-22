@@ -359,6 +359,23 @@ dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd);
     the selected element when it is a shape, else INVALID_MASKID */
 dt_mask_id_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd);
 
+/** the collapsible sections of the mask panel below the list. Each keeps one
+    folded state, the same for every module and target */
+typedef enum dt_masks_section_t
+{
+  DT_MASKS_SECTION_REFINE,
+  DT_MASKS_SECTION_PROPS,
+  DT_MASKS_SECTION_CONSUMERS,
+  DT_MASKS_SECTION_COUNT
+} dt_masks_section_t;
+
+/** whether a section shows unfolded: its saved state, except that the shape
+    properties section opens while it holds the creation controls of a shape
+    being drawn, without that being saved */
+gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing);
+/** save a section's folded state, as a click on its toggle does */
+void _model_section_save(const dt_masks_section_t section, const gboolean expanded);
+
 /** geometry for _model_whisker_popup_rect, all in root (screen) coordinates */
 typedef struct dt_masks_whisker_geom_t
 {
