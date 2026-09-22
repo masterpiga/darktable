@@ -2756,6 +2756,20 @@ static void _blendif_colorspace_radio_toggled(GtkToggleButton *rb,
     gtk_widget_queue_draw(module->widget);
 }
 
+static gboolean _masks_options_popover_destroy(gpointer pop)
+{
+  gtk_widget_destroy(GTK_WIDGET(pop));
+  g_object_unref(pop);
+  return G_SOURCE_REMOVE;
+}
+
+// each opening builds a fresh popover on the button, and a closed one only
+// hides: drop it once "closed" has finished unmapping it
+static void _masks_options_popover_closed(GtkPopover *pop, gpointer user_data)
+{
+  g_idle_add(_masks_options_popover_destroy, g_object_ref(pop));
+}
+
 // The blend mask panel's settings, laid out as a popover of sections the way the
 // darkroom toolbar's other preference popovers are (guides, global toolbox): a
 // dt_section_label per section, radios for the exclusive choices and check
@@ -2772,6 +2786,7 @@ static void _blendif_options_callback(GtkButton *button,
   const gboolean blendif_ok = bd->blendif_support && bd->blendif_inited;
 
   GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
+  g_signal_connect(G_OBJECT(pop), "closed", G_CALLBACK(_masks_options_popover_closed), NULL);
   GtkWidget *box = dt_gui_vbox();
   gtk_container_add(GTK_CONTAINER(pop), box);
 
@@ -2834,7 +2849,8 @@ static void _blendif_options_callback(GtkButton *button,
 void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
 {
   dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
-  if(!module) module = darktable.develop->proxy.masks_flexi_host.hosted_module;
+  if(!module && darktable.develop)
+    module = darktable.develop->proxy.masks_flexi_host.hosted_module;
   if(module)
   {
     _blendif_options_callback(button, module);
@@ -2845,6 +2861,7 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
     // alone. Same popover shape as the full one, minus every section that needs
     // a module to talk about.
     GtkWidget *pop = gtk_popover_new(GTK_WIDGET(button));
+    g_signal_connect(G_OBJECT(pop), "closed", G_CALLBACK(_masks_options_popover_closed), NULL);
     GtkWidget *box = dt_gui_vbox();
     gtk_container_add(GTK_CONTAINER(pop), box);
     _masks_pref_section(box, _("blend mask panel settings"), NULL);

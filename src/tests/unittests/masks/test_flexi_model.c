@@ -1887,6 +1887,36 @@ static void test_cleanup_keeps_every_member_of_a_marked_group(void **state)
   flexi_dev.allforms = NULL;
 }
 
+// an earlier item can name a mask this snapshot no longer holds. Storing that
+// id took a slot of the table too, crowding out a member of the live group
+static void test_cleanup_keeps_every_member_past_a_stale_mask_id(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2");
+
+  dt_develop_blend_params_t stale_bp = { 0 };
+  stale_bp.mask_id = 9999;
+  dt_dev_history_item_t stale = { 0 };
+  stale.blend_params = &stale_bp;
+
+  dt_develop_blend_params_t bp = { 0 };
+  bp.mask_id = grp->formid;
+  dt_dev_history_item_t hist = { 0 };
+  hist.blend_params = &bp;
+  hist.forms = g_list_copy(flexi_dev.forms);
+  GList *history = g_list_append(g_list_append(NULL, &stale), &hist);
+
+  dt_masks_cleanup_unused_from_list(history);
+
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 1));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, 2));
+  assert_non_null(dt_masks_get_from_id_ext(hist.forms, grp->formid));
+
+  g_list_free(history);
+  g_list_free(hist.forms);
+  g_list_free(flexi_dev.allforms);
+  flexi_dev.allforms = NULL;
+}
+
 // a copied group keeps its groups: every marker comes along with its settings,
 // under an id of its own
 static void test_copy_of_a_group_keeps_its_markers(void **state)
@@ -2845,6 +2875,8 @@ int main(void)
     cmocka_unit_test_teardown(test_add_target_counts_an_empty_group, _teardown),
     cmocka_unit_test_teardown(test_add_target_ignores_a_lost_member, _teardown),
     cmocka_unit_test_teardown(test_cleanup_keeps_every_member_of_a_marked_group,
+                              _teardown),
+    cmocka_unit_test_teardown(test_cleanup_keeps_every_member_past_a_stale_mask_id,
                               _teardown),
     cmocka_unit_test_teardown(test_copy_of_a_group_keeps_its_markers, _teardown_linking),
     cmocka_unit_test_teardown(test_prune_spares_markers, _teardown),
