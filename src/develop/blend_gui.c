@@ -7824,29 +7824,32 @@ static const struct
 // (masks_revamp_nested_groups.md, Q8). union (max) is the neutral default;
 // screen (a+b-ab) smooths feathered overlaps; intersect (min) is the AND;
 // difference subtracts every member from the bottom one. Order matches the
-// menu.
+// menu. `algebra` is what the menus show after the name: the fold of the mask
+// so far `a` with the next member `b` (group.c _combine_masks_*)
 static const struct
 {
   dt_masks_state_t bit; // 0 = union (no within bit)
   DTGTKCairoPaintIconFunc paint;
   const char *name;
   const char *tooltip;
+  const char *algebra;
 } _within_modes[] = {
   { 0, dtgtk_cairo_paint_masks_union, N_("union"),
-    N_("standard combination: highest opacity wins") },
+    N_("standard combination: highest opacity wins"), N_("max") },
   { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
-    N_("soft blend: feathered edges merge smoothly without harsh seams") },
+    N_("soft blend: feathered edges merge smoothly without harsh seams"), "a + b - ab" },
   { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect"),
-    N_("keeps only mutual overlap where all shapes coincide") },
+    N_("keeps only mutual overlap where all shapes coincide"), N_("min") },
   { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
-    N_("scales shape opacities against each other") },
+    N_("scales shape opacities against each other"), "a * b" },
   { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
-    N_("adds shape opacities together, clipped at full opacity") },
+    N_("adds shape opacities together, clipped at full opacity"), "a + b" },
   { DT_MASKS_STATE_WITHIN_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"),
-    N_("subtracts every element from the bottom one, cutting holes where they overlap") },
+    N_("subtracts every element from the bottom one, cutting holes where they overlap"),
+    "a * (1 - b)" },
   { DT_MASKS_STATE_WITHIN_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion"),
     N_("keeps areas covered by one element alone, clearing overlaps, "
-       "from the bottom element up") },
+       "from the bottom element up"), N_("xor") },
 };
 
 static DTGTKCairoPaintIconFunc _within_paint(const dt_masks_state_t within)
@@ -7951,6 +7954,21 @@ static GMenuItem *_op_gmenu_item_target(DTGTKCairoPaintIconFunc paint,
     g_menu_item_set_icon(it, G_ICON(pb));
     g_object_unref(pb);
   }
+  return it;
+}
+
+// the menu item for group operator `i` of _within_modes, named with its algebra.
+// Every menu that picks a group's operator builds its items here
+static GMenuItem *_within_mode_gmenu_item(const int i, const char *action, const int target)
+{
+  GMenuItem *it = _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
+                                        _within_modes[i].tooltip, action, target);
+  // only the words are marked for translation: a formula reads the same in
+  // every language, and comes back from _() as it went in
+  gchar *label = g_strdup_printf("%s (%s)", _(_within_modes[i].name),
+                                 _(_within_modes[i].algebra));
+  g_menu_item_set_label(it, label);
+  g_free(label);
   return it;
 }
 
@@ -10503,9 +10521,7 @@ static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u
   GMenu *menu = g_menu_new();
   for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
   {
-    GMenuItem *it =
-      _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
-                            _within_modes[i].tooltip, "masks_new_op.add", i);
+    GMenuItem *it = _within_mode_gmenu_item(i, "masks_new_op.add", i);
     g_menu_append_item(menu, it);
     g_object_unref(it);
   }
@@ -11023,10 +11039,7 @@ static void _build_within_menu(GtkWidget *anchor, dt_iop_module_t *module, const
   GMenu *menu = g_menu_new();
   for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
   {
-    GMenuItem *it =
-      _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
-                            _within_modes[i].tooltip, "masks_within.set",
-                            _within_modes[i].bit);
+    GMenuItem *it = _within_mode_gmenu_item(i, "masks_within.set", _within_modes[i].bit);
     g_menu_append_item(menu, it);
     g_object_unref(it);
   }
@@ -11440,9 +11453,7 @@ static GMenu *_compose_menu(const char *action,
   for(int i = 0; i < (int)(sizeof(_within_modes) / sizeof(_within_modes[0])); i++)
   {
     if(_within_modes[i].bit == (current & DT_MASKS_STATE_WITHIN) && !keep_current) continue;
-    GMenuItem *it = _op_gmenu_item_target(_within_modes[i].paint, _within_modes[i].name,
-                                          _within_modes[i].tooltip, action,
-                                          _within_modes[i].bit);
+    GMenuItem *it = _within_mode_gmenu_item(i, action, _within_modes[i].bit);
     g_menu_append_item(sub, it);
     g_object_unref(it);
   }

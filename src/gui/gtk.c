@@ -7873,8 +7873,90 @@ static void _popover_menu_reveal_icons(GtkWidget *widget)
   }
 }
 
+// the model buttons under `w`, a submenu's back button (an inverted one) aside
+static void _popover_menu_item_buttons(GtkWidget *w, GList **out)
+{
+  if(GTK_IS_MODEL_BUTTON(w))
+  {
+    gboolean inverted = FALSE;
+    g_object_get(w, "inverted", &inverted, NULL);
+    if(!inverted) *out = g_list_prepend(*out, w);
+  }
+  else if(GTK_IS_CONTAINER(w))
+  {
+    GList *children = gtk_container_get_children(GTK_CONTAINER(w));
+    for(GList *l = children; l; l = l->next)
+      _popover_menu_item_buttons(GTK_WIDGET(l->data), out);
+    g_list_free(children);
+  }
+}
+
+static void _popover_menu_apply_submenu_tooltips(GMenuModel *model,
+                                                 const int i,
+                                                 GMenuModel *submenu,
+                                                 GtkStack *stack);
+
+// apply the "tooltip" attributes of `model` to the buttons of a submenu page,
+// matched by label: GTK3 packs a back button first on such a page, which
+// throws off matching by position, and binds each button's text to its
+// item's label (gtkmenusectionbox.c). Callers only set the attribute on the
+// model, so a GTK4 port replaces this walk and nothing else
+// (GTK4 builds a nested popover per submenu, with no stack pages)
+static void _popover_menu_apply_page_tooltips(GMenuModel *model, GList *buttons, GtkStack *stack)
+{
+  const int n_items = g_menu_model_get_n_items(model);
+  for(int i = 0; i < n_items; i++)
+  {
+    GMenuModel *section = g_menu_model_get_item_link(model, i, G_MENU_LINK_SECTION);
+    if(section)
+    {
+      _popover_menu_apply_page_tooltips(section, buttons, stack);
+      g_object_unref(section);
+      continue;
+    }
+    GMenuModel *submenu = g_menu_model_get_item_link(model, i, G_MENU_LINK_SUBMENU);
+    if(submenu)
+    {
+      _popover_menu_apply_submenu_tooltips(model, i, submenu, stack);
+      g_object_unref(submenu);
+    }
+    char *label = NULL, *tip = NULL;
+    if(g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_LABEL, "s", &label)
+       && g_menu_model_get_item_attribute(model, i, "tooltip", "s", &tip))
+    {
+      for(GList *b = buttons; b; b = b->next)
+      {
+        gchar *text = NULL;
+        g_object_get(b->data, "text", &text, NULL);
+        if(!g_strcmp0(text, label)) gtk_widget_set_tooltip_text(GTK_WIDGET(b->data), tip);
+        g_free(text);
+      }
+    }
+    g_free(label);
+    g_free(tip);
+  }
+}
+
+// the tooltips of the page of submenu `submenu`, item `i` of `model`: GTK3
+// names the page after the item's label
+static void _popover_menu_apply_submenu_tooltips(GMenuModel *model,
+                                                 const int i,
+                                                 GMenuModel *submenu,
+                                                 GtkStack *stack)
+{
+  char *label = NULL;
+  if(!g_menu_model_get_item_attribute(model, i, G_MENU_ATTRIBUTE_LABEL, "s", &label)) return;
+  GtkWidget *page = gtk_stack_get_child_by_name(stack, label);
+  g_free(label);
+  if(!page) return;
+  GList *buttons = NULL;
+  _popover_menu_item_buttons(page, &buttons);
+  _popover_menu_apply_page_tooltips(submenu, buttons, stack);
+  g_list_free(buttons);
+}
+
 // walk GMenuModel and apply "tooltip" attributes to corresponding GtkModelButton widgets
-static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
+static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box, GtkStack *stack)
 {
   if(!model || !box) return;
   GtkWidget *target_box = box;
@@ -7903,7 +7985,7 @@ static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
         child_iter = child_iter->next;
       if(child_iter)
       {
-        _popover_menu_apply_tooltips(section, GTK_WIDGET(child_iter->data));
+        _popover_menu_apply_tooltips(section, GTK_WIDGET(child_iter->data), stack);
         child_iter = child_iter->next;
       }
       g_object_unref(section);
@@ -7922,6 +8004,7 @@ static void _popover_menu_apply_tooltips(GMenuModel *model, GtkWidget *box)
         }
         child_iter = child_iter->next;
       }
+      _popover_menu_apply_submenu_tooltips(model, i, submenu, stack);
       g_object_unref(submenu);
     }
     else
@@ -7951,7 +8034,7 @@ static void _popover_menu_set_tooltips(GtkWidget *popover, GMenuModel *model)
   GList *pages = gtk_container_get_children(GTK_CONTAINER(stack));
   if(pages)
   {
-    _popover_menu_apply_tooltips(model, GTK_WIDGET(pages->data));
+    _popover_menu_apply_tooltips(model, GTK_WIDGET(pages->data), GTK_STACK(stack));
     g_list_free(pages);
   }
 }
