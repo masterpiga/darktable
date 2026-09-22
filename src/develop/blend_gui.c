@@ -36,6 +36,7 @@
 #include "dtgtk/expander.h"
 #include "dtgtk/togglebutton.h"
 #include "dtgtk/gradientslider.h"
+#include "dtgtk/icon.h"
 #include "gui/draw.h"
 #include "gui/accelerators.h"
 #include "gui/gtk.h"
@@ -9250,15 +9251,31 @@ void _model_raster_names_follow_sources(dt_masks_form_t *grp)
 }
 
 // a shared element shows the chain and offers "unlink". A raster element never
-// does: it has nothing shared to edit, and unlinking it would change nothing
+// does: it has nothing shared to edit, and unlinking it would change nothing.
+// Nor does a parametric channel, which is only ever copied: the same range
+// selects something else in another module's pixels
 gboolean _model_form_is_linked(const dt_masks_form_t *form)
 {
-  if(!form || (form->type & DT_MASKS_RASTER)) return FALSE;
+  if(!form || (form->type & (DT_MASKS_RASTER | DT_MASKS_PARAMETRIC))) return FALSE;
   GList *users = _model_form_users(form->formid);
   const gboolean linked = !g_list_shorter_than(users, 2);
   g_list_free(users);
   return linked;
 }
+
+// dt_history_item_get_name gives markup, which a plain-text tooltip would show
+// escaped ("&amp;")
+static gchar *_module_plain_name(const dt_iop_module_t *m)
+{
+  gchar *markup = dt_history_item_get_name(m);
+  gchar *text = NULL;
+  if(!pango_parse_markup(markup, -1, 0, NULL, &text, NULL, NULL)) text = g_strdup(markup);
+  g_free(markup);
+  return text;
+}
+
+static dt_iop_module_t *_linked_next_user(const dt_iop_module_t *module,
+                                          const dt_mask_id_t fid);
 
 // the tooltip of a linked element's chain icon, naming the other modules that
 // use it. `uses_here` is how often this module's own mask references the form
@@ -9274,7 +9291,7 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
   for(GList *l = users; l; l = g_list_next(l))
   {
     if(l->data == module) continue;
-    gchar *name = dt_history_item_get_name(l->data);
+    gchar *name = _module_plain_name(l->data);
     if(names->len) g_string_append(names, ", ");
     g_string_append(names, name);
     g_free(name);
@@ -9288,22 +9305,15 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
       return g_strdup_printf(
         _("used %d times in this mask\n"
           "this shape is shared: editing it changes every row it appears in,\n"
-          "while each row keeps its own opacity, operator and refinements"),
+          "while each row keeps its own opacity, operator and refinements\n"
+          "click to select it"),
         uses_here);
     return NULL;
   }
-  // parametric channels are only ever copied, but edits made before that rule
-  // (duplicated instances used to share them) can still hold a shared one
   const char *format =
     (form->type & DT_MASKS_OBJECT)
       ? _("linked with %s\n"
           "this AI object is shared: editing it changes it in every module it is linked with,\n"
-          "while its opacity, operator and refinements stay separate\n"
-          "right-click and pick \"unlink\" to give this module its own copy")
-    : (form->type & DT_MASKS_PARAMETRIC)
-      ? _("linked with %s\n"
-          "this channel is shared: changing its range changes it in every module it is"
-          " linked with,\n"
           "while its opacity, operator and refinements stay separate\n"
           "right-click and pick \"unlink\" to give this module its own copy")
       : _("linked with %s\n"
@@ -9312,35 +9322,93 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
           "right-click and pick \"unlink\" to give this module its own copy");
   gchar *tip = g_strdup_printf(format, names->str);
   g_string_free(names, TRUE);
+  dt_iop_module_t *next = _linked_next_user(module, fid);
+  gchar *next_name = next ? _module_plain_name(next) : NULL;
+  gchar *full = next_name
+    ? g_strdup_printf(_("%s\nclick to go to it in %s"), tip, next_name) : NULL;
+  g_free(next_name);
+  if(full)
+  {
+    g_free(tip);
+    tip = full;
+  }
   return tip;
 }
 
-// the chain of a linked element: a chip like the solo badge (see .mask-row-linked)
-static gboolean _linked_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
+// the chain that leads to a mask living elsewhere, the same wherever it shows:
+// a linked element's other module, a raster element's source, a consumer of
+// this module's raster mask (see .mask-link-btn)
+static GtkWidget *_make_link_button(const char *tooltip, GCallback on_click, gpointer data)
 {
-  GtkAllocation a;
-  gtk_widget_get_allocation(w, &a);
-  GtkStyleContext *ctx = gtk_widget_get_style_context(w);
-  gtk_render_background(ctx, cr, 0, 0, a.width, a.height);
-  GdkRGBA c;
-  gtk_style_context_get_color(ctx, gtk_widget_get_state_flags(w), &c);
-  cairo_set_source_rgba(cr, c.red, c.green, c.blue, c.alpha);
-  const gint pad = DT_PIXEL_APPLY_DPI(1);
-  dtgtk_cairo_paint_link(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad, 0, NULL);
-  return TRUE;
+  GtkWidget *link = dtgtk_button_new(dtgtk_cairo_paint_link, 0, NULL);
+  gtk_widget_set_size_request(link, DT_PIXEL_APPLY_DPI(13), DT_PIXEL_APPLY_DPI(13));
+  gtk_widget_set_halign(link, GTK_ALIGN_CENTER);
+  gtk_widget_set_valign(link, GTK_ALIGN_CENTER);
+  dt_gui_add_class(link, "mask-link-btn");
+  gtk_widget_set_tooltip_text(link, tooltip);
+  g_signal_connect(G_OBJECT(link), "clicked", G_CALLBACK(on_click), data);
+  return link;
 }
 
-static GtkWidget *_make_linked_badge(const char *tooltip)
+// the same 18px slot as a parametric row's picker, so the opacity columns line up
+static GtkWidget *_link_action_slot(GtkWidget *link)
 {
-  GtkWidget *badge = gtk_event_box_new();
-  gtk_event_box_set_visible_window(GTK_EVENT_BOX(badge), TRUE);
-  gtk_widget_set_app_paintable(badge, TRUE);
-  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(11), DT_PIXEL_APPLY_DPI(11));
-  gtk_widget_set_valign(badge, GTK_ALIGN_CENTER);
-  dt_gui_add_class(badge, "mask-row-linked");
-  gtk_widget_set_tooltip_text(badge, tooltip);
-  g_signal_connect(G_OBJECT(badge), "draw", G_CALLBACK(_linked_badge_draw), NULL);
-  return badge;
+  GtkWidget *slot = dt_gui_hbox(link);
+  gtk_widget_set_size_request(slot, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
+  gtk_widget_set_valign(slot, GTK_ALIGN_CENTER);
+  return slot;
+}
+
+// expanded and focused, the way every link in the panel goes to a module
+static void _go_to_module(dt_iop_module_t *m)
+{
+  if(!m->expanded)
+    dt_iop_gui_set_expanded(m, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
+  dt_iop_request_focus(m);
+}
+
+// the module a linked element's chain leads to: the next one using the form
+// after `module` in pipe order, wrapping, so clicking the chain in each panel
+// in turn visits every module it is linked with. NULL when no other module
+// uses it (a form only repeated within this mask)
+static dt_iop_module_t *_linked_next_user(const dt_iop_module_t *module,
+                                          const dt_mask_id_t fid)
+{
+  GList *users = _model_form_users(fid);
+  GList *self = g_list_find(users, module);
+  dt_iop_module_t *next = NULL;
+  for(GList *l = self ? g_list_next(self) : users; l && !next; l = g_list_next(l))
+    if(l->data != module) next = l->data;
+  for(GList *l = users; l && l != self && !next; l = g_list_next(l))
+    if(l->data != module) next = l->data;
+  g_list_free(users);
+  return next;
+}
+
+// go to the linked element in its next module, with its row selected there;
+// a form only repeated within this mask is selected here
+static void _linked_link_clicked(GtkButton *button, dt_iop_module_t *module)
+{
+  const dt_mask_id_t fid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "formid"));
+  dt_iop_module_t *next = _linked_next_user(module, fid);
+  if(!next)
+  {
+    _set_form_target_ext(module, fid, FALSE);
+    return;
+  }
+  _go_to_module(next);
+  if(dt_dev_gui_module() != next || !next->blend_data) return;
+  dt_iop_gui_blend_masks_panel_show();
+  _set_form_target_ext(next, fid, FALSE);
+}
+
+static GtkWidget *_make_linked_link(dt_iop_module_t *module,
+                                    const dt_mask_id_t fid,
+                                    const char *tooltip)
+{
+  GtkWidget *link = _make_link_button(tooltip, G_CALLBACK(_linked_link_clicked), module);
+  g_object_set_data(G_OBJECT(link), "formid", GINT_TO_POINTER(fid));
+  return link;
 }
 
 static void _rename_commit(GtkWidget *entry, dt_iop_module_t *module)
@@ -12564,9 +12632,7 @@ static void _edit_raster_source(const dt_masks_form_t *form)
 {
   dt_iop_module_t *src = dt_masks_raster_source(form);
   if(!src) return;
-  if(!src->expanded)
-    dt_iop_gui_set_expanded(src, TRUE, dt_conf_get_bool("darkroom/ui/single_module"));
-  dt_iop_request_focus(src);
+  _go_to_module(src);
   dt_iop_gui_blend_data_t *sbd = src->blend_data;
   if(sbd && _module_mask_group(src))
   {
@@ -12575,13 +12641,138 @@ static void _edit_raster_source(const dt_masks_form_t *form)
   }
 }
 
-static void _shape_act_edit_source(GSimpleAction *action, GVariant *param, gpointer u)
+static void _raster_source_link_clicked(GtkButton *button, gpointer user_data)
 {
-  GtkWidget *anchor = GTK_WIDGET(u);
-  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
-  if(darktable.gui->active_popover_menu)
-    gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
+  const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(button), "formid"));
   _edit_raster_source(dt_masks_get_from_id(darktable.develop, id));
+}
+
+// a raster element's way to its source, in the action slot left of the
+// opacity. NULL while the source is missing
+static GtkWidget *_make_raster_source_link(const dt_masks_form_t *form)
+{
+  const dt_iop_module_t *src = dt_masks_raster_source(form);
+  if(!src) return NULL;
+  gchar *src_name = _module_plain_name(src);
+  gchar *tip = g_strdup_printf(_("focus %s and edit its mask on the canvas"), src_name);
+  GtkWidget *link = _make_link_button(tip, G_CALLBACK(_raster_source_link_clicked), NULL);
+  g_free(tip);
+  g_free(src_name);
+  g_object_set_data(G_OBJECT(link), "formid", GINT_TO_POINTER(form->formid));
+  return _link_action_slot(link);
+}
+
+// does `m` read `src`'s raster mask? Either as its whole mask in raster mode or
+// through a raster element of its group, and only downstream of `src` with
+// both it and its mask on, since the pipe feeds nothing else
+static gboolean _reads_raster_of(const dt_iop_module_t *m, const dt_iop_module_t *src)
+{
+  const dt_develop_blend_params_t *bp = m->blend_params;
+  if(m == src || !m->enabled || !bp || !(bp->mask_mode & DEVELOP_MASK_ENABLED)
+     || m->iop_order <= src->iop_order)
+    return FALSE;
+  if(bp->mask_mode & DEVELOP_MASK_RASTER)
+    return dt_iop_module_is(src, bp->raster_mask_source)
+           && src->multi_priority == bp->raster_mask_instance;
+  const dt_masks_form_t *grp = dt_masks_get_from_id(m->dev, bp->mask_id);
+  return dt_masks_group_find_raster_of(m->dev->forms, grp, src, NO_MASKID, TRUE) != NULL;
+}
+
+// the dual of a raster element's source link (see _make_raster_source_link):
+// a consumer's mask is edited in its own panel
+static void _consumer_clicked(GtkButton *button, dt_iop_module_t *m)
+{
+  // the row may outlive its module until the next sync
+  if(!darktable.develop || !g_list_find(darktable.develop->iop, m)) return;
+  _go_to_module(m);
+  if(dt_dev_gui_module() == m) dt_iop_gui_blend_masks_panel_show();
+}
+
+static void _consumers_set_expanded(dt_iop_gui_blend_data_t *bd, const gboolean expanded)
+{
+  dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(bd->consumers_toggle_btn),
+                               dtgtk_cairo_paint_solid_arrow,
+                               expanded ? CPF_DIRECTION_DOWN : CPF_DIRECTION_LEFT, NULL);
+  dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->consumers_expander), expanded);
+  gtk_widget_set_visible(bd->consumers_content, expanded);
+}
+
+static void _consumers_toggled(GtkToggleButton *btn, dt_iop_gui_blend_data_t *bd)
+{
+  _consumers_set_expanded(bd, gtk_toggle_button_get_active(btn));
+}
+
+static void _consumers_header_clicked(
+  GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
+{
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  dt_iop_gui_blend_data_t *bd = user_data;
+  GtkToggleButton *btn = GTK_TOGGLE_BUTTON(bd->consumers_toggle_btn);
+  gtk_toggle_button_set_active(btn, !gtk_toggle_button_get_active(btn));
+}
+
+// list the modules reading this module's raster mask, and show the section
+// only while there is one
+static void _consumers_sync(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!bd || !bd->consumers_content || !module->dev) return;
+
+  GList *consumers = NULL;
+  dt_hash_t sig = DT_INITHASH;
+  for(GList *l = module->dev->iop; l; l = g_list_next(l))
+  {
+    dt_iop_module_t *m = l->data;
+    if(!_reads_raster_of(m, module)) continue;
+    consumers = g_list_prepend(consumers, m);
+    gchar *name = dt_history_item_get_name(m);
+    sig = dt_hash(sig, &m, sizeof(m));
+    sig = dt_hash(sig, name, strlen(name));
+    g_free(name);
+  }
+  consumers = g_list_reverse(consumers);
+
+  if(sig != bd->consumers_sig)
+  {
+    bd->consumers_sig = sig;
+    dt_gui_container_destroy_children(GTK_CONTAINER(bd->consumers_content));
+    for(const GList *l = consumers; l; l = g_list_next(l))
+    {
+      dt_iop_module_t *m = l->data;
+      // the name is markup, escaped by dt_history_get_name_label
+      gchar *name = dt_history_item_get_name(m);
+      GtkWidget *label = gtk_label_new(NULL);
+      gtk_label_set_markup(GTK_LABEL(label), name);
+      gchar *tip = g_strdup_printf(_("focus %s and show its mask panel"), name);
+      g_free(name);
+      gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+      gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
+      // one button for the whole row, so it highlights as one wherever the
+      // pointer is. Its chain is the link button's glyph, not a button of its
+      // own, and brightens with the row (see .mask-link-glyph)
+      GtkWidget *chain = dtgtk_icon_new(dtgtk_cairo_paint_link, 0, NULL);
+      gtk_widget_set_size_request(chain, DT_PIXEL_APPLY_DPI(11), DT_PIXEL_APPLY_DPI(11));
+      gtk_widget_set_valign(chain, GTK_ALIGN_CENTER);
+      dt_gui_add_class(chain, "mask-link-glyph");
+      GtkWidget *row = gtk_button_new();
+      gtk_container_add(GTK_CONTAINER(row), dt_gui_hbox(dt_gui_expand(label), chain));
+      dt_gui_add_class(row, "mask-consumer-row");
+      gtk_widget_set_tooltip_markup(row, tip);
+      g_free(tip);
+      g_signal_connect(row, "clicked", G_CALLBACK(_consumer_clicked), m);
+      dt_gui_box_add(bd->consumers_content, row);
+    }
+    gtk_widget_show_all(bd->consumers_content);
+    _consumers_set_expanded(bd, gtk_toggle_button_get_active(
+                                  GTK_TOGGLE_BUTTON(bd->consumers_toggle_btn)));
+  }
+  _box_set_visible(bd->consumers_box, consumers != NULL);
+  g_list_free(consumers);
+}
+
+static void _consumers_history_changed(gpointer instance, dt_iop_module_t *module)
+{
+  _consumers_sync(module);
 }
 
 void dt_iop_gui_blend_module_renamed(dt_iop_module_t *module)
@@ -12682,7 +12873,6 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   GActionEntry action_entries[] =
   {
     { "rename",      _shape_act_rename,      NULL, NULL },
-    { "edit_source", _shape_act_edit_source, NULL, NULL },
     { "compose",     _shape_act_compose,     "i",  NULL },
     { "unlink",      _shape_act_unlink,      NULL, NULL },
     { "edit_paths",  _shape_act_edit_paths,  NULL, NULL },
@@ -12694,9 +12884,11 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
 
   const dt_masks_form_t *elem = dt_masks_get_from_id(darktable.develop, id);
   // shared with another module, or held twice by this mask: either way this
-  // row shows the same shape as some other row (see _model_form_uses_in_mask)
+  // row shows the same shape as some other row (see _model_form_uses_in_mask).
+  // Only a shape can be either; a parametric channel is always copied
   const gboolean linked =
-    _model_form_is_linked(elem) || _model_form_uses_in_mask(module, id) > 1;
+    _model_form_is_linked(elem)
+    || (_form_is_shape(elem) && _model_form_uses_in_mask(module, id) > 1);
 
   GMenu *menu = g_menu_new();
 
@@ -12718,18 +12910,6 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   }
 
   GMenu *sec_edit = g_menu_new();
-  const dt_iop_module_t *raster_src = dt_masks_raster_source(elem);
-  if(raster_src)
-  {
-    gchar *src_name = dt_history_item_get_name(raster_src);
-    gchar *tip = g_strdup_printf(_("focus %s and edit its mask on the canvas"), src_name);
-    GMenuItem *it = g_menu_item_new(_("edit source mask"), "masks_shape_act.edit_source");
-    g_menu_item_set_attribute(it, "tooltip", "s", tip);
-    g_menu_append_item(sec_edit, it);
-    g_object_unref(it);
-    g_free(tip);
-    g_free(src_name);
-  }
   g_menu_append(sec_edit, _("rename"), "masks_shape_act.rename");
   if(linked)
   {
@@ -15211,30 +15391,31 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // row is registered in bd->masks_row_map (it isn't yet, here).
   GtkWidget *lowop_badge = _make_lowop_badge();
 
-  // a linked element carries a chain icon ending its name column. It cannot
-  // sit right after the text: the name is capped to one character of natural
-  // width (see gtk_label_set_max_width_chars above) and only grows by
-  // expanding into the whole column, so the icon goes at the column's end.
-  // A raster element has nothing shared to edit, so it never shows one
-  GtkWidget *name_slot = evbox;
-  // linked across modules, or referenced more than once by this mask itself:
-  // both are the same shape shown in two places, so both earn the chain icon
-  const int uses_here = _model_form_uses_in_mask(module, fid);
-  if(_model_form_is_linked(form) || uses_here > 1)
+  // a linked shape carries a chain in the action slot left of the opacity,
+  // where a parametric row has its picker: linked across modules, or
+  // referenced more than once by this mask itself, both being the same shape
+  // shown in two places. Parametric channels are copied, never linked (see
+  // dt_masks_group_add_members_of); a raster element's chain leads to its
+  // source instead (see _make_raster_source_link)
+  GtkWidget *linked_slot = NULL;
+  const gboolean shape = !(form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER));
+  const int uses_here = shape ? _model_form_uses_in_mask(module, fid) : 0;
+  if(shape && (_model_form_is_linked(form) || uses_here > 1))
   {
     gchar *linked_tip = _linked_tooltip(module, fid, form, uses_here);
     if(linked_tip)
     {
-      GtkWidget *chain = _make_linked_badge(linked_tip);
+      GtkWidget *chain = _make_linked_link(module, fid, linked_tip);
       g_free(linked_tip);
-      name_slot = dt_gui_hbox(dt_gui_expand(evbox), chain);
       gtk_widget_show(chain);
-      gtk_widget_show(name_slot);
+      linked_slot = _link_action_slot(chain);
     }
   }
 
-  GtkWidget *action_icon = (form->type & DT_MASKS_PARAMETRIC) ? param_picker_box : NULL;
-  _pack_row_header(row, handle, name_slot, opacity_box,
+  GtkWidget *action_icon = (form->type & DT_MASKS_PARAMETRIC) ? param_picker_box
+                           : (form->type & DT_MASKS_RASTER)   ? _make_raster_source_link(form)
+                                                              : linked_slot;
+  _pack_row_header(row, handle, evbox, opacity_box,
                    _make_badge_stack(lowop_badge, solo_badge), action_icon,
                    expand_toggle);
 
@@ -17416,6 +17597,9 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
   }
 
   _preview_on_hover_cancel_dwell(bd);
+  // not only on module teardown: the shortcut registration in imageop.c builds
+  // and drops blending on a scratch instance
+  DT_CONTROL_SIGNAL_DISCONNECT(_consumers_history_changed, module);
 
   dt_pthread_mutex_lock(&bd->lock);
   // a queued masks-list rebuild (_queue_masks_list_rebuild) left pending past
@@ -17755,6 +17939,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   }
 
   _box_set_visible(bd->raster_box, bd->raster_inited && mode_raster);
+  _consumers_sync(module);
 
   if(bd->blendif_inited && mode_parametric)
   {
@@ -17867,6 +18052,7 @@ void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module)
   _masks_flexi_relocate(module);
   _carry_mask_display_to(module);
   _carry_edit_to(module);
+  _consumers_sync(module);
 }
 
 void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
@@ -18425,6 +18611,48 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     bd->refine_box = GTK_BOX(dt_gui_vbox(bd->masks_refine_expander));
     _add_wrapped_box(mask_panel, bd->refine_box, "masks_refinement");
+
+    // "mask consumers": the modules reading this one's raster mask, shown only
+    // while there are any (see _consumers_sync)
+    {
+      GtkWidget *head = dt_gui_hbox();
+      gtk_box_set_spacing(GTK_BOX(head), DT_BAUHAUS_SPACE);
+      dt_gui_add_class(head, "dt_section_expander");
+      dt_gui_add_class(head, "mask-refine-section-expander");
+      GtkWidget *label = dt_ui_section_label_new(_("mask consumers"));
+      gtk_widget_set_tooltip_text(
+        label, _("the modules further down the pipe that use this module's mask as"
+                 " a raster mask. click one to go to its mask panel."));
+      GtkWidget *label_evb = gtk_event_box_new();
+      gtk_container_add(GTK_CONTAINER(label_evb), label);
+      dt_gui_connect_click(label_evb, _consumers_header_clicked, NULL, bd);
+      bd->consumers_toggle_btn =
+        dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->consumers_toggle_btn), TRUE);
+      dt_gui_add_class(bd->consumers_toggle_btn, "dt_ignore_fg_state");
+      dt_gui_add_class(bd->consumers_toggle_btn, "dt_transparent_background");
+      gtk_widget_set_tooltip_text(bd->consumers_toggle_btn,
+                                  _("toggle mask consumers section"));
+      g_signal_connect(G_OBJECT(bd->consumers_toggle_btn), "toggled",
+                       G_CALLBACK(_consumers_toggled), bd);
+      dt_gui_box_add(head, dt_gui_expand(label_evb));
+      gtk_box_pack_end(GTK_BOX(head), bd->consumers_toggle_btn, FALSE, FALSE, 0);
+
+      bd->consumers_content = dt_gui_vbox();
+      gtk_widget_set_name(bd->consumers_content, "collapsible");
+      dt_gui_add_class(bd->consumers_content, "mask-consumers");
+      bd->consumers_expander = dtgtk_expander_new(head, bd->consumers_content);
+      dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->consumers_expander), TRUE);
+      gtk_widget_set_name(bd->consumers_expander, "collapse-block");
+      bd->consumers_sig = DT_INVALID_HASH;
+      bd->consumers_box = GTK_BOX(dt_gui_vbox(bd->consumers_expander));
+      _add_wrapped_box(mask_panel, bd->consumers_box, "masks_raster");
+      // a consumer's own changes (a raster element added, its mask switched
+      // off, a rename) reach this panel only through the history. Connected
+      // with the module as user data, so dt_iop_gui_cleanup_module drops it
+      DT_CONTROL_SIGNAL_CONNECT(DT_SIGNAL_DEVELOP_HISTORY_CHANGE,
+                                _consumers_history_changed, module);
+    }
 
     // the standalone "element properties" panel that used to live here is
     // gone -- per-shape/raster/group/parametric properties are now inline

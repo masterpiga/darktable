@@ -1382,6 +1382,18 @@ button.mask-refine-bypass-btn:checked
   color: @field_active_fg;
 }
 
+/* a "mask consumers" row reads as a list entry, not a button, until hovered */
+button.mask-consumer-row
+{
+  background-color: transparent;
+  border-color: transparent;
+}
+
+button.mask-consumer-row:hover
+{
+  background-color: alpha(@button_hover_bg, 0.5);
+}
+
 /* the same eye on a parametric row's input/output slider, where it stands
    directly below the row header's expander button: same size and same side
    margins as .mask-row-expander, so the two form one column instead of two
@@ -1592,8 +1604,7 @@ button.mask-row-expander:hover
    here: this rule is only a colour swap, and must not resize the box it
    colors */
 .mask-list-handle-inverted,
-.mask-power-solo,
-.mask-row-linked
+.mask-power-solo
 {
   background-color: #e8e8e8;
   color: #202020;
@@ -1602,11 +1613,43 @@ button.mask-row-expander:hover
 
 /* the solo badge is a chip rather than a plate: tighter than .mask-list-handle's
    3px, and padding-free so the glyph fills it */
-.mask-power-solo,
-.mask-row-linked
+.mask-power-solo
 {
   border-radius: 2px;
   padding: 0px;
+}
+
+/* the chain leading to a mask elsewhere (see _make_link_button): one look
+   wherever it shows, a plain glyph that is always a button, brightening on
+   hover like the refinement bypass eye */
+button.mask-link-btn
+{
+  background-color: transparent;
+  border: none;
+  padding: 1px;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  color: @button_fg;
+  opacity: 0.6;
+}
+
+button.mask-link-btn:hover
+{
+  opacity: 1.0;
+}
+
+/* the same chain inside a row that is itself the button (a "mask consumers"
+   row): it brightens with the row, whichever part of it is hovered */
+.mask-link-glyph
+{
+  color: @button_fg;
+  opacity: 0.6;
+}
+
+button.mask-consumer-row:hover .mask-link-glyph
+{
+  opacity: 1.0;
 }
 
 /* low-opacity warning badge (see _make_lowop_badge): an element or group whose

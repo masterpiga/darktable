@@ -145,6 +145,28 @@ After each check, switch images and back: the setting and the render stay.
 5.4 Link a shape into a second module ("link shapes" in the import menu),
     then unlink it from the shape menu. Both modules keep their groups.
 
+5.5 Give B a raster element reading A's mask, and a later module C a
+    whole-mask raster from A. A's panel shows "mask consumers" below the
+    refinements, listing B and C with their instance names. Click B: B gets
+    the focus, expanded, with its mask panel open (also with the panel
+    folded, and in the canvas and utility positions). Switch B off, or its
+    mask off, or delete the raster element: B leaves A's list, and the
+    section goes once nothing reads A. Rename C: A's row follows.
+
+5.6 Link icons: on B's raster element row (left of the opacity), on each
+    "mask consumers" row, and on a linked shape (left of the opacity, where
+    a parametric row has its picker). All look alike (a plain chain, no
+    light chip, whatever the row's state) and brighten on hover. The raster
+    one focuses A with its mask on the canvas; a consumer one goes to that
+    module's mask panel; a linked shape's goes to the next module using the
+    shape, with its row selected there, and clicking it there goes on to the
+    next, back to the first. Tooltips name modules with "&" shown plainly.
+    Hovering a "mask consumers" row highlights the whole row, name and chain
+    together, wherever the pointer is on it.
+
+5.7 A parametric element never shows a chain, and its menu has no "link" or
+    "unlink": it can only be copied ("copy parametric channel").
+
 ## 6. Presets and reset
 
 6.1 Apply each built-in group layout preset ("add + subtract + intersect",
