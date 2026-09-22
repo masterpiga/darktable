@@ -95,14 +95,9 @@ static void test_difference_subtracts(void **state)
 {
   float out[N];
   _apply(_combine_masks_difference, A, B, out, 1.0f, 0);
+  // a * (1 - b): b == 0 keeps a, b == 1 removes it
   const float want[N] = { 0.0f, 0.0625f, 0.25f, 0.5625f, 1.0f };
-  for(int i = 0; i < N; i++)
-    if(out[i] < -1e-5f || out[i] > 1.0f + 1e-5f)
-      fail_msg("difference left element %d out of range: %.6f", i, out[i]);
-  // a == b removes everything; a with b == 0 keeps a
-  assert_float_equal(out[0], 0.0f, 1e-5);   // a=0
-  assert_float_equal(out[4], 1.0f, 1e-5);   // a=1, b=0 -> untouched
-  (void)want;
+  _assert_close(out, want, "difference");
 }
 
 static void test_screen_is_the_probabilistic_or(void **state)

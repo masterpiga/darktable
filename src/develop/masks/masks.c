@@ -3678,6 +3678,11 @@ static void _cleanup_unused_recurs(GList *forms,
                                    const int depth)
 {
   if(depth > DT_MASKS_NESTING_MAX) return;
+  // `used` has one slot per form: an id naming no form here (a stale mask_id
+  // from an earlier item, a lost member) would crowd out one that does
+  const dt_masks_form_t *form = dt_masks_get_from_id_ext(forms, formid);
+  if(!form) return;
+
   // first, we search for the formid in used table
   for(int i = 0; i < nb; i++)
   {
@@ -3692,8 +3697,7 @@ static void _cleanup_unused_recurs(GList *forms,
 
   // if the form is a group or an AI object, we iterate through the sub-forms:
   // an object's paths are separate forms that only it refers to
-  const dt_masks_form_t *form = dt_masks_get_from_id_ext(forms, formid);
-  if(form && (form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT)))
+  if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
   {
     for(GList *grpts = form->points; grpts; grpts = g_list_next(grpts))
     {

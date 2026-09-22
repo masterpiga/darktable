@@ -2160,17 +2160,26 @@ static void _masks_panel_quickbutton_clicked(GtkWidget *widget,
 
 // right-click opens the blending options, the way the guides icon's right-click
 // opens the guide settings. Left-click keeps showing and hiding the panel.
-static gboolean _masks_panel_quickbutton_right_click(GtkWidget *widget,
-                                                     GdkEventButton *event,
-                                                     gpointer user_data)
+static void _masks_panel_quickbutton_right_click(GtkGestureSingle *gesture,
+                                                 int n_press,
+                                                 double x,
+                                                 double y,
+                                                 gpointer user_data)
 {
-  if(event->button != GDK_BUTTON_SECONDARY || event->type != GDK_BUTTON_PRESS)
-    return FALSE;
+  if(n_press > 1) return;
+  GtkWidget *widget = dt_gui_get_widget(gesture);
+  // the toggle shortcut reaches the button through this gesture too, as a
+  // synthetic primary press (see _action_process_toggle)
+  if(dt_gui_current_button(gesture) == GDK_BUTTON_PRIMARY)
+  {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(widget),
+                                 !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(widget)));
+    return;
+  }
   // the public entry point resolves the module itself and still opens a useful
   // menu when nothing is focused, which is the case a toolbar button has to
   // survive but a module's own header button never sees
   dt_iop_gui_blend_masks_options_popup(GTK_BUTTON(widget), NULL);
-  return TRUE;
 }
 
 static void _guides_quickbutton_clicked(GtkWidget *widget,
@@ -3800,9 +3809,8 @@ void gui_init(dt_view_t *self)
     // and the blending options hang off a right-click here, the way the guides
     // icon two along carries its guide settings: this is where the panel's
     // presence is established, so it is where its settings belong
-    gtk_widget_add_events(dev->masks_panel_button, GDK_BUTTON_PRESS_MASK);
-    g_signal_connect(G_OBJECT(dev->masks_panel_button), "button-press-event",
-                     G_CALLBACK(_masks_panel_quickbutton_right_click), NULL);
+    dt_gui_connect_click_secondary(dev->masks_panel_button,
+                                   _masks_panel_quickbutton_right_click, NULL, NULL);
     dt_view_manager_module_toolbox_add(darktable.view_manager,
                                        dev->masks_panel_button, DT_VIEW_DARKROOM);
     dt_gui_add_help_link(dev->masks_panel_button, "masks_blending");
