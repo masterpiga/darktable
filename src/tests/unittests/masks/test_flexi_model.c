@@ -324,16 +324,16 @@ static void test_ensure_a_group_gives_an_old_list_one_group(void **state)
 static void test_classic_marking_folds_each_run_into_a_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3,4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "i{u{1,2},3,4}");
-  assert_false(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_false(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
 }
 
 // one operator throughout is one group, the base's own operator ignored
 static void test_classic_marking_keeps_one_operator_one_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("d:1,2,3");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "d{1,2,3}");
 }
 
@@ -341,7 +341,7 @@ static void test_classic_marking_keeps_one_operator_one_group(void **state)
 static void test_classic_marking_puts_the_base_in_the_first_run(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3,4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "d{1,2,3,4}");
 }
 
@@ -350,7 +350,7 @@ static void test_classic_marking_puts_the_base_in_the_first_run(void **state)
 static void test_classic_marking_nests_at_each_operator_change(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | d:3 | u:4");
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "u{d{u{1,2},3},4}");
 }
 
@@ -360,7 +360,7 @@ static void test_a_faded_member_keeps_its_opacity(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3");
   _group_point(grp, 3)->opacity = 0.5f;
-  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp));
+  assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "d{1,2,3@0.5}");
 }
 
@@ -376,7 +376,7 @@ static void test_marking_leaves_members_plain(void **state)
   g_strlcpy(pt->name, "sky", sizeof(pt->name));
   pt->refinement = (dt_masks_refinement_t){ .enabled = DT_MASKS_REFINE_GROUP,
                                             .blur_radius = 2.0f };
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
   assert_tree(grp, "i{1,2~@0.7,3}");
 
   const dt_masks_point_group_t *member = _group_point(grp, 2);
@@ -393,12 +393,12 @@ static void test_marking_leaves_members_plain(void **state)
 static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
   const dt_mask_id_t first = _group_cid_of_form(grp, 2);
   flexi_teardown();
 
   grp = flexi_build_classic("u:1 | i:2");
-  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp);
+  dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
   assert_int_equal(_group_cid_of_form(grp, 2), first);
 }
 
@@ -2527,6 +2527,30 @@ static void test_simplify_splices_same_operator_groups(void **state)
   assert_tree(grp, "d{1,d{11,12}}");
 }
 
+// a nested group another module renders as its mask is shared, even with no
+// second reference: folding the holder's opacity into it would dim that
+// module's mask too
+static void test_simplify_leaves_a_group_another_module_renders(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1");
+  for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
+  const dt_mask_id_t m[] = { 11, 12 };
+  _sub = _nested_group(2000, 2500, m, 2);
+  for(GList *l = grp->points; l; l = g_list_next(l))
+    if(((dt_masks_point_group_t *)l->data)->formid == 2000)
+      ((dt_masks_point_group_t *)l->data)->opacity = 0.5f;
+
+  static dt_develop_blend_params_t other_bp = { .mask_id = 2000 };
+  static dt_iop_module_t other = { .blend_params = &other_bp };
+  flexi_dev.iop = g_list_append(NULL, &other);
+
+  dt_masks_group_simplify(flexi_dev.forms, grp);
+  assert_float_equal(_group_point(grp, 2500)->group_opacity, 1.0f, 1e-6);
+
+  g_list_free(flexi_dev.iop);
+  flexi_dev.iop = NULL;
+}
+
 // what simplify leaves: a named group, even empty, a group whose settings
 // change its result, and a group another reference shares
 static void test_simplify_keeps_what_changes_something(void **state)
@@ -2933,6 +2957,8 @@ int main(void)
     cmocka_unit_test_teardown(test_simplify_undoes_a_compose, _teardown_composed),
     cmocka_unit_test_teardown(test_hoist_undoes_a_whole_mask_compose, _teardown_composed),
     cmocka_unit_test_teardown(test_simplify_splices_same_operator_groups, _teardown_composed),
+    cmocka_unit_test_teardown(test_simplify_leaves_a_group_another_module_renders,
+                              _teardown_composed),
     cmocka_unit_test_teardown(test_simplify_keeps_what_changes_something, _teardown_composed),
     cmocka_unit_test_teardown(test_a_nested_group_moves_out_as_its_group, _teardown_nested),
     cmocka_unit_test_teardown(test_a_faded_nested_group_stays_nested, _teardown_nested),

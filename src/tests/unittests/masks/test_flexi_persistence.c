@@ -70,7 +70,7 @@ static dt_masks_form_t *_build_legacy(const char *layout, const int version)
 // migration converts it, then read like any other
 #define assert_converted(grp, expect)                                          \
   do {                                                                         \
-    dt_masks_group_mark_classic_runs(&flexi_dev.forms, (grp));                 \
+    dt_masks_group_mark_classic_runs(&flexi_dev.forms, (grp), NULL);                 \
     assert_tree((grp), expect);                                                \
   } while(0)
 
