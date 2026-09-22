@@ -612,6 +612,7 @@ static void _add_raster_mask(dt_iop_module_t *self,
                              const dt_mask_id_t id);
 static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t cid);
 static const char *_within_name(const dt_masks_state_t within);
+static void _refresh_mask_display(const dt_iop_module_t *module);
 static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd);
 void _refresh_canvas_edit(dt_iop_module_t *module);
 static dt_mask_id_t _mask_group_cid(dt_iop_module_t *module);
@@ -2025,7 +2026,7 @@ static void _blendop_blendif_showmask_clicked(
   DT_LEAVE_GUI_UPDATE();
 
   dt_iop_request_focus(module);
-  dt_iop_refresh_center(module);
+  _refresh_mask_display(module);
 }
 
 static void _update_mask_enable_toggle_tooltip(GtkWidget *toggle, const gboolean enabled)
@@ -2939,7 +2940,7 @@ static void _blendop_blendif_channel_mask_view_toggle
   if(new_request_mask_display != module->request_mask_display)
   {
     module->request_mask_display = new_request_mask_display;
-    dt_iop_refresh_center(module);
+    _refresh_mask_display(module);
   }
 }
 
@@ -3014,7 +3015,7 @@ static void _preview_on_hover_apply(dt_iop_module_t *module)
   if(module->request_mask_display != wanted)
   {
     module->request_mask_display = wanted;
-    dt_iop_refresh_center(module);
+    _refresh_mask_display(module);
   }
 }
 
@@ -7622,6 +7623,22 @@ void dt_iop_gui_masks_entered_object_changed(dt_iop_module_t *module)
   _queue_masks_list_rebuild(module);
 }
 
+// redraw the center view for a change to what module shows or blends
+// (request_mask_display, suppress_mask). Blending reads both as it runs
+// (blend.c), so unlike dt_iop_refresh_center this replays no history: that
+// synch, which re-commits every module, ran twice on every focus change while
+// the overlay followed the focus. Cache keys do not cover either setting, so
+// the module's output and everything after it still go
+static void _refresh_mask_display(const dt_iop_module_t *module)
+{
+  DT_GUARD_GUI_UPDATE();
+  dt_develop_t *dev = module->dev;
+  if(!dev || !dev->gui_attached) return;
+  dt_dev_pixelpipe_cache_invalidate_later(dev->full.pipe, module->iop_order, "mask display: ");
+  dt_dev_invalidate(dev);
+  dt_control_queue_redraw_center();
+}
+
 // the panel's way to step the canvas into AI object `id`, or out of the one it
 // is in with INVALID_MASKID: the step a double-click on the object and a click
 // outside it take on the canvas
@@ -9477,6 +9494,7 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
 //  * shift+click:        toggle this element's properties/expanded view
 //  * right-click:        open the actions menu
 //  * plain click/release: select (toggles off if already selected)
+//  * double-click:       step into an AI object's paths, or out of them
 // double-click-to-solo used to live here too (see _group_header_press's own
 // comment for groups) -- dropped for the same reason: the double-click's
 // first press already ran a full press/release cycle through
@@ -9504,6 +9522,29 @@ static void _shape_popover_closed(GtkPopover *popover, gpointer user_data)
   if(bd && bd->panel_selected_formid == id) _auto_expand_selected_row(module, id);
 }
 
+// an AI object of several paths, which can be stepped into to edit them one
+// by one. One of a single path already acts as that path
+static gboolean _is_multi_path_object(const dt_mask_id_t id)
+{
+  const dt_masks_form_t *obj = dt_masks_get_from_id(darktable.develop, id);
+  return obj && (obj->type & DT_MASKS_OBJECT) && _object_path_count(obj) >= 2;
+}
+
+// step into AI object `id` to edit its paths one by one, or back out of it
+// with `inside`: shared by a double-click on its row and its actions menu
+static void _toggle_object_paths(dt_iop_module_t *module,
+                                 const dt_mask_id_t id,
+                                 const gboolean inside)
+{
+  if(!_is_multi_path_object(id)) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  // the paths are picked on the canvas, so going in turns editing on there
+  if(!inside && bd && bd->masks_edit
+     && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit)))
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), TRUE);
+  _step_object(module, inside ? INVALID_MASKID : id);
+}
+
 static gboolean
 _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
 {
@@ -9522,6 +9563,21 @@ _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
     if(bd->panel_selected_formid != id) _set_form_target(module, id);
     GtkWidget *evbox = g_object_get_data(G_OBJECT(w), "name-evbox");
     _start_rename_element(evbox, module, id);
+    return TRUE;
+  }
+  // double-click on an AI object: in to its paths, or back out, as on the
+  // canvas. The first click's release has already toggled the selection, and
+  // may have stepped out with it, so the step goes by where the canvas was
+  // before that click; the object is selected again, and the second release
+  // must not toggle it back off
+  if(ev->type == GDK_2BUTTON_PRESS && ev->button == GDK_BUTTON_PRIMARY
+     && _is_multi_path_object(id))
+  {
+    const gboolean inside = bd->masks_row_click_entered == id;
+    if(bd->panel_selected_formid != id) _set_form_target_ext(module, id, FALSE);
+    bd->masks_skip_group_select_release = TRUE;
+    bd->masks_skip_group_select_release_time = ev->time;
+    _toggle_object_paths(module, id, inside);
     return TRUE;
   }
   if(ev->type == GDK_BUTTON_PRESS && ev->button == GDK_BUTTON_SECONDARY)
@@ -9584,6 +9640,7 @@ static void _row_drag_begin(GtkWidget *w, GdkDragContext *dc, dt_iop_module_t *m
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd) return;
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
+  bd->masks_row_click_entered = _entered_object();
   _set_form_target_ext(module, id, FALSE);
   bd->masks_row_click_handled = TRUE;
 }
@@ -9626,6 +9683,7 @@ _row_click_release(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
     return TRUE;
   }
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
+  bd->masks_row_click_entered = _entered_object();
   if(dt_modifier_is(ev->state, GDK_SHIFT_MASK))
   {
     if(bd->panel_selected_formid != id) _set_form_target_ext(module, id, FALSE);
@@ -12434,14 +12492,7 @@ static void _shape_act_edit_paths(GSimpleAction *action, GVariant *param, gpoint
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
   if(darktable.gui->active_popover_menu)
     gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(!module) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  const gboolean inside = _entered_object() == id;
-  // the paths are picked on the canvas, so going in turns editing on there
-  if(!inside && bd && bd->masks_edit
-     && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit)))
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), TRUE);
-  _step_object(module, inside ? INVALID_MASKID : id);
+  if(module) _toggle_object_paths(module, id, _entered_object() == id);
 }
 
 // give this module its own copy of a linked shape or AI object: the other
@@ -12664,7 +12715,7 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
                                     "masks_shape_act.edit_paths");
     g_menu_item_set_attribute(it, "tooltip", "s",
       _("edit and remove the AI object's paths one by one on the canvas,"
-        " like double-clicking it there"));
+        " like double-clicking it there or its row here"));
     g_menu_append_item(sec_edit, it);
     g_object_unref(it);
   }
@@ -14794,6 +14845,23 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                      "(invert, solo, rename, delete)\n"
                      "drag to rearrange, or onto a group to move "
                      "this raster mask into it"))
+    : _is_multi_path_object(fid)
+      ? g_strdup(_entered_object() == fid
+                 ? _("an AI object whose paths are edited one by one, shown below it\n"
+                     "double-click to stop editing its paths\n"
+                     "click to select, click again to deselect\n"
+                     "ctrl+click to rename\n"
+                     "shift+click to show/hide its paths\n"
+                     "right-click to open the actions menu "
+                     "(invert, solo, rename, delete)\n"
+                     "drag to rearrange")
+                 : _("click to select, click again to deselect\n"
+                     "double-click to edit its paths one by one\n"
+                     "ctrl+click to rename\n"
+                     "shift+click to show/hide this object's expanded controls\n"
+                     "right-click to open the actions menu "
+                     "(invert, solo, solo-edit, rename, delete)\n"
+                     "drag to rearrange, or onto a different group to move"))
     : is_subgroup
       ? g_strdup(_("a group inside this group: its own groups are shown below it\n"
                    "click to select, click again to deselect\n"
@@ -17238,6 +17306,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->panel_selected_group_cid = INVALID_MASKID;
     bd->insert_active = FALSE;
     bd->solo_formid = INVALID_MASKID;
+    bd->masks_row_click_entered = INVALID_MASKID;
 
     // ---- "add parametric" cluster (flexi-only, toolbar row 2, leftmost):
     // one flat button per channel of the module's blend colorspace,
@@ -17749,7 +17818,7 @@ static void _carry_mask_display_to(dt_iop_module_t *module)
   if(module->mask_indicator)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(module->mask_indicator), TRUE);
   DT_LEAVE_GUI_UPDATE();
-  dt_iop_refresh_center(module);
+  _refresh_mask_display(module);
 }
 
 void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module)
@@ -17845,7 +17914,7 @@ void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module)
 
     // reprocess main center image if needed
     if(has_mask_display || suppress)
-      dt_iop_refresh_center(module);
+      _refresh_mask_display(module);
   }
 }
 

@@ -890,7 +890,18 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
     return TRUE;
   }
 
+  // a miss names its reason: a hit alone cannot tell a mask that is not
+  // cacheable from one whose key keeps changing
+  const char *why = !cacheable                       ? "needs host guides"
+                    : !mc->data                      ? "empty"
+                    : mc->hash != mkey               ? "mask changed"
+                    : mc->src_hash != msrc           ? "details source changed"
+                                                     : "size changed";
+  const double start = dt_get_debug_wtime();
   const gboolean form_ok = dt_masks_group_render_roi(self, piece, form, roi_out, mask);
+  dt_print_pipe(DT_DEBUG_PIPE | DT_DEBUG_VERBOSE, "drawn mask cache miss",
+                piece->pipe, self, devid, roi_in, roi_out, "%s, rendered in %.3fs", why,
+                dt_get_debug_wtime() - start);
   if(cacheable && form_ok)
   {
     // through the pipe's own allocator, so this buffer is counted in

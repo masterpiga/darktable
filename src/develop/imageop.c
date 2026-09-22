@@ -2153,7 +2153,8 @@ static void _reconcile_raster_form_users(dt_iop_module_t *module,
     dt_iop_module_t *cand = iter->data;
     if(cand == module) continue;
     // leave the legacy single-source (exclusive RASTER mode) registration alone
-    if(dt_iop_module_is(cand, bp->raster_mask_source)
+    if((bp->mask_mode & DEVELOP_MASK_RASTER)
+       && dt_iop_module_is(cand, bp->raster_mask_source)
        && cand->multi_priority == bp->raster_mask_instance)
       continue;
 
@@ -2248,7 +2249,12 @@ void dt_iop_commit_blend_params(dt_iop_module_t *module,
     return;
   }
 
-  for(GList *iter = module->dev->iop; iter; iter = g_list_next(iter))
+  // only a module in raster mode consumes the source it names: one that has
+  // left raster mode keeps the name, and registering it anyway had the pipe
+  // prune it again on every run (dt_dev_pixelpipe_prune_stale_raster_users),
+  // so each commit registered it as new and invalidated the source's cache
+  const gboolean raster_mode = blendop_params->mask_mode & DEVELOP_MASK_RASTER;
+  for(GList *iter = raster_mode ? module->dev->iop : NULL; iter; iter = g_list_next(iter))
   {
     dt_iop_module_t *candidate = iter->data;
     if(dt_iop_module_is(candidate, blendop_params->raster_mask_source))

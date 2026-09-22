@@ -721,6 +721,10 @@ typedef struct dt_iop_gui_blend_data_t
   // either way, by the time release fires the row is already correctly
   // selected, so this flag is enough to make the release a no-op.
   gboolean masks_row_click_handled;
+  // the AI object the canvas was stepped into when a row's last click began:
+  // that click's own release can step out of it (deselecting the object
+  // selects its group), and a double-click must still step out, not back in
+  dt_mask_id_t masks_row_click_entered;
   // suppresses _build_masks_list while set: dt_masks_form_remove() (masks.c)
   // already triggers a full flexi list rebuild via dt_masks_iop_update() on
   // every single shape it removes, so a caller removing several shapes in a
