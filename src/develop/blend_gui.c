@@ -6362,7 +6362,12 @@ static void _apply_row_selection(GtkWidget *w, const dt_mask_id_t sel)
 // same idea as _apply_row_selection, but for a group's header (tagged "mask-header"
 // at construction, with "group-key" holding its cid and "header-widget" the inner
 // box the CSS class actually goes on -- see the header build in _build_masks_list).
-static void _paint_group_header(GtkWidget *header, const gboolean selected)
+// `cls` on a group's block, or `root_cls` on the mask's own group's block with
+// `cls` on its header row
+static void _paint_group_header(GtkWidget *header,
+                                const char *cls,
+                                const char *root_cls,
+                                const gboolean on)
 {
   GtkWidget *target = g_object_get_data(G_OBJECT(header), "header-widget");
   if(!target) target = header;
@@ -6370,21 +6375,22 @@ static void _paint_group_header(GtkWidget *header, const gboolean selected)
   // block is the whole list, and shading it would shade everything in it
   if(g_object_get_data(G_OBJECT(target), "is-root"))
   {
-    if(selected) dt_gui_add_class(target, "mask-root-selected");
-    else dt_gui_remove_class(target, "mask-root-selected");
+    if(on) dt_gui_add_class(target, root_cls);
+    else dt_gui_remove_class(target, root_cls);
     GtkWidget *row = g_object_get_data(G_OBJECT(header), "group-header-widget");
     if(row) target = row;
   }
-  if(selected)
-    dt_gui_add_class(target, "mask-list-row-selected");
+  if(on)
+    dt_gui_add_class(target, cls);
   else
-    dt_gui_remove_class(target, "mask-list-row-selected");
+    dt_gui_remove_class(target, cls);
 }
 
 static void _paint_group_selection(GtkWidget *header, gpointer sel)
 {
   const dt_mask_id_t cid = GPOINTER_TO_INT(sel);
-  _paint_group_header(header, dt_is_valid_maskid(cid) && _header_cid(header) == cid);
+  _paint_group_header(header, "mask-list-row-selected", "mask-root-selected",
+                      dt_is_valid_maskid(cid) && _header_cid(header) == cid);
 }
 
 static void _apply_group_selection(GtkWidget *w, const dt_mask_id_t sel)
@@ -6392,22 +6398,34 @@ static void _apply_group_selection(GtkWidget *w, const dt_mask_id_t sel)
   _foreach_tagged(w, "mask-header", _paint_group_selection, GINT_TO_POINTER(sel));
 }
 
-// everything holding a selected row or group header lights up with it, up to
-// the list `list`: the groups (their blocks carry "group-key") and the rows of
-// nested groups and of the AI object stepped into (tagged "mask-row")
+// everything holding the selected row or group header is selected by
+// implication, up to the list `list`: the groups (their blocks carry
+// "group-key") and the rows of nested groups and of the AI object stepped into
+// (tagged "mask-row"). Shaded apart from the selection itself
 static void _paint_ancestors_selected(GtkWidget *w, GtkWidget *list)
 {
   for(GtkWidget *p = gtk_widget_get_parent(w); p && p != list; p = gtk_widget_get_parent(p))
   {
     if(g_object_get_data(G_OBJECT(p), "mask-row"))
-      dt_gui_add_class(p, "mask-list-row-selected");
+      dt_gui_add_class(p, "mask-list-row-implied");
     else if(g_object_get_data(G_OBJECT(p), "group-key"))
     {
       GtkWidget *header = _find_tagged(p, "mask-header", _header_has_cid,
                                        g_object_get_data(G_OBJECT(p), "group-key"));
-      if(header) _paint_group_header(header, TRUE);
+      if(header)
+        _paint_group_header(header, "mask-list-row-implied", "mask-root-implied", TRUE);
     }
   }
+}
+
+static void _clear_row_implied(GtkWidget *row, gpointer data)
+{
+  dt_gui_remove_class(row, "mask-list-row-implied");
+}
+
+static void _clear_header_implied(GtkWidget *header, gpointer data)
+{
+  _paint_group_header(header, "mask-list-row-implied", "mask-root-implied", FALSE);
 }
 
 typedef struct _ancestor_walk_t
@@ -6428,15 +6446,27 @@ static void _paint_header_ancestors(GtkWidget *header, gpointer data)
   if(_header_cid(header) == a->cid) _paint_ancestors_selected(header, a->list);
 }
 
-// after _apply_row_selection and _apply_group_selection, which clear what this
-// painted before
+// the ancestors of what is explicitly selected: element `formid`, or else
+// group `cid`
 static void _apply_ancestor_selection(GtkWidget *list,
                                       const dt_mask_id_t formid,
                                       const dt_mask_id_t cid)
 {
+  _foreach_tagged(list, "mask-row", _clear_row_implied, NULL);
+  _foreach_tagged(list, "mask-header", _clear_header_implied, NULL);
   _ancestor_walk_t a = { list, formid, cid };
-  if(dt_is_valid_maskid(formid)) _foreach_tagged(list, "mask-row", _paint_row_ancestors, &a);
-  if(dt_is_valid_maskid(cid)) _foreach_tagged(list, "mask-header", _paint_header_ancestors, &a);
+  if(dt_is_valid_maskid(formid))
+    _foreach_tagged(list, "mask-row", _paint_row_ancestors, &a);
+  else if(dt_is_valid_maskid(cid))
+    _foreach_tagged(list, "mask-header", _paint_header_ancestors, &a);
+}
+
+// what is explicitly selected: the element, or else its group. With an
+// element selected its group is selected too, but only by implication
+static inline dt_mask_id_t _explicit_group_cid(const dt_iop_gui_blend_data_t *bd)
+{
+  return dt_is_valid_maskid(bd->panel_selected_formid) ? INVALID_MASKID
+                                                       : bd->panel_selected_group_cid;
 }
 
 // same idea as _apply_group_selection, but toggles a group header's own solo
@@ -7303,7 +7333,7 @@ static void _update_row_selection(dt_iop_gui_blend_data_t *bd)
   _select_mask_group_if_none(bd);
   // every group's element rows are nested inside masks_list_box (under their header)
   _apply_row_selection(GTK_WIDGET(bd->masks_list_box), bd->panel_selected_formid);
-  _apply_group_selection(GTK_WIDGET(bd->masks_list_box), bd->panel_selected_group_cid);
+  _apply_group_selection(GTK_WIDGET(bd->masks_list_box), _explicit_group_cid(bd));
   _apply_ancestor_selection(GTK_WIDGET(bd->masks_list_box), bd->panel_selected_formid,
                             bd->panel_selected_group_cid);
   if(darktable.develop && darktable.develop->form_gui)
@@ -8818,6 +8848,8 @@ static void _auto_expand_selected_group(dt_iop_module_t *module,
 //   click a group       -> that group selected
 //   click it again      -> the mask's own group selected (it cannot be
 //                          deselected: one group is always selected)
+//   click the group of the selected element
+//                       -> that group selected, the element dropped
 //   click an element    -> that element selected, inside its group
 //   click it again      -> the element is dropped, its GROUP stays selected
 //   click elsewhere     -> that thing selected
@@ -8841,8 +8873,11 @@ dt_masks_panel_sel_t _model_click_group(const dt_iop_gui_blend_data_t *bd,
                                         const dt_mask_id_t cid)
 {
   dt_masks_panel_sel_t s = { INVALID_MASKID, INVALID_MASKID };
+  // only a group selected by itself deselects: one selected because it holds
+  // the selected element is selected in the element's place
   const gboolean deselect = dt_is_valid_maskid(bd->panel_selected_group_cid)
-                            && bd->panel_selected_group_cid == cid;
+                            && bd->panel_selected_group_cid == cid
+                            && !dt_is_valid_maskid(bd->panel_selected_formid);
   // deselecting lands on the mask's own group, which therefore stays selected
   // when clicked again
   s.group_cid = deselect ? _mask_group_cid(bd->module) : cid;
@@ -15632,9 +15667,11 @@ static void _pack_group(dt_iop_module_t *module,
                    G_CALLBACK(_group_block_release), module);
 
   // highlight the whole group block when its group is the selected one; the
-  // mask's own, only its header row (see _paint_group_selection)
-  if(dt_is_valid_maskid(bd->panel_selected_group_cid)
-     && (dt_mask_id_t)cid == bd->panel_selected_group_cid)
+  // mask's own, only its header row (see _paint_group_selection). Held by a
+  // selected element, it is selected by implication instead (see
+  // _apply_ancestor_selection)
+  if(dt_is_valid_maskid(_explicit_group_cid(bd))
+     && (dt_mask_id_t)cid == _explicit_group_cid(bd))
   {
     dt_gui_add_class(is_root ? hdr : group_block, "mask-list-row-selected");
     // the rail under it lights up with the header (see _paint_group_selection)
