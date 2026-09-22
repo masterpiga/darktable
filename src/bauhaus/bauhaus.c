@@ -3399,6 +3399,12 @@ static void _popup_show(GtkWidget *widget)
     gtk_style_context_remove_class(context, "dt_bauhaus_popup_right");
   else
     gtk_style_context_add_class(context, "dt_bauhaus_popup_right");
+  // a slider's popup needs room past both ends of its range: a click there
+  // clamps to min/max, while one outside the window rejects the popup
+  if(w->type == DT_BAUHAUS_SLIDER)
+    gtk_style_context_add_class(context, "dt_bauhaus_popup_slider");
+  else
+    gtk_style_context_remove_class(context, "dt_bauhaus_popup_slider");
 
   const GtkStateFlags state = gtk_widget_get_state_flags(pop->area);
   gtk_style_context_get_padding(context, state, &pop->padding);
