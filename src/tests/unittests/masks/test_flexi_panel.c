@@ -680,18 +680,25 @@ static void test_panel_state_expanded_module_respects_pref(void **state)
   assert_true(s_col.corner_icon_visible);
 }
 
-// when masking is disabled on a focused, expanded module:
-// - the panel is collapsed: it edits a mask, and there is no mask to edit
-// - the corner icon stays visible, inactive, since it is what brings the panel
-//   back (and blend mode and opacity live in the module's header regardless)
-static void test_panel_state_mask_disabled_defaults_to_collapsed(void **state)
+// switching the mask off must not move the panel: its controls stay live with
+// the mask off (touching one switches it back on), so the fold follows the
+// user's preference exactly as it does with the mask on. Only the corner icon's
+// active look reports the mask state.
+static void test_panel_state_mask_disabled_does_not_collapse(void **state)
 {
   const dt_masks_panel_state_t s =
     _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, FALSE);
   assert_true(s.want_hosted);
-  assert_true(s.panel_collapsed);
-  assert_true(s.corner_icon_visible);
+  assert_false(s.panel_collapsed);
+  assert_false(s.corner_icon_visible);
   assert_false(s.corner_icon_active);
+
+  // and with the panel folded by preference, the icon is back, still inactive
+  const dt_masks_panel_state_t s_folded =
+    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, TRUE);
+  assert_true(s_folded.panel_collapsed);
+  assert_true(s_folded.corner_icon_visible);
+  assert_false(s_folded.corner_icon_active);
 }
 
 // when a module has no masking support (e.g. demosaic, crop) or is unfocused:
@@ -768,13 +775,6 @@ static void test_panel_state_no_separate_panel_for_utility_or_embedded(void **st
   assert_false(s_emb.corner_icon_visible);
 }
 
-// pinning a module with masking off must enable masking
-static void test_pinning_disabled_mask_enables_mask(void **state)
-{
-  assert_true(_model_masks_pin_should_enable_mask(DEVELOP_MASK_DISABLED));
-  assert_false(_model_masks_pin_should_enable_mask(DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI));
-}
-
 // dedicated panel caption reflects module name and instance name with 2-line markup
 static void test_masks_panel_header_markup(void **state)
 {
@@ -809,7 +809,9 @@ static void test_masks_corner_icon_tooltip(void **state)
   char *tt_off = _model_masks_corner_icon_tooltip("exposure", "foreground", FALSE, NULL);
   assert_non_null(strstr(tt_off, "exposure (foreground)"));
   assert_non_null(strstr(tt_off, "mask - off"));
-  assert_non_null(strstr(tt_off, "click to enable mask and pin"));
+  // showing the panel is a view action: it never switches the mask on
+  assert_null(strstr(tt_off, "enable mask"));
+  assert_non_null(strstr(tt_off, "click to expand"));
   free(tt_off);
 
   char *tt_on = _model_masks_corner_icon_tooltip("exposure", "", TRUE, "drawn mask");
@@ -912,13 +914,12 @@ int main(void)
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_teardown(test_panel_state_collapsed_module_shows_corner_icon, _teardown),
     cmocka_unit_test_teardown(test_panel_state_expanded_module_respects_pref, _teardown),
-    cmocka_unit_test_teardown(test_panel_state_mask_disabled_defaults_to_collapsed, _teardown),
+    cmocka_unit_test_teardown(test_panel_state_mask_disabled_does_not_collapse, _teardown),
     cmocka_unit_test_teardown(test_panel_state_unsupported_or_unfocused_hides_all, _teardown),
     cmocka_unit_test_teardown(test_main_opacity_badge_threshold, _teardown),
     cmocka_unit_test_teardown(test_panel_state_utility_position_follows_pref, _teardown),
     cmocka_unit_test_teardown(test_panel_state_no_separate_panel_for_utility_or_embedded, _teardown),
     cmocka_unit_test_teardown(test_pinning_collapsed_module_expands_iop, _teardown),
-    cmocka_unit_test_teardown(test_pinning_disabled_mask_enables_mask, _teardown),
     cmocka_unit_test_teardown(test_masks_panel_header_markup, _teardown),
     cmocka_unit_test_teardown(test_masks_corner_icon_tooltip, _teardown),
     cmocka_unit_test_teardown(test_param_channel_tooltips, _teardown),

@@ -249,6 +249,45 @@ After each check, switch images and back: the setting and the render stay.
 8.4 Dock and undock the panel. The toggle switches sit in place from the
     start, not only after hovering. (Fixed 2026-09-12.)
 
+## 9. Showing the panel, and switching the mask on
+
+The rule: the mask's on/off state is the image, the panel's fold is the view.
+A view action never writes to the image, and editing anything switches the
+mask on. Run 9.1 to 9.5 once per panel position (blending options >
+right-click the mask on/off toggle, or the toolbar mask icon's right-click):
+embedded in the module, the utility panel, and out on the canvas.
+
+9.1 With the mask off, show the panel. The mask stays off: the module's
+    header gains no mask indicator, and no history item appears.
+
+9.2 With the mask off and the panel showing, every control in it is live, not
+    greyed out: the shape buttons, add group, import, the group list, blend
+    mode and opacity.
+
+9.3 Touch any one of them (move opacity, pick a blend mode, add a shape). The
+    mask switches on, and the change is kept: the value you set is the value
+    left in the control. The header's on/off switch and the toolbar icon both
+    report it straight away.
+
+9.4 The same for an edit of the mask itself, with shapes already there and the
+    mask switched off: change an element's opacity or operator, rename or
+    delete one, drag a shape on the canvas. Each switches the mask back on.
+
+9.5 Switch the mask off from the header toggle. The panel stays exactly where
+    it was, still showing, and does not fold away.
+
+9.6 Switch the mask on from the header toggle with the panel folded. The panel
+    unfolds.
+
+9.7 In the toolbar, the mask icon's box is highlighted only when the panel is
+    really on screen. Collapse the module with the panel in the canvas
+    position: the panel goes, and the box stops being highlighted with it.
+    Clicking then shows the panel rather than hiding an already hidden one.
+
+9.8 The exception, which must NOT switch the mask on: reset the module (its
+    header reset button) while the mask is off. The mask stays off. Same for
+    applying a preset that carries no mask.
+
 ## What to report
 
 For each failure: the step, a screenshot of the panel, the `-d masks` log,

@@ -193,7 +193,16 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   const gboolean mask_active =
     usable && module->blend_params
     && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
-  const gboolean showing = usable && !_masks_panel_collapsed_pref();
+  // the effective state, not the stored preference: the preference is only one
+  // of the inputs, and a collapsed module overrides it (see
+  // _model_masks_panel_state). Reading the preference here made the button draw
+  // itself checked while nothing was on screen, and the next click then "hid"
+  // an already hidden panel.
+  const dt_masks_panel_state_t state =
+    _model_masks_panel_state(_masks_panel_position(), usable, usable,
+                             module ? module->expanded : FALSE, mask_active,
+                             _masks_panel_collapsed_pref());
+  const gboolean showing = usable && !state.panel_collapsed;
 
   dtgtk_togglebutton_set_paint(DTGTK_TOGGLEBUTTON(btn), dtgtk_cairo_paint_masks_panel,
                                mask_active ? CPF_SPECIAL_FLAG : CPF_NONE, NULL);
@@ -211,19 +220,29 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   // the panel always belongs to one module, so with no module focused there is
   // nothing for it to show: say that, rather than leaving a button that looks
   // unavailable for no stated reason
+  // the right-click menu resolves the module itself, so it opens whatever the
+  // button's own state is (see _masks_panel_quickbutton_right_click): both
+  // branches below say so, or the blending options stay undiscoverable exactly
+  // when the button looks least worth clicking
+  const char *const rc = _("right-click for the blending options");
   if(!usable)
-    gtk_widget_set_tooltip_text(
-      btn,
+  {
+    gchar *tt = g_strdup_printf(
+      "%s\n%s",
       module
         ? _("unavailable: the focused module does not support masks")
         : _("unavailable: the blend mask panel shows the mask of the focused"
             " module, and no module is focused.\n"
-            "click a module's header to focus it."));
+            "click a module's header to focus it."),
+      rc);
+    gtk_widget_set_tooltip_text(btn, tt);
+    g_free(tt);
+  }
   else
   {
     gchar *tt = g_strdup_printf(
-      _("%s the blend mask panel of the focused module\nmask: %s"),
-      showing ? _("hide") : _("show"), mask_active ? _("on") : _("off"));
+      _("%s the blend mask panel of the focused module\nmask: %s\n%s"),
+      showing ? _("hide") : _("show"), mask_active ? _("on") : _("off"), rc);
     gtk_widget_set_tooltip_text(btn, tt);
     g_free(tt);
   }
@@ -236,6 +255,25 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
 // the panel by hand. The utility position's counterpart of the persist
 // argument the other two positions' collapse calls take.
 static gboolean _driving_host_expander = FALSE;
+
+// put the mask's on/off toggle back in step with the params it reports. Called
+// at the end of every relocation, where the widget may have been moved between
+// headers -- see the comment at that call for what drifts without it.
+static void _sync_mask_enable_toggle(dt_iop_gui_blend_data_t *bd)
+{
+  if(!bd || !bd->mask_enable_toggle || !GTK_IS_TOGGLE_BUTTON(bd->mask_enable_toggle)) return;
+  if(!bd->module || !bd->module->blend_params) return;
+
+  const gboolean on = bd->module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
+  if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->mask_enable_toggle)) == on) return;
+
+  // guarded: the toggle is driven by a click gesture rather than "toggled"
+  // (see _blendop_mask_enable_toggled), and this is a correction, not a user
+  // action -- nothing downstream should treat it as one
+  ++darktable.gui->reset;
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_enable_toggle), on);
+  --darktable.gui->reset;
+}
 
 static void _masks_utility_apply_collapsed(dt_lib_module_t *host,
                                            const gboolean collapsed)
@@ -398,11 +436,10 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
     const gboolean collapsed = dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
     if(module && collapsed)
     {
-      // opening onto an inert "off" editor the user would then have to turn on
-      // separately is not what they asked for
-      if(_model_masks_pin_should_enable_mask(module->blend_params->mask_mode))
-        dt_iop_gui_blend_mask_enable(module);
-
+      // deliberately does NOT switch the mask on: showing the panel is a view
+      // action and must not write to the image. The panel's controls are live
+      // with the mask off, and the first one the user touches switches it on
+      // (see _blendop_mask_enable in blend_gui.c)
       if(_model_masks_pin_should_expand_iop(module->expanded, collapsed))
       {
         const gboolean collapse_others = dt_conf_get_bool("darkroom/ui/single_module");
@@ -421,8 +458,8 @@ void _flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data)
     {
       const gboolean exp =
         host->expander && dtgtk_expander_get_expanded(DTGTK_EXPANDER(host->expander));
-      if(!exp && module && _model_masks_pin_should_enable_mask(module->blend_params->mask_mode))
-        dt_iop_gui_blend_mask_enable(module);
+      // as in the canvas position above: showing the panel never switches the
+      // mask on
       dt_lib_gui_set_expanded(host, !exp);
       if(!exp && host->expander)
         g_idle_add(_scroll_widget_into_view_idle, host->expander);
@@ -608,19 +645,14 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
       s.corner_icon_visible = TRUE;
       s.corner_icon_active = mask_active;
     }
-    else if(!mask_active)
-    {
-      // the panel exists to edit a mask, so with none switched on it has
-      // nothing to show: fold it away to the corner icon, which is also how it
-      // is brought back. Blend mode and opacity are not lost with it -- they
-      // live in the module's own header, where they always are
-      s.panel_collapsed = TRUE;
-      s.corner_icon_visible = TRUE;
-      s.corner_icon_active = FALSE;
-    }
     else
     {
-      // module is expanded and masking: follow the user's preference
+      // module is expanded: follow the user's preference, whether or not the
+      // mask is switched on. An off mask is edited from the same live panel as
+      // an on one (the first control touched switches it on), so folding the
+      // panel away here would take the controls with it -- and it would also
+      // move the panel in response to the image changing, which is not
+      // something the user asked for
       s.panel_collapsed = panel_pref_collapsed;
       s.corner_icon_visible = panel_pref_collapsed;
       s.corner_icon_active = mask_active;
@@ -653,11 +685,6 @@ gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
   return !is_expanded && is_collapsed;
 }
 
-gboolean _model_masks_pin_should_enable_mask(const uint32_t mask_mode)
-{
-  return mask_mode == DEVELOP_MASK_DISABLED;
-}
-
 char *_model_masks_corner_icon_tooltip(const char *module_name,
                                        const char *instance_name,
                                        const gboolean is_active,
@@ -668,11 +695,12 @@ char *_model_masks_corner_icon_tooltip(const char *module_name,
     ? g_strdup_printf("%s (%s)", mname, instance_name)
     : g_strdup(mname);
 
+  // showing the panel never switches the mask on, in any position, so the off
+  // state promises the same thing the on state does: the panel
   gchar *tooltip = is_active
     ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand"),
         mod_name, mask_label ? mask_label : _("active"))
-    : g_strdup_printf(_("%s: blend mask - off\nclick to enable mask and pin"),
-        mod_name);
+    : g_strdup_printf(_("%s: blend mask - off\nclick to expand"), mod_name);
   g_free(mod_name);
   return tooltip;
 }
@@ -1213,6 +1241,20 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       gtk_widget_set_visible(bd->flexi_inline_collapse_btn, FALSE);
     }
   }
+
+  // the on/off toggle is carried between headers by hand above, and a
+  // reparented widget keeps whatever state it was last given, which is not
+  // necessarily the mask's: hosted in the utility panel it is packed onto the
+  // lib's expander header before the module's own gui update has had anything
+  // to say about it. Re-assert it from the params, which are the truth.
+  //
+  // Both symptoms of letting it drift point at the toggle rather than at the
+  // mask, which is why they read as unrelated: the accent is styled on
+  // :checked, so an out-of-date toggle simply loses it, and
+  // _blendop_mask_enable_toggled branches on the button rather than on
+  // mask_mode, so its first click runs the enable path on an already enabled
+  // mask, does nothing, and only leaves the two back in step for the second.
+  _sync_mask_enable_toggle(bd);
 
   // focus moved, or the hosted module's masking changed: the toolbox button
   // reports both ("is there a panel to show" and "is it showing")
