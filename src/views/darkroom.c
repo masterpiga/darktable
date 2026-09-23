@@ -4195,6 +4195,7 @@ void enter(dt_view_t *self)
     }
   }
   _expand_focused_instance(dev);
+  dt_iop_gui_blend_masks_panel_sync_toolbox();
 
   // image should be there now.
   dt_dev_zoom_move(&dev->full, DT_ZOOM_MOVE, -1.f, 1, 0.0f, 0.0f, TRUE);

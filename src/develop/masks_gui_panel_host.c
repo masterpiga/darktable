@@ -991,6 +991,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
       if(bd->masks_blend_header_label && GTK_IS_LABEL(bd->masks_blend_header_label))
         gtk_label_set_text(GTK_LABEL(bd->masks_blend_header_label), _("blend mask"));
+      dt_iop_gui_blend_masks_panel_sync_toolbox();
       return;
     }
 
@@ -998,6 +999,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     // panel inline, whatever the position preference (see
     // _masks_flexi_release, which gates visibility on real focus)
     _masks_flexi_release(module);
+    dt_iop_gui_blend_masks_panel_sync_toolbox();
     return;
   }
 
