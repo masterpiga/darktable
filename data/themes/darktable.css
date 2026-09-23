@@ -325,14 +325,6 @@ box *
   color: @disabled_fg_color;
 }
 
-/* a blend mask that is switched off keeps its group list insensitive but
-   readable: what the mask holds is still shown, clearly dimmer than a live
-   list. The controls around the list keep the plain disabled color */
-.masks-list-off *:disabled
-{
-  color: alpha(@fg_color, 0.6);
-}
-
 /* Set no background and no border. And avoid undershoot and overshoot having too much empty space at top/bottom of sidepanels when scrolled */
 .combo,
 .combo:disabled,

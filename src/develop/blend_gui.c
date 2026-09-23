@@ -329,6 +329,7 @@ enum _channel_indexes
 dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
 static gboolean _module_has_drawn_shapes(const dt_iop_module_t *module);
+static void _blendop_mask_enable(dt_iop_module_t *module);
 static void _queue_masks_list_rebuild(dt_iop_module_t *module);
 static void _queue_link_peers_rebuild(const dt_iop_module_t *module);
 static void _auto_expand_selected_row(dt_iop_module_t *module, const dt_mask_id_t id);
@@ -1517,6 +1518,7 @@ static guint _form_kind(const dt_masks_form_t *form);
 static const char *_kind_name(const guint kind, const gboolean plural);
 static DTGTKCairoPaintIconFunc _kind_icon_paint(const guint kind);
 static DTGTKCairoPaintIconFunc _op_paint_for_state(const int state);
+static DTGTKCairoPaintIconFunc _within_paint(const dt_masks_state_t within);
 static GtkWidget *_make_channel_handle(const char *code, const char *tooltip);
 static const char *_form_type_prefix(const dt_masks_form_t *form);
 static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form_t *form);
@@ -1527,39 +1529,29 @@ static GtkWidget *_build_group_opacity_editor(dt_iop_module_t *module,
                                               const gboolean in_list);
 static GtkWidget *_build_param_boost_editor(dt_iop_module_t *module, const dt_mask_id_t formid);
 
-// with the mask off there is nothing for the panel's controls to act on, so
-// the whole panel body goes insensitive rather than merely inert -- the panel
-// can still be expanded (the mask-off state is reachable and legible either
-// way), it just stops offering controls that would silently do nothing.
-// Deliberately left live: the on/off toggle, the collapse arrow and the
-// options hamburger, all in the header -- those are the ways out of this
-// state, and the options menu is where the panel position is chosen.
-static void _masks_panel_apply_enabled_state(dt_iop_gui_blend_data_t *data,
-                                             const gboolean mask_enabled)
+// the mask being off does not disable anything: editing a mask control is what
+// turns the mask on, exactly as editing a module's parameter turns the module
+// on (dt_dev_add_history_item's `enable` argument, develop.c:1377). A control
+// is insensitive here only when it has nothing to act on whatever the on/off
+// state is -- see _update_add_target_sensitivity and _update_refine_sensitivity
+// for the other two such rules. The off state stays legible through the
+// header's "mask-enabled" class, not through greyed-out controls.
+static void _masks_panel_apply_shape_sensitivity(dt_iop_gui_blend_data_t *data)
 {
-  if(data->masks_panel_body)
-    gtk_widget_set_sensitive(GTK_WIDGET(data->masks_panel_body), mask_enabled);
-  // the theme's insensitive colors would make an off mask's groups and
-  // elements unreadable, and they are still meant to be read. Only the list:
-  // the controls around it keep looking unavailable (see masks-list-off in
-  // darktable.css)
-  if(data->masks_list_box)
-  {
-    if(mask_enabled)
-      dt_gui_remove_class(GTK_WIDGET(data->masks_list_box), "masks-list-off");
-    else
-      dt_gui_add_class(GTK_WIDGET(data->masks_list_box), "masks-list-off");
-  }
-
-  // the rest are header controls. Sensitivity is set on the widgets
-  // themselves, not on the cluster holding them, because the hamburger shares
-  // that cluster and must stay usable while the mask is off.
+  // "edit on canvas" and "solo edit" need shapes to put on the canvas, and
+  // that is all they need: an off mask's shapes are still editable, and the
+  // first edit switches it on. Sensitivity is set on the widget itself, not on
+  // the cluster holding it, because the hamburger shares that cluster.
   const gboolean has_drawn = _module_has_drawn_shapes(data->module);
-  if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, mask_enabled && has_drawn);
-  // edit on canvas and solo edit act on a mask being rendered: an off mask
-  // shows neither, rather than two buttons that can do nothing
+  if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, has_drawn);
+  // the whole edit run goes with them, for the same reason: with no shapes
+  // there is nothing to put on the canvas or to solo
   if(data->masks_header_edit_box)
-    gtk_widget_set_visible(data->masks_header_edit_box, mask_enabled);
+    gtk_widget_set_visible(data->masks_header_edit_box, has_drawn);
+  // the mask overlay button (data->showmask) is deliberately NOT here: it
+  // follows the module header's own mask indicator, which shows only for an
+  // enabled mask, since an off mask renders nothing to overlay (see
+  // _blendop_masks_mode_callback)
 }
 
 static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
@@ -1581,16 +1573,15 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   // flexi reuses the drawn-group toolbar/renderer, so the drawn-mask panel and
   // refinement controls appear for it too.
   const gboolean mode_drawn_or_flexi = mode_drawn || mode_flexi;
-  // with the mask off the panel shows what switching it on would give -- the
-  // same controls, greyed out (see _masks_panel_apply_enabled_state) -- rather
-  // than folding to nothing and leaving an empty panel behind for anyone who
-  // expands it anyway. Switching on always lands in flexi (see
-  // _blendop_mask_enable), so flexi is the layout to preview.
+  // with the mask off the panel shows the same controls it would with the mask
+  // on, and they stay live: touching one switches the mask on (see
+  // _blend_mask_touched). Switching on always lands in flexi (see
+  // _blendop_mask_enable), so flexi is the layout to show.
   const gboolean show_mask_ui = !mode_raster;
   const gboolean show_flexi_ui = !mode_raster;
 
   _box_set_visible(data->blend_box, TRUE);
-  _masks_panel_apply_enabled_state(data, mask_enabled);
+  _masks_panel_apply_shape_sensitivity(data);
 
   if(data->masks_blend_header)
   {
@@ -1764,6 +1755,9 @@ static void _blendop_blend_mode_callback(GtkWidget *combo,
       dt_bauhaus_slider_set(data->blend_mode_parameter_slider, bp->blend_parameter);
       gtk_widget_hide(data->blend_mode_parameter_slider);
     }
+    // blending is skipped entirely while the mask is off, so a blend mode
+    // picked there would do nothing until the mask came on
+    _blendop_mask_enable(data->module);
     dt_dev_add_history_item(darktable.develop, data->module, TRUE);
   }
 }
@@ -1788,6 +1782,7 @@ static void _blendop_blend_order_clicked(GtkGestureSingle *gesture,
 
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), active);
 
+  _blendop_mask_enable(module);
   dt_dev_add_history_item(darktable.develop, module, TRUE);
   dt_control_queue_redraw_widget(GTK_WIDGET(button));
 }
@@ -1822,6 +1817,7 @@ static void _blendop_masks_combine_callback(GtkWidget *combo,
     // parametric editors from their own forms
   }
 
+  _blendop_mask_enable(data->module);
   dt_dev_add_history_item(darktable.develop, data->module, TRUE);
 }
 
@@ -2050,11 +2046,15 @@ static void _update_mask_enable_toggle_tooltip(GtkWidget *toggle, const gboolean
                               : _("mask disabled\nclick to enable\nright-click for blending options"));
 }
 
-// force the blend mask on (flexi), no-op if it already has some mask
-// content -- used by entry points ("add shape" / "add parametric channel" /
-// "add raster element") that need the group evaluated even if the user
-// hadn't switched masking on yet (see bd->mask_enable_toggle for the
-// user-facing on/off control, which is the only other way into this state)
+// force the blend mask on (flexi), no-op if it already has some mask content.
+//
+// This is how the mask gets switched on in normal use: every panel control
+// that writes calls it before committing, so editing a mask control turns the
+// mask on exactly as editing a module's parameter turns the module on (see
+// dt_dev_add_history_item's `enable` argument, develop.c:1377). Nothing in the
+// panel is disabled merely because the mask is off, so this is reachable from
+// all of it. bd->mask_enable_toggle is the explicit control, and its off path
+// is the one place that must not call back into here.
 static void _blendop_mask_enable(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *data = module->blend_data;
@@ -2068,12 +2068,9 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
   dt_iop_add_remove_mask_indicator(module, TRUE);
   gtk_widget_set_visible(data->showmask, TRUE);
 
-  const int pos = _masks_panel_position();
-  if(pos == MASKS_PANEL_POS_UTILITY)
-  {
-    dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
-    if(host) dt_lib_gui_set_expanded(host, TRUE);
-  }
+  // unfolding on enable is not done here: _blendop_masks_mode_callback above
+  // clears the shared collapse preference and relocates, which applies it in
+  // whichever position the panel is in -- the utility host included
 
   DT_ENTER_GUI_UPDATE();
   if(module->mask_indicator)
@@ -2092,8 +2089,31 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
 void dt_iop_gui_blend_mask_enable(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
+  // a module can support blending and still have no mask of its own
+  // (IOP_FLAGS_NO_MASKS: retouch and spots keep their forms outside the blend
+  // mask). It has a mask_enable_toggle all the same, so check what the toggle
+  // stands for rather than whether it exists -- dt_dev_add_masks_history_item
+  // calls this for every mask edit, those modules' own form edits included
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd->masks_support || !bd->masks_inited) return;
+
+  // this runs from inside whatever widget callback made the mask edit
+  // (dt_dev_add_masks_history_item calls it for every one of them), and
+  // switching the mask on rebuilds the mask list -- twice over, once directly
+  // in _blendop_masks_mode_callback and again through the history item it adds,
+  // via dt_iop_gui_update_blending. That teardown destroys the very row whose
+  // control is mid-callback and frees the editor struct the callback still
+  // holds (see _build_param_row_editor, whose `ed` is owned by the row widget),
+  // so the callback returns into freed memory: dragging a parametric channel
+  // slider with the mask off segfaulted in _param_row_slider_callback's tail.
+  // Suppress the synchronous rebuilds and run one from the idle instead, once
+  // the callback that started all this has returned.
+  const gboolean was_suppressed = bd->masks_rebuild_suppressed;
+  bd->masks_rebuild_suppressed = TRUE;
   dt_iop_request_focus(module);
   _blendop_mask_enable(module);
+  bd->masks_rebuild_suppressed = was_suppressed;
+  if(!was_suppressed) _queue_masks_list_rebuild(module);
 }
 
 void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module)
@@ -2147,7 +2167,14 @@ static void _blendop_mask_enable_toggled(
 
   dt_iop_request_focus(module);
 
-  if(!gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(button)))
+  // branch on the mask, not on the button. The two can drift -- the toggle is
+  // reparented between headers as the panel moves (see _masks_flexi_relocate)
+  // and carries whatever state it was last given -- and reading the widget
+  // turned that into a click that did nothing: with the mask already on and the
+  // button still showing off, this ran the enable path, which is a no-op there,
+  // and only the second click did anything. The params cannot drift from
+  // themselves, and both branches below set the button explicitly anyway.
+  if(module->blend_params->mask_mode == DEVELOP_MASK_DISABLED)
   {
     _blendop_mask_enable(module);
   }
@@ -4563,6 +4590,10 @@ static void _refine_commit_global(dt_iop_gui_blend_data_t *bd, GtkWidget *w)
   {
     const float oldval = bp->details;
     bp->details = dt_bauhaus_slider_get(w);
+    // refining is editing the mask, so it switches the mask on. After the
+    // field is written, never before: enabling runs a gui update that would
+    // repaint the control from the params and lose the value just read
+    _blendop_mask_enable(bd->module);
     dt_dev_add_history_item(darktable.develop, bd->module, TRUE);
     if((oldval == 0.0f) && (bp->details != 0.0f))
     {
@@ -4592,6 +4623,7 @@ static void _refine_commit_global(dt_iop_gui_blend_data_t *bd, GtkWidget *w)
   else if(w == bd->contrast_slider)
     bp->contrast = dt_bauhaus_slider_get(w);
 
+  _blendop_mask_enable(bd->module);
   dt_dev_add_history_item(darktable.develop, bd->module, TRUE);
 }
 
@@ -4632,6 +4664,9 @@ static void _refine_commit_nonglobal(dt_iop_module_t *module)
     if(pt) pt->refinement = r;
   }
 
+  // reachable with the mask off: switching it off leaves its shapes in place,
+  // so their refinements stay editable, and editing one switches it back on
+  _blendop_mask_enable(module);
   dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
 }
 
@@ -4692,6 +4727,9 @@ static void _refine_reset_clicked(GtkWidget *btn, dt_iop_gui_blend_data_t *bd)
   if(bd->masks_refine_scope_kind == REFINE_SCOPE_GLOBAL)
   {
     const gboolean had_details = _refine_clear_global(bd->module);
+    // the same rule the sliders follow, so both refinement scopes behave alike
+    // here: _refine_commit_nonglobal below switches the mask on too
+    _blendop_mask_enable(bd->module);
     dt_dev_add_history_item(darktable.develop, bd->module, TRUE);
     // details crossing to zero needs the same full reprocess the slider path does
     if(had_details)
@@ -4794,8 +4832,13 @@ static void _refine_update_header(dt_iop_module_t *module)
   else
   {
     name = g_strdup(_("whole mask"));
-    // the icon of the darkroom toolbar's mask panel button
-    icon_w = _make_icon_widget(dtgtk_cairo_paint_masks_panel);
+    // the mask is its own top group, so it carries a combine operator like any
+    // other, and the header shows it the way the list's own root row does (see
+    // the ghandle in _pack_group): the static panel icon said nothing
+    // that was not already said by the caption
+    dt_masks_form_t *grp = _module_mask_group(module);
+    const dt_masks_point_group_t *root = _group_point(grp, _mask_group_cid(module));
+    icon_w = _make_icon_widget(_within_paint(root ? (root->state & DT_MASKS_STATE_WITHIN) : 0));
   }
 
   if(icon_w && bd->masks_refine_icon_box)
@@ -6049,6 +6092,11 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
   if(!bd || !bd->blend_opacity_lowop_badge) return;
   const float val = dt_bauhaus_slider_get(slider);
   _update_lowop_badge(bd->blend_opacity_lowop_badge, val / 100.0f, FALSE, FALSE, NULL);
+  // opacity is a blending parameter and blending is skipped while the mask is
+  // off, so setting it switches the mask on. Safe here: bauhaus writes the
+  // field and commits before it emits "value-changed" (bauhaus.c:3970), so the
+  // gui update this triggers repaints the slider from the new value
+  if(!DT_IN_GUI_UPDATE()) _blendop_mask_enable(bd->module);
 }
 
 // the whisker popup's placement rules, over plain geometry: a square directly
@@ -8285,7 +8333,11 @@ void _masks_reset_mask_core(dt_iop_module_t *module)
     g_list_free_full(grp->points, free);
     grp->points = NULL;
     dt_masks_group_ensure_marker(darktable.develop->forms, grp);
-    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+    // enable FALSE: this is a wipe, reached from the module's reset button and
+    // from a preset apply, not a mask edit. Every other mask commit passes TRUE
+    // and so switches the mask on (see dt_dev_add_masks_history_item), which
+    // here would turn masking on for a module whose mask was just thrown away
+    dt_dev_add_masks_history_item(darktable.develop, module, FALSE);
   }
   bd->panel_selected_group_cid = INVALID_MASKID;
   bd->panel_selected_formid = INVALID_MASKID;
@@ -11951,7 +12003,12 @@ static void _build_group_actions_menu(GtkWidget *anchor,
     g_menu_append(sec_edit, _("rename"), "masks_group_act.rename");
   if(!is_base && !bypassed && has_members)
     g_menu_append(sec_edit, _("merge elements into group below"), "masks_group_act.merge_down");
-  if(has_members) g_menu_append(sec_edit, _("empty group"), "masks_group_act.empty");
+  // the mask is its own top group, so emptying that one empties the mask:
+  // "empty group" would name a group the user never sees as one
+  if(has_members)
+    g_menu_append(sec_edit,
+                  cid == _mask_group_cid(module) ? _("reset mask") : _("empty group"),
+                  "masks_group_act.empty");
   if(deletable) g_menu_append(sec_edit, _("delete group"), "masks_group_act.delete");
   g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
   g_object_unref(sec_edit);
@@ -17952,7 +18009,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_enable_toggle),
                                is_mask_enabled);
   _update_mask_enable_toggle_tooltip(bd->mask_enable_toggle, is_mask_enabled);
-  _masks_panel_apply_enabled_state(bd, is_mask_enabled);
+  _masks_panel_apply_shape_sensitivity(bd);
   if(bd->masks_blend_header)
   {
     if(is_mask_enabled)

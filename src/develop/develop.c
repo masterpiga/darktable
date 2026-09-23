@@ -1642,6 +1642,17 @@ void dt_dev_add_masks_history_item(dt_develop_t *dev,
     if(fpt) target = GINT_TO_POINTER(fpt->formid);
   }
 
+  // editing a mask switches the mask on, the same way `enable` switches the
+  // module on in _dev_add_history_item_ext below: the blend mask panel's
+  // controls stay live with the mask off, so this is what turns it back on,
+  // wherever the edit came from -- the panel or the canvas. Safe to do for
+  // every caller of this function: replay, undo, style apply and history copy
+  // all go through dt_dev_add_masks_history_item_ext with enable FALSE and
+  // never reach here. Before the lock, because enabling commits a history item
+  // of its own and would otherwise deadlock on history_mutex.
+  if(enable && dev->gui_attached)
+    dt_iop_gui_blend_mask_enable(module ? module : dev->gui_module);
+
   dt_pthread_mutex_lock(&dev->history_mutex);
 
   const gboolean need_end_record =
