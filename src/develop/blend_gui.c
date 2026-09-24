@@ -1538,16 +1538,19 @@ static GtkWidget *_build_param_boost_editor(dt_iop_module_t *module, const dt_ma
 // header's "mask-enabled" class, not through greyed-out controls.
 static void _masks_panel_apply_shape_sensitivity(dt_iop_gui_blend_data_t *data)
 {
-  // "edit on canvas" and "solo edit" need shapes to put on the canvas, and
-  // that is all they need: an off mask's shapes are still editable, and the
-  // first edit switches it on. Sensitivity is set on the widget itself, not on
-  // the cluster holding it, because the hamburger shares that cluster.
+  // "edit on canvas" and "solo edit" need shapes to put on the canvas, and a
+  // mask that is not locked (see _mask_lock_sync). Sensitivity is set on the
+  // widget itself, not on the cluster holding it, because the hamburger
+  // shares that cluster.
   const gboolean has_drawn = _module_has_drawn_shapes(data->module);
-  if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, has_drawn);
-  // the whole edit run goes with them, for the same reason: with no shapes
-  // there is nothing to put on the canvas or to solo
+  const gboolean locked = dt_develop_blend_mask_locked(data->module->blend_params);
+  if(data->masks_edit) gtk_widget_set_sensitive(data->masks_edit, has_drawn && !locked);
+  // the whole edit run goes with them: with no shapes there is nothing to put
+  // on the canvas or to solo. Like every header button but the expander and
+  // the on/off toggle, it is also hidden while the mask is off
+  const gboolean enabled = data->module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
   if(data->masks_header_edit_box)
-    gtk_widget_set_visible(data->masks_header_edit_box, has_drawn);
+    gtk_widget_set_visible(data->masks_header_edit_box, has_drawn && enabled);
   // the mask overlay button (data->showmask) is deliberately NOT here: it
   // follows the module header's own mask indicator, which shows only for an
   // enabled mask, since an off mask renders nothing to overlay (see
@@ -2046,6 +2049,72 @@ static void _update_mask_enable_toggle_tooltip(GtkWidget *toggle, const gboolean
                               : _("mask disabled\nclick to enable\nright-click for blending options"));
 }
 
+// the lock's own button, the module header's indicator, and what the lock
+// takes out of reach. The panel's controls are made insensitive wholesale
+// rather than each refusing its own edit. The on/off toggle stays sensitive:
+// its right-click opens the blending options, whose panel settings are view,
+// not mask (its left-click refuses instead, see _blendop_mask_enable_toggled)
+static void _mask_lock_sync(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!bd || !bd->mask_lock_btn) return;
+
+  const dt_develop_blend_params_t *bp = module->blend_params;
+  const gboolean locked = dt_develop_blend_mask_locked(bp);
+  const gboolean enabled = bp->mask_mode != DEVELOP_MASK_DISABLED;
+
+  DT_ENTER_GUI_UPDATE();
+  gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_lock_btn), locked);
+  DT_LEAVE_GUI_UPDATE();
+  gtk_widget_set_tooltip_text(bd->mask_lock_btn,
+                              locked
+                              ? _("mask locked\nreset, presets, styles and paste leave it"
+                                  " alone, and it cannot be edited\nclick to unlock")
+                              : _("lock the mask\nreset, presets, styles and paste will"
+                                  " leave it alone, and it cannot be edited.\ndiscarding"
+                                  " the history still removes it"));
+  // shown with an off mask too while locked: an off mask keeps its lock, and
+  // this is the panel's only way to lift it
+  gtk_widget_set_visible(bd->mask_lock_btn,
+                         bd->masks_support && !module->hide_enable_button
+                         && (enabled || locked));
+
+  if(bd->masks_box) gtk_widget_set_sensitive(GTK_WIDGET(bd->masks_box), !locked);
+  if(bd->refine_box) gtk_widget_set_sensitive(GTK_WIDGET(bd->refine_box), !locked);
+  _masks_panel_apply_shape_sensitivity(bd);
+  if(bd->soloedit_mode) gtk_widget_set_sensitive(bd->soloedit_mode, !locked);
+
+  dt_iop_add_remove_mask_lock_indicator(module, locked);
+
+  if(locked && bd->masks_shown != DT_MASKS_EDIT_OFF)
+    dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
+}
+
+void dt_iop_gui_blend_set_mask_lock(dt_iop_module_t *module, const gboolean lock)
+{
+  if(!module || !module->blend_params) return;
+  dt_develop_blend_params_t *bp = module->blend_params;
+  if(dt_develop_blend_mask_locked(bp) == lock) return;
+
+  bp->mask_lock = lock ? 1 : 0;
+  // locking changes nothing the module renders, so it does not switch it on
+  dt_dev_add_history_item(darktable.develop, module, FALSE);
+  _mask_lock_sync(module);
+}
+
+static void _mask_lock_clicked(GtkGestureSingle *gesture,
+                               gint n_press,
+                               gdouble x,
+                               gdouble y,
+                               dt_iop_module_t *module)
+{
+  DT_GUARD_GUI_UPDATE();
+  if(dt_gui_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  dt_iop_request_focus(module);
+  dt_iop_gui_blend_set_mask_lock(module,
+                                 !dt_develop_blend_mask_locked(module->blend_params));
+}
+
 // force the blend mask on (flexi), no-op if it already has some mask content.
 //
 // This is how the mask gets switched on in normal use: every panel control
@@ -2067,6 +2136,7 @@ static void _blendop_mask_enable(dt_iop_module_t *module)
   _blendop_masks_mode_callback(DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI, data);
   dt_iop_add_remove_mask_indicator(module, TRUE);
   gtk_widget_set_visible(data->showmask, TRUE);
+  _mask_lock_sync(module);
 
   // unfolding on enable is not done here: _blendop_masks_mode_callback above
   // clears the shared collapse preference and relocates, which applies it in
@@ -2179,6 +2249,15 @@ static void _blendop_mask_enable_toggled(
 
   dt_iop_request_focus(module);
 
+  // switching it on or off is a change to the mask like any other
+  if(dt_develop_blend_mask_locked(module->blend_params))
+  {
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button),
+                                 module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
+    dt_control_log(_("the mask is locked"));
+    return;
+  }
+
   // branch on the mask, not on the button. The two can drift -- the toggle is
   // reparented between headers as the panel moves (see _masks_flexi_relocate)
   // and carries whatever state it was last given -- and reading the widget
@@ -2197,6 +2276,7 @@ static void _blendop_mask_enable_toggled(
     gtk_widget_set_visible(data->showmask, FALSE);
     _blendop_masks_mode_callback(DEVELOP_MASK_DISABLED, data);
     dt_iop_add_remove_mask_indicator(module, FALSE);
+    _mask_lock_sync(module);
   }
 
   dt_control_hinter_message("");
@@ -2828,11 +2908,17 @@ static void _blendif_options_callback(GtkButton *button,
                                     DEVELOP_BLEND_CS_RGB_SCENE,
                                     module_blend_cst == DEVELOP_BLEND_CS_RGB_SCENE);
     --darktable.gui->reset;
+    // the blend colorspace belongs to the mask: parametric elements are tied
+    // to it (see _blendif_change_blend_colorspace)
+    const gboolean locked = dt_develop_blend_mask_locked(module->blend_params);
     // connected only after the initial states are set, so building the popover
     // does not look like the user picking a colorspace
     for(int i = 0; i < n; i++)
+    {
       g_signal_connect(G_OBJECT(radios[i]), "toggled",
                        G_CALLBACK(_blendif_colorspace_radio_toggled), module);
+      gtk_widget_set_sensitive(radios[i], !locked);
+    }
   }
 
   if(bd->masks_support)
@@ -17596,7 +17682,9 @@ static void _pack_group_elements(dt_iop_module_t *module,
   const gboolean has_drawn = _module_has_drawn_shapes(module);
   if(bd->masks_edit)
   {
-    gtk_widget_set_sensitive(bd->masks_edit, is_mask_enabled && has_drawn);
+    gtk_widget_set_sensitive(bd->masks_edit,
+                             is_mask_enabled && has_drawn
+                             && !dt_develop_blend_mask_locked(module->blend_params));
     if(!has_drawn && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->masks_edit)))
     {
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit), FALSE);
@@ -18373,6 +18461,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
 
   // (un)set the mask indicator
   dt_iop_add_remove_mask_indicator(module, valid_masking);
+  _mask_lock_sync(module);
 
   // initialization of blending modes
   if(bd->csp != bd->blend_modes_csp)
@@ -18876,8 +18965,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     // "blend mask" header, in one fixed reading order:
     //
-    //   expander | title | <space> | show_mask_overlay | <gap> | edit on canvas
-    //   | solo edit | <gap> | on/off toggle
+    //   expander | title | <space> | lock | show_mask_overlay | <gap>
+    //   | edit on canvas | solo edit | <gap> | on/off toggle
     //
     // The expander (the panel-collapse arrow, embedded position only) leads;
     // the caption follows; everything after the space closes on the right,
@@ -18928,6 +19017,14 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
          "ctrl+click to display mask,\n"
          "shift+click to display channel"));
 
+    bd->mask_lock_btn = dt_iop_togglebutton_new(
+      module, "blend`masks", N_("lock mask"), NULL,
+      G_CALLBACK(_mask_lock_clicked), FALSE, 0, 0,
+      dtgtk_cairo_paint_lock, NULL);
+    gtk_widget_set_valign(bd->mask_lock_btn, GTK_ALIGN_CENTER);
+    // shown by _mask_lock_sync only, never by an ancestor's show_all
+    gtk_widget_set_no_show_all(bd->mask_lock_btn, TRUE);
+
     // edit on canvas and solo edit, with a gap either side: they are built with
     // the rest of the mask controls, and packed in by _pack_header_edit_run.
     // Hidden until then, so a module without masks shows no stray gaps
@@ -18935,11 +19032,11 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_add_class(bd->masks_header_edit_box, "masks-btn-row");
     gtk_widget_set_no_show_all(bd->masks_header_edit_box, TRUE);
 
-    // right-hand cluster: show_mask_overlay, edit run, preferences (hidden),
-    // on/off toggle
+    // right-hand cluster: lock, show_mask_overlay, edit run, preferences
+    // (hidden), on/off toggle
     GtkWidget *right_cluster = bd->masks_right_cluster =
-      dt_gui_hbox(bd->showmask, bd->masks_header_edit_box, presets_button,
-                  bd->mask_enable_toggle);
+      dt_gui_hbox(bd->mask_lock_btn, bd->showmask, bd->masks_header_edit_box,
+                  presets_button, bd->mask_enable_toggle);
     dt_gui_add_class(right_cluster, "masks-btn-row");
     gtk_widget_set_valign(right_cluster, GTK_ALIGN_CENTER);
     gtk_box_pack_end(GTK_BOX(gbox), right_cluster, FALSE, FALSE, 0);

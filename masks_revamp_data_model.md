@@ -204,6 +204,24 @@ some combination. Flexi just adds one more value to that set. Same struct,
 same size, no schema change needed for that either — flexi is additive to
 a field that was already a bitmask.
 
+The mask lock (2026-09-24) took over the first of the blend parameters' two
+reserved fields as `mask_lock`: same size, no `DEVELOP_BLEND_VERSION` bump.
+Every legacy conversion clears it, since the reserved field it replaced was
+never guaranteed zero. It is ordinary blend params, so it is saved in history,
+XMP and styles, and undo toggles it. Three places honor it, via
+`dt_develop_blend_keep_locked_mask`: module reset (imageop.c), preset apply
+(presets.c) and `dt_history_merge_module_into_history` (styles and paste). A
+locked module keeps everything but blend mode, blend parameter and opacity,
+and a lock the incoming params carry is dropped. History replay and undo
+ignore it by design. Overwrite paste, selective or full, deletes the history
+before the merge runs, so `_history_copy_and_paste_on_image_overwrite` loads
+the locked modules first and `_locked_masks_restore` puts their masks back on
+the result: a pasted module keeps its pasted params, one that was not pasted
+is reset, and both keep their mask and shapes. Discarding history is the one
+deliberate exception. `--lock-masks` (masks/lockcheck.c) checks paste in both
+modes and styles on two scratch images, with `--library :memory:`; a styles
+case only checks the mask id, since styles store no forms at all.
+
 ### The enums and structs, before and after
 
 The diffs below show the actual shape of the change: nothing removed,

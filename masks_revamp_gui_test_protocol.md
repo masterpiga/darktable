@@ -288,6 +288,30 @@ embedded in the module, the utility panel, and out on the canvas.
     header reset button) while the mask is off. The mask stays off. Same for
     applying a preset that carries no mask.
 
+## 10. Mask lock
+
+10.1 With the mask on, a lock icon sits left of the mask overlay button. With
+     the mask off, it is hidden, and so are the overlay button and the edit
+     run; only the expander and the on/off toggle remain.
+
+10.2 Lock: the panel below the blend mode and opacity greys out, edit on
+     canvas and solo edit grey out and leave the canvas, and a lock icon
+     appears in the module header. Blend mode and opacity stay editable.
+     Clicking the on/off toggle logs "the mask is locked"; its right-click
+     still opens the blending options, with the colorspace choices greyed.
+
+10.3 Reset the module: the parameters and blend mode/opacity reset, the mask
+     and its shapes stay. Apply a preset: same. Apply a style (append mode)
+     that includes the module with a different mask: same. Copy another
+     image's history with this module and paste it, in append mode and in
+     overwrite mode, full and selective: same. A selective overwrite paste
+     that leaves this module out resets it, and keeps the mask.
+
+10.4 Click the header lock icon: the mask unlocks and the header icon goes.
+     Undo: locked again. Each lock/unlock is one history item on the module.
+
+10.5 Restart: the lock is still there.
+
 ## What to report
 
 For each failure: the step, a screenshot of the panel, the `-d masks` log,
