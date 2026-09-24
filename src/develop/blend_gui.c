@@ -2107,10 +2107,22 @@ void dt_iop_gui_blend_mask_enable(dt_iop_module_t *module)
   // so the callback returns into freed memory: dragging a parametric channel
   // slider with the mask off segfaulted in _param_row_slider_callback's tail.
   // Suppress the synchronous rebuilds and run one from the idle instead, once
-  // the callback that started all this has returned.
+  // the callback that started all this has returned. Only when the mask
+  // actually goes on: with it already on, _blendop_mask_enable does nothing,
+  // and a rebuild on every edit tore down the slider being dragged mid-drag
+  // and flashed the panel. Read under history_mutex: the pipe's history
+  // replay resets blend_params to the defaults, mask off, before walking the
+  // history back up (dt_dev_pixelpipe_synch_all), and an edit landing in that
+  // window read the mask as off, re-ran the enable and rebuilt mid-drag
+  dt_pthread_mutex_lock(&darktable.develop->history_mutex);
+  const gboolean was_on = module->blend_params->mask_mode
+                          & (DEVELOP_MASK_MASK | DEVELOP_MASK_FLEXI | DEVELOP_MASK_RASTER);
+  dt_pthread_mutex_unlock(&darktable.develop->history_mutex);
+  dt_iop_request_focus(module);
+  if(was_on) return;
+
   const gboolean was_suppressed = bd->masks_rebuild_suppressed;
   bd->masks_rebuild_suppressed = TRUE;
-  dt_iop_request_focus(module);
   _blendop_mask_enable(module);
   bd->masks_rebuild_suppressed = was_suppressed;
   if(!was_suppressed) _queue_masks_list_rebuild(module);
@@ -2450,7 +2462,7 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
         if(owner && form) dt_masks_form_remove(module, owner, form);
       }
       g_list_free_full(parametrics, free);
-      dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+      dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
       // the panel's selection and its cached list signature can still name the
       // forms just deleted; dt_iop_gui_update() below rebuilds from these
@@ -4667,7 +4679,7 @@ static void _refine_commit_nonglobal(dt_iop_module_t *module)
   // reachable with the mask off: switching it off leaves its shapes in place,
   // so their refinements stay editable, and editing one switches it back on
   _blendop_mask_enable(module);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 }
 
 // shared value-changed handler for all six refinement controls.
@@ -5179,7 +5191,7 @@ static void _props_row_apply(dt_iop_module_t *module,
   // commit exactly one history item for the whole gesture across every targeted
   // form, whatever the property -- opacity included (the OPACITY branch above no
   // longer self-commits per form, so a multi-form drag is now a single commit).
-  if(value != old_value) dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  if(value != old_value) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 }
 
 // Quad for the shrink/grow slider's unit toggle: always shows "%" inside a
@@ -7447,7 +7459,9 @@ void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
 // working anywhere else in the panel or canvas, so it lives in its own list,
 // recomputed here whenever solo state changes.
 // what solo edit leaves on the canvas: the isolated shape, or every member of
-// the isolated group
+// the isolated group. None for an isolated parametric or raster element, which
+// has no outline to show: dt_masks_set_edit_mode_forms then leaves the canvas
+// empty
 static GList *_soloedit_formids(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -7456,6 +7470,8 @@ static GList *_soloedit_formids(dt_iop_module_t *module)
   const dt_masks_point_group_t *pt = grp ? _group_point(grp, bd->soloedit_formid) : NULL;
   if(pt && dt_masks_point_is_marker(pt))
     return _selected_group_formids(grp, bd->soloedit_formid);
+  const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, bd->soloedit_formid);
+  if(form && (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))) return NULL;
   return g_list_prepend(NULL, GINT_TO_POINTER(bd->soloedit_formid));
 }
 
@@ -7504,9 +7520,10 @@ static gboolean _soloedit_mode_is_on(void)
 }
 
 // what the mode would isolate for the current selection: the selected element,
-// as long as it is a drawn shape, or the selected group, whose members are then
-// the only shapes left on the canvas. A parametric channel or a raster mask has
-// no canvas geometry of its own to isolate (same carve-out the menu item had).
+// or the selected group, whose members are then the only shapes left on the
+// canvas. A parametric channel or a raster mask is isolated too: it has no
+// canvas geometry, so the canvas is left with no shape at all (see
+// _soloedit_formids), rather than falling back to every shape of the mask.
 // The mask's own group holds every shape, so selecting it is the mode's own off
 // state.
 dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
@@ -7524,9 +7541,7 @@ dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
     return cid != _mask_group_cid(bd->module) ? cid : INVALID_MASKID;
   if(!dt_is_valid_maskid(bd->panel_selected_formid)) return INVALID_MASKID;
 
-  const dt_masks_form_t *form =
-    dt_masks_get_from_id(darktable.develop, bd->panel_selected_formid);
-  if(!form || (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)))
+  if(!dt_masks_get_from_id(darktable.develop, bd->panel_selected_formid))
     return INVALID_MASKID;
   // a path of the AI object stepped into isolates the object: stepping in is
   // for editing its paths side by side, and narrowing to the path would also
@@ -7617,11 +7632,13 @@ static void _update_row_selection(dt_iop_gui_blend_data_t *bd)
   dt_control_queue_redraw_center();
 }
 
-// drop the transient hover wash from every row / cluster header in the list.
+// drop the transient hover wash from every row / cluster header in the list,
+// and its mirror on group blocks (see _hover_block_of)
 static void _clear_hover_classes(GtkWidget *w)
 {
   if(!GTK_IS_WIDGET(w)) return;
   dt_gui_remove_class(w, "mask-list-row-hover");
+  dt_gui_remove_class(w, "mask-group-header-hovered");
   if(!GTK_IS_CONTAINER(w)) return;
   GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
   for(GList *c = kids; c; c = g_list_next(c)) _clear_hover_classes(c->data);
@@ -7836,7 +7853,7 @@ static void _masks_param_inout_toggled(GtkWidget *btn, dt_iop_module_t *module)
   dt_print(DT_DEBUG_MASKS, "[masks] parametric form %d: show_output=%u", id, want);
   gtk_widget_set_tooltip_text(
     btn, _("show/hide this channel's expanded controls (full input and output sliders)"));
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
   // this row's editor is always present now (see _build_param_row_editor) --
   // just show/hide its output slider and boost box in place, no docking
@@ -8231,7 +8248,7 @@ static void _toggle_solo_form(dt_iop_module_t *module, const dt_mask_id_t id)
 
   if(_model_toggle_solo_form(module, grp, id) == DT_MASKS_SOLO_CANVAS_FULL)
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _sync_hidden_to_form_visible(module);
   // solo can flip every row's hidden state at once; refresh them all in place
   // instead of rebuilding the whole list (see _update_shape_row_state).
@@ -8500,7 +8517,7 @@ static void _masks_row_drag_received(GtkWidget *w,
     if(ok)
     {
       dt_print(DT_DEBUG_MASKS, "[masks] form %d drag-moved near %d", src, dst);
-      dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+      dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
     }
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
@@ -8677,7 +8694,7 @@ static void _masks_group_drag_received(GtkWidget *w,
       // reorder does (see _masks_row_drag_received). Without this the model
       // moved but nothing invalidated the pipe, so the canvas kept the pre-drag
       // render until an unrelated event (a zoom) forced a recompute.
-      if(ok) dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+      if(ok) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
     }
     dt_print(DT_DEBUG_MASKS, "[masks dnd] group received src=%d dst=%d ok=%d", src, dst,
              ok);
@@ -8745,7 +8762,7 @@ static void _masks_shape_to_group_drop(GtkWidget *w,
     if(ok)
     {
       dt_print(DT_DEBUG_MASKS, "[masks] shape %d moved into group %d", src, _header_cid(w));
-      dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+      dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
     }
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
@@ -8769,7 +8786,7 @@ static void _masks_cluster_to_group_drop(GtkWidget *w,
   if(ok)
   {
     dt_print(DT_DEBUG_MASKS, "[masks] cluster moved near %d", dst);
-    dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
   if(ok) _queue_masks_list_rebuild(module);
@@ -8798,7 +8815,7 @@ static void _masks_cluster_row_drop(GtkWidget *w,
   if(ok)
   {
     dt_print(DT_DEBUG_MASKS, "[masks] cluster moved near %d", dst);
-    dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   }
   gtk_drag_finish(ctx, ok, FALSE, time);
   if(ok) _queue_masks_list_rebuild(module);
@@ -9517,7 +9534,7 @@ static void _rename_commit(GtkWidget *entry, dt_iop_module_t *module)
   if(_model_rename_form(form, txt))
   {
     dt_print(DT_DEBUG_MASKS, "[masks] form %d renamed to '%s'", id, form->name);
-    dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   }
   g_free(txt);
   // deferred, not a direct _build_masks_list() call: this runs from inside
@@ -9657,7 +9674,7 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
   _detach_group_members(grp, one);
   g_list_free(one);
   dt_print(DT_DEBUG_MASKS, "[masks] form %d deleted from panel", id);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _queue_masks_list_rebuild(module);
   _refresh_canvas_edit(module);
 }
@@ -9947,16 +9964,102 @@ static void _hover_washed_set(GtkWidget *row)
                               (gpointer *)&_hover_washed_row);
 }
 
+// the group block holding `target` when it is a group header, else NULL. A
+// hovered group header's wash is mirrored onto its block as
+// .mask-group-header-hovered: the controls the header owns (its opacity
+// slider) sit in the header's sibling box, where no CSS rule on the header
+// can reach, but a rule on the block, an ancestor of both, can
+static GtkWidget *_hover_block_of(GtkWidget *target)
+{
+  if(!target
+     || !gtk_style_context_has_class(gtk_widget_get_style_context(target),
+                                     "mask-group-header"))
+    return NULL;
+  for(GtkWidget *w = gtk_widget_get_parent(target); w; w = gtk_widget_get_parent(w))
+    if(!g_strcmp0(gtk_widget_get_name(w), "mask-group-block")) return w;
+  return NULL;
+}
+
 // the hover wash in the list, on the row of `target` or on none. Cheap, so it
 // follows the pointer at once, unlike the canvas half below
 static void _row_hover_wash(dt_iop_gui_blend_data_t *bd, GtkWidget *target)
 {
   if(_hover_washed_row)
+  {
     dt_gui_remove_class(_hover_washed_row, "mask-list-row-hover");
+    GtkWidget *block = _hover_block_of(_hover_washed_row);
+    if(block) dt_gui_remove_class(block, "mask-group-header-hovered");
+  }
   else if(bd && bd->masks_list_box)
     _clear_hover_classes(GTK_WIDGET(bd->masks_list_box));
-  if(target) dt_gui_add_class(target, "mask-list-row-hover");
+  if(target)
+  {
+    dt_gui_add_class(target, "mask-list-row-hover");
+    GtkWidget *block = _hover_block_of(target);
+    if(block) dt_gui_add_class(block, "mask-group-header-hovered");
+  }
   _hover_washed_set(target);
+}
+
+// the hovered shapes solo edit has brought onto the canvas (see
+// _soloedit_hover_scope), so the canvas is only rebuilt when they change
+static GList *_soloedit_hover_extra = NULL;
+
+static gboolean _canvas_shows_form(const dt_mask_id_t formid)
+{
+  const dt_masks_form_t *vis = darktable.develop->form_visible;
+  for(const GList *l = vis ? vis->points : NULL; l; l = g_list_next(l))
+    if(((const dt_masks_point_group_t *)l->data)->formid == formid) return TRUE;
+  return FALSE;
+}
+
+// solo edit narrows the canvas to the isolated shapes, so a hovered row
+// outside them had nothing on the canvas to highlight. Bring its shapes in for
+// as long as the hover lasts, and back out after: the list can then find any
+// shape, not only those of the current selection. Parametric and raster
+// elements have no outline to bring in
+static void _soloedit_hover_scope(dt_iop_module_t *module, const GList *hovered)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(!dt_is_valid_maskid(bd->soloedit_formid))
+  {
+    // solo edit going off rebuilt the canvas as the whole mask already
+    g_list_free(_soloedit_hover_extra);
+    _soloedit_hover_extra = NULL;
+    return;
+  }
+
+  GList *solo = _soloedit_formids(module);
+  GList *extra = NULL;
+  for(const GList *l = hovered; l; l = g_list_next(l))
+  {
+    if(g_list_find(solo, l->data)) continue;
+    const dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, GPOINTER_TO_INT(l->data));
+    if(!form || (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))) continue;
+    extra = g_list_append(extra, l->data);
+  }
+
+  // checked against the canvas too, not only against the last hover: any
+  // re-narrowing of solo edit (a selection change) drops what a hover added
+  gboolean same = g_list_length(extra) == g_list_length(_soloedit_hover_extra);
+  for(const GList *a = extra, *b = _soloedit_hover_extra; same && a;
+      a = g_list_next(a), b = g_list_next(b))
+    same = a->data == b->data && _canvas_shows_form(GPOINTER_TO_INT(a->data));
+
+  if(!same)
+  {
+    // rebuilding the canvas drops its selection: put it back, as
+    // _soloedit_follow_selection does
+    const dt_mask_id_t canvas_sel = darktable.develop->mask_form_selected_id;
+    GList *ids = g_list_concat(g_list_copy(solo), g_list_copy(extra));
+    dt_masks_set_edit_mode_forms(module, ids, DT_MASKS_EDIT_FULL);
+    g_list_free(ids);
+    darktable.develop->mask_form_selected_id = canvas_sel;
+  }
+
+  g_list_free(solo);
+  g_list_free(_soloedit_hover_extra);
+  _soloedit_hover_extra = extra;
 }
 
 // apply a hover: the wash in the list, and the shapes the canvas highlights
@@ -9965,6 +10068,7 @@ static void _row_hover_apply(dt_iop_module_t *module, GtkWidget *w)
   dt_masks_form_gui_t *gui = darktable.develop ? darktable.develop->form_gui : NULL;
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(!gui || !bd) return;
+  _soloedit_hover_scope(module, w ? g_object_get_data(G_OBJECT(w), "hover-formids") : NULL);
   g_list_free(gui->panel_hover_formids);
   gui->panel_hover_formids =
     w ? g_list_copy(g_object_get_data(G_OBJECT(w), "hover-formids")) : NULL;
@@ -11034,7 +11138,7 @@ static void _delete_elements(dt_iop_module_t *module, GList *fids)
   for(GList *l = fids; l; l = g_list_next(l))
     _clear_stale_formid_refs(bd, GPOINTER_TO_INT(l->data));
   _detach_group_members(grp, fids);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // deferred: this is called from a header's own press handler, which is
   // still mid-dispatch on `module`'s header widget -- rebuilding synchronously
   // here would destroy that widget out from under GTK's event propagation and
@@ -11091,7 +11195,7 @@ static void _group_reset_members(dt_iop_module_t *module, const dt_mask_id_t cid
     _clear_stale_formid_refs(bd, GPOINTER_TO_INT(l->data));
   g_list_free(fids);
   bd->panel_selected_group_cid = cid;
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // deferred, same reasoning as _delete_elements above
   _queue_masks_list_rebuild(module);
   _refresh_canvas_edit(module);
@@ -11338,7 +11442,7 @@ static void _toggle_solo_group(dt_iop_module_t *module, const dt_mask_id_t cid)
   g_list_free(members);
   if(canvas == DT_MASKS_SOLO_CANVAS_FULL)
     dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _sync_hidden_to_form_visible(module);
   // group solo only flips hidden/dim state and solo badges, never the list
   // structure, so refresh every row (and the group-solo badges / empty-group
@@ -11506,7 +11610,7 @@ static void _merge_group_down(dt_iop_module_t *module, const dt_mask_id_t cid)
   if(!_model_merge_group_down(grp, cid)) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd->panel_selected_group_cid == cid) bd->panel_selected_group_cid = INVALID_MASKID;
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // deferred: also reachable directly from the group's own operator-handle
   // press handler (_group_op_press's shift-click), same reasoning as
   // _group_op_apply above
@@ -11545,7 +11649,7 @@ static void _invert_group_members(dt_iop_module_t *module, const dt_mask_id_t ci
     pt->state ^= DT_MASKS_STATE_INVERSE;
   }
   g_list_free(members);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // an INVERSE-only change touches no row's structure/position, just its own
   // look -- refresh every row in place (same mechanism _invert_element uses
   // for the per-shape gesture) instead of a full teardown+rebuild, which
@@ -12819,7 +12923,7 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
   pt->state ^= DT_MASKS_STATE_INVERSE;
   dt_print(DT_DEBUG_MASKS, "[masks] form %d inverse=%d", id,
            !!(pt->state & DT_MASKS_STATE_INVERSE));
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // update this row's own state in place -- a full rebuild here would tear
   // down and recreate the whole list (and re-dock the parametric editor if one
   // is open), which visibly flashes the panel for what is just one bit.
@@ -13676,7 +13780,7 @@ static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
 static void _param_form_commit(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   dt_print(DT_DEBUG_MASKS, "[masks] parametric form %d: blendif edit committed", formid);
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   (void)module;
 }
 
@@ -16727,7 +16831,12 @@ static void _pack_group(dt_iop_module_t *module,
   // rows (packed from the bottom, see _pack_group_elements) and the
   // pending-shape placeholder below
   if(show_group_opacity_slider && !_props_subpanel())
+  {
     dt_gui_box_add(elem_box, _build_group_opacity_editor(module, cid, TRUE));
+    // the slider hangs straight off the header as one block, so the header
+    // squares its bottom edge onto it (.mask-group-has-slider)
+    dt_gui_add_class(hdr, "mask-group-has-slider");
+  }
 
   _pack_group_elements(module, grp, elem_box, g_list_reverse(g_list_copy(formids)),
                        formids, group_block);
@@ -16742,12 +16851,21 @@ static void _pack_group(dt_iop_module_t *module,
              && _group_cid_of_form(grp, bd->insert_after_fid) == (dt_mask_id_t)cid)))
     dt_gui_box_add(elem_box, _make_pending_shape_row(module, pending_form));
 
-  // an empty group shows its box only for what it holds anyway (the opacity
-  // slider, a shape landing in it): bare, it would be a stub of rail
-  if(empty)
+  // a group's box shows only what it actually holds (member rows, the opacity
+  // slider, a shape landing in it). With nothing in it there is nothing to
+  // show, but its padding still opens a stray gap under the header. Checked
+  // on the children rather than on `empty`, which only counts members and so
+  // misses a group whose box came out childless for any other reason. Only
+  // ever hides: whether an expanded group's box shows at all is settled
+  // above. no_show_all, or the show_all pass in _masks_panel_pack turns it
+  // straight back on
   {
     GList *kids = gtk_container_get_children(GTK_CONTAINER(elem_box));
-    gtk_widget_set_visible(elem_box, kids != NULL);
+    if(!kids)
+    {
+      gtk_widget_set_no_show_all(elem_box, TRUE);
+      gtk_widget_set_visible(elem_box, FALSE);
+    }
     g_list_free(kids);
   }
 
@@ -16790,6 +16908,173 @@ static void _pack_subgroup(dt_iop_module_t *module, dt_masks_form_t *sub, GtkWid
   depth--;
 }
 
+// the header line of a row or group packed into a group's elements box: the
+// first element, group or cluster header below `w`. NULL for something with no
+// header line (the group opacity slider)
+static GtkWidget *_mask_row_header(GtkWidget *w)
+{
+  GtkStyleContext *ctx = gtk_widget_get_style_context(w);
+  if(gtk_style_context_has_class(ctx, "mask-element-header")
+     || gtk_style_context_has_class(ctx, "mask-group-header")
+     || !g_strcmp0(gtk_widget_get_name(w), "mask-cluster-header-row"))
+    return w;
+  if(!GTK_IS_CONTAINER(w)) return NULL;
+  GtkWidget *found = NULL;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *k = kids; k && !found; k = g_list_next(k))
+    found = _mask_row_header(GTK_WIDGET(k->data));
+  g_list_free(kids);
+  return found;
+}
+
+// a group's rail, drawn rather than left to its CSS border so it can stop at
+// its last member, with a tick across the indent to each member's header line
+// (a tree view's ├ and └). The CSS still sets all of it. The width is the
+// box's border-left-width, whose border is transparent and so only reserves
+// the room. The colour is the group HEADER's outline-color, which GTK computes
+// but never draws with no outline-style: the header's own state rules
+// (selected, implied, hover) set it beside its background, so the rail follows
+// its header in every state, hover included, which no selector on the box
+// could do since hover is a class on the header, a sibling. `user_data` is
+// that header (see _hook_mask_rails)
+static gboolean _masks_rail_draw(GtkWidget *box, cairo_t *cr, gpointer user_data)
+{
+  GtkWidget *hdr_of_box = GTK_WIDGET(user_data);
+  GtkStyleContext *ctx = gtk_widget_get_style_context(box);
+  const GtkStateFlags state = gtk_style_context_get_state(ctx);
+  GtkBorder border;
+  gtk_style_context_get_border(ctx, state, &border);
+  GtkStyleContext *hctx = gtk_widget_get_style_context(hdr_of_box);
+  GdkRGBA *color = NULL;
+  gtk_style_context_get(hctx, gtk_style_context_get_state(hctx), "outline-color", &color,
+                        NULL);
+  if(!color || border.left <= 0 || color->alpha <= 0.0)
+  {
+    if(color) gdk_rgba_free(color);
+    return FALSE;
+  }
+
+  const int w = border.left;
+  // the lowest tick is the rail's end, drawn below as a rounded elbow (└).
+  // Found by position, not list order: members are packed from the end, so
+  // the list does not run top to bottom
+  int last_top = -1, last_hx = 0;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(box));
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    GtkWidget *child = GTK_WIDGET(k->data);
+    if(!gtk_widget_get_visible(child)) continue;
+    GtkWidget *hdr = _mask_row_header(child);
+    if(!hdr || !gtk_widget_get_visible(hdr)) continue;
+    // centre on the header's visible line, not on its allocation: a CSS margin
+    // is part of a GTK3 widget's allocation, and a group header carries a
+    // 12px top one (.mask-panel-row.mask-group-header), which put its tick
+    // in the gap above it
+    GtkStyleContext *mctx = gtk_widget_get_style_context(hdr);
+    GtkBorder margin;
+    gtk_style_context_get_margin(mctx, gtk_style_context_get_state(mctx), &margin);
+    const int line = gtk_widget_get_allocated_height(hdr) - margin.top - margin.bottom;
+    int hx = 0, hy = 0;
+    if(!gtk_widget_translate_coordinates(hdr, box, margin.left, margin.top + line / 2,
+                                         &hx, &hy))
+      continue;
+    // from the rail's inner edge to the header's left edge, centred on its
+    // line; the lowest one is held back for the elbow
+    const int top = hy - w / 2;
+    if(top > last_top)
+    {
+      if(last_top >= 0) cairo_rectangle(cr, w, last_top, last_hx - w, w);
+      last_top = top;
+      last_hx = hx;
+    }
+    else
+      cairo_rectangle(cr, w, top, hx - w, w);
+    if(g_getenv("DT_MASKS_PANEL_DUMP"))
+    {
+      GtkAllocation ba;
+      gtk_widget_get_allocation(box, &ba);
+      dt_print(DT_DEBUG_ALWAYS,
+               "[masks-rail] box %dx%d rail=%d child=%s#%s hdr=%s#%s h=%d m=%d/%d/%d"
+               " -> tick x=[%d,%d) y=%d",
+               ba.width, ba.height, w, G_OBJECT_TYPE_NAME(child),
+               gtk_widget_get_name(child), G_OBJECT_TYPE_NAME(hdr),
+               gtk_widget_get_name(hdr), gtk_widget_get_allocated_height(hdr),
+               margin.top, margin.bottom, margin.left, w, hx, top);
+    }
+  }
+  g_list_free(kids);
+
+  if(last_top >= 0)
+  {
+    // the elbow's outer radius comes from the CSS with the rail's width and
+    // colour. Read through the "border-radius" shorthand, the only radius GTK3
+    // lets a style context query: it reports the top-left corner, as an int
+    // (pack_border_radius in gtkcssshorthandpropertyimpl.c). The per-corner
+    // longhands have no query function at all, and asking for one aborts the
+    // varargs read and crashes. Clamped so the curve never runs past the
+    // rail's top or the last tick's end
+    int radius = 0;
+    gtk_style_context_get(ctx, state, "border-radius", &radius, NULL);
+    const int bottom = last_top + w;
+    const int r = CLAMP(radius, w, MIN(bottom, last_hx));
+    // rail down to where the curve starts, then the last tick from where it
+    // ends, joined by a quarter ring of outer radius r and inner r - w
+    cairo_rectangle(cr, 0, 0, w, bottom - r);
+    cairo_rectangle(cr, r, last_top, last_hx - r, w);
+    cairo_new_sub_path(cr);
+    cairo_arc_negative(cr, r, bottom - r, r, G_PI, G_PI / 2.0);
+    cairo_arc(cr, r, bottom - r, r - w, G_PI / 2.0, G_PI);
+    cairo_close_path(cr);
+  }
+  gdk_cairo_set_source_rgba(cr, color);
+  cairo_fill(cr);
+  gdk_rgba_free(color);
+  return FALSE;
+}
+
+// hook every group's elements box up to its drawn rail (_masks_rail_draw),
+// paired with the header it hangs from: the header sits before the box in the
+// same parent, so the first header below that parent is it. Done over the
+// finished tree rather than while packing, because a group reaches the list
+// through more than one packing path (_pack_group directly, _pack_subgroup for
+// a nested one, _make_shape_row for a subgroup row)
+static void _hook_mask_rails(GtkWidget *w)
+{
+  if(gtk_style_context_has_class(gtk_widget_get_style_context(w), "mask-group-elements")
+     && !g_object_get_data(G_OBJECT(w), "rail-drawn"))
+  {
+    // a box holding the opacity slider alone draws no rail (the rail runs to
+    // the last member's tick), so the slider's block must run flush under the
+    // whole header instead of stopping at a rail that is not there
+    // (.mask-group-slider-only). Tagged here rather than where the box is
+    // built: an empty nested group is built as an element row (see
+    // _nested_as_group), not by _pack_group, and every box passes through here
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+    if(kids && !kids->next
+       && gtk_style_context_has_class(gtk_widget_get_style_context(kids->data),
+                                      "mask-group-opacity-editor"))
+      dt_gui_add_class(w, "mask-group-slider-only");
+    g_list_free(kids);
+
+    GtkWidget *hdr = _mask_row_header(gtk_widget_get_parent(w));
+    if(hdr)
+    {
+      g_object_set_data(G_OBJECT(w), "rail-drawn", GINT_TO_POINTER(TRUE));
+      // both tied to the other widget's lifetime, so neither outlives it
+      g_signal_connect_object(G_OBJECT(w), "draw", G_CALLBACK(_masks_rail_draw), hdr,
+                              G_CONNECT_AFTER);
+      // a state change restyles the header, not its sibling box: redraw the
+      // rail with it, or it keeps the old state's colour
+      g_signal_connect_object(G_OBJECT(hdr), "style-updated",
+                              G_CALLBACK(gtk_widget_queue_draw), w, G_CONNECT_SWAPPED);
+    }
+  }
+  if(!GTK_IS_CONTAINER(w)) return;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *k = kids; k; k = g_list_next(k)) _hook_mask_rails(GTK_WIDGET(k->data));
+  g_list_free(kids);
+}
+
 // Widget-side: build the panel's row tree from the already-reconciled model.
 // Every mutation happens in _masks_panel_reconcile above, so this only reads.
 static void _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp)
@@ -16821,6 +17106,8 @@ static void _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp)
     if(_starts_group(l))
       _pack_group(module, grp, l->data, l->next, l == grp->points, ngroups, pending_form,
                   list);
+
+  _hook_mask_rails(list);
 
   // the box carries no_show_all (flexi-only), which makes gtk_widget_show_all on
   // the box itself a no-op; show each header explicitly, then reveal the box.
@@ -16854,6 +17141,47 @@ static void _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp)
                             bd->panel_selected_group_cid);
   // the data the rows were rebuilt from changed, and so may the shape's editor
   _props_panel_sync(module, TRUE);
+}
+
+// one line per widget under the masks list: type, CSS node name, style
+// classes, visibility and allocated size. Debug-only, reached solely through
+// DT_MASKS_PANEL_DUMP (see the call at the end of _build_masks_list).
+static void _dump_masks_panel_tree(GtkWidget *w, const int depth)
+{
+  if(!w) return;
+  GString *cls = g_string_new(NULL);
+  GList *classes = gtk_style_context_list_classes(gtk_widget_get_style_context(w));
+  for(GList *c = classes; c; c = g_list_next(c))
+    g_string_append_printf(cls, ".%s", (const char *)c->data);
+  g_list_free(classes);
+
+  GtkAllocation a;
+  gtk_widget_get_allocation(w, &a);
+  GList *kids =
+    GTK_IS_CONTAINER(w) ? gtk_container_get_children(GTK_CONTAINER(w)) : NULL;
+  const char *name = gtk_widget_get_name(w);
+
+  dt_print(DT_DEBUG_ALWAYS, "[masks-tree] %*s%s #%s %s vis=%d x=%d y=%d %dx%d kids=%d",
+           depth * 2, "", G_OBJECT_TYPE_NAME(w), name ? name : "-",
+           cls->str[0] ? cls->str : "-", gtk_widget_get_visible(w), a.x, a.y,
+           a.width, a.height, g_list_length(kids));
+  g_string_free(cls, TRUE);
+
+  for(GList *k = kids; k; k = g_list_next(k))
+    _dump_masks_panel_tree(GTK_WIDGET(k->data), depth + 1);
+  g_list_free(kids);
+}
+
+static gboolean _dump_masks_panel_tree_idle(gpointer user_data)
+{
+  dt_iop_module_t *module = user_data;
+  const dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(bd && bd->masks_list_box)
+  {
+    dt_print(DT_DEBUG_ALWAYS, "[masks-tree] ==== %s ====", module->op);
+    _dump_masks_panel_tree(GTK_WIDGET(bd->masks_list_box), 0);
+  }
+  return G_SOURCE_REMOVE;
 }
 
 void _build_masks_list(dt_iop_module_t *module)
@@ -16955,6 +17283,16 @@ void _build_masks_list(dt_iop_module_t *module)
   }
 
   _masks_panel_pack(module, grp);
+
+  // DT_MASKS_PANEL_DUMP=1 prints the finished list as a tree: widget type, CSS
+  // node name, style classes, visibility and allocated size. The panel's look
+  // is decided by CSS over a tree this file builds through several different
+  // paths (a top-level group via _pack_group, a nested one as an element row
+  // via _make_shape_row), and working out from the source which rule reaches
+  // which widget is unreliable. Deferred to an idle so the sizes printed are
+  // the ones after layout, not the stale ones from before it.
+  if(g_getenv("DT_MASKS_PANEL_DUMP"))
+    g_idle_add(_dump_masks_panel_tree_idle, module);
 }
 
 // expand/collapse a same-kind element cluster. Shared by the triangle button
@@ -17473,7 +17811,7 @@ static void _add_raster_mask(dt_iop_module_t *self,
   // _form_display_name). Set AFTER save_creation, whose de-dup numbering names
   // it "raster mask #N"
   g_strlcpy(form->name, _("raster mask"), sizeof(form->name));
-  dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+  dt_dev_add_masks_history_item(darktable.develop, self, TRUE);
 
   _build_masks_list(self);
   // full reprocess so the (possibly newly-used) source recomputes and stores its
