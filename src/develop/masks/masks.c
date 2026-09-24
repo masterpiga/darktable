@@ -406,6 +406,7 @@ gboolean dt_masks_is_in_module(const dt_mask_id_t maskid, const dt_iop_module_t 
 }
 
 void dt_masks_register_forms(dt_develop_t *dev,
+                             dt_iop_module_t *module,
                              GList *forms)
 {
   for(GList *l = forms;
@@ -416,7 +417,7 @@ void dt_masks_register_forms(dt_develop_t *dev,
     dev->forms = g_list_append(dev->forms, form);
   }
 
-  dt_dev_add_masks_history_item(dev, NULL, TRUE);
+  dt_dev_add_masks_history_item(dev, module, TRUE);
 }
 
 void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form)
@@ -3343,7 +3344,8 @@ void dt_masks_remove_shape(dt_iop_module_t *module,
     dt_masks_form_remove(module, dt_masks_get_from_id(darktable.develop, parentid), form);
 }
 
-float dt_masks_form_change_opacity(dt_masks_form_t *form,
+float dt_masks_form_change_opacity(dt_iop_module_t *module,
+                                   dt_masks_form_t *form,
                                    const dt_mask_id_t parentid,
                                    const float amount)
 {
@@ -3376,7 +3378,7 @@ float dt_masks_form_change_opacity(dt_masks_form_t *form,
       {
         fpt->opacity = opacity;
         dt_toast_log(_("opacity: %.0f%%"), opacity * 100);
-        dt_dev_add_masks_history_item(darktable.develop, NULL, TRUE);
+        dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
       }
       return opacity;
     }

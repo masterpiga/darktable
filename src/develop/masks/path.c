@@ -3008,7 +3008,7 @@ static int _path_events_mouse_scrolled(dt_iop_module_t *module,
     if(dt_modifier_is(state, GDK_CONTROL_MASK))
     {
       // we try to change the opacity
-      dt_masks_form_change_opacity(form, parentid, up ? 0.05f : -0.05f);
+      dt_masks_form_change_opacity(module, form, parentid, up ? 0.05f : -0.05f);
     }
     else
     {

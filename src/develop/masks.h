@@ -949,8 +949,10 @@ dt_masks_form_t *dt_masks_get_from_id_ext(GList *forms, dt_mask_id_t id);
 dt_masks_form_t *dt_masks_get_from_id(const dt_develop_t *dev, dt_mask_id_t id);
 /** check if a form is used by a given module (directly or as a child of its group) */
 gboolean dt_masks_is_in_module(dt_mask_id_t maskid, const struct dt_iop_module_t *module);
-/** register forms into the mask manager */
+/** register forms into the mask manager, recording them in `module`'s history
+    item (the mask manager's when NULL) */
 void dt_masks_register_forms(dt_develop_t *dev,
+                             struct dt_iop_module_t *module,
                              GList *forms);
 
 /** read the forms from the db */
@@ -1217,7 +1219,8 @@ dt_masks_form_t *dt_masks_bundle_of(const dt_masks_point_group_t *fpt);
 /** add every element of `src_grp` to `grp`, keeping its operator and opacity:
     shapes are shared, parametric channels copied. No history item */
 void dt_masks_group_add_members_of(dt_masks_form_t *grp, const dt_masks_form_t *src_grp);
-float dt_masks_form_change_opacity(dt_masks_form_t *form,
+float dt_masks_form_change_opacity(struct dt_iop_module_t *module,
+                                   dt_masks_form_t *form,
                                    const dt_imgid_t parentid,
                                    const float amount);
 void dt_masks_form_move(dt_masks_form_t *grp,
