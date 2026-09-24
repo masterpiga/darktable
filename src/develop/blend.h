@@ -227,8 +227,12 @@ typedef struct dt_develop_blend_params_t
   float details;
   /** feathering parameters version */
   uint32_t feather_version;
+  /** nonzero: reset, presets, styles and paste leave the mask alone (see
+   *  dt_develop_blend_keep_locked_mask). Took over a reserved field, so the
+   *  layout and DEVELOP_BLEND_VERSION are unchanged */
+  uint32_t mask_lock;
   /** some reserved fields for future use */
-  uint32_t reserved[2];
+  uint32_t reserved[1];
   /** blendif parameters */
   float blendif_parameters[4 * DEVELOP_BLENDIF_SIZE];
   float blendif_boost_factors[DEVELOP_BLENDIF_SIZE];
@@ -454,6 +458,9 @@ typedef struct dt_iop_gui_blend_data_t
 
   dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
+  // locks the mask against reset, presets, styles, paste and editing (see
+  // dt_develop_blend_params_t's mask_lock). Left of showmask in the header
+  GtkWidget *mask_lock_btn;
   GtkWidget *soloedit_mode;
   GtkWidget *masks_combine_combo;
   GtkWidget *blend_modes_combo;
@@ -862,6 +869,19 @@ dt_develop_blend_default_module_blend_colorspace(dt_iop_module_t *module);
 void dt_develop_blend_init_blend_parameters(dt_develop_blend_params_t *blend_params,
                                             const dt_develop_blend_colorspace_t cst);
 
+/** the mask of these blend params is locked */
+static inline gboolean dt_develop_blend_mask_locked(const dt_develop_blend_params_t *const p)
+{
+  return p && p->mask_lock != 0;
+}
+
+/** copies the mask part of `locked` (everything but blend mode, blend
+ *  parameter and opacity) over `incoming`, when `locked` is locked. Otherwise
+ *  only clears the lock `incoming` brings along: the params being replaced
+ *  decide whether the result is locked, never the incoming ones */
+void dt_develop_blend_keep_locked_mask(dt_develop_blend_params_t *incoming,
+                                       const dt_develop_blend_params_t *const locked);
+
 /** initializes the default blendif parameters for the given color space in blend_params */
 void dt_develop_blend_init_blendif_parameters(dt_develop_blend_params_t *blend_params,
                                               const dt_develop_blend_colorspace_t cst);
@@ -1079,6 +1099,9 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
 // panel corner icon: clicking it while the hosted module's mask is off
 // should turn the mask on, not just re-expand the panel to an inert editor.
 void dt_iop_gui_blend_mask_enable(dt_iop_module_t *module);
+// locks or unlocks the module's mask, as a history item. The module header's
+// lock indicator unlocks through this
+void dt_iop_gui_blend_set_mask_lock(dt_iop_module_t *module, const gboolean lock);
 // the masking panel just folded away (collapsed == TRUE) or came back
 // (FALSE), in whichever position it currently lives. Collapsing turns "edit
 // on canvas" (and any armed shape-add tool) off, stashing the edit mode in
