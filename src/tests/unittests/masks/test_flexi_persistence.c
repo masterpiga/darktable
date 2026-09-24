@@ -350,6 +350,50 @@ static void test_cleanup_keeps_shapes_another_module_still_uses(void **state)
   g_list_free(history);
 }
 
+// a locked mask keeps everything but blend mode, blend parameter and opacity
+// from the params it replaces (reset, preset, style or paste)
+static void test_locked_mask_survives_replacement(void **state)
+{
+  dt_develop_blend_params_t locked = { 0 }, incoming = { 0 };
+  locked.mask_lock = 1;
+  locked.mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
+  locked.mask_id = 7;
+  locked.feathering_radius = 12.0f;
+  locked.raster_mask_id = 3;
+  locked.opacity = 40.0f;
+  incoming.mask_mode = DEVELOP_MASK_DISABLED;
+  incoming.mask_id = NO_MASKID;
+  incoming.opacity = 80.0f;
+  incoming.blend_mode = DEVELOP_BLEND_MULTIPLY;
+  incoming.blend_parameter = 2.0f;
+
+  dt_develop_blend_keep_locked_mask(&incoming, &locked);
+
+  assert_int_equal(incoming.mask_lock, 1);
+  assert_int_equal(incoming.mask_mode, DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI);
+  assert_int_equal(incoming.mask_id, 7);
+  assert_int_equal(incoming.raster_mask_id, 3);
+  assert_true(incoming.feathering_radius == 12.0f);
+  assert_true(incoming.opacity == 80.0f);
+  assert_int_equal(incoming.blend_mode, DEVELOP_BLEND_MULTIPLY);
+  assert_true(incoming.blend_parameter == 2.0f);
+}
+
+// an unlocked mask is replaced whole, and a lock the incoming params carry
+// (a style or preset saved from a locked module) does not come along
+static void test_incoming_lock_is_dropped(void **state)
+{
+  dt_develop_blend_params_t replaced = { 0 }, incoming = { 0 };
+  replaced.mask_id = 7;
+  incoming.mask_lock = 1;
+  incoming.mask_id = 9;
+
+  dt_develop_blend_keep_locked_mask(&incoming, &replaced);
+
+  assert_int_equal(incoming.mask_lock, 0);
+  assert_int_equal(incoming.mask_id, 9);
+}
+
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -365,6 +409,8 @@ int main(void)
     cmocka_unit_test_teardown(test_pre_v7_refinement_stays_disabled, _teardown),
     cmocka_unit_test_teardown(test_cleanup_drops_shapes_only_replaced_steps_use, _teardown),
     cmocka_unit_test_teardown(test_cleanup_keeps_shapes_another_module_still_uses, _teardown),
+    cmocka_unit_test(test_locked_mask_survives_replacement),
+    cmocka_unit_test(test_incoming_lock_is_dropped),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

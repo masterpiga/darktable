@@ -2669,6 +2669,22 @@ void dt_iop_gui_reset(dt_iop_module_t *module)
   DT_LEAVE_GUI_UPDATE();
 }
 
+// resets the blend params to the defaults, but for a locked mask, which keeps
+// its own (see dt_develop_blend_keep_locked_mask)
+static void _commit_reset_blend_params(dt_iop_module_t *module)
+{
+  if(!dt_develop_blend_mask_locked(module->blend_params))
+  {
+    dt_iop_commit_blend_params(module, module->default_blendop_params, NULL);
+    return;
+  }
+  // not the default_blendop_params pointer itself: dt_iop_commit_blend_params
+  // drops the raster mask source for that one, and a locked mask keeps it
+  dt_develop_blend_params_t reset = *module->default_blendop_params;
+  dt_develop_blend_keep_locked_mask(&reset, module->blend_params);
+  dt_iop_commit_blend_params(module, &reset, NULL);
+}
+
 // kept for direct callers from accelerators
 static gboolean _gui_reset_callback(GtkButton *button,
                                     GdkEventButton *event,
@@ -2684,8 +2700,9 @@ static gboolean _gui_reset_callback(GtkButton *button,
        && dt_modifier_is(dt_gdk_event_get_state(event), GDK_CONTROL_MASK))
      || !dt_gui_presets_autoapply_for_module(module, NULL))
   {
-    // if a drawn mask is set, remove it from the list
-    if(dt_is_valid_maskid(module->blend_params->mask_id))
+    // if a drawn mask is set, remove it from the list, unless it is locked
+    if(dt_is_valid_maskid(module->blend_params->mask_id)
+       && !dt_develop_blend_mask_locked(module->blend_params))
     {
       dt_masks_form_t *grp =
         dt_masks_get_from_id(darktable.develop, module->blend_params->mask_id);
@@ -2693,7 +2710,7 @@ static gboolean _gui_reset_callback(GtkButton *button,
     }
     /* reset to default params */
     dt_iop_reload_defaults(module);
-    dt_iop_commit_blend_params(module, module->default_blendop_params, NULL);
+    _commit_reset_blend_params(module);
 
     // the module's forms were rewritten out from under the flexi masks panel,
     // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
@@ -2730,8 +2747,9 @@ static void _gui_reset_clicked(GtkGestureSingle *gesture,
   if(!((dt_key_modifier_state() & GDK_CONTROL_MASK)
        && dt_gui_presets_autoapply_for_module(module, NULL)))
   {
-    // if a drawn mask is set, remove it from the list
-    if(dt_is_valid_maskid(module->blend_params->mask_id))
+    // if a drawn mask is set, remove it from the list, unless it is locked
+    if(dt_is_valid_maskid(module->blend_params->mask_id)
+       && !dt_develop_blend_mask_locked(module->blend_params))
     {
       dt_masks_form_t *grp =
         dt_masks_get_from_id(darktable.develop, module->blend_params->mask_id);
@@ -2739,7 +2757,7 @@ static void _gui_reset_clicked(GtkGestureSingle *gesture,
     }
     /* reset to default params */
     dt_iop_reload_defaults(module);
-    dt_iop_commit_blend_params(module, module->default_blendop_params, NULL);
+    _commit_reset_blend_params(module);
 
     // the module's forms were rewritten out from under the flexi masks panel,
     // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
@@ -3491,6 +3509,34 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
   return TRUE;
 }
 
+// packs an indicator into the module header, clear of the buttons that
+// dt_iop_show_hide_header_buttons hides
+static void _header_pack_indicator(dt_iop_module_t *module, GtkWidget *indicator)
+{
+  gtk_box_pack_end(GTK_BOX(module->header), indicator, FALSE, FALSE, 0);
+
+  // in dynamic modes, we need to put the indicator after the drawing area
+  GList *children = gtk_container_get_children(GTK_CONTAINER(module->header));
+  GList *child;
+
+  for(child = g_list_last(children);
+      child && GTK_IS_BUTTON(child->data);
+      child = g_list_previous(child));
+
+  if(GTK_IS_DRAWING_AREA(child->data))
+  {
+    GValue position = G_VALUE_INIT;
+    g_value_init (&position, G_TYPE_INT);
+    gtk_container_child_get_property(GTK_CONTAINER(module->header),
+                                     child->data ,"position", &position);
+    gtk_box_reorder_child(GTK_BOX(module->header), indicator,
+                          g_value_get_int(&position));
+  }
+  g_list_free(children);
+
+  dt_iop_show_hide_header_buttons(module, NULL, FALSE, FALSE);
+}
+
 void dt_iop_add_remove_mask_indicator(dt_iop_module_t *module, gboolean add)
 {
   const gboolean show = add && dt_conf_get_bool("darkroom/ui/show_mask_indicator");
@@ -3515,28 +3561,35 @@ void dt_iop_add_remove_mask_indicator(dt_iop_module_t *module, gboolean add)
                      G_CALLBACK(_mask_indicator_tooltip), module);
     gtk_widget_set_has_tooltip(module->mask_indicator, TRUE);
     gtk_widget_set_sensitive(module->mask_indicator, module->enabled);
-    gtk_box_pack_end(GTK_BOX(module->header), module->mask_indicator, FALSE, FALSE, 0);
+    _header_pack_indicator(module, module->mask_indicator);
+  }
+}
 
-    // in dynamic modes, we need to put the mask indicator after the drawing area
-    GList *children = gtk_container_get_children(GTK_CONTAINER(module->header));
-    GList *child;
+static void _mask_lock_indicator_clicked(GtkButton *button, dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_set_mask_lock(module, FALSE);
+}
 
-    for(child = g_list_last(children);
-        child && GTK_IS_BUTTON(child->data);
-        child = g_list_previous(child));
-
-    if(GTK_IS_DRAWING_AREA(child->data))
-    {
-      GValue position = G_VALUE_INIT;
-      g_value_init (&position, G_TYPE_INT);
-      gtk_container_child_get_property(GTK_CONTAINER(module->header),
-                                       child->data ,"position", &position);
-      gtk_box_reorder_child(GTK_BOX(module->header), module->mask_indicator,
-                            g_value_get_int(&position));
-    }
-    g_list_free(children);
-
+void dt_iop_add_remove_mask_lock_indicator(dt_iop_module_t *module, const gboolean add)
+{
+  if(module->mask_lock_indicator && !add)
+  {
+    gtk_widget_destroy(module->mask_lock_indicator);
+    module->mask_lock_indicator = NULL;
     dt_iop_show_hide_header_buttons(module, NULL, FALSE, FALSE);
+  }
+  else if(!module->mask_lock_indicator && add)
+  {
+    // a plain button rather than a toggle: it only ever shows the locked
+    // state, and only the panel's own lock button locks
+    module->mask_lock_indicator =
+      dtgtk_button_new_full(dtgtk_cairo_paint_lock, 0, NULL,
+                            &(dtgtk_button_config_t){
+                              .tooltip = _("mask locked\nclick to unlock"),
+                            });
+    g_signal_connect(G_OBJECT(module->mask_lock_indicator), "clicked",
+                     G_CALLBACK(_mask_lock_indicator_clicked), module);
+    _header_pack_indicator(module, module->mask_lock_indicator);
   }
 }
 

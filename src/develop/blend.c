@@ -54,7 +54,8 @@ static dt_develop_blend_params_t _default_blendop_params
         0.0f,
         0.0f, // detail mask threshold
         1, // feather_version
-        { 0, 0 },
+        0, // mask_lock
+        { 0 },
         { 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f,
           0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f,
           0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f, 0.0f, 0.0f, 1.0f, 1.0f,
@@ -2857,7 +2858,28 @@ gboolean dt_develop_blend_legacy_params_ext(dt_iop_module_t *module,
   // regardless of which version branch produced it. Migration cannot fail.
   dt_develop_blend_params_t *n = new_params;
   dt_masks_migrate_classic_to_flexi(module, n, history_num);
+  // every conversion is from a version older than the lock, whose reserved
+  // field it took over
+  n->mask_lock = 0;
   return FALSE;
+}
+
+void dt_develop_blend_keep_locked_mask(dt_develop_blend_params_t *incoming,
+                                       const dt_develop_blend_params_t *const locked)
+{
+  if(!dt_develop_blend_mask_locked(locked))
+  {
+    incoming->mask_lock = 0;
+    return;
+  }
+
+  const uint32_t blend_mode = incoming->blend_mode;
+  const float blend_parameter = incoming->blend_parameter;
+  const float opacity = incoming->opacity;
+  *incoming = *locked;
+  incoming->blend_mode = blend_mode;
+  incoming->blend_parameter = blend_parameter;
+  incoming->opacity = opacity;
 }
 
 gboolean dt_develop_blend_legacy_params(dt_iop_module_t *module,

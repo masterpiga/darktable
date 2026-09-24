@@ -317,8 +317,8 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
 // (in the utility position those three sit on the lib's own header, which
 // stands in for this one)
 //
-// with the same controls on the right in every case: the mask overlay, the
-// edit run (edit on canvas and solo edit, between two gaps, see
+// with the same controls on the right in every case: the mask lock, the mask
+// overlay, the edit run (edit on canvas and solo edit, between two gaps, see
 // masks_header_edit_box), and the mask on/off toggle at the very end. They act
 // on the canvas, so they stay wherever the panel is hosted. The old
 // preferences button is gone from all of
@@ -328,6 +328,23 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
 // the lib's own expander to its left, and out on the canvas the panel is opened
 // and closed from the darkroom toolbar button, which is a bigger and more
 // findable target than an icon on a floating panel.
+// the lock sits immediately left of the mask overlay, so it goes wherever the
+// overlay is reparented: the panel's header, or the utility lib's in its place
+static void _place_mask_lock(dt_iop_gui_blend_data_t *bd)
+{
+  GtkWidget *lock = bd->mask_lock_btn;
+  GtkWidget *parent = bd->showmask ? gtk_widget_get_parent(bd->showmask) : NULL;
+  if(!lock || !GTK_IS_WIDGET(lock) || !parent || !GTK_IS_BOX(parent)) return;
+
+  _reparent_into(lock, parent, FALSE, FALSE);
+  int lock_pos = 0, showmask_pos = 0;
+  gtk_container_child_get(GTK_CONTAINER(parent), lock, "position", &lock_pos, NULL);
+  gtk_container_child_get(GTK_CONTAINER(parent), bd->showmask, "position", &showmask_pos, NULL);
+  // moving the lock out from ahead of the overlay shifts the overlay down one
+  gtk_box_reorder_child(GTK_BOX(parent), lock,
+                        lock_pos < showmask_pos ? showmask_pos - 1 : showmask_pos);
+}
+
 static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
                                      const gboolean mirrored)
 {
@@ -348,6 +365,7 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), showmask, 0);
   if(edit) gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), edit, 1);
   gtk_box_reorder_child(GTK_BOX(bd->masks_right_cluster), toggle, -1);
+  _place_mask_lock(bd);
 
   // the expander belongs to the embedded position alone
   const gboolean show_pin = _masks_panel_position() == MASKS_PANEL_POS_EMBEDDED;
@@ -765,6 +783,7 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
       _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
     if(bd->mask_enable_toggle && GTK_IS_WIDGET(bd->mask_enable_toggle) && gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
       _reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
+    _place_mask_lock(bd);
   }
   if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header)
      && gtk_widget_get_parent(bd->masks_blend_header) != GTK_WIDGET(bd->relocatable_box))
@@ -1001,6 +1020,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
           _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
         if(bd->mask_enable_toggle && GTK_IS_WIDGET(bd->mask_enable_toggle) && gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
           _reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
+        _place_mask_lock(bd);
       }
       if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header))
         gtk_widget_set_visible(bd->masks_blend_header, TRUE);
@@ -1100,6 +1120,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
         _reparent_into(bd->masks_header_edit_box, GTK_WIDGET(actions_box), FALSE, FALSE);
         gtk_widget_set_valign(bd->masks_header_edit_box, GTK_ALIGN_CENTER);
       }
+      _place_mask_lock(bd);
       const gboolean is_mask_enabled = (module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
       gtk_widget_set_visible(bd->showmask, is_mask_enabled && !module->hide_enable_button);
       gtk_widget_show(GTK_WIDGET(actions_box));
@@ -1171,6 +1192,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
         _reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
       if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
         _reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
+      _place_mask_lock(bd);
     }
     gtk_widget_set_visible(bd->masks_blend_header, TRUE);
     // hosted elsewhere now -- drop the embedded inset, the host already

@@ -34,6 +34,7 @@
 #include "develop/masks/roundtrip.h"
 #include "develop/masks/styleapply.h"
 #include "develop/masks/undo.h"
+#include "develop/masks/lockcheck.h"
 #include "develop/masks/verify.h"
 #include "common/datetime.h"
 #include "common/exif.h"
@@ -314,6 +315,12 @@ static int usage(const char *argv0)
          "    Undo is the one operation that has to RECOVER a mask rather than\n"
          "    build one, and it recovers it from a copy taken before the edit.\n"
          "    Nothing else here exercises that copy.\n"
+         "\n"
+         "--lock-masks\n"
+         "    Check that a locked mask survives paste, in append and overwrite\n"
+         "    mode, and styles, on two scratch images. Prints one line per case.\n"
+         "\n"
+         "    Needs `--library :memory:`: it writes to the database.\n"
          "\n"
          "--verify-masks FILE\n"
          "    Replay the mask configurations in a --harvest-masks FILE, rendering\n"
@@ -1265,6 +1272,7 @@ int dt_init(int argc,
   char *styleapply_masks_input = NULL;
   char *persist_masks_input = NULL;
   char *undo_masks_input = NULL;
+  gboolean lock_masks = FALSE;
   char *check_masks_input = NULL;
   char *noiseprofiles_from_command = NULL;
   char *datadir_from_command = NULL;
@@ -1413,6 +1421,11 @@ int dt_init(int argc,
         }
         persist_masks_input = argv[++k];
         argv[k-1] = NULL;
+        argv[k] = NULL;
+      }
+      else if(!strcmp(argv[k], "--lock-masks"))
+      {
+        lock_masks = TRUE;
         argv[k] = NULL;
       }
       else if(!strcmp(argv[k], "--undo-masks"))
@@ -2635,6 +2648,14 @@ int dt_init(int argc,
     const gboolean ok = dt_masks_undo_harvest(undo_masks_input, report);
     g_free(report);
     exit(ok ? 0 : 1);
+  }
+
+  if(lock_masks)
+  {
+    // drives the real history reader and writer, paste and styles against two
+    // scratch images: `--library :memory:` only, never a real catalogue
+    dt_splash_screen_destroy();
+    exit(dt_masks_lock_check() ? 0 : 1);
   }
 
   if(check_masks_input)

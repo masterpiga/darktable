@@ -141,6 +141,7 @@ FILE(GLOB SOURCE_FILES
   "develop/masks/path.c"
   "develop/masks/probe_image.c"
   "develop/masks/raster.c"
+  "develop/masks/lockcheck.c"
   "develop/masks/persist.c"
   "develop/masks/postedit.c"
   "develop/masks/roundtrip.c"

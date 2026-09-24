@@ -2959,6 +2959,13 @@ void dt_masks_set_edit_mode(dt_iop_module_t *module,
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd) return;
 
+  // a locked mask cannot be edited, and the canvas only edits in edit mode
+  if(value != DT_MASKS_EDIT_OFF && dt_develop_blend_mask_locked(module->blend_params))
+  {
+    dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
+    return;
+  }
+
   dt_masks_form_t *grp = NULL;
   dt_masks_form_t *form =
     dt_masks_get_from_id(module->dev, module->blend_params->mask_id);
@@ -3017,6 +3024,13 @@ void dt_masks_set_edit_mode_single_form(dt_iop_module_t *module,
 {
   if(!module) return;
 
+  // see dt_masks_set_edit_mode
+  if(value != DT_MASKS_EDIT_OFF && dt_develop_blend_mask_locked(module->blend_params))
+  {
+    dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
+    return;
+  }
+
   dt_masks_form_t *grp = dt_masks_create_ext(DT_MASKS_GROUP);
 
   const dt_mask_id_t grid = module->blend_params->mask_id;
@@ -3049,6 +3063,13 @@ void dt_masks_set_edit_mode_forms(dt_iop_module_t *module,
                                   const dt_masks_edit_mode_t value)
 {
   if(!module) return;
+
+  // see dt_masks_set_edit_mode
+  if(value != DT_MASKS_EDIT_OFF && dt_develop_blend_mask_locked(module->blend_params))
+  {
+    dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
+    return;
+  }
 
   dt_masks_form_t *grp = dt_masks_create_ext(DT_MASKS_GROUP);
   const dt_mask_id_t grid = module->blend_params->mask_id;
