@@ -316,9 +316,10 @@ static void test_soloedit_mode_stands_down_while_a_group_is_soloed(void **state)
   assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
-// parametric and raster elements have nothing to edit on canvas: isolating one
-// would empty the canvas of editable shapes rather than narrow it
-static void test_soloedit_mode_skips_elements_with_no_canvas_geometry(void **state)
+// parametric and raster elements have nothing to edit on canvas, but they are
+// isolated all the same: standing down instead would put every shape of the
+// mask back on the canvas, the opposite of isolating the selection
+static void test_soloedit_mode_isolates_elements_with_no_canvas_geometry(void **state)
 {
   flexi_build("u:1,2");
   _soloedit_mode(TRUE);
@@ -329,13 +330,11 @@ static void test_soloedit_mode_skips_elements_with_no_canvas_geometry(void **sta
 
   f->type = DT_MASKS_PARAMETRIC;
   flexi_bd.panel_selected_formid = 2;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
 
   f->type = DT_MASKS_RASTER;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
 
-  // a drawn shape in the same slot is fine, so the rejection is about the kind
-  // of element and not about the selection machinery
   f->type = was;
   assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
 }
@@ -838,7 +837,7 @@ int main(void)
     cmocka_unit_test_teardown(test_soloedit_mode_needs_an_element_selection, _soloedit_teardown),
     cmocka_unit_test_teardown(test_soloedit_mode_stands_down_while_an_element_is_soloed, _soloedit_teardown),
     cmocka_unit_test_teardown(test_soloedit_mode_stands_down_while_a_group_is_soloed, _soloedit_teardown),
-    cmocka_unit_test_teardown(test_soloedit_mode_skips_elements_with_no_canvas_geometry, _soloedit_teardown),
+    cmocka_unit_test_teardown(test_soloedit_mode_isolates_elements_with_no_canvas_geometry, _soloedit_teardown),
     cmocka_unit_test_teardown(test_soloedit_mode_ignores_a_stale_selection, _soloedit_teardown),
     cmocka_unit_test_teardown(test_at_most_one_isolation_mode_is_ever_active, _teardown),
     cmocka_unit_test_teardown(test_solo_edit_cleared_when_its_element_gets_hidden, _teardown),

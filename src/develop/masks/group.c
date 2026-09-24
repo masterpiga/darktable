@@ -125,12 +125,12 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
       // ctrl+scroll (opacity): the panel's own inline opacity control for a
       // bundle row edits the bundle's own membership entry in the module's
       // top group (its overall contribution to the composite) via
-      // dt_masks_form_change_opacity(bundle, module's group formid, ...) --
+      // dt_masks_form_change_opacity(module, bundle, module's group formid, ...) --
       // not any child's own internal per-membership opacity within the
       // bundle, which is invisible bookkeeping nothing else in the UI
       // exposes. Drive the exact same call here.
       const float amount = up ? 0.05f : -0.05f;
-      dt_masks_form_change_opacity(object, module->blend_params->mask_id, amount);
+      dt_masks_form_change_opacity(module, object, module->blend_params->mask_id, amount);
       dt_masks_iop_update(module);
       dt_control_queue_redraw_center();
       return 1;

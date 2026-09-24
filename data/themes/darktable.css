@@ -867,6 +867,18 @@ dialog .sidebar row:selected:hover label,
    override them.
    ----------------------------------------------------------------------------*/
 
+/* the panel's shades, one per state. Each header, the rail hanging from it and
+   the controls it owns take the same one, so a theme or user.css retints the
+   whole panel by redefining these. A selected or hovered header is a gradient
+   from the _top shade down to the plain one, and its rail and controls take
+   the plain one: that is the edge they meet */
+@define-color mask_rest          rgba(255, 255, 255, 0.1);
+@define-color mask_implied       rgba(255, 255, 255, 0.25);
+@define-color mask_selected_top  rgba(255, 255, 255, 0.5);
+@define-color mask_selected      rgba(255, 255, 255, 0.4);
+@define-color mask_hover_top     rgba(255, 255, 255, 0.7);
+@define-color mask_hover         rgba(255, 255, 255, 0.4);
+
 /* every row/header kind in the panel (element/parametric/raster row, real
    group header, empty-group header, cluster header) has its own unique widget
    id for CSS -- #mask-shape-row, #mask-group-header-row, #mask-empty-header-row,
@@ -875,13 +887,12 @@ dialog .sidebar row:selected:hover label,
    that has to be repeated per id. A transparent border keeps the box model
    stable across states (drag indicators colour one edge of it, see below).
    The top margin is the one gap between a row and whatever is above it: a
-   row, its group's header, or the end of a rail. It matches the gap between
-   a rail and the rail nested in it (.mask-group-elements's padding-left) */
+   row, its group's header, or the end of a rail */
 .mask-panel-row
 {
   border: 2px solid transparent;
   border-radius: 3px;
-  margin-top: 6px;
+  margin-top: 2px;
   /* a background image starts at the padding box by default and repeats into
      the transparent border above, where the far end of the selection
      gradient showed as a frame around every selected row */
@@ -912,11 +923,20 @@ dialog .sidebar row:selected:hover label,
   box-shadow: inset 0 -2px #ffffff;
 }
 
+/* every header, element or group, rests at one shade a step lighter than the
+   panel, whatever its depth, so the panel reads as the darker ground behind
+   them, and only brightens further when selected, implied or hovered (the
+   state rules below). outline-color is never drawn here: it is
+   the colour of the rail hanging from this header (see .mask-group-elements
+   and _masks_rail_draw), set beside the background in every state so the two
+   cannot disagree */
 .mask-element-header
 {
   border: 2px solid transparent;
   border-radius: 3px;
   background-origin: border-box;
+  background-color: @mask_rest;
+  outline-color: @mask_rest;
 }
 
 /* "selected" wash, grayscale only: no accent colour, just a lighter shade of
@@ -954,21 +974,30 @@ dialog .sidebar row:selected:hover label,
   background-image: none;
 }
 
-/* child selectors, here and on the rail below: a selected group shades its
-   own header, not those of the groups nested in it */
-.mask-group-block.mask-list-row-selected > box > * > .mask-group-header
-{
-  background-color: rgba(255, 255, 255, 0.18);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
-}
-
 /* selected by implication: a group or nested group holding the selection
    (see _apply_ancestor_selection). Flat, and just under the selection, so
    the selection itself still stands out. The same shade goes on every
-   implied header below, and 0.25 on their rails */
+   implied header below, and on their rails.
+   Every implied rule in this file comes BEFORE its selected counterpart: a
+   group can carry both classes at once (the mask's own group is selected by
+   default and implied whenever it holds the selection), and at equal
+   specificity the later rule wins. The other way round, the implied shade
+   overrode the selected one on the card while the header kept the selected
+   gradient, so the two disagreed. */
 .mask-group-block.mask-list-row-implied > box > * > .mask-group-header
 {
-  background-color: rgba(255, 255, 255, 0.16);
+  background-color: @mask_implied;
+  outline-color: @mask_implied;
+}
+
+/* child selectors: a selected group shades its own header, not those of the
+   groups nested in it. The rail takes the shade the gradient ends on, since
+   that is the edge it meets */
+.mask-group-block.mask-list-row-selected > box > * > .mask-group-header
+{
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @mask_selected_top, @mask_selected);
+  outline-color: @mask_selected;
 }
 
 /* transient hover wash (canvas <-> list sync). Also applied to a row/header
@@ -1077,31 +1106,38 @@ dialog .sidebar row:selected:hover label,
    (.mask-group-open) meets the rail, and the two read as one piece */
 .mask-group-elements
 {
-  border-left: 2px solid rgba(255, 255, 255, 0.08);
+  /* no background of its own, at any depth or in any state: the body is the
+     panel, and a group is told apart by its header and rail alone */
+  /* the rail, drawn in code (_masks_rail_draw) so it can stop at the last
+     member and tick across to each member's header, like a tree view. Its
+     width is this border's: the border itself stays transparent and only
+     reserves the room. Its colour is NOT set here but on the group's header,
+     as outline-color (see .mask-panel-row.mask-group-header): the header's
+     state rules set it beside its background, so the rail follows the header
+     into selection and hover alike. Every rail in the panel is 3px:
+     thickness is not a signal here, colour is. */
+  border-left: 3px solid transparent;
+  /* the outer radius of the rounded elbow where the rail turns into its last
+     tick (└). Top-left although the elbow is at the bottom: it is the one
+     corner GTK3 lets code read (see _masks_rail_draw). Nothing else uses it,
+     since the box has no background and its border is transparent */
+  border-top-left-radius: 8px;
   margin-left: 0;
-  /* the gap between two nested rails, and between rows (.mask-panel-row) */
-  padding-left: 6px;
+  /* the indent per nesting level. Wider than the gap between rows
+     (.mask-panel-row), so a step inward is not mistaken for the ordinary
+     space between two siblings */
+  padding-left: 8px;
+  /* no extra space after the last member: the rail's elbow already shows
+     where the group ends */
+  padding-bottom: 0;
 }
 
-/* the header's bottom, where the rail meets it: its 0.18 background under the
-   gradient's 0.14 end (see the selected header rule above) */
-.mask-group-block.mask-list-row-selected > box > .mask-group-elements,
-.mask-root-selected > box > .mask-group-elements
-{
-  border-left-color: rgba(255, 255, 255, 0.295);
-}
-
-.mask-group-block.mask-list-row-implied > box > .mask-group-elements,
-.mask-root-implied > box > .mask-group-elements
-{
-  border-left-color: rgba(255, 255, 255, 0.25);
-}
-
-/* an expanded cluster's rows: a cluster header has no background of its own,
-   so its rail stays a plain line, lined up with the header's left edge */
+/* an expanded cluster's rows, lined up with the header's left edge. A cluster
+   header has no background of its own to match, so its rail takes the resting
+   header shade every other rail rests at */
 .mask-cluster-elements
 {
-  border-left: 2px solid rgba(255, 255, 255, 0.22);
+  border-left: 3px solid @mask_rest;
   margin-left: 0;
   padding-left: 6px;
 }
@@ -1127,13 +1163,17 @@ dialog .sidebar row:selected:hover label,
   opacity: 1.0;
 }
 
-/* group headers (#mask-group-header-row and #mask-empty-header-row alike)
-   get a subtle resting background distinct from plain element rows, so "this
-   is a group heading" reads clearly even when nothing is selected/hovered --
-   grayscale only, no accent colour, one step lighter than the panel itself. */
+/* group headers (#mask-group-header-row and #mask-empty-header-row alike):
+   the same resting shade as an element's, and the same rail colour in
+   outline-color (see .mask-element-header) */
 .mask-panel-row.mask-group-header
 {
-  background-color: rgba(255, 255, 255, 0.08);
+  background-color: @mask_rest;
+  outline-color: @mask_rest;
+  /* the space between the last element of one group and the head of the
+     next: the same as between two rows, since the header and its rail
+     already mark the group boundary */
+  margin-top: 2px;
 }
 
 /* an open group's header sits on its rail (.mask-group-elements): no rounding
@@ -1143,12 +1183,13 @@ dialog .sidebar row:selected:hover label,
   border-bottom-left-radius: 0;
 }
 
-/* an open element's header: the resting shade of a group header, squared
-   off onto its editor's rail, as an open group's is onto its elements' */
+/* an open element's header: squared off along its whole bottom edge onto its
+   controls, which carry the same resting shade (.mask-param-row-editor), so
+   header and controls meet as one block with no notch at either corner */
 .mask-row-open > * > .mask-element-header
 {
-  background-color: rgba(255, 255, 255, 0.08);
   border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
 }
 
 /* a selected element: its header line alone, as for a group, not the whole
@@ -1158,10 +1199,20 @@ dialog .sidebar row:selected:hover label,
   background-image: none;
 }
 
+/* implied before selected, as everywhere (see the implied group header rule) */
+.mask-panel-row.mask-group-header.mask-list-row-implied,
+.mask-list-row-implied > * > .mask-element-header
+{
+  background-color: @mask_implied;
+  outline-color: @mask_implied;
+}
+
+/* rail: the gradient's end shade, as for a selected group */
 .mask-list-row-selected > * > .mask-element-header
 {
-  background-color: rgba(255, 255, 255, 0.18);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @mask_selected_top, @mask_selected);
+  outline-color: @mask_selected;
 }
 
 /* the mask's own group, selected: its header row alone, since its block is the
@@ -1169,14 +1220,9 @@ dialog .sidebar row:selected:hover label,
    header gets from its block */
 .mask-panel-row.mask-group-header.mask-list-row-selected
 {
-  background-color: rgba(255, 255, 255, 0.18);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
-}
-
-.mask-panel-row.mask-group-header.mask-list-row-implied,
-.mask-list-row-implied > * > .mask-element-header
-{
-  background-color: rgba(255, 255, 255, 0.16);
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @mask_selected_top, @mask_selected);
+  outline-color: @mask_selected;
 }
 
 /* an empty group's own header doubles as its drag-drop highlight frame (see
@@ -1205,16 +1251,16 @@ dialog .sidebar row:selected:hover label,
 
 /* hover over the selected and implied shades: ids, which outrank their class
    selectors, and declared after the solo wash above. An element's row is
-   marked, but only its header line lights up, as for its selection. The
-   selection's gradient on a lighter base, so a hovered header is always the
-   brightest: the selected one composites to about 0.36 -> 0.29, this to
-   0.42 -> 0.36 */
+   marked, but only its header line lights up, as for its selection. Its
+   gradient starts brighter than the selection's, so a hovered header is
+   always the brightest, and the rail takes the shade it ends on */
 #mask-group-header-row.mask-list-row-hover,
 #mask-empty-header-row.mask-list-row-hover,
 #mask-shape-row.mask-list-row-hover > * > .mask-element-header
 {
-  background-color: rgba(255, 255, 255, 0.26);
-  background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.14));
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @mask_hover_top, @mask_hover);
+  outline-color: @mask_hover;
 }
 
 #mask-shape-row.mask-list-row-hover
@@ -1225,11 +1271,21 @@ dialog .sidebar row:selected:hover label,
 /* each parametric mask row's own permanently-visible editor with a subtle left rail */
 .mask-param-row-editor
 {
-  /* the header's color and width of a group's rail (.mask-group-elements),
-     starting right under the header: padding, not margin, keeps the controls
-     off the header without breaking the rail */
-  border-left: 2px solid rgba(255, 255, 255, 0.08);
-  padding-top: 3px;
+  /* an element's controls take their header's shade in every state (the
+     element state rules below), so an expanded element reads as one card
+     with its header, with nothing drawn between the two. Clipped to the
+     padding box so the rail sits on the panel,
+     as its header does, not stacked on this tint: rail and controls then
+     match exactly in every state. The rail is a plain CSS border: it borders
+     one element's controls rather than a list of members, so it needs neither
+     ticks nor an end. */
+  background-color: @mask_rest;
+  background-clip: padding-box;
+  border-left: 3px solid @mask_rest;
+  border-bottom-left-radius: 3px;
+  border-bottom-right-radius: 3px;
+  padding-bottom: 0;
+  padding-top: 0;
   /* the rail runs down the row's own left edge */
   margin-left: 0;
   /* no right margin, unlike the left rail: this puts the editor's right edge
@@ -1247,11 +1303,6 @@ dialog .sidebar row:selected:hover label,
 .mask-boost-factor-box
 {
   margin-top: 0.14em;
-  /* the editor itself has no right margin, so the bypass-eye column can line up
-     under the row header's expander. That column is not this slider's to fill:
-     stop where it starts, which is also where the header's opacity value ends
-     and where the gradient sliders' bars end. 17px = .mask-param-bypass-slot */
-  margin-right: 17px;
 }
 
 /* "use sliders for opacity": the slider leading a parametric
@@ -1260,8 +1311,20 @@ dialog .sidebar row:selected:hover label,
 .mask-param-opacity-box
 {
   margin-bottom: 0.14em;
-  /* same overhang as the boost factor below the channel sliders: see
-     .mask-boost-factor-box */
+}
+
+/* every slider in the list ends its bar where the bypass-eye column starts
+   (17px = .mask-param-bypass-slot), which is also where the header's opacity
+   value ends and where the gradient sliders' bars end (see
+   _param_slider_fit_eye). The inset is the slider's own margin, not its box's:
+   a bauhaus slider draws into its margin, so the marker at 1.0 overhangs the
+   bar's end there. Inset by its box instead, the widget ended at the bar and
+   cut the marker in half */
+.masks-list .mask-props-row-editor .dt_bauhaus,
+.masks-list .mask-group-opacity-editor .dt_bauhaus,
+.masks-list .mask-boost-factor-box .dt_bauhaus,
+.masks-list .mask-param-opacity-box .dt_bauhaus
+{
   margin-right: 17px;
 }
 
@@ -1283,11 +1346,18 @@ dialog .sidebar row:selected:hover label,
 /* every row/group's own inline "properties" expander with a subtle left rail */
 .mask-props-row-editor
 {
-  /* see .mask-param-row-editor */
-  border-left: 2px solid rgba(255, 255, 255, 0.08);
-  padding-top: 3px;
+  /* see .mask-param-row-editor: same element-level card, rail and line */
+  background-color: @mask_rest;
+  background-clip: padding-box;
+  border-left: 3px solid @mask_rest;
+  border-bottom-left-radius: 3px;
+  border-bottom-right-radius: 3px;
+  padding-top: 0;
+  padding-bottom: 0;
   margin-left: 0;
-  margin-right: 22px;
+  /* no right inset: the block's tint runs out to the header's right edge, and
+     the sliders stop short by their own margin (see .mask-param-opacity-box) */
+  padding-right: 0;
   padding-left: 6px;
 }
 
@@ -1321,31 +1391,106 @@ dialog .sidebar row:selected:hover label,
   border-left-width: 0;
   padding: 0;
   margin: 0;
+  /* no header above them there, so no block to extend */
+  background-color: transparent;
 }
 
-/* a selected element's rails: the color its header ends on, as for a group
-   (see .mask-group-elements). Child selectors, so a selected group does not
-   light up the rails of the elements it holds */
+/* an element's controls, rail and background both, follow its row's header
+   into each state, at the shade the header's outline-color takes (see
+   .mask-element-header and the header state rules): where a header carries a
+   gradient, the shade it ENDS on, since that is the edge the controls meet.
+   Child selectors, so a selected group does not light up the controls of
+   the elements it holds. Implied before selected, as everywhere, and hover
+   last: its id outranks both */
+.mask-list-row-implied > * > .mask-param-row-editor,
+.mask-list-row-implied > * > .mask-props-row-editor
+{
+  background-color: @mask_implied;
+  border-left-color: @mask_implied;
+}
+
 .mask-list-row-selected > * > .mask-param-row-editor,
-.mask-list-row-selected > * > .mask-props-row-editor,
-#mask-shape-row.mask-list-row-selected > * > .mask-group-elements
+.mask-list-row-selected > * > .mask-props-row-editor
 {
-  border-left-color: rgba(255, 255, 255, 0.295);
+  background-color: @mask_selected;
+  border-left-color: @mask_selected;
 }
 
-#mask-shape-row.mask-list-row-implied > * > .mask-group-elements
+#mask-shape-row.mask-list-row-hover > * > .mask-param-row-editor,
+#mask-shape-row.mask-list-row-hover > * > .mask-props-row-editor
 {
-  border-left-color: rgba(255, 255, 255, 0.25);
+  background-color: @mask_hover;
+  border-left-color: @mask_hover;
 }
 
 /* "use sliders for opacity": the slider leading a group's expanded contents.
-   It sits inside .mask-group-elements, which already draws the left rail and
-   indent, so this only spaces it off its header (the member rows below space
-   themselves, see .mask-panel-row) */
+   It is the group's own control, not a member, so it hangs off the header as
+   one block with it and the rail, the way an element's controls hang off the
+   element's header (.mask-param-row-editor): same resting shade, no gap
+   above, and flush left against the group's rail rather than indented like
+   the members below -- the negative margin takes back the members' indent
+   (.mask-group-elements' 8px padding). Only the bottom-right corner is
+   rounded: the rail runs on past the bottom-left one. It takes its header's
+   shade in every state (the rules below). No rail of its own, even on a nested
+   group's row, where the box also carries .mask-props-row-editor (declared
+   earlier, so this wins the tie). No right inset, so the tint runs to the
+   right edge: the slider stops short by its own margin (see
+   .mask-param-opacity-box) */
 .mask-group-opacity-editor
 {
-  margin-top: 3px;
-  margin-right: 22px;
+  background-color: @mask_rest;
+  background-clip: padding-box;
+  border-left-width: 0;
+  border-radius: 0 0 3px 0;
+  margin-top: 0;
+  margin-left: -8px;
+  padding: 0 0 0 6px;
+}
+
+/* and follows its header's state. The state classes sit on the group's
+   block (or, for the mask's own group, .mask-root-*), and hover is mirrored
+   onto the block as .mask-group-header-hovered (see _hover_block_of): the
+   header itself is a sibling of the box holding this slider, out of a CSS
+   rule's reach. Child selectors throughout, so a group's state does not
+   reach the sliders of the groups nested in it. Implied before selected,
+   hover last, as everywhere */
+.mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-opacity-editor,
+.mask-root-implied > box > .mask-group-elements > .mask-group-opacity-editor
+{
+  background-color: @mask_implied;
+}
+
+.mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-opacity-editor,
+.mask-root-selected > box > .mask-group-elements > .mask-group-opacity-editor
+{
+  background-color: @mask_selected;
+}
+
+.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-opacity-editor
+{
+  background-color: @mask_hover;
+}
+
+/* a group with no members holds the slider alone and draws no rail (the rail
+   runs to the last member's tick): drop the rail's reserved room, so the
+   slider's block runs flush under the whole header, and round the bottom-left
+   corner the rail would otherwise have run past. Scoped under .masks-list so
+   it outranks a user.css rule on .masks-list .mask-group-elements that sets
+   the rail's width: a tie went to user.css, and the notch came back */
+.masks-list .mask-group-elements.mask-group-slider-only
+{
+  border-left-width: 0;
+}
+
+.masks-list .mask-group-elements.mask-group-slider-only > .mask-group-opacity-editor
+{
+  border-bottom-left-radius: 3px;
+}
+
+/* and the header it hangs from squares its whole bottom edge onto it */
+.mask-panel-row.mask-group-header.mask-group-open.mask-group-has-slider
+{
+  border-bottom-right-radius: 0;
 }
 
 /* refinement section header label styling */
@@ -2767,26 +2912,31 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   margin: 0.14em 0.28em;
 }
 
-/* flexi masks panel: deliberately NO background-color rule here. #left/
-   #right also have none -- both rely on the "box, box *" reset (above)
-   making them transparent so the ambient grid's own @bg_color paint (from
-   the universal "*" rule) shows through untouched. An earlier explicit
-   "background-color: @bg_color" rule here painted a visually close but not
-   pixel-identical value (measured ~6/255 darker than #left/#right) -- going
-   through the ancestor-reveal path instead of a fresh paint guarantees an
-   identical result since it's the exact mechanism #left/#right use.
+/* flexi masks panel: #flexi itself has no background-color while docked.
+   #left/#right have none either: both rely on the "box, box *" reset (above)
+   making them transparent, so the ambient grid's own @bg_color paint (from
+   the universal "*" rule) shows through untouched.
 
    That reveal has a precondition: something opaque behind it. True while the
    panel is a column in the grid; false while it floats over the canvas during
    an overlay on the canvas (see _ui_init_panel_flexi in gui/gtk.c), where the only
    thing behind it is the image -- so the transparency that normally goes
    unnoticed made the whole panel read as semi-transparent. The floating state,
-   and only it, therefore paints its own background. The ~6/255 mismatch the
-   paragraph above is about cannot show here: the panel is over the image, with
-   no #left/#right edge next to it to compare against. */
+   and only it, therefore paints its own background. */
 #flexi.flexi-floating
 {
   background-color: @bg_color;
+}
+
+/* the panel is framed as a module (#iop-expander, see _ui_init_panel_flexi),
+   so its body takes a module's card color, as .dt_plugin_ui gives every module
+   in #left/#right. Left bare, it showed the panel's own lighter @bg_color and
+   stood out from the modules beside it. The one box child of the frame is the
+   row holding the scrolled content and the resize handle; the header sits in
+   an event box and keeps its own color */
+#flexi > #iop-expander > box
+{
+  background-color: @plugin_bg_color;
 }
 
 /* #bauhaus-slider always paints a flat @plugin_bg_color background (see that
