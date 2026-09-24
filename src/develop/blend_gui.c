@@ -828,11 +828,15 @@ static void _raster_sources_collect(dt_iop_module_t *module, GPtrArray *usable, 
     {
       // the mask's available identifier (module display name, or the mask
       // name/path for an external source): the same string the whole-mask
-      // raster picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask)
+      // raster picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask).
+      // That name is markup, and the menu and the replace dialog show plain
+      // text, so an "&" would read "&amp;"
+      const char *name = value ? (const char *)value : iop->name();
       _masks_raster_source_entry_t *entry = g_new0(_masks_raster_source_entry_t, 1);
       entry->src = iop;
       entry->id = GPOINTER_TO_INT(key);
-      entry->name = g_strdup(value ? (const char *)value : iop->name());
+      if(!pango_parse_markup(name, -1, 0, NULL, &entry->name, NULL, NULL))
+        entry->name = g_strdup(name);
       g_ptr_array_add(past ? later : usable, entry);
     }
   }
