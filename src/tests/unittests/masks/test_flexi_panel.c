@@ -536,11 +536,9 @@ static void test_section_state_is_one_config_key_each(void **state)
   _model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
   _model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
   _model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
-  _model_section_save(DT_MASKS_SECTION_DETAILS, FALSE);
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/refinements_collapsed"));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/properties_collapsed"));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/consumers_collapsed"));
-  assert_true(dt_conf_get_bool("plugins/darkroom/masks/element_details_collapsed"));
 
   dt_conf_set_bool("plugins/darkroom/masks/consumers_collapsed", FALSE);
   assert_true(_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, FALSE));
@@ -555,16 +553,6 @@ static void test_drawing_opens_the_properties_without_saving(void **state)
   assert_true(_model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
   assert_false(_model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/properties_collapsed"));
-}
-
-// the properties sit inside the details expander, so drawing opens that too,
-// and folds it back the same way
-static void test_drawing_opens_the_details_without_saving(void **state)
-{
-  _model_section_save(DT_MASKS_SECTION_DETAILS, FALSE);
-  assert_true(_model_section_expanded(DT_MASKS_SECTION_DETAILS, TRUE));
-  assert_false(_model_section_expanded(DT_MASKS_SECTION_DETAILS, FALSE));
-  assert_true(dt_conf_get_bool("plugins/darkroom/masks/element_details_collapsed"));
 }
 
 // drawing concerns the properties section only
@@ -880,8 +868,6 @@ int main(void)
     cmocka_unit_test_setup_teardown(test_section_state_is_one_config_key_each,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_drawing_opens_the_properties_without_saving,
-                                    _conf_setup, _conf_teardown),
-    cmocka_unit_test_setup_teardown(test_drawing_opens_the_details_without_saving,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_drawing_leaves_the_other_sections_folded,
                                     _conf_setup, _conf_teardown),

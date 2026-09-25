@@ -727,30 +727,27 @@ typedef struct dt_iop_gui_blend_data_t
   guint masks_rebuild_idle_id;
   // the refinement section's caption; its tooltip says why the section is
   // inactive, when it is (see _update_refine_sensitivity). What it refines is
-  // named by masks_refine_name_label
+  // named beside it by masks_refine_name_label, after the target's icon in
+  // masks_refine_icon_box (see _refine_update_header)
   GtkWidget *masks_refine_section_label;
   GtkWidget *masks_refine_expander;
   GtkWidget *masks_refine_icon_box;
   GtkWidget *masks_refine_name_label;
-  // the details expander holding the properties and refinement sections,
-  // its header naming what they act on with the two above (see
-  // _refine_update_header)
-  GtkWidget *details_toggle_btn;
-  GtkWidget *details_expander;
-  GtkWidget *details_content;
   GtkWidget *masks_refine_bypass_btn;
   GtkWidget *masks_refine_toggle_btn;
   GtkBox *masks_refine_sliders_box;
   // "element properties in subpanel": the selected element's or group's
   // properties, or the creation controls of a shape being drawn, in a
-  // collapsible of their own in the details expander, above the
-  // refinements (see _props_panel_sync). props_panel_box is the wrapped
-  // section, props_panel_content the box the editor goes in,
-  // props_panel_formid the element or group (props_panel_is_group) it holds
-  // the editor of, and pending_props_box the creation controls a pending row
-  // built for it
+  // collapsible of their own above the refinements (see _props_panel_sync).
+  // props_panel_box is the wrapped section, props_panel_content the box the
+  // editor goes in, props_panel_formid the element or group
+  // (props_panel_is_group) it holds the editor of, and pending_props_box the
+  // creation controls a pending row built for it. Its header names what it
+  // holds with props_panel_icon_box and props_panel_name_label
   GtkBox *props_panel_box;
   GtkWidget *props_panel_expander;
+  GtkWidget *props_panel_icon_box;
+  GtkWidget *props_panel_name_label;
   GtkWidget *props_panel_content;
   GtkWidget *props_panel_toggle_btn;
   dt_mask_id_t props_panel_formid;
