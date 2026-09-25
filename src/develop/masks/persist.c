@@ -174,9 +174,9 @@ static const seq_t _sequences[] =
 
   /* ---- the shapes themselves. Everything above edits how members combine;
      these edit what they are, which is the one part of a mask with a per-type
-     serialised representation of its own -- a blob of dt_masks_point_<type>_t
+     serialized representation of its own -- a blob of dt_masks_point_<type>_t
      in masks_history, written by code the harvested forms never exercise,
-     because they arrive already-serialised and go back out unchanged.
+     because they arrive already-serialized and go back out unchanged.
 
      A shape control is therefore the only step here whose *first* half is at
      risk: a poke that fails to persist loses a state bit, while a geometry
@@ -249,7 +249,7 @@ static dt_masks_form_t *_target_group(dt_develop_t *dev,
 /** Every group the module renders through, the top one first and its nested
     groups after, in a deterministic order.
 
-    Sweeping only the top group was the earlier behaviour, on the grounds that
+    Sweeping only the top group was the earlier behavior, on the grounds that
     masks_history stores one flat row per form so a nested group traverses the
     same storage code. That is true of the storage half and wrong about the
     rest: a sequence here pokes a control and then reads the *partition* back,
@@ -446,7 +446,7 @@ static gboolean _reset_to_migrated(const char *op, const int mp, const int bv,
 // rendering a stored state
 // ---------------------------------------------------------------------------
 
-/** Point an already-initialised replay at a different mask, taking ownership
+/** Point an already-initialized replay at a different mask, taking ownership
     of `forms`. _render_mask() re-reads r->dev.forms into the pipe every time,
     so nothing else needs updating. */
 static void _install_state(replay_t *r,

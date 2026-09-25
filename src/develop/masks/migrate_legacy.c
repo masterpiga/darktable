@@ -63,7 +63,7 @@
  *
  *  - Every *existing* main.masks_history row belongs to a whole cumulative
  *    snapshot: darktable writes each history item's forms as a full copy of
- *    dev->forms as it stood at that step (see dt_dev_write_history_item() in
+ *    dev->forms as it stood at that step (see _dev_write_history_item() in
  *    develop.c), which is why a classic drawn mask made in an early step is
  *    still found by every later step's own masks_history rows. A newly
  *    synthesized form has no such history -- writing it only under the row
@@ -122,7 +122,7 @@
  * the bottom one, the group satisfies the invariant, and both folds render what
  * classic rendered all along. They were kept as disabled members at first, so
  * the user could bring them back; in the panel that reads as a mask full of
- * greyed rows nobody asked for, next to controls they can still reach. Classic
+ * grayed rows nobody asked for, next to controls they can still reach. Classic
  * never rendered them, so there is nothing to bring back: drop the references
  * and let the panel show what the mask actually is. The forms themselves stay
  * in the list, unreferenced, like the orphans this data already carries.

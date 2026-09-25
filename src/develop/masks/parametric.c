@@ -188,8 +188,9 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   // A form stores the channel layout of the colorspace it was authored in
   // (p->colorspace), but can only be evaluated against the module's current one:
   // that is what the pixel data handed to make_mask is in. The interactive
-  // switch that would create a mismatch is refused (see
-  // _module_parametric_form_count, blend_gui.c), but one can still arrive from
+  // switch that would create a mismatch removes the parametric forms first,
+  // after asking (see _blendif_change_blend_colorspace, blend_gui.c), but one
+  // can still arrive from
   // disk: an edit whose stored blend_cst is DEVELOP_BLEND_CS_NONE has its
   // colorspace resolved at load time from the *workflow preference*, not from
   // the file (dt_iop_commit_blend_params, imageop.c -- upstream behavior, also

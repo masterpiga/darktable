@@ -58,7 +58,6 @@ dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module);
 enum
 {
   REFINE_SCOPE_GLOBAL = 0,
-  REFINE_SCOPE_ALL_SHAPES,
   REFINE_SCOPE_ELEMENT,
   REFINE_SCOPE_GROUP
 };
@@ -91,13 +90,13 @@ void _refresh_canvas_edit(dt_iop_module_t *module);
 // marker (see DT_MASKS_STATE_GROUP_MARKER). Everything the panel does to the
 // mask structure -- every drag/drop, every group added, merged or deleted --
 // is ultimately expressed as a call into these, which is what makes the
-// panel's behaviour testable at all without a display.
+// panel's behavior testable at all without a display.
 //
 // They are declared here for the same reason as everything else in this file:
 // a caller lives in a different translation unit. That the caller is a test
 // rather than another panel file makes no difference to the seam -- but it
 // does mean these carry a stability expectation the rest of this header does
-// not, since the tests are the regression net for the panel's behaviour.
+// not, since the tests are the regression net for the panel's behavior.
 
 /** every group's marker id, bottom-up. Caller frees the list. */
 GList *_group_partition_heads(dt_masks_form_t *grp);
@@ -338,11 +337,6 @@ dt_masks_panel_state_t _model_masks_panel_state(const int pos,
 gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
                                             const gboolean is_collapsed);
 
-char *_model_masks_corner_icon_tooltip(const char *module_name,
-                                       const char *instance_name,
-                                       const gboolean is_active,
-                                       const char *mask_label);
-
 char *_model_masks_panel_header_markup(const char *module_name,
                                         const char *instance_name,
                                         const gboolean is_hosted);
@@ -392,7 +386,7 @@ void _model_section_save(const dt_masks_section_t section, const gboolean expand
 typedef struct dt_masks_whisker_geom_t
 {
   GdkRectangle anchor;   // the widget the popup belongs to
-  gint center_x;         // where the popup wants to be centred
+  gint center_x;         // where the popup wants to be centered
   GdkRectangle workarea; // the monitor's usable area
   gint panel_x;          // horizontal bounds the popup is held within: the
   gint panel_w;          //   host panel, or the work area outside one

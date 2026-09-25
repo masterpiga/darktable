@@ -359,10 +359,8 @@ static gboolean _blendif_blend_parameter_enabled(dt_develop_blend_colorspace_t c
 }
 
 // core boost-factor lookup, parameterized on an explicit boost-factors array
-// and channel-descriptor array instead of a fixed dt_iop_gui_blend_data_t --
-// shared by the module-wide shared editor (bp/data->channel) and per-row
-// parametric-form editors (p->blendif_boost_factors/dt_develop_blendif_channels_for_csp),
-// see _param_row_boost_factor (per-row).
+// and channel-descriptor array: each parametric form carries its own
+// (p->blendif_boost_factors, dt_develop_blendif_channels_for_csp)
 static inline float _get_boost_factor_ex(const float *blendif_boost_factors,
                                          const dt_iop_gui_blendif_channel_t *channels,
                                          const int channel,
@@ -373,9 +371,8 @@ static inline float _get_boost_factor_ex(const float *blendif_boost_factors,
 
 // normalize a raw picked pixel into each channel's [0,1] display range,
 // boost-factor corrected. Parameterized on boost_factors/channels (see
-// _get_boost_factor_ex) so it works identically for the module-wide shared
-// editor and for a per-row parametric-form editor (whose boost factors live
-// in that form's own dt_masks_point_parametric_t, not the module's bp).
+// _get_boost_factor_ex): a parametric form's boost factors live in its own
+// dt_masks_point_parametric_t, not in the module's blend params
 static void _blendif_scale_ex(const float *blendif_boost_factors,
                               const dt_iop_gui_blendif_channel_t *channels,
                               dt_iop_colorspace_type_t cst,
@@ -428,53 +425,6 @@ static void _blendif_scale_ex(const float *blendif_boost_factors,
       break;
   }
 #undef BOOST
-}
-
-static void _blendif_cook(const dt_iop_colorspace_type_t cst,
-                          const float *in,
-                          float *out,
-                          const dt_iop_order_iccprofile_info_t *const work_profile)
-{
-  out[0] = out[1] = out[2] = out[3] = out[4] = out[5] = out[6] = out[7] = -1.0f;
-
-  switch(cst)
-  {
-    case IOP_CS_LAB:
-      out[CHANNEL_INDEX_L] = in[0];
-      out[CHANNEL_INDEX_a] = in[1];
-      out[CHANNEL_INDEX_b] = in[2];
-      break;
-    case IOP_CS_RGB:
-      if(work_profile == NULL)
-        out[CHANNEL_INDEX_g] = (0.3f * in[0] + 0.59f * in[1] + 0.11f * in[2]) * 100.0f;
-      else
-        out[CHANNEL_INDEX_g] = dt_ioppr_get_rgb_matrix_luminance
-          (in, work_profile->matrix_in,
-           work_profile->lut_in,
-           work_profile->unbounded_coeffs_in,
-           work_profile->lutsize,
-           work_profile->nonlinearlut) * 100.0f;
-      out[CHANNEL_INDEX_R] = in[0] * 100.0f;
-      out[CHANNEL_INDEX_G] = in[1] * 100.0f;
-      out[CHANNEL_INDEX_B] = in[2] * 100.0f;
-      break;
-    case IOP_CS_LCH:
-      out[CHANNEL_INDEX_C] = in[1] / (128.0f * M_SQRT2_F) * 100.0f;
-      out[CHANNEL_INDEX_h] = in[2] * 360.0f;
-      break;
-    case IOP_CS_HSL:
-      out[CHANNEL_INDEX_H] = in[0] * 360.0f;
-      out[CHANNEL_INDEX_S] = in[1] * 100.0f;
-      out[CHANNEL_INDEX_l] = in[2] * 100.0f;
-      break;
-    case IOP_CS_JZCZHZ:
-      out[CHANNEL_INDEX_Jz] = in[0] * 100.0f;
-      out[CHANNEL_INDEX_Cz] = in[1] * 100.0f;
-      out[CHANNEL_INDEX_hz] = in[2] * 360.0f;
-      break;
-    default:
-      break;
-  }
 }
 
 static inline int _blendif_print_digits_default(const float value)
@@ -604,8 +554,7 @@ static GtkWidget *_pack_gap(GtkWidget *box)
 // the mask list clusters same-kind elements
 static guint _form_kind(const dt_masks_form_t *form);
 static const char *_kind_name(const guint kind, const gboolean plural);
-// defined further up (module.c-adjacent helpers); forward declared here so
-// the import menu can look up which module (if any) currently uses a form.
+// defined much further down; the import menu rebuilds the list after an import
 void _build_masks_list(dt_iop_module_t *module);
 // defined further down, with the rest of the raster element, group naming and
 // refinement code
@@ -623,8 +572,8 @@ static void _select_mask_group_if_none(dt_iop_gui_blend_data_t *bd);
 // ---- linking and copying elements between modules' masks -----------------
 // A shape or AI object can sit in several modules' masks at once: each mask's
 // point refers to the same form, so editing the form changes it in all of
-// them, while the point's own opacity, operator, invert state and refinement
-// stay per module. That is a link. A copy is a new form, independent from the
+// them, while the point's own opacity, invert state and refinement stay per
+// module. That is a link. A copy is a new form, independent from the
 // start. Parametric channels are only ever copied: the same thresholds select
 // something else in another module's pixels
 
@@ -826,11 +775,10 @@ static void _raster_sources_collect(dt_iop_module_t *module, GPtrArray *usable, 
     g_hash_table_iter_init(&masks_iter, iop->raster_mask.source.masks);
     while(g_hash_table_iter_next(&masks_iter, &key, &value))
     {
-      // the mask's available identifier (module display name, or the mask
-      // name/path for an external source): the same string the whole-mask
-      // raster picker shows (see _raster_combo_populate / dt_iop_advertise_rastermask).
-      // That name is markup, and the menu and the replace dialog show plain
-      // text, so an "&" would read "&amp;"
+      // the name the source advertises the mask under (module display name,
+      // or the mask name/path for an external source, see
+      // dt_iop_advertise_rastermask). It is markup, and the menu and the
+      // replace dialog show plain text, so an "&" would read "&amp;"
       const char *name = value ? (const char *)value : iop->name();
       _masks_raster_source_entry_t *entry = g_new0(_masks_raster_source_entry_t, 1);
       entry->src = iop;
@@ -1401,40 +1349,15 @@ typedef struct dt_masks_param_row_editor_t
   GtkWidget *colorpicker;
   GtkWidget *colorpicker_set_values;
   GtkWidget *master_picker;
-  // the user asked that expanding a parametric row's existing in/out chevron
-  // also reveal the opacity slider (parametric rows get no separate properties
-  // expander of their own -- see _make_props_row_toggle's callers). Gated by
-  // the same p->in_out bit as filter[1].box/boost_box, in
-  // _update_param_row_visibility. Delta-applied via the shared
-  // _props_row_apply, same as every other row kind's opacity control.
+  // expanding a parametric row's in/out chevron also reveals the opacity
+  // slider (parametric rows get no separate properties expander of their own,
+  // see _make_props_row_toggle's callers). Gated by the same p->in_out bit as
+  // the output slider and boost_box, in _update_param_row_visibility.
+  // Delta-applied via the shared _props_row_apply, same as every other row
+  // kind's opacity control.
   GtkWidget *opacity_box;
   GtkWidget *opacity_slider;
   float opacity_last_value;
-  // collapsed state docks the input slider directly onto the row's own header
-  // bar (see _make_shape_row) instead of the below-row editor -- this is that
-  // slot, wired up from _make_shape_row after this editor is built (NULL until
-  // then, and left NULL entirely for a legacy multi-channel form, which is
-  // still edited via the shared tabbed editor, not one of these per-row ones).
-  // Always visible and always the row's sole expanding child (see
-  // _make_shape_row's packing of evbox/header_slot) -- whether or not the
-  // slider is currently docked inside it, so the name label never has to
-  // fight it for a share of the header's free width (that used to be done by
-  // toggling the name's own GtkBox "expand" child property at dock time,
-  // which left a dead gap whenever the two were briefly out of sync). See
-  // _update_param_row_header_dock.
-  GtkWidget *header_slot;
-  // the row's own full-width outer box (icon/name/slider/actions), wired up
-  // from _make_shape_row exactly like header_slot above -- used only to size
-  // and place the precise-value popup (see _bauhaus_whisker_popup_rect)
-  // against the row's real on-screen width/position, not the header_slot's
-  // (which starts only after the name label).
-  GtkWidget *row;
-  // the row's picker button (master_picker's own wrapper, see
-  // _build_param_row_editor's picker_box_out) permanently docked as
-  // header_slot's fixed-width first child, immediately left of whichever
-  // slider is currently docked there -- see _update_param_row_header_dock.
-  // Never reparented itself, unlike the input/opacity sliders.
-  GtkWidget *header_picker;
   GtkWidget *sliders_grid;
   GtkWidget *input_lbl;
   GtkWidget *input_slot;
@@ -1458,8 +1381,8 @@ static gboolean _param_row_picker_apply(dt_iop_module_t *module,
                                         GtkWidget *picker,
                                         dt_dev_pixelpipe_t *pipe);
 
-// per-row/group "properties" inline expander (see the Phase-3-replacement
-// block below, near _blend_masks_properties): every shape/raster/group row
+// per-row/group "properties" inline expander (see the block near
+// _blend_masks_properties below): every shape/raster/group row
 // gets its own permanently-built (but conditionally hidden) editor box docked
 // directly below it, mirroring dt_masks_param_row_editor_t's pattern exactly.
 typedef struct dt_masks_props_row_editor_t
@@ -1477,8 +1400,8 @@ typedef struct dt_masks_props_row_editor_t
   // reads as "undo edits made in this sitting", closest available proxy for
   // "reset to how it was created" without persisting new per-shape state.
   gboolean relative_baseline_set;
-  // path-only shrink/grow control, mirroring the removed mask manager's own resize_amount
-  // (see the block near _blend_masks_properties below) -- NULL for a group row
+  // path-only shrink/grow control (see the block near _blend_masks_properties
+  // below) -- NULL for a group row
   // or an opacity-only row, and hidden at runtime for anything but a path.
   GtkWidget *resize_widget;
   guint resize_timer;       // debounce source id (0 = none)
@@ -1508,8 +1431,6 @@ static void _paint_param_inout(cairo_t *cr,
                                const gint h,
                                const gint flags,
                                void *data);
-// appends a "presets" section (group-layout presets) directly to `menu` --
-// see the full definition near _flexi_layout_apply
 // detach members from a module's mask group without dt_masks_form_remove's
 // nested history/GUI update and its "group just emptied" destruction cascade
 static void _detach_group_members(dt_masks_form_t *grp, GList *fids);
@@ -1538,8 +1459,8 @@ static GtkWidget *_build_param_boost_editor(dt_iop_module_t *module, const dt_ma
 // on (dt_dev_add_history_item's `enable` argument, develop.c:1377). A control
 // is insensitive here only when it has nothing to act on whatever the on/off
 // state is -- see _update_add_target_sensitivity and _update_refine_sensitivity
-// for the other two such rules. The off state stays legible through the
-// header's "mask-enabled" class, not through greyed-out controls.
+// for the other two such rules. The off state shows on the on/off toggle
+// alone, not through grayed-out controls.
 static void _masks_panel_apply_shape_sensitivity(dt_iop_gui_blend_data_t *data)
 {
   // "edit on canvas" and "solo edit" need shapes to put on the canvas, and a
@@ -1581,9 +1502,8 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   // refinement controls appear for it too.
   const gboolean mode_drawn_or_flexi = mode_drawn || mode_flexi;
   // with the mask off the panel shows the same controls it would with the mask
-  // on, and they stay live: touching one switches the mask on (see
-  // _blend_mask_touched). Switching on always lands in flexi (see
-  // _blendop_mask_enable), so flexi is the layout to show.
+  // on, and they stay live: touching one switches the mask on, and always into
+  // flexi (see _blendop_mask_enable), so flexi is the layout to show.
   const gboolean show_mask_ui = !mode_raster;
   const gboolean show_flexi_ui = !mode_raster;
 
@@ -1643,7 +1563,7 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   }
   else
   {
-    // mask off: still shown, greyed, as the preview described above
+    // mask off: still shown, as described above
     _box_set_visible(data->refine_box,
                      !mask_enabled || (data->raster_inited && mode_raster));
   }
@@ -1660,7 +1580,7 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
     if(data->soloedit_mode) gtk_widget_set_visible(data->soloedit_mode, show_flexi_ui);
     gtk_widget_set_visible(GTK_WIDGET(data->masks_list_box), show_flexi_ui);
     // only for a live mask: with the mask off the list keeps whatever it last
-    // held, greyed out, rather than being rebuilt from a group nothing is
+    // held, rather than being rebuilt from a group nothing is
     // using. A list never built is built anyway, so switching the mask on or
     // off never changes the groups it shows
     if(mode_flexi || data->masks_list_sig == DT_INVALID_HASH)
@@ -1734,8 +1654,8 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
   }
 
   // mode just changed (possibly into/out of flexi) while this module was
-  // already focused -- dt_iop_request_focus() above is a no-op in that case,
-  // so re-evaluate the flexi panel's host placement here too
+  // already focused: dt_iop_request_focus() is a no-op in that case, so
+  // re-evaluate the flexi panel's host placement here too
   _masks_flexi_relocate(data->module);
 }
 
@@ -1888,11 +1808,9 @@ static float _magnifier_scale_callback(GtkWidget *self,
 static const dt_masks_param_row_editor_t *_param_row_editor_resolve(
   GtkWidget *widget, const dt_iop_gui_blendif_channel_t **channels_out, int *ch_out);
 
-// toggle a slider's alternative (log / magnifier) display scale and restate its
-// head label to match. The slider always belongs to a per-row parametric editor
-// now -- the shared tabbed editor this used to also serve is gone, and with it
-// bd->filter[], whose head labels were NULL here (silently dropping the "(log)"
-// / "(zoom)" suffix this function exists to show).
+// toggle a slider's alternative (log / magnifier) display scale. The slider
+// always belongs to a per-row parametric editor, which has no text label to
+// carry the scale: its tooltip names it, and a toast says it changed
 static int _blendop_blendif_disp_alternative_worker(GtkWidget *widget,
                                                     dt_iop_module_t *module,
                                                     const int mode,
@@ -1912,14 +1830,15 @@ static int _blendop_blendif_disp_alternative_worker(GtkWidget *widget,
   if(ed)
   {
     const int in_out = (widget == GTK_WIDGET(ed->filter[1].slider)) ? 1 : 0;
-    gchar *text = g_strdup_printf("%s%s", (in_out == 0) ? _("input") : _("output"),
-                                  (mode == 1) ? label : "");
-    if(ed->filter[in_out].head) gtk_label_set_text(ed->filter[in_out].head, text);
-    // the compact layout shows a second copy of the same head label beside the
-    // slider (see _apply_param_row_filter_layout); keep the two in step
-    if(ed->filter[in_out].head_compact)
-      gtk_label_set_text(ed->filter[in_out].head_compact, text);
-    g_free(text);
+    dt_masks_param_row_editor_t *red = (dt_masks_param_row_editor_t *)ed;
+    red->filter[in_out].altmode = (mode == 1) ? 1 : 0;
+    red->filter[in_out].altmode_name = (mode == 1) ? label : NULL;
+    _update_param_row_display(red);
+    const char *which = in_out ? _("output") : _("input");
+    if(mode == 1)
+      dt_toast_log(_("%s slider: %s scale"), which, label);
+    else
+      dt_toast_log(_("%s slider: linear scale"), which);
   }
 
   return (mode == 1) ? 1 : 0;
@@ -1930,7 +1849,7 @@ static int _blendop_blendif_disp_alternative_mag(GtkWidget *widget,
                                                  const int mode)
 {
   return _blendop_blendif_disp_alternative_worker
-    (widget, module, mode, _magnifier_scale_callback, _(" (zoom)"));
+    (widget, module, mode, _magnifier_scale_callback, _("zoom"));
 }
 
 static int _blendop_blendif_disp_alternative_log(GtkWidget *widget,
@@ -1938,12 +1857,11 @@ static int _blendop_blendif_disp_alternative_log(GtkWidget *widget,
                                                  const int mode)
 {
   return _blendop_blendif_disp_alternative_worker
-    (widget, module, mode, _log10_scale_callback, _(" (log)"));
+    (widget, module, mode, _log10_scale_callback, _("log"));
 }
 
-// parameterized on an explicit channel index instead of reading bd->tab, so a
-// per-row parametric-form editor can call it with p->channel (see
-// _param_row_picker_colorspace) while the shared editor keeps using bd->tab.
+// parameterized on an explicit channel index, so a parametric row can pass its
+// own p->channel
 static dt_iop_colorspace_type_t
 _picker_colorspace_for_channel(const dt_develop_blend_colorspace_t channel_tabs_csp,
                                const int channel)
@@ -1981,15 +1899,9 @@ _blendop_blendif_get_picker_colorspace(dt_iop_gui_blend_data_t *bd)
   return _picker_colorspace_for_channel(bd->channel_tabs_csp, bd->tab);
 }
 
-static inline int _blendif_print_digits_picker(const float value)
-{
-  return (value < 10.0f) ? 2 : 1;
-}
-
-// NB: the former _blendop_blendif_details_callback / _blendop_blendif_feathering_callback
-// were folded into the scoped-refinement handler _refine_control_changed (see the
-// Phase 2 block near the mask group helpers); its GLOBAL-scope path reproduces
-// their exact behaviour (details zero-cross reprocess, feather_version bump).
+// the details and feathering controls are handled by _refine_control_changed,
+// whose GLOBAL-scope path does the details zero-cross reprocess and the
+// feather_version bump
 
 static void _blendop_blendif_showmask_clicked(
   GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, dt_iop_module_t *module)
@@ -2072,11 +1984,14 @@ static void _mask_lock_sync(dt_iop_module_t *module)
   DT_LEAVE_GUI_UPDATE();
   gtk_widget_set_tooltip_text(bd->mask_lock_btn,
                               locked
-                              ? _("mask locked\nreset, presets, styles and paste leave it"
-                                  " alone, and it cannot be edited\nclick to unlock")
-                              : _("lock the mask\nreset, presets, styles and paste will"
-                                  " leave it alone, and it cannot be edited.\ndiscarding"
-                                  " the history still removes it"));
+                              ? _("mask locked\n"
+                                  "reset, presets, styles and paste leave it alone,\n"
+                                  "and it cannot be edited\n"
+                                  "click to unlock")
+                              : _("mask unlocked\n"
+                                  "click to lock: reset, presets, styles and paste\n"
+                                  "then leave it alone, and it cannot be edited.\n"
+                                  "discarding the history still removes it"));
   // shown with an off mask too while locked: an off mask keeps its lock, and
   // this is the panel's only way to lift it
   gtk_widget_set_visible(bd->mask_lock_btn,
@@ -2428,11 +2343,7 @@ static void _blendop_masks_show_and_edit(GtkGestureSingle *gesture,
   DT_LEAVE_GUI_UPDATE();
 }
 
-// A blend-level color pick. The two shared-editor pickers this used to also
-// serve (bd->colorpicker / bd->colorpicker_set_values) went away with the
-// classic tabbed blendif editor and were never rebuilt, so both were NULL and
-// neither branch could ever match a real picker widget. Every pick that
-// reaches this now belongs to a parametric row's own editor.
+// a blend-level color pick: every one belongs to a parametric row's own editor
 gboolean blend_color_picker_apply(dt_iop_module_t *module,
                                   GtkWidget *picker,
                                   dt_dev_pixelpipe_t *pipe)
@@ -2590,10 +2501,8 @@ static gboolean _blendif_change_blend_colorspace(dt_iop_module_t *module,
     dt_iop_gui_update(module);
 
     // re-arm a picker that is currently up, so it samples in the new
-    // colorspace. This used to test bd->colorpicker/bd->colorpicker_set_values
-    // directly, but those belonged to the removed shared editor and were NULL:
-    // the pickers that can be live now are a parametric row's own, so ask the
-    // picker proxy which module is picking instead of naming widgets.
+    // colorspace. The live pickers are the parametric rows' own, so ask the
+    // picker proxy whether this module is picking instead of naming widgets
     if(cst_old != _blendop_blendif_get_picker_colorspace(bd)
        && dt_iop_color_picker_get_active_cst(module) != IOP_CS_NONE)
     {
@@ -2708,8 +2617,8 @@ static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
   _preview_on_hover_set(gtk_toggle_button_get_active(mi));
 }
 
-// appends the "options" section to `box` -- behavioural toggles for the blend
-// mask panel that don't fit the position or colorspace sections. Check buttons
+// appends the "options" section to `box`: toggles for how the blend mask panel
+// behaves that don't fit the position or colorspace sections. Check buttons
 // under a dt_section_label, the way the other toolbar preference popovers are
 // laid out (see global_toolbox.c's overlay settings).
 #define _MASKS_OPT_CHECK(var, label, tip, active, cb)                             \
@@ -2725,33 +2634,25 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
   gtk_widget_set_tooltip_text(header,
-                              _("behavioural options for the blend mask panel."));
+                              _("how the blend mask panel behaves"));
   dt_gui_box_add(box, header);
 
-  // the checkbox reads "sticky" (on = remember last opacity for new shapes),
-  // the conf key is stored inverted (absent/FALSE = sticky, the default) so
-  // it needs no preferences.xml entry -- see _new_shape_default_opacity in
-  // masks.c, which is the actual place this is consumed.
   _MASKS_OPT_CHECK(
     sticky, _("sticky opacity"),
-    _("when enabled (default), a newly added shape starts at the opacity"
-      " last used by any shape, so adjusting opacity once carries over to"
-      " every shape you add afterwards.\n"
-      "when disabled, every newly added shape starts at 100% opacity,"
-      " regardless of what opacity was last used."),
+    _("when enabled (default), a new shape starts at the opacity last used by"
+      " any shape, so adjusting opacity once carries over to every shape you"
+      " add afterwards.\n"
+      "when disabled, a new shape always starts at 100% opacity."),
     !dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"),
     _masks_opacity_sticky_toggled)
 
   _MASKS_OPT_CHECK(
     autoexpand, _("auto-expand selected"),
     _("when enabled (default), whatever you select is the one thing expanded,"
-      " and whatever was expanded before is collapsed. selecting a group shows"
-      " its elements; selecting an element shows its controls, and its group"
-      " with it. applies to every element that can be expanded -- shapes and"
-      " parametric elements, plus raster masks once \"use sliders for opacity\""
-      " gives them a slider to show.\n"
-      "selecting something with nothing to expand leaves whatever is open"
-      " open, rather than collapsing the panel down to nothing.\n"
+      " and whatever was expanded before collapses: selecting a group shows its"
+      " elements, selecting an element shows its controls and its group.\n"
+      "selecting something with nothing to expand, such as a raster mask"
+      " without \"use sliders for opacity\", leaves what is open as it is.\n"
       "when disabled, everything is expanded and collapsed by hand."),
     _auto_expand_selected(), _masks_auto_expand_selected_toggled)
 
@@ -2860,8 +2761,7 @@ static void _masks_options_popover_closed(GtkPopover *pop, gpointer user_data)
 // The blend mask panel's settings, laid out as a popover of sections the way the
 // darkroom toolbar's other preference popovers are (guides, global toolbox): a
 // dt_section_label per section, radios for the exclusive choices and check
-// buttons for the toggles. This replaced a GtkMenu of check items, which worked
-// but looked nothing like the neighbouring popovers it sits between.
+// buttons for the toggles
 static void _blendif_options_callback(GtkButton *button,
                                       dt_iop_module_t *module)
 {
@@ -2966,22 +2866,10 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
   }
 }
 
-// resolve the DT_DEV_PIXELPIPE_DISPLAY_* channel bit for a flexi parametric
-// row's own slider -- each row is single-channel, so there is no shared
-// "current tab" to read (that was the removed classic editor's model, see
-// dt_iop_gui_init_blendif's removal note on data->channel/data->tab in
-// dt_iop_gui_blend_data_t, blend.h). `widget` must be tagged with its owning
-// dt_masks_param_row_editor_t via "param-row-editor" (see
-// _build_param_row_editor). Returns FALSE (leaving *channel_out untouched) if
-// the row/form cannot be resolved, so callers degrade to "no channel view"
-// instead of dereferencing anything -- this is what used to crash on
-// 'c'/'C'/'m'/'M' (and shift-hover) over a row's slider.
-// shared resolver: finds the flexi parametric row (and its channel-table
-// entry) owning `widget`, tagged via "param-row-editor" (see
-// _build_param_row_editor). Used by _param_row_editor_channel below and by
-// the key-press handler's alt-display case, both of which used to read the
-// removed classic editor's data->channel[data->tab] (see the removal note on
-// dt_iop_gui_blend_data_t in blend.h) -- permanently NULL now, hence the crash.
+// finds the flexi parametric row (and its channel-table entry) owning
+// `widget`, tagged via "param-row-editor" (see _build_param_row_editor). Used
+// by _param_row_editor_channel below and by the key-press handler's
+// alt-display case
 static const dt_masks_param_row_editor_t *_param_row_editor_resolve(
   GtkWidget *widget, const dt_iop_gui_blendif_channel_t **channels_out, int *ch_out)
 {
@@ -3002,6 +2890,10 @@ static const dt_masks_param_row_editor_t *_param_row_editor_resolve(
   return ed;
 }
 
+// resolve the DT_DEV_PIXELPIPE_DISPLAY_* channel bit for a parametric row's
+// own slider: each row is single-channel. Returns FALSE (leaving *channel_out
+// untouched) if the row/form cannot be resolved, so callers degrade to "no
+// channel view" instead of dereferencing anything
 static gboolean _param_row_editor_channel(GtkWidget *widget,
                                           dt_dev_pixelpipe_display_mask_t *channel_out)
 {
@@ -3244,13 +3136,12 @@ static gboolean _blendop_blendif_key_press_cb(GtkEventControllerKey *controller,
       int ch;
       const dt_masks_param_row_editor_t *row_ed =
         _param_row_editor_resolve(widget, &channels, &ch);
-      // data->altmode is sized [8][2] (the old classic tab-count ceiling);
-      // reused here indexed by the row's own channel instead of a tab.
-      if(row_ed && ch >= 0 && ch < 8 && channels[ch].altdisplay)
+      // the scale is the slider's own, so a rebuilt row starts linear like
+      // its fresh slider does
+      if(row_ed && ch >= 0 && channels[ch].altdisplay)
       {
         const int io = (widget == GTK_WIDGET(row_ed->filter[1].slider)) ? 1 : 0;
-        data->altmode[ch][io] =
-          channels[ch].altdisplay(widget, module, data->altmode[ch][io] + 1);
+        channels[ch].altdisplay(widget, module, row_ed->filter[io].altmode + 1);
       }
       handled = TRUE;
       break;
@@ -3275,28 +3166,28 @@ static gboolean _blendop_blendif_key_press_cb(GtkEventControllerKey *controller,
                              gradient
 
 const dt_iop_gui_blendif_channel_t Lab_channels[]
-    = { { N_("L"), N_("add a parametric element of type L"), 1.0f / 100.0f,
+    = { { N_("L"), N_("add a parametric element selecting by lightness (L)"), 1.0f / 100.0f,
             COLORSTOPS(_gradient_L), TRUE, 0.0f,
           { DEVELOP_BLENDIF_L_in, DEVELOP_BLENDIF_L_out }, DT_DEV_PIXELPIPE_DISPLAY_L,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("lightness") },
-        { N_("a"), N_("add a parametric element of type a"), 1.0f / 256.0f,
+        { N_("a"), N_("add a parametric element selecting by green/red (a)"), 1.0f / 256.0f,
           COLORSTOPS(_gradient_a), TRUE, 0.0f,
           { DEVELOP_BLENDIF_A_in, DEVELOP_BLENDIF_A_out }, DT_DEV_PIXELPIPE_DISPLAY_a,
           _blendif_scale_print_ab, _blendop_blendif_disp_alternative_mag,
           N_("green/red") },
-        { N_("b"), N_("add a parametric element of type b"), 1.0f / 256.0f,
+        { N_("b"), N_("add a parametric element selecting by blue/yellow (b)"), 1.0f / 256.0f,
           COLORSTOPS(_gradient_b), TRUE, 0.0f,
           { DEVELOP_BLENDIF_B_in, DEVELOP_BLENDIF_B_out }, DT_DEV_PIXELPIPE_DISPLAY_b,
           _blendif_scale_print_ab, _blendop_blendif_disp_alternative_mag,
           N_("blue/yellow") },
-        { N_("C"), N_("add a parametric element of type C"), 1.0f / 100.0f,
+        { N_("C"), N_("add a parametric element selecting by saturation (C)"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           TRUE, 0.0f,
           { DEVELOP_BLENDIF_C_in, DEVELOP_BLENDIF_C_out }, DT_DEV_PIXELPIPE_DISPLAY_LCH_C,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("saturation") },
-        { N_("h"), N_("add a parametric element of type h"), 1.0f / 360.0f,
+        { N_("h"), N_("add a parametric element selecting by hue (h)"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_LCh_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_h_in, DEVELOP_BLENDIF_h_out }, DT_DEV_PIXELPIPE_DISPLAY_LCH_h,
@@ -3304,45 +3195,45 @@ const dt_iop_gui_blendif_channel_t Lab_channels[]
         { NULL } };
 
 const dt_iop_gui_blendif_channel_t rgb_channels[]
-    = { { N_("g"), N_("add a parametric element of type g"), 1.0f / 255.0f,
+    = { { N_("g"), N_("add a parametric element selecting by gray (g)"), 1.0f / 255.0f,
             COLORSTOPS(_gradient_gray), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GRAY_in, DEVELOP_BLENDIF_GRAY_out },
           DT_DEV_PIXELPIPE_DISPLAY_GRAY,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("gray") },
-        { N_("R"), N_("add a parametric element of type R"), 1.0f / 255.0f,
+        { N_("R"), N_("add a parametric element selecting by red (R)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_red), TRUE, 0.0f,
           { DEVELOP_BLENDIF_RED_in, DEVELOP_BLENDIF_RED_out },
           DT_DEV_PIXELPIPE_DISPLAY_R,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("red") },
-        { N_("G"), N_("add a parametric element of type G"), 1.0f / 255.0f,
+        { N_("G"), N_("add a parametric element selecting by green (G)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_green), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GREEN_in, DEVELOP_BLENDIF_GREEN_out },
           DT_DEV_PIXELPIPE_DISPLAY_G,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("green") },
-        { N_("B"), N_("add a parametric element of type B"), 1.0f / 255.0f,
+        { N_("B"), N_("add a parametric element selecting by blue (B)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_blue), TRUE, 0.0f,
           { DEVELOP_BLENDIF_BLUE_in, DEVELOP_BLENDIF_BLUE_out },
           DT_DEV_PIXELPIPE_DISPLAY_B,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("blue") },
-        { N_("H"), N_("add a parametric element of type H"), 1.0f / 360.0f,
+        { N_("H"), N_("add a parametric element selecting by hue (H)"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_HSL_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_H_in, DEVELOP_BLENDIF_H_out },
           DT_DEV_PIXELPIPE_DISPLAY_HSL_H,
           _blendif_scale_print_hue, NULL,
           N_("hue") },
-        { N_("S"), N_("add a parametric element of type S"), 1.0f / 100.0f,
+        { N_("S"), N_("add a parametric element selecting by chroma (S)"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_S_in, DEVELOP_BLENDIF_S_out },
           DT_DEV_PIXELPIPE_DISPLAY_HSL_S,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("chroma") },
-        { N_("L"), N_("add a parametric element of type L"), 1.0f / 100.0f,
+        { N_("L"), N_("add a parametric element selecting by luminance (L)"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_gray),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_l_in, DEVELOP_BLENDIF_l_out },
@@ -3352,45 +3243,45 @@ const dt_iop_gui_blendif_channel_t rgb_channels[]
         { NULL } };
 
 const dt_iop_gui_blendif_channel_t rgbj_channels[]
-    = { { N_("g"), N_("add a parametric element of type g"), 1.0f / 255.0f,
+    = { { N_("g"), N_("add a parametric element selecting by gray (g)"), 1.0f / 255.0f,
             COLORSTOPS(_gradient_gray), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GRAY_in, DEVELOP_BLENDIF_GRAY_out },
           DT_DEV_PIXELPIPE_DISPLAY_GRAY,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("gray") },
-        { N_("R"), N_("add a parametric element of type R"), 1.0f / 255.0f,
+        { N_("R"), N_("add a parametric element selecting by red (R)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_red), TRUE, 0.0f,
           { DEVELOP_BLENDIF_RED_in, DEVELOP_BLENDIF_RED_out },
           DT_DEV_PIXELPIPE_DISPLAY_R,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("red") },
-        { N_("G"), N_("add a parametric element of type G"), 1.0f / 255.0f,
+        { N_("G"), N_("add a parametric element selecting by green (G)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_green), TRUE, 0.0f,
           { DEVELOP_BLENDIF_GREEN_in, DEVELOP_BLENDIF_GREEN_out },
           DT_DEV_PIXELPIPE_DISPLAY_G,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("green") },
-        { N_("B"), N_("add a parametric element of type B"), 1.0f / 255.0f,
+        { N_("B"), N_("add a parametric element selecting by blue (B)"), 1.0f / 255.0f,
           COLORSTOPS(_gradient_blue), TRUE, 0.0f,
           { DEVELOP_BLENDIF_BLUE_in, DEVELOP_BLENDIF_BLUE_out },
           DT_DEV_PIXELPIPE_DISPLAY_B,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("blue") },
-        { N_("Jz"), N_("add a parametric element of type Jz"), 1.0f / 100.0f,
+        { N_("Jz"), N_("add a parametric element selecting by luminance (Jz)"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_gray),
           TRUE, -6.64385619f, // cf. _blend_init_blendif_boost_parameters
           { DEVELOP_BLENDIF_Jz_in, DEVELOP_BLENDIF_Jz_out },
           DT_DEV_PIXELPIPE_DISPLAY_JzCzhz_Jz,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("luminance") },
-        { N_("Cz"), N_("add a parametric element of type Cz"), 1.0f / 100.0f,
+        { N_("Cz"), N_("add a parametric element selecting by chroma (Cz)"), 1.0f / 100.0f,
           COLORSTOPS(_gradient_chroma),
           TRUE, -6.64385619f, // cf. _blend_init_blendif_boost_parameters
           { DEVELOP_BLENDIF_Cz_in, DEVELOP_BLENDIF_Cz_out },
           DT_DEV_PIXELPIPE_DISPLAY_JzCzhz_Cz,
           _blendif_scale_print_default, _blendop_blendif_disp_alternative_log,
           N_("chroma") },
-        { N_("hz"), N_("add a parametric element of type hz"), 1.0f / 360.0f,
+        { N_("hz"), N_("add a parametric element selecting by hue (hz)"), 1.0f / 360.0f,
           COLORSTOPS(_gradient_JzCzhz_hue),
           FALSE, 0.0f,
           { DEVELOP_BLENDIF_hz_in, DEVELOP_BLENDIF_hz_out },
@@ -3399,11 +3290,10 @@ const dt_iop_gui_blendif_channel_t rgbj_channels[]
           N_("hue") },
         { NULL } };
 
-// the channel descriptor array for a blend colorspace (NULL-terminated). Mirrors
-// the switch in dt_iop_gui_update_blendif; used by the single-channel parametric
-// machinery (add-buttons + editor lock) to enumerate / index channels.
-// exported (see blend.h) so parametric.c can label a single-channel form's
-// name after its channel without duplicating the per-colorspace arrays above
+// the channel descriptor array for a blend colorspace (NULL-terminated), used
+// by the parametric elements (add buttons, row editors) to enumerate and index
+// channels. Exported (see blend.h) so parametric.c can name a form after its
+// channel without duplicating the per-colorspace arrays above
 const dt_iop_gui_blendif_channel_t *dt_develop_blendif_channels_for_csp(const int csp)
 {
   switch(csp)
@@ -3488,14 +3378,11 @@ void dt_iop_gui_update_masks(dt_iop_module_t *module)
 }
 
 // ===========================================================================
-// In-module per-shape composition list + parametric (blendif) forms (Phase 3)
+// the mask list
 // ---------------------------------------------------------------------------
-// A compact list of the module's mask-group shapes is shown in the module's own
-// mask section, each row carrying a composition-operator chooser and an inverse
-// toggle, plus reordering. Parametric masks can be added like a shape and, when
-// selected, bind the module's existing parametric channel editor to that form
-// (see _blendif_commit). All of this only ever touches new parametric forms /
-// explicit user actions, so legacy edits are unaffected.
+// one row per element of the module's mask, grouped, each with its operator,
+// invert and visibility controls, reorderable by drag and drop. A parametric
+// element carries its own channel editor (see _build_param_row_editor)
 
 // destroys and rebuilds the whole mask-list widget tree, including the very
 // widget a drag-and-drop just landed on. Doing that synchronously from inside
@@ -3839,22 +3726,18 @@ static const char *_group_custom_name(dt_masks_form_t *grp, const dt_mask_id_t c
 }
 
 // ===========================================================================
-// Phase 2: scoped mask refinement.
+// scoped mask refinement
 //
-// The "mask refinement" sliders (details / feathering guide+radius / blur /
-// brightness / contrast) can target one of three scopes chosen by the combo in
-// the section header:
-//   - GLOBAL    : blend_params->{details,...}, applied once on the final group
-//                 mask. The legacy behaviour, and the default. Also the forced
-//                 scope in classic/raster modes (the combo is flexi-only).
-//   - ALL_SHAPES: one refinement set broadcast into every *drawn* (non-parametric)
-//                 form's dt_masks_point_group_t.refinement.
-//   - PARAMETRIC: a single parametric form's point refinement.
-// The latter two reuse the existing per-shape refinement storage (masks v7) and
-// its renderer hook (group.c, dt_develop_blend_refine_form_mask), so no schema,
-// version or render change is needed -- a zero-filled (disabled) refinement is
-// byte-identical to before.
-// A group's own refinement (REFINE_SCOPE_GROUP) is held by its marker.
+// The refinement controls (details, feathering guide and radius, blur,
+// brightness, contrast) act on the scope the list selection implies (see
+// _model_refine_scope_from_selection):
+//   - GLOBAL    : blend_params->{details,...}, applied once to the finished
+//                 mask. Nothing selected, or the mask's own group
+//   - GROUP     : the selected group's refinement, held by its marker
+//   - ELEMENT   : the selected element's own point refinement
+// The per-point scopes use the per-shape refinement storage (masks v7) and its
+// renderer hook (group.c, dt_develop_blend_refine_form_mask): a zero-filled
+// (disabled) refinement renders exactly as no refinement.
 // The REFINE_SCOPE_* values live in blend_gui_internal.h.
 
 // a group's displayed number (see its definition)
@@ -3866,24 +3749,6 @@ static const uint32_t _refine_guide_values[] = { DEVELOP_MASK_GUIDE_OUT_BEFORE_B
                                                  DEVELOP_MASK_GUIDE_IN_BEFORE_BLUR,
                                                  DEVELOP_MASK_GUIDE_OUT_AFTER_BLUR,
                                                  DEVELOP_MASK_GUIDE_IN_AFTER_BLUR };
-
-// first drawn (non-parametric) form's point in the group, or NULL. Used to read
-// back the "all shapes" refinement (every drawn point is kept in sync, so the
-// first one is representative).
-// A nested group is not a drawn form of its own: its shapes are, at any depth.
-static dt_masks_point_group_t *_refine_first_drawn_point(dt_masks_form_t *grp)
-{
-  dt_masks_point_group_t *first = NULL;
-  GList *pts = _mask_points(grp);
-  for(GList *l = pts; l && !first; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = l->data;
-    dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
-    if(form && !(form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_GROUP))) first = pt;
-  }
-  g_list_free(pts);
-  return first;
-}
 
 // a group point's effective operator for grouping: a missing operator (the base)
 // reads as union, matching how the list folds runs. Shared with the renderer,
@@ -4456,12 +4321,9 @@ static void _refine_populate(dt_iop_module_t *module)
   else
   {
     dt_masks_form_t *grp = _module_mask_group(module);
-    // ALL_SHAPES reads the first drawn point; GROUP reads the group's marker;
-    // ELEMENT reads that one specific form directly
-    const dt_masks_point_group_t *src =
-      (bd->masks_refine_scope_kind == REFINE_SCOPE_ALL_SHAPES)
-        ? _refine_first_drawn_point(grp)
-        : _group_point(grp, bd->masks_refine_scope_formid);
+    // GROUP reads the group's marker; ELEMENT reads that one specific form
+    // directly
+    const dt_masks_point_group_t *src = _group_point(grp, bd->masks_refine_scope_formid);
     // ...but only when the stored value belongs to the scope being shown. One
     // member's point holds either its own element refinement or a broadcast copy
     // of its group's (see dt_masks_refine_scope_t); showing one in the other's
@@ -4617,7 +4479,7 @@ static void _refine_header_clicked(
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_refine_toggle_btn), !active);
 }
 
-// flexi: the refinement controls follow the list selection — a selected shape
+// flexi: the refinement controls follow the list selection: a selected shape
 // (or parametric/raster element) targets only that one element; a selected
 // group header (no specific element within it) targets the whole group;
 // nothing selected targets global. Defined here so _update_row_selection
@@ -4681,9 +4543,9 @@ static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd)
   _update_refine_sensitivity(bd->module);
 }
 
-// commit a control change in GLOBAL scope. This reproduces, field by field, the
-// exact behaviour the old set_field bindings / blendif callbacks had, so classic
-// and flexi-global refinement render bit-for-bit identically to before.
+// commit a control change in GLOBAL scope, into the module-wide blend params.
+// details crossing away from 0 needs a full reprocess (the detail mask has to be
+// built), and a feathering or blur edit moves feather_version off 0
 static void _refine_commit_global(dt_iop_gui_blend_data_t *bd, GtkWidget *w)
 {
   dt_develop_blend_params_t *bp = bd->module->blend_params;
@@ -4739,32 +4601,15 @@ static void _refine_commit_nonglobal(dt_iop_module_t *module)
 
   dt_masks_refinement_t r = { 0 };
   _refine_read_controls(bd, &r);
-  // stamp which mask this refinement is for (see dt_masks_refine_scope_t).
-  // ALL_SHAPES is a per-shape broadcast, not a group one: each shape refines
-  // its own mask.
+  // stamp which mask this refinement is for (see dt_masks_refine_scope_t)
   if(r.enabled)
     r.enabled = (bd->masks_refine_scope_kind == REFINE_SCOPE_GROUP)
                   ? DT_MASKS_REFINE_GROUP
                   : DT_MASKS_REFINE_ELEMENT;
 
-  if(bd->masks_refine_scope_kind == REFINE_SCOPE_ALL_SHAPES)
-  {
-    // broadcast to every drawn (non-parametric) form, nested groups' shapes
-    // included (see _refine_first_drawn_point)
-    GList *pts = _mask_points(grp);
-    for(GList *l = pts; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = l->data;
-      dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, pt->formid);
-      if(form && !(form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_GROUP))) pt->refinement = r;
-    }
-    g_list_free(pts);
-  }
-  else // REFINE_SCOPE_GROUP writes the group's marker, ELEMENT the one element
-  {
-    dt_masks_point_group_t *pt = _group_point(grp, bd->masks_refine_scope_formid);
-    if(pt) pt->refinement = r;
-  }
+  // REFINE_SCOPE_GROUP writes the group's marker, ELEMENT the one element
+  dt_masks_point_group_t *pt = _group_point(grp, bd->masks_refine_scope_formid);
+  if(pt) pt->refinement = r;
 
   // reachable with the mask off: switching it off leaves its shapes in place,
   // so their refinements stay editable, and editing one switches it back on
@@ -4783,11 +4628,6 @@ static void _refine_control_changed(GtkWidget *w, dt_iop_gui_blend_data_t *bd)
   _refine_update_header(bd->module);
 }
 
-// reset the refinement of the currently selected scope back to neutral. For
-// GLOBAL this clears blend_params (mirroring _refine_commit_global, but all
-// fields at once); for the per-form scopes the controls are zeroed and the
-// neutral (enabled==0) refinement is broadcast, restoring the byte-identical
-// renderer fast path.
 // clear the module-wide ("whole mask") refinement back to neutral, in the
 // caller's blend_params. Returns TRUE if `details` was non-zero: crossing it to
 // zero has to rebuild the scharr-derived detail mask, which an ordinary history
@@ -4817,6 +4657,9 @@ static gboolean _refine_global_is_set(const dt_iop_module_t *module)
          || bp->brightness != 0.0f || bp->contrast != 0.0f;
 }
 
+// reset the refinement of the current scope back to neutral. For GLOBAL this
+// clears blend_params (see _refine_clear_global); for the per-form scopes the
+// controls are zeroed and the neutral (enabled == 0) refinement is committed
 static void _refine_reset_clicked(GtkWidget *btn, dt_iop_gui_blend_data_t *bd)
 {
   if(DT_IN_GUI_UPDATE() || !bd || !bd->blend_inited || bd->masks_refine_updating) return;
@@ -4980,12 +4823,9 @@ static void _refine_update_header(dt_iop_module_t *module)
     gtk_widget_set_sensitive(bd->masks_refine_bypass_btn, has_refinement);
 }
 
-// (re)build the refinement-header group selector from the current mask group:
-// title-only now (see _refine_update_header) -- no selector combo any more,
-// the scope follows the mask list selection alone. Still refreshes the reset
-// button's visibility (flexi-only) and the caption/sliders for the current
-// scope, so it stays safe to call from every place that used to also rebuild
-// the combo (list rebuild, target-sensitivity refresh).
+// refresh the refinement section for the scope the selection implies: the
+// reset button's visibility (flexi only), the header and the sliders. Named
+// for the scope combo it once rebuilt; the scope follows the list selection
 static void _refine_scope_combo_rebuild(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -5025,26 +4865,23 @@ static void _set_solo_status_badge(GtkWidget *badge, int status);
 // ===========================================================================
 // Per-shape/raster/group/parametric inline "properties" expanders.
 //
-// Formerly a single, selection-following "element properties" panel (a
-// visually separate sibling of the mask refinement panel above, scoped by
-// masks_refine_scope_kind/_formid). Per the revamped design, every row now
-// owns its own inline expander instead -- shapes and raster forms get a new
-// toggle button next to their solo-edit slot, groups get one in their header,
-// and parametric rows reuse their existing in/out chevron to also reveal
-// opacity. This block keeps the classic mask manager's own delta-based commit
-// machinery (modify_property/dt_masks_form_change_opacity) generalized to take
-// an explicit per-row target instead of a single global scope.
+// Every row owns an inline expander: shapes and raster forms get a toggle
+// button next to their solo-edit slot, groups one in their header, and
+// parametric rows reuse their in/out chevron to also reveal opacity. The
+// commit machinery is the mask manager's delta-based one (modify_property),
+// taking an explicit per-row target.
 //
 // NOTE ON PROVENANCE. Comments in this file refer to "the removed mask
 // manager": that is src/libs/masks.c, the lib this branch DELETED when the
-// flexi panel replaced it. Those references record which behaviour a piece of
+// flexi panel replaced it. Those references record which behavior a piece of
 // code was written to reproduce -- they are not pointers to code you can go and
 // read, and there is nothing left to keep in sync with.
 //
 // This metadata table began as a copy of that lib's file-local
 // _masks_properties (name/format/min/max/relative/boolean per
 // dt_masks_property_t). It is now the only copy, so it is authoritative rather
-// than a mirror.
+// than a mirror. The tooltip says what the property does; how a double-click
+// resets it is added where the control is built (_build_props_row_editor)
 static const struct
 {
   gchar *name;
@@ -5052,17 +4889,34 @@ static const struct
   float min, max;
   gboolean relative;
   gboolean boolean;
+  gchar *tooltip;
 } _blend_masks_properties[DT_MASKS_PROPERTY_LAST] = {
-  [DT_MASKS_PROPERTY_OPACITY] = { N_("opacity"), "%", 0, 1, FALSE, FALSE },
-  [DT_MASKS_PROPERTY_SIZE] = { N_("size"), "%", 0.0001, 1, TRUE, FALSE },
-  [DT_MASKS_PROPERTY_HARDNESS] = { N_("hardness"), "%", 0.0001, 1, TRUE, FALSE },
-  [DT_MASKS_PROPERTY_FEATHER] = { N_("fade-out border"), "%", 0.0001, 1, TRUE, FALSE },
-  [DT_MASKS_PROPERTY_ROTATION] = { N_("rotation"), "°", 0, 360, FALSE, FALSE },
-  [DT_MASKS_PROPERTY_CURVATURE] = { N_("curvature"), "%", -1, 1, FALSE, FALSE },
-  [DT_MASKS_PROPERTY_COMPRESSION] = { N_("compression"), "%", 0.0001, 1, TRUE, FALSE },
-  [DT_MASKS_PROPERTY_CLEANUP] = { N_("cleanup"), "", 0, 100, FALSE, FALSE },
-  [DT_MASKS_PROPERTY_SMOOTHING] = { N_("smoothing"), "", 0, 1.3, FALSE, FALSE },
-  [DT_MASKS_PROPERTY_REFINE] = { N_("refine mask boundary"), "", 0, 1, FALSE, TRUE },
+  [DT_MASKS_PROPERTY_OPACITY] = { N_("opacity"), "%", 0, 1, FALSE, FALSE,
+    N_("how strongly this element counts in the mask") },
+  [DT_MASKS_PROPERTY_SIZE] = { N_("size"), "%", 0.0001, 1, TRUE, FALSE,
+    N_("size of the shape") },
+  [DT_MASKS_PROPERTY_HARDNESS] = { N_("hardness"), "%", 0.0001, 1, TRUE, FALSE,
+    N_("how much of the brush stroke's width is at full opacity\n"
+       "before it starts to fade out") },
+  [DT_MASKS_PROPERTY_FEATHER] = { N_("fade-out border"), "%", 0.0001, 1, TRUE, FALSE,
+    N_("width of the soft edge around the shape, over which\n"
+       "it fades from full opacity to none") },
+  [DT_MASKS_PROPERTY_ROTATION] = { N_("rotation"), "°", 0, 360, FALSE, FALSE,
+    N_("rotation of the shape") },
+  [DT_MASKS_PROPERTY_CURVATURE] = { N_("curvature"), "%", -1, 1, FALSE, FALSE,
+    N_("how much the gradient's line bends: 0 is straight") },
+  [DT_MASKS_PROPERTY_COMPRESSION] = { N_("compression"), "%", 0.0001, 1, TRUE, FALSE,
+    N_("width of the gradient's transition from full opacity\n"
+       "to none: lower makes it sharper") },
+  [DT_MASKS_PROPERTY_CLEANUP] = { N_("cleanup"), "", 0, 100, FALSE, FALSE,
+    N_("discards small, stray outline fragments below this size\n"
+       "(in traced pixels)") },
+  [DT_MASKS_PROPERTY_SMOOTHING] = { N_("smoothing"), "", 0, 1.3, FALSE, FALSE,
+    N_("how closely the traced outline follows the AI selection's\n"
+       "raw edge: higher gives smoother, more rounded corners") },
+  [DT_MASKS_PROPERTY_REFINE] = { N_("refine mask boundary"), "", 0, 1, FALSE, TRUE,
+    N_("snap the AI selection's edge to the edges in the image\n"
+       "applies from the next click on the object") },
 };
 
 // does an element row of this kind carry an expander of its own?
@@ -5097,16 +4951,6 @@ static void _style_opacity_gradient(GtkWidget *slider);
 // alongside the label itself.
 static void _refresh_inline_opacity_label(GtkWidget *slider);
 
-// apply a single property's new value to every form in `target_formids`,
-// following the exact delta protocol the removed mask manager's _property_changed
-// uses: modify_property takes (old_val -> new_val) and derives its own
-// ratio/delta internally, so *last_value must be the previously *committed*
-// value for this specific row/control, never the shape's raw current
-// size/hardness/etc -- these are relative controls, not absolute readouts.
-// Also drives the live on-canvas preview (dt_masks_gui_form_create) exactly
-// as the classic manager does, using each shape's absolute position in the
-// group's full points list. `target_formids` is not owned/freed here -- the
-// caller builds and frees it (a single formid, or a whole group's run).
 // both defined below, next to the row index they read: the rows showing one
 // form, and the refresh that pushes an edit made in one of them into the rest
 static GSList *_masks_rows_for_form(dt_iop_gui_blend_data_t *bd,
@@ -5114,6 +4958,17 @@ static GSList *_masks_rows_for_form(dt_iop_gui_blend_data_t *bd,
 static void _refresh_sibling_prop_rows(dt_iop_module_t *module,
                                        GList *formids,
                                        GtkWidget *src);
+
+// apply a single property's new value to every form in `target_formids`,
+// following the removed mask manager's delta protocol: modify_property takes
+// (old_val -> new_val) and derives its own ratio/delta internally, so
+// *last_value must be the previously *committed* value for this row/control.
+// The slider shows the targets' mean value, and an edit moves each target by
+// the same delta or ratio, so a group's members keep their differences.
+// Also drives the live on-canvas preview (dt_masks_gui_form_create), using
+// each shape's position in the canvas copy of the group. `target_formids` is
+// not owned/freed here -- the caller builds and frees it (a single formid, or
+// a whole group's run).
 
 static void _props_row_apply(dt_iop_module_t *module,
                              GList *target_formids,
@@ -5227,9 +5082,7 @@ static void _props_row_apply(dt_iop_module_t *module,
   // dt_bauhaus_slider_set_soft_range/dt_bauhaus_slider_set and
   // gtk_toggle_button_set_active below re-emit "value-changed"/"toggled" on
   // this same widget, which would otherwise re-enter the row's own
-  // changed-handler and recurse forever -- guard exactly like masks.c's own
-  // DT_ENTER_GUI_UPDATE()/DT_LEAVE_GUI_UPDATE() around _property_changed (this
-  // guard is what fixed a real stack-overflow crash from this same re-entrancy).
+  // changed-handler and recurse forever (a real stack-overflow crash).
   DT_ENTER_GUI_UPDATE();
   if(is_bool)
   {
@@ -5287,8 +5140,7 @@ static void _props_row_apply(dt_iop_module_t *module,
 // Quad for the shrink/grow slider's unit toggle: always shows "%" inside a
 // button-like square frame. Its active state (drawn brighter by bauhaus) tells
 // whether % mode is engaged; the slider's own value format spells out the
-// unit. Exact copy of the removed mask manager's own _paint_resize_unit -- file-local
-// static there, so duplicated here rather than shared across the two TUs.
+// unit.
 static void _props_paint_resize_unit(cairo_t *cr,
                                      const gint x,
                                      const gint y,
@@ -5363,7 +5215,7 @@ static gboolean _props_resize_timeout(gpointer data)
 }
 
 // Debounce: morphing is expensive, so commit ~180 ms after the last change
-// rather than on every slider tick -- same interval as masks.c's own slider.
+// rather than on every slider tick
 static void _props_resize_schedule_commit(dt_masks_props_row_editor_t *ed)
 {
   if(ed->resize_updating) return;
@@ -5385,8 +5237,7 @@ static void _props_resize_sync_unit(dt_masks_props_row_editor_t *ed)
 
 // the unit toggle lives in the slider's quad; bauhaus flips the active flag
 // before emitting "quad-pressed", so the new state is read directly. The unit
-// preference is shared with the classic mask manager's own slider (same conf
-// key), so switching it in either place keeps both in sync.
+// preference is shared with the canvas's scroll-to-resize (path.c, group.c)
 static void _props_resize_unit_quad(GtkWidget *w, dt_masks_props_row_editor_t *ed)
 {
   const gboolean pct = dt_bauhaus_widget_get_quad_active(w);
@@ -5450,12 +5301,11 @@ static GList *_props_row_target_formids(const dt_masks_props_row_editor_t *ed)
 }
 
 // (re)populate every one of this row's own controls -- called once right
-// after construction and whenever the row's expander is opened. Sliders are
-// never populated with a shape's absolute current value -- like the classic
-// mask manager, they are delta/ratio controls that start from whatever they
-// were last left at (ed->last_value[]), and re-running _props_row_apply with
-// the unchanged current value is a neutral no-op that only recomputes which
-// controls apply (count != 0) and their soft range for this row's own target.
+// after construction and whenever the row's expander is opened. Re-running
+// _props_row_apply with the unchanged value (ed->last_value[]) is a neutral
+// no-op that reads the targets' current mean into the slider, and recomputes
+// which controls apply (count != 0) and their soft range for this row's
+// target
 static void _props_row_populate(dt_masks_props_row_editor_t *ed)
 {
   if(!ed) return;
@@ -5582,6 +5432,7 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
     if(_blend_masks_properties[i].boolean)
     {
       w = gtk_check_button_new_with_label(_(_blend_masks_properties[i].name));
+      gtk_widget_set_tooltip_text(w, _(_blend_masks_properties[i].tooltip));
       ed->last_value[i] = (float)gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(w));
       g_object_set_data(G_OBJECT(w), "dt-prop", GINT_TO_POINTER(i));
       g_signal_connect(G_OBJECT(w), "toggled", G_CALLBACK(_props_row_control_changed),
@@ -5624,6 +5475,17 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
       dt_bauhaus_slider_set_format(w, _blend_masks_properties[i].format);
       dt_bauhaus_slider_set_digits(w, 2);
       if(_blend_masks_properties[i].relative) dt_bauhaus_slider_set_log_curve(w);
+      // a relative slider's double-click goes back to where it stood when the
+      // row was first populated (see _props_row_populate), which nothing on
+      // screen would otherwise say
+      gchar *tip = g_strdup_printf(
+        "%s\n%s", _(_blend_masks_properties[i].tooltip),
+        _blend_masks_properties[i].relative
+          ? _("double-click to undo the edits made since the properties were shown")
+          : i == DT_MASKS_PROPERTY_OPACITY ? _("double-click to reset to 100%")
+                                           : _("double-click to reset to 0"));
+      gtk_widget_set_tooltip_text(w, tip);
+      g_free(tip);
       ed->last_value[i] = dt_bauhaus_slider_get(w);
       g_object_set_data(G_OBJECT(w), "dt-prop", GINT_TO_POINTER(i));
       g_signal_connect(G_OBJECT(w), "value-changed",
@@ -5640,17 +5502,16 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
       // every opacity slider this panel shows carries the same checkerboard-
       // to-white track, whether it ends up inline in a row header (where
       // _style_inline_opacity_box applies it again, harmlessly) or leading an
-      // expanded panel under "show opacity slider in expanded elements"
+      // expanded panel under "use sliders for opacity"
       if(i == DT_MASKS_PROPERTY_OPACITY) _style_opacity_gradient(w);
     }
     ed->widget[i] = w;
     dt_gui_box_add(box, w);
   }
 
-  // path-only shrink/grow (outset/inset) control -- mirrors the removed mask manager's
-  // own "shrink or grow" slider exactly (same conf-stored unit, same debounced
-  // resize()/resize_get() calls into path.c's cache), just scoped to this row's
-  // single shape instead of "whichever single path is selected". A group or
+  // path-only shrink/grow (outset/inset) control, as the removed mask manager
+  // had it (conf-stored unit, debounced resize()/resize_get() calls into
+  // path.c's cache), scoped to this row's single shape. A group or
   // opacity-only row (raster/group headers) never gets one; _props_resize_update
   // hides it at runtime for anything but a path.
   if(!is_group && !opacity_only)
@@ -5660,8 +5521,9 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
     dt_bauhaus_slider_set_soft_range(w, -20, 20);
     dt_bauhaus_slider_set_format(w, "");
     gtk_widget_set_tooltip_text(
-      w, _("grow (positive) or shrink (negative) the selected path,\n"
-           "relative to its shape when selected; 0 restores the original"));
+      w, _("grow (positive) or shrink (negative) this path's outline\n"
+           "0 restores the outline it grew or shrank from. a size, feather\n"
+           "or rotation edit makes the current outline the new 0"));
     g_signal_connect(G_OBJECT(w), "value-changed",
                      G_CALLBACK(_props_resize_amount_changed), ed);
     dt_gui_add_class(w, "mask-props-slider");
@@ -5675,7 +5537,7 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
       dt_bauhaus_widget_set_quad_active(w, !g_strcmp0(unit, "% of path size"));
     }
     dt_bauhaus_widget_set_quad_tooltip(
-      w, _("shrink/grow unit: image pixels (px) or % of path size - click to toggle"));
+      w, _("shrink/grow unit: image pixels (px) or % of path size\nclick to toggle"));
     g_signal_connect(G_OBJECT(w), "quad-pressed", G_CALLBACK(_props_resize_unit_quad),
                      ed);
 
@@ -5683,9 +5545,8 @@ static GtkWidget *_build_props_row_editor(dt_iop_module_t *module,
     _props_resize_sync_unit(ed);
     dt_gui_box_add(box, w);
 
-    // "size" scales the shape live; "shrink or grow" insets/outsets its outline --
-    // keep this slider right below "size", matching masks.c's own ordering,
-    // instead of at the end of the property list.
+    // "size" scales the shape live; "shrink or grow" insets/outsets its outline:
+    // keep this slider right below "size" instead of at the end of the list
     if(ed->widget[DT_MASKS_PROPERTY_SIZE])
     {
       GList *kids = gtk_container_get_children(GTK_CONTAINER(box));
@@ -5994,8 +5855,8 @@ static void _subgroup_expand_toggled(GtkToggleButton *btn, gpointer user_data)
 // which element "auto-expand selected" keeps open at build time: the
 // current selection, if it is an element that can be expanded at all, and
 // otherwise whatever was expanded last (see bd->masks_last_expanded_elem).
-// Selecting a group, or a raster mask while "show opacity slider in expanded
-// elements" is off, therefore leaves the open element open rather than
+// Selecting a group, or a raster mask while "use sliders for opacity" is off,
+// therefore leaves the open element open rather than
 // collapsing the panel down to nothing.
 dt_mask_id_t _model_auto_expand_anchor(const dt_iop_gui_blend_data_t *bd)
 {
@@ -6068,8 +5929,8 @@ static GtkWidget *_make_props_row_toggle(dt_iop_module_t *module,
   // enabled, expansion is strictly tied to _model_auto_expand_anchor -- the
   // selection if it can be expanded at all, else the last element that could
   // -- not bd->panel_selected_formid directly: selecting something with
-  // nothing to expand (a group, or a raster row while "show opacity slider in
-  // expanded elements" is off) must leave whichever element was last expanded
+  // nothing to expand (a group, or a raster row while "use sliders for
+  // opacity" is off) must leave whichever element was last expanded
   // alone instead of collapsing it, so the panel does not visibly shift just
   // because the user picked such an element next (see
   // _auto_expand_selected_row, which maintains that field and performs the
@@ -6133,26 +5994,6 @@ static void _style_opacity_gradient(GtkWidget *slider)
   dt_bauhaus_slider_set_feedback(slider, FALSE);
 }
 
-// style a _build_props_row_editor(..., opacity_only=TRUE) box for inline
-// display in a row's own header instead of docked below it (shape/raster
-// rows -- mirrors the group header's own opacity slider treatment, see the
-// group header build): drop the box's own below-row margins and hide the
-// slider's label/value (the tooltip above stands in for them on hover).
-// Sizing within the header's free width is handled by the caller instead
-// (see _control_column_size_allocate, which drives this box's own
-// size-request from the row's width so the row's name column -- not this
-// box -- ends up as the one that actually expands to fill). The box (not
-// just its one slider child) is what the caller packs --
-// reparenting just the slider out of it would orphan the
-// dt_masks_props_row_editor_t the box's own destruction is tied to (see
-// _build_props_row_editor's "props-editor" data), while the slider's signal
-// handler keeps referencing it.
-// the actual per-slider half of the styling above: hides the label/value,
-// tags it for the "mask-inline-opacity" CSS + the gradient track, and wires
-// up the tooltip. Factored out so a caller that already has a bare slider in
-// hand (no _build_props_row_editor box around it -- e.g. the pending-row
-// opacity slider, which is a plain conf-write control instead) can apply the
-// exact same look without going through the box-shaped wrapper below.
 static void _inline_opacity_update_label(GtkWidget *label, const float val)
 {
   GtkWidget *slider = g_object_get_data(G_OBJECT(label), "opacity-slider");
@@ -6203,7 +6044,7 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
 
 // the whisker popup's placement rules, over plain geometry: a square directly
 // above or below the anchor (never over it, so the control points it drives
-// stay visible while it is open), centred on where the caller asked, and held
+// stay visible while it is open), centered on where the caller asked, and held
 // inside both the host panel and the work area. Split out from
 // _bauhaus_whisker_popup_rect below so the rules can be tested without a
 // display -- getting them wrong is invisible on the machine that wrote them
@@ -6237,7 +6078,7 @@ GdkRectangle _model_whisker_popup_rect(const dt_masks_whisker_geom_t *g)
   return rect;
 }
 
-// where the whisker popup of `anchor` should sit, horizontally centred on
+// where the whisker popup of `anchor` should sit, horizontally centered on
 // `center_in_anchor` -- an x offset within the anchor, so callers do not each
 // have to work out its position on screen.
 //
@@ -6294,7 +6135,7 @@ static gboolean _bauhaus_whisker_popup_rect(GtkWidget *anchor,
   return TRUE;
 }
 
-// pin `slider`'s popup above/below `anchor`, centred on `center_in_anchor`
+// pin `slider`'s popup above/below `anchor`, centered on `center_in_anchor`
 // (an x offset within the anchor), and open it there
 static void _show_bauhaus_whisker_popup(GtkWidget *slider,
                                         GtkWidget *anchor,
@@ -6446,8 +6287,11 @@ static GtkWidget *_make_inline_opacity_value_widget(GtkWidget *slider,
   gtk_container_add(GTK_CONTAINER(evbox), label);
   dt_gui_add_class(evbox, "mask-inline-opacity-value");
   gtk_widget_set_tooltip_text(evbox,
-                              _("opacity (right-click for precise entry; "
-                                "Ctrl/Shift+scroll to adjust; double-click to reset)"));
+                              _("opacity\n"
+                                "scroll to adjust by 5%, shift+scroll by 10%,"
+                                " ctrl+scroll by 1%\n"
+                                "right-click for precise entry\n"
+                                "double-click to reset to 100%"));
 
   g_object_set_data(G_OBJECT(evbox), "opacity-slider", slider);
   if(module) g_object_set_data(G_OBJECT(evbox), "module", module);
@@ -6463,6 +6307,13 @@ static GtkWidget *_make_inline_opacity_value_widget(GtkWidget *slider,
   return evbox;
 }
 
+// style a _build_props_row_editor(..., opacity_only=TRUE) box for a row's own
+// header instead of docked below it: the slider is hidden behind a compact
+// value label (see _make_inline_opacity_value_widget) that drives it. The box
+// (not just its one slider child) is what the caller packs: reparenting just
+// the slider out of it would orphan the dt_masks_props_row_editor_t the box's
+// own destruction is tied to (see _build_props_row_editor's "props-editor"
+// data), while the slider's signal handler keeps referencing it
 static GtkWidget *_style_inline_opacity_box(GtkWidget *box, dt_iop_module_t *module)
 {
   dt_gui_remove_class(box, "mask-props-row-editor");
@@ -6488,15 +6339,12 @@ static GtkWidget *_style_inline_opacity_box(GtkWidget *box, dt_iop_module_t *mod
 
   return container;
 }
-// Shared by every row/header kind that has a name column and, optionally, a
-// param slot and/or an inline opacity slider (element/raster/parametric rows
-// via _make_shape_row, the pending/temporary row via _make_pending_shape_row,
-// and group headers via _build_masks_list). By splitting the row into a
-// 35% / 65% homogeneous grid (left 35%: handle + name; right 65%: icon/slider + badges),
-// GTK resolves all column alignment natively in a single layout pass without
-// Pack a row header: <icon/handle> <name> <badges> <opacity> <action_slot (18px)>
-// - actions: within-group combine selector for groups, colorpicker for parametric, or
-// NULL for shapes
+
+// pack a row header, shared by element rows, the pending row and group
+// headers: <handle> <name, expanding> ... <badges> <actions> <opacity>
+// <expander>, the right-hand run packed from the end
+// - actions: within-group combine selector for groups, colorpicker for
+//   parametric rows, or NULL for shapes
 // - trailing_control: inline opacity value widget
 // - badge_stack: low-opacity / solo status badges
 // - expander_toggle: expand/collapse arrow toggle button (or NULL)
@@ -6637,11 +6485,6 @@ static void _sync_hidden_to_form_visible(dt_iop_module_t *module)
   dt_control_queue_redraw_center();
 }
 
-// install (once) the CSS that draws a border around the selected mask-list row.
-// Done at runtime so it works regardless of the active theme; registered just
-// above darktable's own theme provider (USER+1) so the border is not overridden.
-// rows tagged "mask-row" may be nested inside cluster expanders, so the row
-// lookups below walk the whole subtree under masks_list_box.
 // the mask list's rows and headers carry a tag (object data such as "mask-row"
 // or "mask-header") and sit nested in expanders and boxes at varying depths:
 // these two walk the subtree under `w`, `w` excluded, to reach them.
@@ -6970,7 +6813,7 @@ static GSList *_masks_rows_for_form(dt_iop_gui_blend_data_t *bd,
 
 // O(1) shape-row lookup by form id via the masks_row_map index (see blend.h),
 // used by every per-formid whole-list lookup instead of a recursive tree walk.
-// Falls back to the tree walk if the map is somehow cold, so behaviour is never
+// Falls back to the tree walk if the map is somehow cold, so behavior is never
 // worse than before. Where the same shape is referenced twice this returns the
 // first of its rows: anything refreshing one row per reference wants
 // _masks_row_for_point instead.
@@ -7018,18 +6861,14 @@ static GtkWidget *_masks_row_for_point(dt_iop_gui_blend_data_t *bd,
 static const GtkTargetEntry _mask_row_dnd[] = { { (gchar *)DND_TARGET_ROW,
                                                   GTK_TARGET_SAME_APP, 0 } };
 
-// every badge kind (solo/solo-edit/low-opacity) is now always mapped, part of
-// one fixed-size 3-cell stack packed into a row/header's own box (see
-// _make_badge_stack), rather than each badge being packed as its own
-// separate sibling and shown/hidden with gtk_widget_set_visible -- toggling
-// a badge's visibility that way used to change the row's own packed-child
-// count, so however many badges happened to be active shifted every other
-// header control (name, slider, operator chips) sideways. An "active" flag
-// (read by each badge's own draw handler below) now stands in for
-// show/hide: inactive means painted as nothing, but the badge's cell in the
-// stack -- and everything to its left in the row -- never moves. Clearing
-// the tooltip alongside also keeps an inactive (blank) badge from hovering
-// up a status message that no longer applies.
+// every badge (low-opacity, solo/disable) is always mapped, one cell of a
+// fixed-size stack packed into a row/header's own box (see _make_badge_stack):
+// showing and hiding a badge would change the row's packed-child count and
+// shift every other header control sideways. An "active" flag (read by each
+// badge's own draw handler below) stands in for show/hide: inactive means
+// painted as nothing, but the badge's cell -- and everything to its left in
+// the row -- never moves. Clearing the tooltip alongside keeps an inactive
+// (blank) badge from showing a status that no longer applies.
 static void _set_badge_active(GtkWidget *badge,
                               const gboolean active,
                               const char *tooltip_when_active)
@@ -7056,11 +6895,11 @@ static const char *_solo_badge_tooltip(void)
 
 // solo and per-element disable are mutually exclusive, so one row/header can
 // only ever be in one of these states at a time and they share a single badge
-// slot instead of two (see _make_badge_stack). Solo-edit used to have a state
-// here too; it is a mode now (see _soloedit_follow_selection), always applying
-// to the selected row, so the selection highlight and the header toggle already
-// say what it is doing. (MASK_SOLO_BADGE_* forward-declared above, with the
-// other badge helper forward decls.)
+// slot instead of two (see _make_badge_stack). Solo edit has no state here: it
+// is a mode (see _soloedit_follow_selection) that follows the selection, so the
+// selection highlight and the header toggle already say what it is doing.
+// (MASK_SOLO_BADGE_* forward-declared above, with the other badge helper
+// forward decls.)
 
 static const char *_disable_badge_tooltip(void)
 {
@@ -7125,7 +6964,7 @@ static GtkWidget *_make_solo_status_badge(void)
 }
 
 // --- low-opacity warning badge ----------------------------------------------
-// Opacity can now go all the way to 0 (see the CLAMP in _props_row_apply): the
+// Opacity goes all the way to 0 (see the CLAMP in _props_row_apply): the
 // classic manager's 0.05 floor was there only because a near-invisible shape
 // used to be indistinguishable from a live one in the flat list. This badge is
 // what replaces that floor -- an element or group under the threshold below
@@ -7133,11 +6972,11 @@ static GtkWidget *_make_solo_status_badge(void)
 // at a glance instead of by opening the properties expander.
 #define MASK_LOW_OPACITY_WARN 0.10f
 
-// same reason _solo_badge_draw paints by hand: GtkDarktableIcon never calls
+// same reason _solo_status_badge_draw paints by hand: GtkDarktableIcon never calls
 // gtk_render_background, so a plain icon child would leave the CSS-styled badge
 // background unpainted. dtgtk_cairo_paint_warning fills even-odd (a solid
 // triangle with the exclamation mark knocked out of it), so it needs only the
-// foreground colour -- .mask-lowop-warn supplies an amber one.
+// foreground color -- .mask-lowop-warn supplies an amber one.
 static gboolean _lowop_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
 {
   if(!_badge_is_active(w)) return FALSE;
@@ -7153,7 +6992,7 @@ static gboolean _lowop_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
   // takes precedence over a merely-low-opacity one. Drawn as a plain solid
   // red dot for now -- the switch-off glyph read too close to an open
   // slider handle at this size to be told apart at a glance; a filled disc
-  // in a colour nothing else in the row uses is the placeholder until this
+  // in a color nothing else in the row uses is the placeholder until this
   // gets a considered icon.
   if(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "badge-noop")))
   {
@@ -7188,13 +7027,12 @@ static GtkWidget *_make_lowop_badge(void)
   return badge;
 }
 
-// pack the low-opacity warning badge and the (solo/solo-edit, mutually
+// pack the low-opacity warning badge and the (solo/disable, mutually
 // exclusive, see MASK_SOLO_BADGE_*) status badge into one fixed-size
-// vertical stack ("stacked squares"), meant to be packed into a row/
-// header's own box in place of where the badges used to be packed
-// individually. Because every badge is now always mapped and merely blank
-// while inactive (see the badge-active/badge-status comments above
-// _set_badge_active/_set_solo_status_badge), this stack's own size never
+// vertical stack ("stacked squares") for a row/header's own box. Because
+// every badge is always mapped and merely blank while inactive (see the
+// badge-active/badge-status comments above _set_badge_active/
+// _set_solo_status_badge), this stack's own size never
 // changes as badges turn on and off, so it reserves a constant slot and
 // nothing else in the row shifts. The two squares and the gap between them
 // (.mask-badge-stack in darktable.css) add up to no more than the lead
@@ -7218,7 +7056,7 @@ static GtkWidget *_make_badge_stack(GtkWidget *lowop_badge, GtkWidget *solo_stat
 // blendif_parameters slot directly -- that slot is
 // channels[p->channel].param_channels[in_out] (same indirection every other
 // reader of blendif_parameters in this file goes through, e.g.
-// _blendif_scale_ex/the "changed" tab-label check above). Both input and
+// _blendif_scale_ex). Both input and
 // output sub-ranges are checked: per dt_masks_point_parametric_t's own field
 // comment, a non-empty output range still refines the mask even while its
 // slider is hidden, so it must count too, not just whichever one the UI
@@ -7242,13 +7080,6 @@ gboolean _parametric_form_is_noop(const dt_masks_form_t *const sel)
   return TRUE;
 }
 
-// activate/deactivate one badge from the opacity it watches, and say the
-// actual value in its tooltip -- "low" alone doesn't tell the user whether
-// they are looking at 9% or 0%, and those read very differently on canvas.
-// `is_noop` (an element only, never a group -- see the callers) takes
-// precedence over the opacity check: a parametric channel still at its
-// full/base range contributes nothing regardless of its opacity, so opacity
-// is not even worth reporting once that's already true.
 // Which badge a row should show, from the two values it watches. `is_noop`
 // (an element only, never a group -- see the callers) takes precedence: a
 // parametric channel still at its full/base range contributes nothing
@@ -7262,6 +7093,9 @@ dt_masks_badge_kind_t _model_badge_kind(const float opacity, const gboolean is_n
                                            : DT_MASKS_BADGE_NONE;
 }
 
+// activate/deactivate one badge from the opacity it watches, and say the
+// actual value in its tooltip -- "low" alone doesn't tell the user whether
+// they are looking at 9% or 0%, and those read very differently on canvas.
 // `noop_reason`, when non-NULL, replaces the default parametric wording with a
 // reason of the caller's own. The badge itself is deliberately the same one:
 // both cases are "this element is in the list but contributes nothing", which
@@ -7283,9 +7117,9 @@ static void _update_lowop_badge(GtkWidget *badge,
     _set_badge_active(badge, TRUE,
                       noop_reason
                       ? noop_reason
-                      : _("this channel's range still covers its entire span, so it "
-                          "does not restrict the mask at all yet -- adjust it to "
-                          "have an effect"));
+                      : _("this channel's range still covers its whole span, so it"
+                          " does not restrict the mask yet: narrow the range to have"
+                          " an effect"));
     return;
   }
   g_object_set_data(G_OBJECT(badge), "badge-noop", GINT_TO_POINTER(0));
@@ -7314,11 +7148,10 @@ static void _update_lowop_badge(GtkWidget *badge,
 // lightweight: refresh one shape/parametric row's toggle states and opacity
 // from `pt`'s current state, in place -- no widget is destroyed or reparented.
 // Used by the solo/invert handlers so a single click doesn't tear down and
-// rebuild the whole list, which visibly flashes the panel (most noticeably
-// the docked parametric editor, which gets parked home and re-docked on every
-// rebuild). Now that real mute is gone, DT_MASKS_STATE_HIDDEN only ever
-// reflects a transient solo, so a row stays fully interactive (selectable,
-// draggable, soloable) regardless -- only its opacity dims.
+// rebuild the whole list, which visibly flashes the panel.
+// DT_MASKS_STATE_HIDDEN only reflects a transient solo, so a row stays fully
+// interactive (selectable, draggable, soloable) regardless -- only its
+// opacity dims.
 static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd,
                                     GtkWidget *row_vbox,
                                     const dt_masks_point_group_t *pt)
@@ -7402,9 +7235,9 @@ static void _update_shape_row_state(dt_iop_gui_blend_data_t *bd,
   if(opacity_box) gtk_widget_set_sensitive(opacity_box, !hidden);
   // solo-edit only makes sense on a shape that is actually shown -- a
   // solo-suppressed shape contributes nothing to the composite, so nothing to
-  // edit. There is no persistent solo-edit widget to grey out any more (it is
+  // edit. There is no persistent solo-edit widget to gray out any more (it is
   // a menu item built fresh each time the row's actions menu opens, see
-  // _build_shape_actions_menu); _clear_soloedit_if_hidden below still drops
+  // _build_shape_actions_menu); _model_clear_soloedit_if_hidden still drops
   // an already-active solo-edit for the same reason.
 }
 
@@ -7449,10 +7282,7 @@ static void _refresh_all_shape_rows(dt_iop_module_t *module)
   // hidden (see its own "a hidden shape must not remain the selected one").
   // _update_shape_row_state does not paint the selection -- only the solo
   // class -- so without this the deselected row kept its selected border until
-  // something else forced a rebuild. That gap is exactly what a partial move
-  // off the rebuild path costs: the rebuild used to repaint everything, so
-  // each state an in-place path replaces it for has to be accounted for
-  // explicitly.
+  // something else forced a rebuild.
   _update_row_selection(bd);
 }
 
@@ -7527,10 +7357,10 @@ static void _refresh_lowop_badges(dt_iop_module_t *module)
                           pt->opacity * run_group_opacity, FALSE,
                           raster_broken || _parametric_form_is_noop(sel),
                           raster_broken
-                          ? _("this raster mask has no mask to read: the module it "
-                              "came from is switched off, no longer carries a mask, "
-                              "or is gone -- so this element selects nothing. Restore "
-                              "the source module, or remove this element")
+                          ? _("this raster mask has no mask to read: the module it"
+                              " came from is switched off, no longer carries a mask,"
+                              " or is gone, so this element selects nothing.\n"
+                              "restore the source module, or remove this element")
                           : NULL);
     }
   }
@@ -7543,11 +7373,6 @@ void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
   _refresh_lowop_badges(module);
 }
 
-// keep the canvas's persistent solo highlight (gui->solo_formids) in step with the
-// panel's solo / solo-edit state. Unlike the hover sync (panel_hover_formids,
-// cleared the moment the mouse moves elsewhere), this must survive the user
-// working anywhere else in the panel or canvas, so it lives in its own list,
-// recomputed here whenever solo state changes.
 // what solo edit leaves on the canvas: the isolated shape, or every member of
 // the isolated group. None for an isolated parametric or raster element, which
 // has no outline to show: dt_masks_set_edit_mode_forms then leaves the canvas
@@ -7565,6 +7390,11 @@ static GList *_soloedit_formids(dt_iop_module_t *module)
   return g_list_prepend(NULL, GINT_TO_POINTER(bd->soloedit_formid));
 }
 
+// keep the canvas's persistent solo highlight (gui->solo_formids) in step with the
+// panel's solo / solo-edit state. Unlike the hover sync (panel_hover_formids,
+// cleared the moment the mouse moves elsewhere), this must survive the user
+// working anywhere else in the panel or canvas, so it lives in its own list,
+// recomputed here whenever solo state changes.
 static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -7585,11 +7415,6 @@ static void _sync_solo_canvas_highlight(dt_iop_module_t *module)
   dt_control_queue_redraw_center();
 }
 
-// lightweight: update only the selected-row border on the existing rows, without
-// rebuilding the list (so it is safe to call from a button-press handler, where a
-// full rebuild would destroy the row mid-press and break drag-and-drop). Also
-// mirrors the persistent selection onto the canvas (gui->panel_selected_formid,
-// drawn when nothing is hovered) and asks for a redraw.
 // flexi: mirror the selected shape's group operator into the new-shape operator
 // (defined lower, after the operator helpers).
 static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd);
@@ -7597,9 +7422,8 @@ static void _flexi_new_op_follow_selection(dt_iop_gui_blend_data_t *bd);
 // solo-edit is a mode rather than a per-element action: while it is on, canvas
 // editing follows the list selection, so only the selected shape, or the
 // shapes of the selected group, are shown and grabbable, and clicking down the
-// list walks the isolation along with it. The state it drives (bd->soloedit_formid) and the way it is applied
-// are unchanged -- this only replaces the trigger, so it goes through
-// _toggle_soloedit rather than setting the canvas up itself. The header toggle
+// list walks the isolation along with it. It drives bd->soloedit_formid
+// through _toggle_soloedit rather than setting the canvas up itself. The header toggle
 // is the whole indication that the mode is on; rows carry no solo-edit badge,
 // since the isolated element is by definition the selected one.
 #define MASKS_SOLOEDIT_MODE_CONF "plugins/darkroom/masks/solo_edit_mode"
@@ -7620,7 +7444,7 @@ dt_mask_id_t _model_soloedit_target(dt_iop_gui_blend_data_t *bd)
 {
   if(!_soloedit_mode_is_on()) return INVALID_MASKID;
   // solo and solo-edit stay mutually exclusive: while something is soloed the
-  // mode stands down rather than cancelling the solo behind the user's back
+  // mode stands down rather than canceling the solo behind the user's back
   // (_model_toggle_soloedit would clear it). It re-applies on the next
   // selection change once the solo is off.
   if(dt_is_valid_maskid(bd->solo_formid) || bd->solo_group_key != 0)
@@ -7703,6 +7527,12 @@ static void _soloedit_mode_toggled(GtkGestureSingle *gesture,
   }
 }
 
+// lightweight: update only the selected-row border on the existing rows, without
+// rebuilding the list (so it is safe to call from a button-press handler, where a
+// full rebuild would destroy the row mid-press and break drag-and-drop). Also
+// mirrors the persistent selection onto the canvas (gui->panel_selected_formid,
+// drawn when nothing is hovered), and lets everything that follows the
+// selection follow it
 static void _update_row_selection(dt_iop_gui_blend_data_t *bd)
 {
   if(!bd || !bd->masks_list_box) return;
@@ -7750,9 +7580,6 @@ static GtkWidget *_find_collapsed_cluster_header(GtkWidget *w, const dt_mask_id_
   return _find_tagged(w, "group-formids", _header_has_member, GINT_TO_POINTER(formid));
 }
 
-// canvas -> list selection sync: when a shape is selected on the canvas (click),
-// highlight its row in the flexi mask list. No-op when there is no list
-// (classic mode / no masks).
 // a path of an AI object is selected through its object, whose row stands for
 // it, unless the object is stepped into: its paths then have rows of their own
 dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t formid)
@@ -7777,6 +7604,8 @@ dt_mask_id_t _model_panel_formid_for(dt_iop_module_t *module, const dt_mask_id_t
   return out;
 }
 
+// canvas -> list selection sync: when a shape is selected on the canvas (click),
+// highlight its row in the flexi mask list. No-op when there is no list
 void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   if(!module) return;
@@ -7819,12 +7648,12 @@ void dt_iop_gui_masks_select_form(dt_iop_module_t *module, const dt_mask_id_t fo
   _auto_expand_selected_row(module, id);
 }
 
-// canvas -> list hover sync: transiently highlight the row matching the shape
-// under the cursor, or its group's header as a fallback. An invalid id just
-// clears the hover wash.
 // defined with the rest of the list-row hover machinery further down
 static void _row_hover_wash(dt_iop_gui_blend_data_t *bd, GtkWidget *target);
 
+// canvas -> list hover sync: transiently highlight the row matching the shape
+// under the cursor, or its group's header as a fallback. An invalid id just
+// clears the hover wash.
 void dt_iop_gui_masks_hover_form(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   if(!module) return;
@@ -7942,7 +7771,8 @@ static void _masks_param_inout_toggled(GtkWidget *btn, dt_iop_module_t *module)
   p->in_out = want;
   dt_print(DT_DEBUG_MASKS, "[masks] parametric form %d: show_output=%u", id, want);
   gtk_widget_set_tooltip_text(
-    btn, _("show/hide this channel's expanded controls (full input and output sliders)"));
+    btn, _("show/hide this channel's expanded controls (input and output sliders,"
+           " boost factor)"));
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
 
   // this row's editor is always present now (see _build_param_row_editor) --
@@ -7953,21 +7783,6 @@ static void _masks_param_inout_toggled(GtkWidget *btn, dt_iop_module_t *module)
   dt_masks_param_row_editor_t *ed =
     editor_box ? g_object_get_data(G_OBJECT(editor_box), "param-editor") : NULL;
   if(ed) _update_param_row_display(ed);
-}
-
-// "bypassed": a crossed-out eye. dtgtk_cairo_paint_eye_toggle already draws
-// exactly that, but only strikes the eye through when CPF_ACTIVE is set, and
-// every call site here (the operator menu's pixbuf, the group handle) paints
-// with flags 0 -- so force the flag rather than teach each of them about it.
-static void _paint_masks_bypass(cairo_t *cr,
-                                const gint x,
-                                const gint y,
-                                const gint w,
-                                const gint h,
-                                const gint flags,
-                                void *data)
-{
-  dtgtk_cairo_paint_eye_toggle(cr, x, y, w, h, flags | CPF_ACTIVE, data);
 }
 
 // input channel icon for parametric editor rows (arrow entering module)
@@ -8040,35 +7855,19 @@ static void _paint_param_output(cairo_t *cr,
   cairo_restore(cr);
 }
 
-// operator descriptors: the same icons (and order) the mask manager uses
+// operator icons: the same icons (and order) the mask manager uses
 static const struct
 {
   dt_masks_state_t state;
   DTGTKCairoPaintIconFunc paint;
-  const char *name;
-  const char *tooltip;
 } _masks_ops[] = {
-  { DT_MASKS_STATE_UNION, dtgtk_cairo_paint_masks_union, N_("union"),
-    N_("adds group to stack: highest opacity takes precedence") },
-  { DT_MASKS_STATE_INTERSECTION, dtgtk_cairo_paint_masks_intersection,
-    N_("intersection"),
-    N_("restricts accumulated mask strictly to this group's area") },
-  { DT_MASKS_STATE_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"),
-    N_("subtracts group from accumulated mask, cutting holes where it overlaps") },
-  { DT_MASKS_STATE_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
-    N_("adds opacities together, building up density toward solid coverage") },
-  { DT_MASKS_STATE_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion"),
-    N_("keeps areas covered by either stack or group alone, clearing overlaps") },
-  { DT_MASKS_STATE_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
-    N_("scales down accumulated stack opacity by group opacity") },
-  { DT_MASKS_STATE_OP_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
-    N_("blends group smoothly onto stack without forming harsh boundary seams") },
-  // bypass is last so the loops below (which return the first bit they find)
-  // keep reporting the group's real combining operator; it is a modifier on
-  // top of one of the operators above, not one of them, and every menu that
-  // offers "which operator does this group use" skips it -- only the
-  // between-group chooser for an existing group offers it, as a toggle.
-  { DT_MASKS_STATE_OP_BYPASS, _paint_masks_bypass, N_("disable"), NULL }
+  { DT_MASKS_STATE_UNION, dtgtk_cairo_paint_masks_union },
+  { DT_MASKS_STATE_INTERSECTION, dtgtk_cairo_paint_masks_intersection },
+  { DT_MASKS_STATE_DIFFERENCE, dtgtk_cairo_paint_masks_difference },
+  { DT_MASKS_STATE_SUM, dtgtk_cairo_paint_masks_sum },
+  { DT_MASKS_STATE_EXCLUSION, dtgtk_cairo_paint_masks_exclusion },
+  { DT_MASKS_STATE_MULTIPLY, dtgtk_cairo_paint_masks_multiply },
+  { DT_MASKS_STATE_OP_SCREEN, dtgtk_cairo_paint_tool_blur },
 };
 
 // a group's operator: how it folds its own members together, in list order
@@ -8090,11 +7889,11 @@ static const struct
   { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_tool_blur, N_("screen"),
     N_("soft blend: feathered edges merge smoothly without harsh seams"), "a + b - ab" },
   { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("intersect"),
-    N_("keeps only mutual overlap where all shapes coincide"), N_("min") },
+    N_("keeps only the overlap, where all elements coincide"), N_("min") },
   { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("multiply"),
-    N_("scales shape opacities against each other"), "a * b" },
+    N_("multiplies the elements' opacities: strong only where all of them are"), "a * b" },
   { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("sum"),
-    N_("adds shape opacities together, clipped at full opacity"), "a + b" },
+    N_("adds the elements' opacities together, clipped at full opacity"), "a + b" },
   { DT_MASKS_STATE_WITHIN_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"),
     N_("subtracts every element from the bottom one, cutting holes where they overlap"),
     "a * (1 - b)" },
@@ -8131,17 +7930,12 @@ static gboolean _op_is_bypassed(const int state)
   return (state & DT_MASKS_STATE_OP_BYPASS) != 0;
 }
 
-// the icon for a group's operator chip. A bypassed group shows the bypass glyph
-// instead of its own operator's -- that the group is switched off is the more
-// important thing to read at a glance, and its name keeps showing the operator
-// it will go back to (see _op_name_for_state).
+// the icon of a group's operator, from its point's state. A disabled group
+// keeps its operator's icon: the disabled look is drawn elsewhere
 static DTGTKCairoPaintIconFunc _op_paint_for_state(const int state)
 {
   for(int i = 0; i < (int)(sizeof(_masks_ops) / sizeof(_masks_ops[0])); i++)
-  {
-    if(_masks_ops[i].state == DT_MASKS_STATE_OP_BYPASS) continue;
     if(state & _masks_ops[i].state) return _masks_ops[i].paint;
-  }
   return dtgtk_cairo_paint_masks_union;
 }
 
@@ -8165,22 +7959,19 @@ static GdkPixbuf *_op_pixbuf(DTGTKCairoPaintIconFunc paint)
 }
 
 // "add group": clicking the button opens an operator chooser; picking an
-// operator stages a new (empty) group of that operator on top of the list. The
-// button icon mirrors the operator the next shape will use (the pref read back by
-// dt_masks_get_default_operator), which the staged group also sets.
-// the add-group icon reflects bd->masks_new_group_op -- the operator the *user*
-// last chose for the add-group button. It is deliberately NOT tied to the current
-// selection (the icon only changes when the user picks an operator here), so it
-// reads as "the kind of group the add-group button will create next".
+// operator nests a new, empty group of that operator in the target group (see
+// _stage_new_group). The icon is a fixed "+": it reflects neither the
+// selection nor the operator last chosen
+static void _stash_base_tooltip(GtkWidget *w);
 static void _new_shape_op_update(GtkWidget *btn)
 {
-  // the add-group button is a fixed "+" affordance: clicking it opens the operator
-  // chooser. The icon never reflects the selection or the chosen operator. It is a
-  // filled circle with a cut-out plus.
   dtgtk_button_set_paint(DTGTK_BUTTON(btn), dtgtk_cairo_paint_plus, 0, NULL);
-  gtk_widget_set_tooltip_text(btn, _("add a new group inside the selected group\n"
-                                     "(or at the top of the mask, if none is selected)\n"
-                                     "click to pick its operator"));
+  // _update_add_target_sensitivity appends where the group goes
+  gtk_widget_set_tooltip_text(btn, _("add a new, empty group\n"
+                                     "click to pick its operator\n"
+                                     "right-click for group layout presets, which"
+                                     " build a whole set of groups at once"));
+  _stash_base_tooltip(btn);
   gtk_widget_queue_draw(btn);
 }
 
@@ -8188,7 +7979,7 @@ static void _new_shape_op_update(GtkWidget *btn)
 // relies on).
 static void _stage_new_group(dt_iop_module_t *module, const int within);
 
-// build a labelled "icon + name" menu item with an action target for an operator chooser
+// build a labeled "icon + name" menu item with an action target for an operator chooser
 static GMenuItem *_op_gmenu_item_target(DTGTKCairoPaintIconFunc paint,
                                         const char *name,
                                         const char *tooltip,
@@ -8281,17 +8072,10 @@ static gboolean _model_clear_soloedit_if_hidden(dt_iop_module_t *module,
 }
 
 
-// solo a single element: show only this shape, hiding all the others; toggling
-// off clears every hidden bit (solo is the only thing that ever sets
-// DT_MASKS_STATE_HIDDEN now that real mute has been removed, so there is
-// nothing else to preserve). Triggered from the row's own actions menu (see
-// _build_shape_actions_menu) or by clicking its own solo badge to clear it,
-// with the soloed state shown by a badge next to the name instead of a
-// button icon (see _set_solo_status_badge / _update_shape_row_state).
 // Model half of the element solo toggle -- the state machine only. Returns
-// what the caller must then do to the canvas edit scope. The three isolation
-// modes (solo, solo-edit, and per-element disable) are mutually exclusive by
-// construction here rather than by convention at the call sites.
+// what the caller must then do to the canvas edit scope. Solo and solo edit
+// are mutually exclusive by construction here rather than by convention at
+// the call sites.
 dt_masks_solo_canvas_t _model_toggle_solo_form(dt_iop_module_t *module,
                                                dt_masks_form_t *grp,
                                                const dt_mask_id_t id)
@@ -8331,6 +8115,12 @@ dt_masks_solo_canvas_t _model_toggle_solo_form(dt_iop_module_t *module,
   return canvas;
 }
 
+// solo a single element: show only this shape, hiding all the others; toggling
+// off clears every hidden bit (solo is the only thing that sets
+// DT_MASKS_STATE_HIDDEN, so there is nothing else to preserve). Triggered from
+// the row's own actions menu (see _build_shape_actions_menu) or by clicking its
+// own solo badge to clear it (see _set_solo_status_badge /
+// _update_shape_row_state)
 static void _toggle_solo_form(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -8414,9 +8204,7 @@ static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t 
   // DISABLE-dependent part of a row (status badge, dimmed handle/name/opacity/
   // action icon, insensitive editors) -- a strict superset of what
   // _make_shape_row sets from the same bit at construction time -- so a rebuild
-  // has nothing to add here beyond the visible flash and the re-docking of any
-  // open parametric editor. Mirrors _invert_element, which is the same
-  // one-bit-on-one-point gesture and already took this path.
+  // would add nothing here beyond a visible flash. Same as _invert_element
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   _update_shape_row_state(bd, _masks_row_widget(bd, id), pt);
   _refresh_canvas_edit(module);
@@ -8793,8 +8581,6 @@ static void _masks_group_drag_received(GtkWidget *w,
   if(ok) _queue_masks_list_rebuild(module);
 }
 
-// a single shape dropped onto a group header: move it into that group, adopting
-// the group's operator. It lands at the top of the target run.
 // Model half of the element-onto-group-header drop -- same split as
 // _model_drop_element_onto_element (see its comment). The element joins the
 // target group's run, landing on top of it.
@@ -8957,27 +8743,6 @@ static void _element_row_drag_received(GtkWidget *w,
     _masks_group_drag_received(w, ctx, x, y, sel, info, time, module);
 }
 
-// point the panel's element selection at id -- the refinement / element-
-// properties panels then edit just it -- while still updating the group
-// context (add-target sensitivity, edit mode) the same way clicking the
-// group's header would. A parametric row's own editor is always visible
-// already (see _build_param_row_editor), no separate "open" step, but it
-// still becomes the refinement/properties target. Never deselects: this is
-// the "acting on an element selects it if it wasn't already selected" variant
-// shared by the row's own action controls (see _row_click_press's
-// ctrl+click invert); _select_form below adds the toggle-to-deselect behaviour
-// for a genuine click on the title.
-// same-kind drawn shapes (any kind except parametric/raster, see
-// _pack_group_elements) fold into a collapsed expand/collapse cluster once
-// there are enough of them -- AI mask (DT_MASKS_OBJECT) rows are not
-// exempted from this any more than circle/path/brush rows are. A row inside
-// a *collapsed* cluster is still reachable in the widget tree (a GtkRevealer
-// keeps its child even while hidden), so toggling its own props expander
-// still technically "works", but the user would never see it happen behind
-// a collapsed cluster -- walk up from the row and force that cluster open
-// too, mirroring _element_cluster_toggle's own reveal/arrow/hash-update
-// triplet. A shape outside any cluster has no GtkRevealer ancestor short of
-// masks_list_box, so this is a no-op for the common case.
 // the expand/collapse chevron of the group header for `gcid`, or NULL: group
 // headers are tagged "mask-header", carry their cid under "group-key", and
 // hold their own toggle under "group-expand-toggle" (see the header build).
@@ -9021,7 +8786,12 @@ static void _reveal_nesting(dt_iop_module_t *module, const dt_mask_id_t id)
   _group_expand_enforcing = was;
 }
 
-// reveals all containers (cluster revealer and enclosing group) for a given row
+// reveal every container of a row: its cluster, its group and any nested
+// groups holding it. Same-kind drawn shapes fold into a collapsible cluster
+// once there are enough of them (see _pack_group_elements), and a row inside
+// a *collapsed* one is still in the widget tree (a GtkRevealer keeps its child
+// while hidden), so anything done to it would happen out of sight. Mirrors
+// _element_cluster_toggle's reveal/arrow/hash-update triplet
 static void
 _reveal_containers_for_row(dt_iop_module_t *module, GtkWidget *row, const dt_mask_id_t id)
 {
@@ -9128,7 +8898,7 @@ static void _set_row_expanded(dt_iop_module_t *module,
 // full rebuild, so this enforces the same invariant immediately.
 //
 // Selecting something with nothing to expand -- a group, a raster row while
-// "show opacity slider in expanded elements" is off, an invalid/cleared
+// "use sliders for opacity" is off, an invalid/cleared
 // selection -- is deliberately a no-op here: `id` is only ever a *candidate*
 // replacement, and this bails out before touching anything if `id` itself has
 // no expander, so whatever was expanded before stays open instead of
@@ -9223,7 +8993,7 @@ static void _auto_expand_selected_group(dt_iop_module_t *module,
   if(!_auto_expand_selected()) return;
 
   // a chevron click the user just made collapses the group *and* selects it,
-  // which lands here -- honour the click instead of undoing it. One-shot,
+  // which lands here -- honor the click instead of undoing it. One-shot,
   // cleared by whichever selection arrives first so it can never go stale.
   const dt_mask_id_t collapsed_by_click = bd->masks_group_collapse_click;
   bd->masks_group_collapse_click = INVALID_MASKID;
@@ -9248,17 +9018,6 @@ static void _auto_expand_selected_group(dt_iop_module_t *module,
   bd->masks_last_expanded_group = cid;
 }
 
-// auto_expand=FALSE skips _auto_expand_selected_row's own collapse-the-
-// previous-row/expand-this-one side effect -- used by a right-click (see
-// _row_click_press): that side effect can change row heights (the
-// previously-expanded row collapsing shifts every row below it), and doing
-// that synchronously before the actions menu pops up leaves the menu
-// anchored to where the header *was*, not where it ends up once the reflow
-// lands -- a right-click is opening a context menu for whichever shape it
-// landed on, not asking to see that shape's controls, so there is no reason
-// for it to reflow the list at all. Every other caller still wants the
-// normal interactive behaviour and goes through the plain _set_form_target
-// wrapper below (auto_expand=TRUE).
 // The panel's selection state machine, split out from the widget/canvas
 // effects its callers apply, so the contract below can be tested without a
 // display (see src/tests/unittests/masks/test_flexi_model.c). These decide
@@ -9306,6 +9065,13 @@ dt_masks_panel_sel_t _model_click_group(const dt_iop_gui_blend_data_t *bd,
   return s;
 }
 
+// point the panel's element selection at `id`, and its group selection at the
+// group holding it. Never deselects: that is _select_form's, for a click on
+// the title. auto_expand=FALSE skips _auto_expand_selected_row's
+// collapse-the-previous-row/expand-this-one side effect -- used by a
+// right-click (see _row_click_press): the reflow it causes would leave the
+// actions menu anchored to where the header *was*. Every other caller goes
+// through the plain _set_form_target wrapper below (auto_expand=TRUE)
 static void _set_form_target_ext(dt_iop_module_t *module,
                                  const dt_mask_id_t id,
                                  const gboolean auto_expand)
@@ -9358,16 +9124,10 @@ static void _element_chevron_clicked(dt_iop_module_t *module,
 
 // select an element by clicking its title. Clicking the title of an already-
 // selected element deselects it (toggle), mirroring the group header's own
-// title-click behaviour (see _select_group) -- only the title click routes
+// title-click behavior (see _select_group) -- only the title click routes
 // through here, see _set_form_target above for the select-only variant.
-//
-// Deselecting an element drops back to its GROUP being selected, rather than to
-// nothing. Selection has two levels (group, then element within it), so element
-// and group are not two independent things a click has to clear separately:
-// stepping out of an element lands you in its group, and clicking that group
-// again clears everything. Every state is therefore one click away -- which it
-// was not when this cleared both at once, since re-selecting the group after
-// deselecting an element then took a second click.
+// Deselecting an element drops back to its GROUP being selected (see
+// _model_click_element for the whole contract)
 static void _select_form(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   const dt_masks_panel_sel_t s =
@@ -9506,8 +9266,9 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
     if(uses_here > 1)
       return g_strdup_printf(
         _("used %d times in this mask\n"
-          "this shape is shared: editing it changes every row it appears in,\n"
-          "while each row keeps its own opacity, operator and refinements\n"
+          "this shape is shared: editing it changes every row it\n"
+          "appears in, while each row keeps its own opacity,\n"
+          "inversion and refinements\n"
           "click to select it"),
         uses_here);
     return NULL;
@@ -9515,13 +9276,17 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
   const char *format =
     (form->type & DT_MASKS_OBJECT)
       ? _("linked with %s\n"
-          "this AI object is shared: editing it changes it in every module it is linked with,\n"
-          "while its opacity, operator and refinements stay separate\n"
-          "right-click and pick \"unlink\" to give this module its own copy")
+          "this AI object is shared: editing it changes it in every\n"
+          "module it is linked with, while its opacity, inversion and\n"
+          "refinements stay separate\n"
+          "right-click the row and pick \"unlink\" to give this module\n"
+          "its own copy")
       : _("linked with %s\n"
-          "this shape is shared: editing it changes it in every module it is linked with,\n"
-          "while its opacity, operator and refinements stay separate\n"
-          "right-click and pick \"unlink\" to give this module its own copy");
+          "this shape is shared: editing it changes it in every\n"
+          "module it is linked with, while its opacity, inversion and\n"
+          "refinements stay separate\n"
+          "right-click the row and pick \"unlink\" to give this module\n"
+          "its own copy");
   gchar *tip = g_strdup_printf(format, names->str);
   g_string_free(names, TRUE);
   dt_iop_module_t *next = _linked_next_user(module, fid);
@@ -9661,7 +9426,7 @@ static void
 _start_rename_element(GtkWidget *evbox, dt_iop_module_t *module, const dt_mask_id_t id)
 {
   // same gesture as renaming a module (ctrl+click), for consistency -- see
-  // _iop_plugin_header_button_release.
+  // _iop_plugin_header_released in imageop.c
   GtkWidget *child = gtk_bin_get_child(GTK_BIN(evbox));
   if(child && GTK_IS_ENTRY(child))
   {
@@ -9709,16 +9474,10 @@ _start_rename_element(GtkWidget *evbox, dt_iop_module_t *module, const dt_mask_i
 }
 
 // a deleted formid can be left behind in several bd fields that reference a
-// specific shape by id (element selection, solo, solo-edit) -- none of the
-// delete paths (_delete_single_shape, _group_reset_members, _group_delete,
-// _delete_elements) used to clear these, so after deleting the
-// individually-selected shape, _flexi_refine_follow_selection kept reading a
-// "valid" (dt_is_valid_maskid) but now-nonexistent panel_selected_formid,
-// landing refinement scope on ELEMENT for a shape that no longer resolves --
-// seen as the refinement caption still naming the deleted shape and its
-// controls reading as disabled, even though the group's own add-target
-// selection (panel_selected_group_cid) was unaffected and
-// adding a new shape kept working. Called once per deleted formid.
+// specific shape by id (element selection, solo, solo-edit): left there,
+// _flexi_refine_follow_selection keeps a "valid" but nonexistent
+// panel_selected_formid, and the refinement caption goes on naming the deleted
+// shape. Called by every delete path, once per deleted formid.
 static void _clear_stale_formid_refs(dt_iop_gui_blend_data_t *bd, const dt_mask_id_t id)
 {
   if(!bd || !dt_is_valid_maskid(id)) return;
@@ -9736,10 +9495,29 @@ static void _clear_stale_formid_refs(dt_iop_gui_blend_data_t *bd, const dt_mask_
   if(bd->masks_group_collapse_click == id) bd->masks_group_collapse_click = NO_MASKID;
 }
 
-// delete a single shape from the module's mask group: shared by a right-click
-// on the row's name (_row_click_press) and the "delete" entry in the row's
-// actions menu (_build_shape_actions_menu).
-static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
+// the list holding member point `pt`, found by the point itself rather than by
+// its form id: a form referenced twice has two points, and only `pt` is the
+// one a row stands for
+static dt_masks_form_t *_point_owner_form(dt_masks_form_t *grp,
+                                          const dt_masks_point_group_t *pt)
+{
+  if(g_list_find(grp->points, pt)) return grp;
+  for(GList *l = darktable.develop->forms; l; l = g_list_next(l))
+  {
+    dt_masks_form_t *f = l->data;
+    if(g_list_find(f->points, pt)) return f;
+  }
+  return NULL;
+}
+
+// delete a single shape from the module's mask group: shared by the "delete"
+// entry in the row's actions menu (_build_shape_actions_menu), a nested
+// group's delete, and dt_iop_gui_blend_delete_element (the canvas's delete).
+// `pt` is the member point to remove, as the row that asked holds it; NULL
+// takes the first reference to `id`
+static void _delete_single_shape(dt_iop_module_t *module,
+                                 const dt_mask_id_t id,
+                                 dt_masks_point_group_t *pt)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -9760,9 +9538,18 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
   // survivor. _detach_group_members() touches only grp->points, with no
   // reentry and no destruction cascade. A group emptied this way stays: its
   // marker does.
-  GList *one = g_list_prepend(NULL, GINT_TO_POINTER(id));
-  _detach_group_members(grp, one);
-  g_list_free(one);
+  dt_masks_form_t *owner = pt ? _point_owner_form(grp, pt) : NULL;
+  if(owner)
+  {
+    owner->points = g_list_remove(owner->points, pt);
+    free(pt);
+  }
+  else
+  {
+    GList *one = g_list_prepend(NULL, GINT_TO_POINTER(id));
+    _detach_group_members(grp, one);
+    g_list_free(one);
+  }
   dt_print(DT_DEBUG_MASKS, "[masks] form %d deleted from panel", id);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   _queue_masks_list_rebuild(module);
@@ -9771,7 +9558,7 @@ static void _delete_single_shape(dt_iop_module_t *module, const dt_mask_id_t id)
 
 void dt_iop_gui_blend_delete_element(dt_iop_module_t *module, const dt_mask_id_t id)
 {
-  if(module && module->blend_data) _delete_single_shape(module, id);
+  if(module && module->blend_data) _delete_single_shape(module, id, NULL);
 }
 
 // forward declared here (defined much further down, near _build_shape_actions_menu's
@@ -9783,29 +9570,6 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
                                       GtkWidget *handle,
                                       GtkWidget *evbox);
 
-// unified press/release handlers for a row's three "non-specific" click
-// surfaces: the lead icon (handle), the name, and the row's own background
-// (covering every gap between actual controls, e.g. the opacity slider) --
-// connected identically to all three (see _make_shape_row) so a click has the
-// exact same effect no matter which of the three it lands on, as long as it
-// isn't a genuinely specific interactive widget in its own right (a slider,
-// a colour picker, a badge, ...), each of which keeps its own distinct
-// meaning. `w` (whichever of the three received the event) only needs its own
-// "formid" tag to work here -- "handle-widget" and "name-evbox" are looked up
-// from it too (each of the three carries all three tags, including a
-// self-reference on whichever one it itself is, see _make_shape_row):
-//  * ctrl+click:         rename
-//  * shift+click:        toggle this element's properties/expanded view
-//  * right-click:        open the actions menu
-//  * plain click/release: select (toggles off if already selected)
-//  * double-click:       step into an AI object's paths, or out of them
-// double-click-to-solo used to live here too (see _group_header_press's own
-// comment for groups) -- dropped for the same reason: the double-click's
-// first press already ran a full press/release cycle through
-// _row_click_release's toggle-to-deselect branch, so by the time the second
-// press arrived the element read as deselected even though it was the solo
-// target, and force-selecting it back afterward was never fully reliable.
-// Solo an element via its own solo badge, or the row's actions menu, instead.
 // once the right-click actions menu closes -- an item was chosen, or the
 // user clicked away/pressed Escape -- auto-expand the row it was opened on,
 // if it's still selected and the option is on. Deferred to here rather than
@@ -9849,6 +9613,26 @@ static void _toggle_object_paths(dt_iop_module_t *module,
   _step_object(module, inside ? INVALID_MASKID : id);
 }
 
+// unified press/release handlers for a row's three "non-specific" click
+// surfaces: the lead icon (handle), the name, and the row's own background
+// (covering every gap between actual controls, e.g. the opacity slider) --
+// connected identically to all three (see _make_shape_row) so a click has the
+// exact same effect no matter which of the three it lands on, as long as it
+// isn't a genuinely specific interactive widget in its own right (a slider,
+// a color picker, a badge, ...), each of which keeps its own distinct
+// meaning. `w` (whichever of the three received the event) only needs its own
+// "formid" tag to work here -- "handle-widget" and "name-evbox" are looked up
+// from it too (each of the three carries all three tags, including a
+// self-reference on whichever one it itself is, see _make_shape_row):
+//  * ctrl+click:         rename
+//  * shift+click:        toggle this element's properties/expanded view
+//  * right-click:        open the actions menu
+//  * plain click/release: select (toggles off if already selected)
+//  * double-click:       step into an AI object's paths, or out of them
+// There is no double-click-to-solo: the double-click's first press already
+// ran a full press/release cycle through _row_click_release's
+// toggle-to-deselect branch, so the element read as deselected by the second
+// press
 static gboolean
 _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
 {
@@ -9856,7 +9640,7 @@ _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   // a fresh press always starts a new interaction -- clear any stale flag a
   // previous press's drag-begin set but whose release never arrived to
-  // consume (e.g. a drag cancelled by Escape), so it cannot wrongly swallow
+  // consume (e.g. a drag canceled by Escape), so it cannot wrongly swallow
   // this press's own eventual release (see _row_drag_begin / masks_row_click_handled).
   bd->masks_row_click_handled = FALSE;
   if(bd->masks_skip_group_select_release_time != ev->time)
@@ -9886,9 +9670,6 @@ _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
   }
   if(ev->type == GDK_BUTTON_PRESS && ev->button == GDK_BUTTON_SECONDARY)
   {
-    // not a direct delete any more, so a stray right-click cannot destroy a
-    // shape with no confirmation -- delete is one of the actions menu's own
-    // items instead (see _build_shape_actions_menu).
     // auto_expand=FALSE: this selects the right-clicked shape (so the menu's
     // own actions target the right one) without also auto-expanding its
     // controls -- see _set_form_target_ext's own comment for why a right-
@@ -9913,12 +9694,10 @@ _row_click_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
   return FALSE;
 }
 
-// there is no longer a visible chevron button for a row's (or group's) own
-// properties/expanded-view editor -- shift+click on any of a row's own
-// non-specific click surfaces toggles it instead, by driving the
-// still-alive-but-hidden toggle button the row's handle was tagged with at
-// build time (see _make_shape_row / the group header block's "expand-toggle"
-// data). No-op if untagged.
+// shift+click on any of a row's non-specific click surfaces toggles its
+// expander, by driving the chevron the row's handle was tagged with at build
+// time (see _make_shape_row / the group header block's "expand-toggle" data).
+// No-op if untagged
 static void _toggle_expand_widget(GtkWidget *src)
 {
   GtkWidget *btn = g_object_get_data(G_OBJECT(src), "expand-toggle");
@@ -9960,12 +9739,9 @@ static void _row_drag_begin(GtkWidget *w, GdkDragContext *dc, dt_iop_module_t *m
 // unconsumed button-release-event bubbles from whichever of the inner two
 // (handle/evbox) received it up through its ancestors -- including
 // row_evbox, which has this identical handler attached too. Returning FALSE
-// here used to let that second, bubbled invocation run the same selection
-// logic again with `w` now pointing at row_evbox, toggling the row right
-// back off in the same click: this is why clicking the lead icon or the name
-// silently did nothing while clicking the row's own empty background (which
-// receives the event directly, with nothing above it to bubble the toggle
-// into a second time) worked fine.
+// would let that second, bubbled invocation run the same selection logic
+// again with `w` now pointing at row_evbox, toggling the row right back off
+// in the same click
 static gboolean
 _row_click_release(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
 {
@@ -10025,15 +9801,6 @@ static GtkWidget *_row_widget_for_hover(GtkWidget *w)
   return NULL;
 }
 
-// list -> canvas hover: hovering a mask-list row highlights its shape on the
-// canvas; hovering a cluster header highlights every member shape. The hover
-// target ids are carried on the event box as "hover-formids" (a one-element list
-// for a single row, the whole member set for a cluster header). The box has a
-// real window so crossings into its child buttons report GDK_NOTIFY_INFERIOR,
-// which we ignore so the hover stays stable across the row's controls.
-// Also drives the row's own hover wash in the list (mirroring the canvas ->
-// list sync in dt_iop_gui_masks_hover_form), so hovering a row highlights it
-// exactly like hovering its shape on the canvas does.
 // the row the wash is on, weak since a list rebuild destroys it. Taking it off
 // that one row beats walking the list for every row a scroll passes over, and
 // the walk is only needed when this is unknown -- a leave is not always
@@ -10529,14 +10296,6 @@ static void _append_tooltip_hint(GtkWidget *w, const char *hint)
   g_free(tt);
 }
 
-// re-append (or drop) the disabled-state hint on a widget previously stashed
-// with _stash_base_tooltip, matching its current sensitivity
-static void
-_restate_tooltip_hint(GtkWidget *w, const gboolean has_target, const char *no_target_hint)
-{
-  _append_tooltip_hint(w, has_target ? "" : no_target_hint);
-}
-
 // Which group a newly added element will land in.
 //
 // Normally the explicit panel selection. But when the mask has exactly one
@@ -10578,7 +10337,7 @@ dt_masks_add_target_t _resolve_add_target(dt_iop_module_t *module)
 
 // whole-mask (global scope) refinement is always reachable: it operates on
 // the final composited mask regardless of how many shapes exist, so it stays
-// enabled unconditionally. A GROUP/EMPTY_GROUP/ALL_SHAPES-scoped refinement,
+// enabled unconditionally. A GROUP- or ELEMENT-scoped refinement,
 // by contrast, is only meaningful when its target actually has a member to
 // refine -- an empty staged group, or a real group whose run has no member
 // formids, contributes nothing to the mask, so refining it would just be a
@@ -10601,11 +10360,6 @@ static void _update_refine_sensitivity(dt_iop_module_t *module)
     active = ids != NULL;
     g_list_free(ids);
   }
-  else if(bd->masks_refine_scope_kind == REFINE_SCOPE_ALL_SHAPES)
-  {
-    dt_masks_form_t *grp = _module_mask_group(module);
-    active = grp && grp->points != NULL;
-  }
   else if(bd->masks_refine_scope_kind == REFINE_SCOPE_ELEMENT)
   {
     // the targeted element can vanish (deleted) without the scope itself
@@ -10626,9 +10380,12 @@ static void _update_refine_sensitivity(dt_iop_module_t *module)
   if(bypassed) active = FALSE;
 
   if(bd->masks_refine_section_label)
-    _restate_tooltip_hint(bd->masks_refine_section_label, active,
-                          _("\nrefinements cannot be applied to an empty group -- to "
-                            "refine the whole image, deselect the group."));
+    _append_tooltip_hint(bd->masks_refine_section_label,
+                         active     ? ""
+                         : bypassed ? _("\n(bypassed for this target: the eye on the right"
+                                        " brings it back)")
+                                    : _("\n(the target is empty, so there is nothing to"
+                                        " refine: deselect it to refine the whole mask)"));
 
   if(bd->masks_feathering_guide_combo)
     gtk_widget_set_sensitive(bd->masks_feathering_guide_combo, active);
@@ -10655,12 +10412,19 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
   // none selected -- disables the controls.
   const dt_masks_add_target_t target = _resolve_add_target(module);
   const gboolean has_target = target.valid;
-  // say where the element will land, not just when it cannot land anywhere
-  const char *hint = !has_target
-                       ? _("\n(select a group first: there is more than one, so where"
-                           " the new element goes is ambiguous)")
-                     : target.implicit ? _("\n(added to the only group)")
-                                       : _("\n(added to the selected group)");
+  // say where the element will land, not just when it cannot land anywhere. A
+  // mask with no group form yet has no name to give: its first element makes it
+  dt_masks_form_t *grp = _module_mask_group(module);
+  gchar *group_name = has_target && grp && dt_is_valid_maskid(target.cid)
+                        ? _masks_import_group_label(module, grp, target.cid)
+                        : NULL;
+  gchar *hint = !has_target
+                  ? g_strdup(_("\n(select a group first: the mask has more than one)"))
+                : !group_name
+                  ? g_strdup(_("\n(added to the only group)"))
+                : target.implicit
+                  ? g_strdup_printf(_("\n(added to the only group, %s)"), group_name)
+                  : g_strdup_printf(_("\n(added to the selected group, %s)"), group_name);
   for(int n = 0; n < DEVELOP_MASKS_NB_SHAPES; n++)
     if(bd->masks_shapes[n])
     {
@@ -10692,6 +10456,17 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     g_free(ch_hint);
   }
 
+  // a new group goes where a new element would, and with no target into the
+  // whole mask (see _stage_new_group), so it is never disabled
+  if(bd->masks_new_op)
+  {
+    gchar *group_hint =
+      group_name ? g_strdup_printf(_("\n(nested in %s)"), group_name)
+                 : g_strdup(_("\n(nested in the whole mask)"));
+    _append_tooltip_hint(bd->masks_new_op, group_hint);
+    g_free(group_hint);
+  }
+
   // import also adds elements to the target group, so it needs the same
   // target and the same explanation when there isn't one
   if(bd->masks_import_btn)
@@ -10704,6 +10479,8 @@ static void _update_add_target_sensitivity(dt_iop_module_t *module)
     gtk_widget_set_tooltip_text(bd->masks_import_btn, tt);
     g_free(tt);
   }
+  g_free(hint);
+  g_free(group_name);
 
   // refresh the refinement scope combo: forms may have been added/removed/renamed,
   // or the selected group may have changed
@@ -10878,19 +10655,12 @@ int _group_ord_max_for_within(dt_iop_module_t *module, const int mode)
   return mx;
 }
 
-// drop remembered numbers whose group no longer exists, so a series can restart
-// at 1 once emptied (and the table does not grow across edits/images)
-// a deleted/reshaped group can leave bd->solo_group_key pointing at a cid
-// that no longer identifies any real run (see _clear_stale_formid_refs's own
-// comment for the formid-keyed siblings of this same bug class -- solo_group_key
-// is cid-keyed, not formid-keyed, so it needs its own check). Left stale, every
-// row/header in the panel keeps reading "some group is soloed, and it isn't
-// me" (see the dt_is_valid_maskid(bd->solo_formid) || bd->solo_group_key != 0
-// dimming checks in both _pack_empty_group_header and the real-group header
-// build), dimming everything to 45% opacity including a freshly emptied
-// group's own header -- visible as a hard opacity seam against its own,
-// undimmed pending-row body. Self-healing at rebuild (like
-// _prune_group_ordinals) rather than chasing every mutation call site.
+// a deleted group can leave bd->solo_group_key pointing at a cid that no
+// longer identifies any group (the formid-keyed siblings are cleared by
+// _clear_stale_formid_refs). Left stale, every row and header keeps reading
+// "some group is soloed, and it isn't me" and dims to 45% opacity.
+// Self-healing at rebuild (like _prune_group_ordinals) rather than chasing
+// every mutation call site
 void _prune_stale_solo(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -10900,6 +10670,8 @@ void _prune_stale_solo(dt_iop_module_t *module)
   if(!pt || !dt_masks_point_is_marker(pt)) bd->solo_group_key = 0;
 }
 
+// drop remembered numbers whose group no longer exists, so a series can restart
+// at 1 once emptied (and the table does not grow across edits/images)
 void _prune_group_ordinals(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -10996,9 +10768,8 @@ static void _stage_new_group(dt_iop_module_t *module, const int within)
 }
 
 // select a real group by its header. The selected group is where the next drawn
-// shape lands (it adopts the group's operator) and what the refinement controls
-// target. Clicking the already selected group deselects it (selection toggles),
-// so the user can reach a state with no group selected.
+// shape lands and what the refinement controls target. Clicking the already
+// selected group selects the mask's own group instead (see _model_click_group)
 static void
 _select_group(dt_iop_module_t *module, const dt_mask_id_t cid, const int op_state)
 {
@@ -11012,11 +10783,10 @@ _select_group(dt_iop_module_t *module, const dt_mask_id_t cid, const int op_stat
 // core of group selection: point the panel's "where do new elements go" target
 // at the group cid (INVALID_MASKID to clear it), then update the header/row
 // highlight and the dependent controls (add-element sensitivity, refinement
-// scope combo) in place -- no list rebuild, so this never disturbs the GTK
-// focus chain and never triggers the containing scrolled viewport to
-// auto-scroll to a re-created widget (see _select_group / _select_form /
-// _param_enter_edit, all of which funnel group selection through here instead
-// of _build_masks_list).
+// scope) in place -- no list rebuild, so this never disturbs the GTK focus
+// chain and never triggers the containing scrolled viewport to auto-scroll to
+// a re-created widget (see _select_group / _select_form, which funnel group
+// selection through here instead of _build_masks_list).
 // Selecting anything but the AI object stepped into steps out of it, as a click
 // outside it on the canvas does; keep_entered is the element an element
 // selection is on its way to, which may be that object.
@@ -11148,10 +10918,6 @@ static guint _form_kind(const dt_masks_form_t *form)
          );
 }
 
-// manual collapse/expand: the disclosure triangle sits after the label so the
-// operator/invert/hide controls stay aligned with the per-row layout. The
-// clickable label area carries the body revealer, the triangle widget and the
-// group key (so the expanded state survives a rebuild).
 /* Detach every listed member from the module's mask group, and nothing else.
 
    This is deliberately NOT dt_masks_form_remove(module, grp, form). That
@@ -11168,11 +10934,10 @@ static guint _form_kind(const dt_masks_form_t *form)
    contrary to _group_reset_members' purpose, which is to KEEP the group.
 
    Detaching leaves the shapes in dev->forms, unused, exactly as the upstream
-   detach branch does; "delete unused shapes" purges them (see
-   _masks_import_cleanup_unused). Callers record one masks history item and
-   trigger one rebuild afterwards, so the per-removal history/update work that
-   dt_masks_form_remove does (and that masks_rebuild_suppressed existed to mask)
-   is not needed either. */
+   detach branch does; the import menu's "clean up unused shapes" purges them
+   (see _masks_import_cleanup_action). Callers record one masks history item
+   and trigger one rebuild afterwards, so the per-removal history/update work
+   that dt_masks_form_remove does is not needed either. */
 static void _detach_group_members(dt_masks_form_t *grp, GList *fids)
 {
   // one point per listed id: a form listed twice is referenced twice
@@ -11237,8 +11002,6 @@ static void _delete_elements(dt_iop_module_t *module, GList *fids)
   _refresh_canvas_edit(module);
 }
 
-// "delete group": the group goes, and its elements with it. The last group
-// stays: the mask always has one
 // the nested group form whose only group is `cid`, or NULL: deleting that
 // group deletes the nested group, the element its holder shows it as
 static dt_masks_form_t *_sole_nested_group(dt_masks_form_t *grp, const dt_mask_id_t cid)
@@ -11248,6 +11011,8 @@ static dt_masks_form_t *_sole_nested_group(dt_masks_form_t *grp, const dt_mask_i
   return dt_masks_get_from_id(darktable.develop, mk->parentid);
 }
 
+// "delete group": the group goes, and its elements with it. The last group
+// stays: the mask always has one
 static void _group_delete(dt_iop_module_t *module, const dt_mask_id_t cid)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -11256,7 +11021,7 @@ static void _group_delete(dt_iop_module_t *module, const dt_mask_id_t cid)
   if(nested)
   {
     if(bd->panel_selected_group_cid == cid) bd->panel_selected_group_cid = INVALID_MASKID;
-    _delete_single_shape(module, nested->formid);
+    _delete_single_shape(module, nested->formid, NULL);
     return;
   }
   if(!grp || _level_group_count(grp, cid) <= 1) return;
@@ -11302,13 +11067,9 @@ static void _build_group_actions_menu(GtkWidget *anchor,
 // start inline rename on a group's title: swap `lbl_box`'s label child for an
 // entry, same gesture as renaming an element (ctrl+click, see
 // _start_rename_element) -- but the typed text names the group (see
-// _group_rename_commit). Shared by ctrl+click on the header background/title
-// (_group_header_press) and ctrl+click on the operator handle
-// (_group_op_press): ctrl+click is now the one shared "rename" gesture
-// regardless of which of a header's non-specific-widget areas it lands on
-// (icon, title, or the empty gaps between them), matching the same rule
-// shift+click (toggle properties) and right-click (open the actions menu)
-// already follow.
+// _group_rename_commit). Shared by ctrl+click anywhere on the header that is
+// not a control of its own (_group_header_press) and the "rename" entry of
+// the group's actions menu
 static void _start_group_rename(GtkWidget *lbl_box,
                                 dt_iop_module_t *module,
                                 const dt_mask_id_t cid)
@@ -11325,7 +11086,7 @@ static void _start_group_rename(GtkWidget *lbl_box,
   }
   // renaming acts on the group, so it should select it too (never deselect --
   // same select-only rule every other action control follows, see
-  // _update_add_target_sensitivity) and the selection should still be there
+  // _set_form_target) and the selection should still be there
   // once the rename commits: neither commit path touches selection, and
   // committing only ever rebuilds the list (which preserves it), so
   // selecting here is the one place this needs to happen.
@@ -11378,14 +11139,10 @@ static void _start_group_rename(GtkWidget *lbl_box,
 static gboolean
 _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
 {
-  // double-click used to solo the whole group here, but the preceding single
-  // click's own release always ran first (selecting/deselecting the group)
-  // before the second press could be recognized as a double-click, so
-  // double-clicking an already-selected group reliably deselected it right
-  // as it was soloed -- force-selecting afterward (tried first) didn't fully
-  // resolve it either. Dropped rather than keep chasing it: a group can
-  // still be soloed via its "solo" menu item (see _build_group_op_menu) or
-  // the solo badge itself once active (see _solo_badge_group_press).
+  // no double-click-to-solo: the first click's release always runs first,
+  // (de)selecting the group before the second press is recognized. A group is
+  // soloed from its actions menu (see _build_group_actions_menu), and the solo
+  // cleared from its badge (see _solo_badge_group_press).
   // rename and the actions menu select the group first, as they do an element
   // (see _row_click_press), so the highlight shows what they act on
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -11421,9 +11178,8 @@ _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
 // takes the select-only branch instead: acting on the group selects it if it
 // wasn't already selected, but never deselects it -- only a click on the title
 // itself toggles selection off (see _select_group). Shift+click has no special
-// meaning here any more: a group's opacity is always visible inline in the
-// header now (see the header build below), so it just falls through to a
-// plain select, same as an unmodified click.
+// meaning here: it falls through to a plain select, same as an unmodified
+// click.
 static gboolean
 _group_header_release(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
 {
@@ -11481,13 +11237,6 @@ _group_block_release(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   return _group_header_release(w, e, module);
 }
 
-// solo a whole group: show only its member shapes, hiding all others.
-// Toggling off restores every hidden bit (solo is the only thing that ever
-// sets DT_MASKS_STATE_HIDDEN now that real mute has been removed). Used to be
-// the ctrl+click branch of a combined mute/solo "power" button; now triggered
-// from the group's own "solo" menu item (see _build_group_op_menu) or by
-// clicking its own solo badge to clear it, with the soloed state shown by a
-// badge next to the label instead of a button icon.
 // Model half of the group solo toggle; mirrors _model_toggle_solo_form.
 dt_masks_solo_canvas_t _model_toggle_solo_group(dt_iop_module_t *module,
                                                 dt_masks_form_t *grp,
@@ -11521,6 +11270,10 @@ dt_masks_solo_canvas_t _model_toggle_solo_group(dt_iop_module_t *module,
   return canvas;
 }
 
+// solo a whole group: show only its member shapes, hiding all others.
+// Toggling off restores every hidden bit (solo is the only thing that sets
+// DT_MASKS_STATE_HIDDEN). Triggered from the group's actions menu (see
+// _build_group_actions_menu) or by clicking its solo badge to clear it
 static void _toggle_solo_group(dt_iop_module_t *module, const dt_mask_id_t cid)
 {
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -11547,10 +11300,9 @@ static void _toggle_solo_group(dt_iop_module_t *module, const dt_mask_id_t cid)
   _soloedit_follow_selection(module->blend_data);
 }
 
-// same idea as _solo_badge_form_press: the group badge only shows solo (never
-// solo-edit, groups have no such concept) while its group is the soloed one,
-// so a click while it shows solo always means "un-solo". Must check the
-// status first (see _solo_badge_form_press).
+// same idea as _solo_badge_form_press: the group badge shows solo while its
+// group is the soloed one and disable while it is bypassed, and a click clears
+// whichever it shows. Must check the status first (see _solo_badge_form_press)
 static gboolean
 _solo_badge_group_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
 {
@@ -11569,8 +11321,8 @@ _solo_badge_group_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module
   return FALSE;
 }
 
-// set a group's within-group combine mode, on its marker. Union (no within
-// bit) ⇒ byte-identical for groups that never touch this.
+// set a group's within-group combine mode, on its marker. Union is no within
+// bit, so a group that never touches this stays byte-identical
 static void
 _within_mode_apply(dt_iop_module_t *module, dt_mask_id_t cid, const dt_masks_state_t within)
 {
@@ -11620,9 +11372,9 @@ static void _within_action(GSimpleAction *action, GVariant *parameter, gpointer 
   if(module) _within_mode_apply(module, cid, within);
 }
 
-// build and show the within-group combine chooser (union / screen /
-// intersect) for a group. Shared by a direct click on the chooser button and
-// the "change within-group mode" shortcut.
+// build and show the within-group operator chooser (every _within_modes
+// entry) for a group. Shared by a direct click on the chooser button and the
+// "change operator of selected group" shortcut
 static void _build_within_menu(GtkWidget *anchor, dt_iop_module_t *module, const dt_mask_id_t cid)
 {
   g_object_set_data(G_OBJECT(anchor), "module", module);
@@ -11683,10 +11435,9 @@ _group_op_apply(dt_iop_module_t *module, dt_mask_id_t cid, const dt_masks_state_
   else
     marker->state = (marker->state & ~DT_MASKS_STATE_OP) | op;
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  // deferred: also reachable directly from the group's own operator-handle
-  // press handler (_group_op_press's ctrl/shift-click), still mid-dispatch on
-  // that widget -- see _delete_elements above for why this must not be
-  // synchronous
+  // deferred: also reachable from the solo badge's own press handler
+  // (_solo_badge_group_press), still mid-dispatch on that widget -- see
+  // _delete_elements above for why this must not be synchronous
   _queue_masks_list_rebuild(module);
   _refresh_canvas_edit(module);
 }
@@ -11701,27 +11452,13 @@ static void _merge_group_down(dt_iop_module_t *module, const dt_mask_id_t cid)
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd->panel_selected_group_cid == cid) bd->panel_selected_group_cid = INVALID_MASKID;
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  // deferred: also reachable directly from the group's own operator-handle
-  // press handler (_group_op_press's shift-click), same reasoning as
-  // _group_op_apply above
+  // deferred, same reasoning as _group_op_apply above
   _queue_masks_list_rebuild(module);
 }
 
-// the group header's drag handle doubles as its operator chip: shift+click
-// merges the group down into the group below it (first-class groups). A
-// plain click is left alone here (returns FALSE) so the handle's own drag
-// source can still arm -- the operator chooser it used to open immediately
-// opens instead on the matching release (see _group_op_release), once it is
-// known no drag actually happened. That chooser is also where both invert
-// actions below live now (see _build_group_op_menu) -- there used to be a
-// ctrl+click shortcut straight to _invert_group_members here, dropped once
-// the menu offered both invert actions explicitly (a bare ctrl+click could
-// only ever reach one of the two, and picking which one silently would have
-// been confusing now that they mean different things).
-//
 // flip every member's own inversion bit independently (not a group-wide state
 // to set/clear): ON, OFF, ON becomes OFF, ON, OFF. A one-shot action, not a
-// persistent "group is inverted" mode -- shared by the operator chooser's
+// persistent "group is inverted" mode -- shared by the actions menu's
 // "invert all elements" entry and the "invert selected group" shortcut. Not
 // the same operation as _group_toggle_output_invert below: inverting every
 // member and folding is mathematically different from folding and then
@@ -11782,13 +11519,11 @@ static void _group_opacity_update_tooltip(GtkWidget *slider, const float value)
 }
 
 // pressing/dragging the slider is, like every other action control in a
-// group header (the operator handle, the old properties chevron), not a
-// click on the title -- it must not be able to deselect an already-selected
-// group. A bauhaus widget's own click handling does not consume the
-// underlying button-press-event, which still bubbles to hdr_evbox's press/
-// release afterwards (see _group_op_press for the same reasoning applied to
-// the operator handle), so arm the same select-only guard here before that
-// happens.
+// group, not a click on the title -- it must not be able to deselect an
+// already-selected group. A bauhaus widget's own click handling does not
+// consume the underlying button-press-event, which still bubbles to
+// hdr_evbox's press/release afterwards, so arm the same select-only guard
+// here before that happens.
 static gboolean
 _group_opacity_press(GtkWidget *w, GdkEventButton *ev, dt_iop_module_t *module)
 {
@@ -12056,6 +11791,16 @@ static void _simplify(dt_iop_module_t *module, const dt_mask_id_t cid)
   _refresh_canvas_edit(module);
 }
 
+// a menu entry with a tooltip (see _popover_menu_apply_tooltips in gui/gtk.c)
+static void _menu_append_tip(GMenu *menu, const char *label, const char *action,
+                             const char *tooltip)
+{
+  GMenuItem *it = g_menu_item_new(label, action);
+  g_menu_item_set_attribute(it, "tooltip", "s", tooltip);
+  g_menu_append_item(menu, it);
+  g_object_unref(it);
+}
+
 // the "compose" entry opening `compose`, which it takes
 static void _append_compose_submenu(GMenu *section, GMenu *compose)
 {
@@ -12163,9 +11908,13 @@ static void _build_group_actions_menu(GtkWidget *anchor,
 
   // visibility
   GMenu *sec_vis = g_menu_new();
-  g_menu_append(sec_vis, _("disable"), "masks_group_act.disable");
+  _menu_append_tip(sec_vis, _("disable"), "masks_group_act.disable",
+                   _("switch this group off: it adds nothing to the mask,\n"
+                     "and keeps its elements and settings for when it is back on"));
   if(!bypassed && has_members)
-    g_menu_append(sec_vis, _("solo"), "masks_group_act.solo");
+    _menu_append_tip(sec_vis, _("solo"), "masks_group_act.solo",
+                     _("use only this group, to see what it contributes\n"
+                       "click its badge, or this entry again, to go back"));
   g_menu_append_section(menu, _("visibility"), G_MENU_MODEL(sec_vis));
   g_object_unref(sec_vis);
 
@@ -12173,8 +11922,12 @@ static void _build_group_actions_menu(GtkWidget *anchor,
   {
     // mask operations
     GMenu *sec_ops = g_menu_new();
-    g_menu_append(sec_ops, _("invert output"), "masks_group_act.invert_output");
-    g_menu_append(sec_ops, _("invert all elements"), "masks_group_act.invert_elems");
+    _menu_append_tip(sec_ops, _("invert output"), "masks_group_act.invert_output",
+                     _("invert what the group gives, once its elements are combined.\n"
+                       "stays on until chosen again"));
+    _menu_append_tip(sec_ops, _("invert all elements"), "masks_group_act.invert_elems",
+                     _("flip the invert of each element on its own, before they\n"
+                       "are combined: a different mask from inverting the output"));
     if(_restructurable_group(module, cid))
     {
       GMenu *compose = _compose_menu("masks_group_act.compose", marker->state, FALSE);
@@ -12194,16 +11947,29 @@ static void _build_group_actions_menu(GtkWidget *anchor,
   // edit
   GMenu *sec_edit = g_menu_new();
   if(cid != _mask_group_cid(module))
-    g_menu_append(sec_edit, _("rename"), "masks_group_act.rename");
+    _menu_append_tip(sec_edit, _("rename"), "masks_group_act.rename",
+                     _("give this group a name of its own\n"
+                       "ctrl+click on the group header does the same"));
   if(!is_base && !bypassed && has_members)
-    g_menu_append(sec_edit, _("merge elements into group below"), "masks_group_act.merge_down");
+    _menu_append_tip(sec_edit, _("merge elements into group below"),
+                     "masks_group_act.merge_down",
+                     _("this group goes, and its elements join the group below,\n"
+                       "combined with that group's operator and settings"));
   // the mask is its own top group, so emptying that one empties the mask:
   // "empty group" would name a group the user never sees as one
   if(has_members)
-    g_menu_append(sec_edit,
-                  cid == _mask_group_cid(module) ? _("reset mask") : _("empty group"),
-                  "masks_group_act.empty");
-  if(deletable) g_menu_append(sec_edit, _("delete group"), "masks_group_act.delete");
+  {
+    if(cid == _mask_group_cid(module))
+      _menu_append_tip(sec_edit, _("reset mask"), "masks_group_act.empty",
+                       _("remove every element and group from the mask"));
+    else
+      _menu_append_tip(sec_edit, _("empty group"), "masks_group_act.empty",
+                       _("remove this group's elements, keeping the group\n"
+                         "with its operator, settings and name"));
+  }
+  if(deletable)
+    _menu_append_tip(sec_edit, _("delete group"), "masks_group_act.delete",
+                     _("remove this group and every element in it"));
   g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
   g_object_unref(sec_edit);
 
@@ -12211,11 +11977,6 @@ static void _build_group_actions_menu(GtkWidget *anchor,
   g_object_unref(menu);
 }
 
-// solo-edit a single shape: only its outline/handles are editable on the
-// canvas, while the full mask still computes so every shape's effect is still
-// visible in the mask overlay. Toggling off restores editing of the whole group.
-// Shared by the row's solo-edit toggle button and the "toggle solo-edit for
-// current shape" shortcut.
 // Model half of the solo-edit toggle; the third corner of the mutual
 // exclusivity enforced by _model_toggle_solo_form / _model_toggle_solo_group.
 dt_masks_solo_canvas_t _model_toggle_soloedit(dt_iop_module_t *module,
@@ -12243,6 +12004,11 @@ dt_masks_solo_canvas_t _model_toggle_soloedit(dt_iop_module_t *module,
   return DT_MASKS_SOLO_CANVAS_ONE;
 }
 
+// solo-edit a single element or group: only its outlines/handles are editable
+// on the canvas, while the full mask still computes so every shape's effect is
+// still visible in the mask overlay. Toggling off restores editing of the whole
+// mask. Driven by the solo edit mode following the selection (see
+// _soloedit_follow_selection)
 static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -12282,7 +12048,7 @@ static void _clear_drop_classes(GtkWidget *f)
 }
 
 // clear the drop feedback from `f` *and its siblings*. The insertion line is
-// drawn on a canonical neighbour rather than always on the hovered group (see
+// drawn on a canonical neighbor rather than always on the hovered group (see
 // _canonical_drop_frame), so the widget wearing the class is not necessarily
 // the one a later motion/leave event arrives on -- clearing only `f` would
 // strand a line on the group next door.
@@ -12320,7 +12086,7 @@ static GtkWidget *_canonical_drop_frame(GtkWidget *f, gboolean *above)
   GtkWidget *parent = gtk_widget_get_parent(f);
   if(!GTK_IS_CONTAINER(parent)) return f;
 
-  // Find the neighbour by on-screen geometry, not by position in the child
+  // Find the neighbor by on-screen geometry, not by position in the child
   // list. The list packs blocks with gtk_box_pack_end, and reasoning about what
   // that implies for gtk_container_get_children's order is exactly the kind of
   // assumption that is easy to get backwards and hard to see in a screenshot --
@@ -12388,7 +12154,7 @@ static gboolean _group_drop_motion_kind(GtkWidget *w,
                                         GtkWidget *f,
                                         const dt_masks_dnd_hover_t kind)
 {
-  // siblings too: a reorder line is drawn on a canonical neighbour, not always
+  // siblings too: a reorder line is drawn on a canonical neighbor, not always
   // on this frame (see _canonical_drop_frame)
   _clear_group_drop_classes(f);
 
@@ -12402,7 +12168,7 @@ static gboolean _group_drop_motion_kind(GtkWidget *w,
     // disagree.
     gboolean above = _group_drop_above(w, y);
     // ...then draw that slot in its canonical place, so the gap between two
-    // groups shows one line rather than one per neighbour
+    // groups shows one line rather than one per neighbor
     GtkWidget *line = _canonical_drop_frame(f, &above);
     dt_gui_add_class(line,
                      above ? "mask-list-row-drop-above" : "mask-list-row-drop-below");
@@ -12434,7 +12200,7 @@ static void
 _group_drop_leave(GtkWidget *w, GdkDragContext *dc, guint time, gpointer frame)
 {
   // siblings too, for the same reason as the motion handler: the line may be
-  // wearing on a neighbouring group's block rather than this frame
+  // wearing on a neighboring group's block rather than this frame
   if(frame) _clear_group_drop_classes(GTK_WIDGET(frame));
 }
 
@@ -12481,11 +12247,7 @@ static void _group_drag_begin(GtkWidget *w, GdkDragContext *dc, dt_iop_module_t 
 {
   dt_print(DT_DEBUG_MASKS, "[masks dnd] group drag-begin");
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(bd)
-  {
-    bd->masks_skip_group_select_release = TRUE;
-    bd->masks_group_op_drag_started = TRUE;
-  }
+  if(bd) bd->masks_skip_group_select_release = TRUE;
 }
 
 static GtkWidget *_make_drag_handle(DTGTKCairoPaintIconFunc kind_paint,
@@ -12582,6 +12344,13 @@ static GtkWidget *_pending_conf_slider_new(dt_iop_module_t *module,
   return w;
 }
 
+static gboolean _pending_shape_click(GtkWidget *w, GdkEventButton *e, gpointer user_data)
+{
+  // absorb clicks on the pending row background so reaching for sliders does
+  // not bubble up to group_block and deselect or disarm the shape
+  return TRUE;
+}
+
 // synthesizes a disposable, dashed-border placeholder row for the single
 // shape currently being drawn (dev->form_gui->creation): not backed by a
 // real dt_masks_point_group_t (that only exists once the shape commits), so
@@ -12610,16 +12379,8 @@ static GtkWidget *_pending_conf_slider_new(dt_iop_module_t *module,
 // absent from _build_props_row_editor entirely, not just duplicated here.
 //
 // None of this goes through _props_row_apply/_build_props_row_editor: that
-// shared machinery only ever applies a property to forms already found in
-// grp->points (_props_row_apply's own loop is `for(GList *fpts =
-// grp->points; ...)`), and this form is, by definition, not committed yet.
-static gboolean _pending_shape_click(GtkWidget *w, GdkEventButton *e, gpointer user_data)
-{
-  // absorb clicks on the pending row background so reaching for sliders does
-  // not bubble up to group_block and deselect or disarm the shape
-  return TRUE;
-}
-
+// shared machinery only ever applies a property to forms already in the mask,
+// and this form is, by definition, not committed yet.
 static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form_t *form)
 {
   const guint kind = _form_kind(form);
@@ -12644,15 +12405,10 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
     name,
     _("this shape has not been added yet -- finish drawing it on canvas to add it"));
 
-  // opacity: universal across every shape kind, mirroring the removed mask manager's
-  // own "prop == DT_MASKS_PROPERTY_OPACITY && gui->creation" case, which
-  // adjusts the *sticky default* opacity conf (the value the shape actually
-  // gets baked in with on commit, see masks.c's _new_shape_default_opacity)
-  // rather than a real shape's opacity -- there is no real shape yet. Hidden
-  // when "sticky opacity" is off (the options menu's "disable stickiness of
-  // opacity"): every new shape gets 100% regardless of this conf then, so a
-  // slider here would silently have no effect.
-  // opacity: universal across every shape kind, shown directly in the header
+  // opacity: universal across every shape kind, shown directly in the header.
+  // It adjusts the *sticky default* opacity conf (the value the shape gets on
+  // commit, see _new_shape_default_opacity in masks/masks.c) rather than a
+  // real shape's opacity -- there is no real shape yet
   const float init_op = dt_conf_get_float("plugins/darkroom/masks/opacity");
   GtkWidget *opacity = dt_bauhaus_slider_new_with_range(
     module, _blend_masks_properties[DT_MASKS_PROPERTY_OPACITY].min,
@@ -12721,7 +12477,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].min,
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
-      _("fade-out border the next node placed on this path will start with."));
+      _("fade-out border the next node placed on this path will start with"));
     dt_gui_box_add(props_box, feather);
   }
   else if(kind == DT_MASKS_CIRCLE)
@@ -12732,8 +12488,8 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                                _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].min,
                                _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].max, 2,
                                _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].format,
-                               _("radius of the next circle, before it is placed -- same "
-                                 "as scrolling on canvas."));
+                               _("radius of the next circle, before it is placed --\n"
+                                 "same as scrolling on canvas"));
     dt_gui_box_add(props_box, size);
 
     GtkWidget *feather = _pending_conf_slider_new(
@@ -12743,7 +12499,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
       _("fade-out border of the next circle, before it is placed --\n"
-        "same as shift+scrolling on canvas."));
+        "same as shift+scrolling on canvas"));
     dt_gui_box_add(props_box, feather);
   }
   else if(kind == DT_MASKS_ELLIPSE)
@@ -12762,7 +12518,8 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                                  _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].format);
     gtk_widget_set_tooltip_text(
       size,
-      _("size of the next ellipse, before it is placed -- same as scrolling on canvas."));
+      _("size of the next ellipse, before it is placed --\n"
+        "same as scrolling on canvas"));
     g_object_set_data(G_OBJECT(size), "dt-conf-key",
                       (gpointer)DT_MASKS_CONF(form->type, ellipse, radius_a));
     g_object_set_data(G_OBJECT(size), "dt-conf-key2",
@@ -12780,7 +12537,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_FEATHER].format,
       _("fade-out border of the next ellipse, before it is placed --\n"
-        "same as shift+scrolling on canvas."));
+        "same as shift+scrolling on canvas"));
     dt_gui_box_add(props_box, feather);
 
     GtkWidget *rotation =
@@ -12790,7 +12547,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                                _blend_masks_properties[DT_MASKS_PROPERTY_ROTATION].max, 1,
                                _blend_masks_properties[DT_MASKS_PROPERTY_ROTATION].format,
                                _("rotation of the next ellipse, before it is placed --\n"
-                                 "same as ctrl+shift+scrolling on canvas."));
+                                 "same as ctrl+shift+scrolling on canvas"));
     dt_gui_box_add(props_box, rotation);
   }
   else if(kind == DT_MASKS_GRADIENT)
@@ -12799,14 +12556,14 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       module, DT_MASKS_CONF(form->type, gradient, compression),
       _blend_masks_properties[DT_MASKS_PROPERTY_COMPRESSION].name, 0.001f, 1.0f, 2, "%",
       _("compression of the next gradient, before it is placed --\n"
-        "same as shift+scrolling on canvas."));
+        "same as shift+scrolling on canvas"));
     dt_gui_box_add(props_box, compression);
 
     GtkWidget *curvature = _pending_conf_slider_new(
       module, DT_MASKS_CONF(form->type, gradient, curvature),
       _blend_masks_properties[DT_MASKS_PROPERTY_CURVATURE].name, -2.0f, 2.0f, 2, NULL,
       _("curvature of the next gradient, before it is placed --\n"
-        "same as scrolling on canvas."));
+        "same as scrolling on canvas"));
     dt_gui_box_add(props_box, curvature);
   }
   else if(kind == DT_MASKS_BRUSH)
@@ -12817,7 +12574,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].min,
       _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_SIZE].format,
-      _("width of the next brush stroke -- same as scrolling on canvas."));
+      _("width of the next brush stroke -- same as scrolling on canvas"));
     dt_gui_box_add(props_box, size);
 
     GtkWidget *hardness = _pending_conf_slider_new(
@@ -12826,7 +12583,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _blend_masks_properties[DT_MASKS_PROPERTY_HARDNESS].min,
       _blend_masks_properties[DT_MASKS_PROPERTY_HARDNESS].max, 2,
       _blend_masks_properties[DT_MASKS_PROPERTY_HARDNESS].format,
-      _("hardness of the next brush stroke -- same as shift+scrolling on canvas."));
+      _("hardness of the next brush stroke -- same as shift+scrolling on canvas"));
     dt_gui_box_add(props_box, hardness);
   }
 
@@ -12851,7 +12608,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       sm, _("how closely the traced outline follows the AI selection's raw edge.\n"
             "lower: a tighter, more angular fit to the selection.\n"
             "higher: a looser fit with smoother, more rounded corners.\n"
-            "same as scrolling on the canvas while drawing."));
+            "same as scrolling on the canvas while drawing"));
     g_object_set_data(G_OBJECT(sm), "dt-prop",
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_SMOOTHING));
     g_signal_connect(G_OBJECT(sm), "value-changed",
@@ -12872,7 +12629,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
       _("discards small, stray outline fragments below this size (in traced pixels).\n"
         "higher: removes more small islands/holes, at the risk of dropping\n"
         "genuinely small parts of the selection.\n"
-        "same as shift+scrolling on the canvas while drawing."));
+        "same as shift+scrolling on the canvas while drawing"));
     g_object_set_data(G_OBJECT(cl), "dt-prop",
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_CLEANUP));
     g_signal_connect(G_OBJECT(cl), "value-changed",
@@ -13003,8 +12760,8 @@ static GtkWidget *_make_group_header_evbox(dt_iop_module_t *module,
   return evbox;
 }
 
-// invert a single element's mask polarity (the drag handle's ctrl+click
-// behaviour, extracted so the "invert selected element" shortcut can share it).
+// invert a single element's mask polarity: the row's actions menu "invert" and
+// the "invert selected element" shortcut
 static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
 {
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -13015,8 +12772,8 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
            !!(pt->state & DT_MASKS_STATE_INVERSE));
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   // update this row's own state in place -- a full rebuild here would tear
-  // down and recreate the whole list (and re-dock the parametric editor if one
-  // is open), which visibly flashes the panel for what is just one bit.
+  // down and recreate the whole list, which visibly flashes the panel for
+  // what is just one bit.
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   GtkWidget *row_vbox = _masks_row_widget(bd, id);
   // this also flips a parametric row's own slider markers, which carry the
@@ -13024,17 +12781,9 @@ static void _invert_element(dt_iop_module_t *module, const dt_mask_id_t id)
   _update_shape_row_state(bd, row_vbox, pt);
 }
 
-// GtkCheckMenuItem does not auto-close its parent popup on toggle the way a
-// plain GtkMenuItem's "activate" does (by design -- it lets a settings-style
-// menu stay open across several checkbox flips) -- but every check item in
-// *this* menu (disable/solo/solo-edit/invert) is a one-shot
-// action, not a settings panel, and is meant to close the menu like every
-// other entry here (see _row_click_press's right-click branch and
-// _shape_menu_closed, which the menu's own "hide" signal drives). Without
-// this, "hide" simply never fired for these four items -- the menu stayed
-// open until a later, unrelated click dismissed it -- which is why deferred
-// auto-expand-on-close only ever appeared to work for whichever item
-// happened to be clicked last before that unrelated dismissal.
+// each shape action pops the menu down itself, stateful (check) entries
+// included, so every entry closes it the same way and _shape_popover_closed
+// (the deferred auto-expand, connected in _row_click_press) runs for all
 static void _shape_act_disable(GSimpleAction *action, GVariant *param, gpointer u)
 {
   GtkWidget *anchor = GTK_WIDGET(u);
@@ -13215,12 +12964,15 @@ static void _consumers_sync(dt_iop_module_t *module)
     for(const GList *l = consumers; l; l = g_list_next(l))
     {
       dt_iop_module_t *m = l->data;
-      // the name is markup, escaped by dt_history_get_name_label
+      // the name is markup, escaped by dt_history_get_name_label; the tooltip
+      // is plain text and takes the plain name
       gchar *name = dt_history_item_get_name(m);
       GtkWidget *label = gtk_label_new(NULL);
       gtk_label_set_markup(GTK_LABEL(label), name);
-      gchar *tip = g_strdup_printf(_("focus %s and show its mask panel"), name);
       g_free(name);
+      gchar *plain = _module_plain_name(m);
+      gchar *tip = g_strdup_printf(_("focus %s and show its mask panel"), plain);
+      g_free(plain);
       gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
       gtk_label_set_ellipsize(GTK_LABEL(label), PANGO_ELLIPSIZE_END);
       // one button for the whole row, so it highlights as one wherever the
@@ -13233,7 +12985,7 @@ static void _consumers_sync(dt_iop_module_t *module)
       GtkWidget *row = gtk_button_new();
       gtk_container_add(GTK_CONTAINER(row), dt_gui_hbox(dt_gui_expand(label), chain));
       dt_gui_add_class(row, "mask-consumer-row");
-      gtk_widget_set_tooltip_markup(row, tip);
+      gtk_widget_set_tooltip_text(row, tip);
       g_free(tip);
       g_signal_connect(row, "clicked", G_CALLBACK(_consumer_clicked), m);
       dt_gui_box_add(bd->consumers_content, row);
@@ -13261,9 +13013,12 @@ static void _shape_act_delete(GSimpleAction *action, GVariant *param, gpointer u
   GtkWidget *anchor = GTK_WIDGET(u);
   dt_iop_module_t *module = g_object_get_data(G_OBJECT(anchor), "module");
   const dt_mask_id_t id = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(anchor), "shape_act_id"));
+  // the row the menu was opened on, so a shape held twice loses the reference
+  // the user clicked, as with unlink
+  dt_masks_point_group_t *pt = g_object_get_data(G_OBJECT(anchor), "shape_act_point");
   if(darktable.gui->active_popover_menu)
     gtk_popover_popdown(GTK_POPOVER(darktable.gui->active_popover_menu));
-  if(module) _delete_single_shape(module, id);
+  if(module) _delete_single_shape(module, id, pt);
 }
 
 // the member point a shape actions menu acts on: the row's own, where it has one
@@ -13368,16 +13123,21 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   GMenu *menu = g_menu_new();
 
   GMenu *sec_vis = g_menu_new();
-  g_menu_append(sec_vis, _("disable"), "masks_shape_act.disable");
+  _menu_append_tip(sec_vis, _("disable"), "masks_shape_act.disable",
+                   _("switch this element off: it adds nothing to the mask,\n"
+                     "and keeps its settings for when it is back on"));
   if(!elem_disabled)
-    g_menu_append(sec_vis, _("solo"), "masks_shape_act.solo");
+    _menu_append_tip(sec_vis, _("solo"), "masks_shape_act.solo",
+                     _("use only this element, to see what it contributes\n"
+                       "click its badge, or this entry again, to go back"));
   g_menu_append_section(menu, _("visibility"), G_MENU_MODEL(sec_vis));
   g_object_unref(sec_vis);
 
   if(!elem_disabled)
   {
     GMenu *sec_ops = g_menu_new();
-    g_menu_append(sec_ops, _("invert"), "masks_shape_act.invert");
+    _menu_append_tip(sec_ops, _("invert"), "masks_shape_act.invert",
+                     _("invert this element: it selects what it left out"));
     GMenu *compose = _shape_compose_menu(grp, pt);
     if(compose) _append_compose_submenu(sec_ops, compose);
     g_menu_append_section(menu, _("mask operations"), G_MENU_MODEL(sec_ops));
@@ -13385,7 +13145,9 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
   }
 
   GMenu *sec_edit = g_menu_new();
-  g_menu_append(sec_edit, _("rename"), "masks_shape_act.rename");
+  _menu_append_tip(sec_edit, _("rename"), "masks_shape_act.rename",
+                   _("give this element a name of its own\n"
+                     "ctrl+click on the row does the same"));
   if(linked)
   {
     GMenuItem *it = g_menu_item_new(_("unlink"), "masks_shape_act.unlink");
@@ -13408,7 +13170,10 @@ static void _build_shape_actions_menu(GtkWidget *anchor,
     g_menu_append_item(sec_edit, it);
     g_object_unref(it);
   }
-  g_menu_append(sec_edit, _("delete"), "masks_shape_act.delete");
+  _menu_append_tip(sec_edit, _("delete"), "masks_shape_act.delete",
+                   linked ? _("remove this element here; the other rows and modules"
+                              " it is linked with keep it")
+                          : _("remove this element from the mask"));
   g_menu_append_section(menu, _("edit"), G_MENU_MODEL(sec_edit));
   g_object_unref(sec_edit);
 
@@ -13496,8 +13261,8 @@ static gboolean _drag_handle_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
   // this widget is app-paintable (see _make_drag_handle), so its normal CSS
   // background is never drawn automatically -- paint it explicitly, so
   // .mask-list-handle-inverted (darktable.css) can swap this handle to a
-  // light background / dark foreground, reading as a true colour inversion
-  // rather than a colour tint over the icon.
+  // light background / dark foreground, reading as a true color inversion
+  // rather than a color tint over the icon.
   gtk_render_background(ctx, cr, 0, 0, a.width, a.height);
   gtk_style_context_get_color(ctx, state, &c);
 
@@ -13561,12 +13326,10 @@ static GtkWidget *_make_drag_handle(DTGTKCairoPaintIconFunc kind_paint,
 }
 
 // a parametric row's own lead handle: the channel code itself (e.g. "hz",
-// "Cz") instead of a generic "this is a parametric mask" glyph -- every
-// channel used the same icon, so it carried no information a glance at the
-// row didn't already need the name for, and it duplicated the separate
-// channel-code badge that used to sit next to it. This is a plain label (not
+// "Cz") instead of a generic "this is a parametric mask" glyph, which would
+// say nothing a glance at the row does not. This is a plain label (not
 // app-paintable like _make_drag_handle's icon version), so .mask-list-handle
-// / .mask-list-handle-inverted's background+text colour swap applies to it
+// / .mask-list-handle-inverted's background+text color swap applies to it
 // via ordinary CSS with no custom draw code needed.
 static GtkWidget *_make_channel_handle(const char *code, const char *tooltip)
 {
@@ -13590,15 +13353,13 @@ static GtkWidget *_make_channel_handle(const char *code, const char *tooltip)
   return eb;
 }
 
-// ---- always-expanded per-row parametric mask editor -----------------------
-// Every parametric channel row gets its own permanently-visible input/output
-// slider pair, boost-factor slider and picker buttons, bound directly to that
-// form's own dt_masks_point_parametric_t -- instead of the single editor
-// widget set (bd->blendif_box et al, still used for classic/legacy
-// multi-channel editing only) reparented under whichever one row was being
-// edited. See _build_param_row_editor below. (dt_masks_param_row_editor_t
-// itself is declared earlier in this file, near the other forward decls, so
-// early functions like _masks_param_inout_toggled can use it too.)
+// ---- per-row parametric mask editor ---------------------------------------
+// Every parametric channel row gets its own input/output slider pair,
+// boost-factor slider and picker, bound directly to that form's own
+// dt_masks_point_parametric_t. See _build_param_row_editor below.
+// (dt_masks_param_row_editor_t itself is declared earlier in this file, near
+// the other forward decls, so early functions like _masks_param_inout_toggled
+// can use it too.)
 
 // the single-channel form this editor owns, or NULL if it no longer exists
 // (e.g. deleted from under it before the next rebuild tears the row down).
@@ -13615,10 +13376,8 @@ _param_row_point(const dt_masks_param_row_editor_t *ed)
   return _param_point(ed->formid);
 }
 
-// is this row's own shape inverted? (the per-shape ctrl+click invert,
-// DT_MASKS_STATE_INVERSE on its group point) -- flips the displayed slider polarity to
-// match, same as the legacy shared editor's _param_single_inverted, but keyed on this
-// row's own formid.
+// is this row's own element inverted (DT_MASKS_STATE_INVERSE on its group
+// point)? The displayed slider polarity flips to match
 static gboolean _param_row_inverted(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   dt_masks_form_t *grp = _module_mask_group(module);
@@ -13639,13 +13398,6 @@ gboolean _param_channel_is_used(const dt_masks_point_parametric_t *p,
   return !is_default_range || bit_active;
 }
 
-// show/hide this row's input slider, output slider and boost-factor slider:
-// - expanded (p->in_out != 0): show both input and output sliders + boost slider
-// - collapsed (p->in_out == 0):
-//     * both input & output used: show both input and output sliders (hide boost factor
-//     only)
-//     * only output used: show only output slider
-//     * only input used (or no-op / default): show only input slider
 // Which of a parametric row's controls are shown, from the channel's own state.
 // A collapsed row adapts to which sub-ranges the user has actually touched, so
 // an untouched channel does not show a slider that says nothing; an expanded
@@ -13763,9 +13515,26 @@ static void _update_param_row_visibility(dt_masks_param_row_editor_t *ed)
   _param_slider_fit_eye(ed);
 }
 
-// refresh this row's own slider markers/values/labels/boost-slider display from
-// its form's current values -- what the classic tabbed editor's own per-tab
-// refresh used to do, scoped to one form's one channel (no bp scratch, no tab).
+// the slider's tooltip: its range values, which the row shows nowhere else, and
+// its display scale when that is not the linear one
+static void _param_row_slider_set_tooltip(const dt_iop_gui_blendif_filter_t *sl,
+                                          const int in_out,
+                                          char range_text[4][256])
+{
+  const char *which = in_out ? _("output") : _("input");
+  gchar *head = sl->altmode_name ? g_strdup_printf("%s (%s)", which, sl->altmode_name)
+                                 : g_strdup(which);
+  gchar *full_tip =
+    g_strdup_printf("%s: %s  %s  %s  %s\n\n%s", head,
+                    range_text[0], range_text[1], range_text[2], range_text[3],
+                    _(slider_tooltip[in_out]));
+  gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider), full_tip);
+  g_free(full_tip);
+  g_free(head);
+}
+
+// refresh this row's own slider markers/values/boost-slider display from its
+// form's current values
 static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
 {
   const dt_masks_point_parametric_t *p = _param_row_point(ed);
@@ -13785,8 +13554,7 @@ static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
     const float *defaults =
       &ed->module->default_blendop_params->blendif_parameters[4 * ch];
 
-    // a single-channel row has no polarity control of its own (sl->polarity is
-    // NULL, see _build_param_row_editor) -- the shape's own ctrl+click invert
+    // a single-channel row has no polarity control of its own -- the element's own invert
     // (single_inv, also driving the row's handle icon, see _invert_element) is
     // the one and only source of truth for polarity here. p->blendif's own
     // per-channel polarity bit is a leftover from the legacy multi-channel tab
@@ -13824,21 +13592,9 @@ static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
       _get_boost_factor_ex(p->blendif_boost_factors, channels, p->channel, in_out);
     char range_text[4][256];
     for(int k = 0; k < 4; k++)
-    {
       channel->scale_print(parameters[k], boost_factor, range_text[k],
                            sizeof(range_text[k]));
-      gtk_label_set_text(sl->label[k], range_text[k]);
-    }
-
-    // compact mode hides these numeric labels entirely (see
-    // _apply_param_row_filter_layout) -- surface the same range values on the
-    // slider's own tooltip so hovering it in compact mode loses no information.
-    gchar *full_tip =
-      g_strdup_printf("%s: %s  %s  %s  %s\n\n%s", in_out ? _("output") : _("input"),
-                      range_text[0], range_text[1], range_text[2], range_text[3],
-                      _(slider_tooltip[in_out]));
-    gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider), full_tip);
-    g_free(full_tip);
+    _param_row_slider_set_tooltip(sl, in_out, range_text);
 
     dtgtk_gradient_slider_multivalue_clear_stops(sl->slider);
     for(int k = 0; k < channel->numberstops; k++)
@@ -13866,7 +13622,7 @@ static void _update_param_row_display(dt_masks_param_row_editor_t *ed)
 }
 
 // commit a blendif edit straight to this row's own form (no module->blend_params
-// scratch involved) -- the per-row equivalent of _blendif_commit's parametric branch.
+// scratch involved)
 static void _param_form_commit(dt_iop_module_t *module, const dt_mask_id_t formid)
 {
   dt_print(DT_DEBUG_MASKS, "[masks] parametric form %d: blendif edit committed", formid);
@@ -13901,28 +13657,6 @@ static void _param_channel_bypass_toggled(GtkToggleButton *btn, gpointer user_da
   }
 }
 
-// refreshes this row's own numeric labels from `slider`'s current marker
-// positions, purely cosmetic -- unlike _param_row_slider_callback below, this
-// never writes into the form's own persisted blendif_parameters or touches
-// the tooltip/blendif-bit bookkeeping, so it is safe to call for a value that
-// may still be discarded (see the hover-preview handler further down, which
-// previews a node position without committing it).
-static void
-_update_param_row_range_labels_preview(dt_masks_param_row_editor_t *ed,
-                                       GtkDarktableGradientSlider *slider,
-                                       const dt_iop_gui_blendif_channel_t *channel,
-                                       const float boost_factor,
-                                       const int in_out)
-{
-  for(int k = 0; k < 4; k++)
-  {
-    const float value = dtgtk_gradient_slider_multivalue_get_value(slider, k);
-    char range_text[256];
-    channel->scale_print(value, boost_factor, range_text, sizeof(range_text));
-    gtk_label_set_text(ed->filter[in_out].label[k], range_text);
-  }
-}
-
 static void _param_row_slider_callback(GtkDarktableGradientSlider *slider,
                                        dt_masks_param_row_editor_t *ed)
 {
@@ -13952,20 +13686,12 @@ static void _param_row_slider_callback(GtkDarktableGradientSlider *slider,
     _get_boost_factor_ex(p->blendif_boost_factors, channels, p->channel, in_out);
   char range_text[4][256];
   for(int k = 0; k < 4; k++)
-  {
     channel->scale_print(parameters[k], boost_factor, range_text[k],
                          sizeof(range_text[k]));
-    gtk_label_set_text(ed->filter[in_out].label[k], range_text[k]);
-  }
 
-  // keep the compact-mode tooltip (see _update_param_row_display) in sync with
-  // a live drag too, not just the initial build
-  gchar *full_tip =
-    g_strdup_printf("%s: %s  %s  %s  %s\n\n%s", in_out ? _("output") : _("input"),
-                    range_text[0], range_text[1], range_text[2], range_text[3],
-                    _(slider_tooltip[in_out]));
-  gtk_widget_set_tooltip_text(GTK_WIDGET(slider), full_tip);
-  g_free(full_tip);
+  // keep the range tooltip in sync with a live drag too, not just the initial
+  // build
+  _param_row_slider_set_tooltip(&ed->filter[in_out], in_out, range_text);
 
   if(parameters[1] == 0.0f && parameters[2] == 1.0f)
     p->blendif &= ~(1 << ch);
@@ -13996,7 +13722,7 @@ static void _param_row_slider_reset_callback(GtkDarktableGradientSlider *slider,
   const dt_develop_blendif_channels_t ch = channel->param_channels[in_out];
 
   // reset always clears polarity back to "not inverted" for this channel; the
-  // per-shape invert (ctrl+click on the row handle) is what actually flips it
+  // element's own invert (the row's actions menu) is what actually flips it
   p->blendif &= ~(1 << (16 + ch));
 
   _param_form_commit(ed->module, ed->formid);
@@ -14028,7 +13754,7 @@ static void _param_row_slider_reset_callback(GtkDarktableGradientSlider *slider,
 // the same normalized [0,1] "display" domain channel->scale_print already
 // formats for the row's own numeric labels (see _update_param_row_display) --
 // _blendif_scale_ex, which normalizes a picked pixel into this same domain
-// for the colour-picker feature, confirms it. scale_print itself is a
+// for the color-picker feature, confirms it. scale_print itself is a
 // one-way formatter with no matching parser, but only three implementations
 // of it exist in this file (_blendif_scale_print_default/_ab/_hue, matched
 // below by function-pointer identity), each a simple, exactly invertible
@@ -14098,7 +13824,7 @@ _param_row_slider_precise_context(GtkWidget *slider,
 // _param_row_slider_precise_open) before applying a new position for node
 // `k` -- always computing from that one fixed baseline, never cumulatively
 // from wherever a prior preview/drag tick happened to leave things, is what
-// makes a neighbour that got pushed out of the way ease back once the
+// makes a neighbor that got pushed out of the way ease back once the
 // pointer/drag reverses towards where this session started, instead of
 // staying pushed forever (see _slider_move's own push logic in
 // gradientslider.c, which has no such notion of "the position before this
@@ -14151,10 +13877,10 @@ static void _param_row_slider_precise_value_changed(GtkWidget *bauhaus_slider,
   // is already listening for -- so this commits through the exact same
   // persistence/label-refresh path a drag on the range slider's own node directly would.
   // The "_pushing" variant (not the plain
-  // ..._set_value) matches a real drag's own behaviour: crossing an adjacent
+  // ..._set_value) matches a real drag's own behavior: crossing an adjacent
   // node pushes it along instead of being hard-blocked at it (see
   // _param_row_slider_precise_open, whose embedded slider is given the full
-  // channel range, not a neighbour-clamped one, precisely so this can happen).
+  // channel range, not a neighbor-clamped one, precisely so this can happen).
   dtgtk_gradient_slider_multivalue_set_value_pushing(DTGTK_GRADIENT_SLIDER(slider),
                                                      newfrac, k);
 }
@@ -14191,7 +13917,7 @@ static gboolean _param_row_slider_precise_hover_settled(gpointer user_data)
 
 // dt_bauhaus_static_hover_preview_t hook (see bauhaus.h): fires on every
 // pointer motion over the popup's own slider while no button is held.
-// Previews node k moving to the hovered value -- and any neighbour it would
+// Previews node k moving to the hovered value -- and any neighbor it would
 // push along -- on the row's own range slider, without touching the form's
 // persisted parameters or the bauhaus slider's own committed value, then
 // (re)arms the settle timer that turns this into a real commit once the
@@ -14232,11 +13958,6 @@ static void _param_row_slider_precise_hover_preview(GtkWidget *bauhaus_slider,
                                                      newfrac, k);
   DT_LEAVE_GUI_UPDATE();
 
-  // labels normally refresh from "value-changed" (see _param_row_slider_callback),
-  // suppressed above since nothing is committed yet -- refresh them directly
-  // instead, purely cosmetic
-  _update_param_row_range_labels_preview(ed, DTGTK_GRADIENT_SLIDER(slider), channel,
-                                         boost_factor, in_out);
 
   // this row lives in a different top-level window than the popup calling
   // this hook (see _param_row_slider_precise_open): a plain queue_draw here
@@ -14366,14 +14087,12 @@ static gboolean _param_row_slider_precise_open_idle(gpointer user_data)
   return G_SOURCE_REMOVE;
 }
 
-// opens a small (practically invisible -- see above) anchor popover at node
-// k's own position, holding one real bauhaus slider bound to that node's
-// value, and immediately opens *that* slider's own right-click popup on it --
-// so what the user actually sees and edits is a completely normal bauhaus
-// value-entry popup, "the same logarithmic selection mode as [any other]
-// value selector for sliders" the user asked for (see _popup_show in
-// bauhaus.c), not a bespoke re-implementation of it, and not an extra click
-// through some intermediate slider bar first.
+// opens a small, invisible anchor popover at node k's own position, holding
+// one real bauhaus slider bound to that node's value, and immediately opens
+// *that* slider's own right-click popup on it -- so what the user sees and
+// edits is a normal bauhaus value-entry popup (see _popup_show in bauhaus.c),
+// not a bespoke re-implementation of it, and not an extra click through some
+// intermediate slider bar first.
 static void _param_row_slider_precise_open(GtkWidget *slider,
                                            dt_masks_param_row_editor_t *ed,
                                            const gint k)
@@ -14406,10 +14125,10 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // gradient slider itself is free to cross an adjacent node and push it
   // along (see _slider_move's FREE_MARKERS branch in gradientslider.c), so
   // this embedded slider must allow the same range, not hard-block at the
-  // neighbour. Order is preserved instead by
+  // neighbor. Order is preserved instead by
   // dtgtk_gradient_slider_multivalue_set_value_pushing, called from
   // _param_row_slider_precise_value_changed on every change, which pushes the
-  // neighbour rather than clamping against it -- exactly like a drag would.
+  // neighbor rather than clamping against it -- exactly like a drag would.
   const double lo_frac = 0.0;
   const double hi_frac = 1.0;
   const gboolean is_hue = channel->scale_print == _blendif_scale_print_hue;
@@ -14457,7 +14176,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   g_signal_connect(G_OBJECT(bauhaus_slider), "value-changed",
                    G_CALLBACK(_param_row_slider_precise_value_changed), slider);
   // static popups opt out of bauhaus's own "bare hover drags the value"
-  // behaviour (see the comment right above), which is what made this control
+  // behavior (see the comment right above), which is what made this control
   // click-and-drag-only -- restore a hover preview on top of that opt-out
   // instead of reverting it outright (removing "dt-bauhaus-static-popup"
   // would break the popup's own away-from-the-pointer positioning): this
@@ -14469,7 +14188,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // found it -- is snapshotted here too: both a real drag and a settled
   // hover preview recompute from this one fixed baseline (see
   // _param_row_slider_precise_restore_baseline), not cumulatively, so a
-  // neighbour pushed out of the way eases back if the gesture reverses; and
+  // neighbor pushed out of the way eases back if the gesture reverses; and
   // _param_row_slider_precise_closed reverts to it if the popup is dismissed
   // (ESC) while a preview is still uncommitted.
   gdouble *baseline = g_new(gdouble, GRADIENT_SLIDER_MAX_POSITIONS);
@@ -14482,7 +14201,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
 
   GtkWidget *popover = gtk_popover_new(slider);
   // not modal: this popover is only ever an invisible-in-practice anchor for
-  // the embedded slider's own popup (see _param_row_slider_precise_slider_mapped),
+  // the embedded slider's own popup (see _param_row_slider_precise_open_idle),
   // which opens a separate top-level window and manages its own grab/modality
   // entirely itself (see _popup_show in bauhaus.c) -- a *modal* anchor popover
   // grabs input for itself too, and that grab was winning over the bauhaus
@@ -14492,7 +14211,7 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
   // fully transparent: this anchor (both its own chrome and the slider inside
   // it) is never meant to be seen at all -- it exists only to give the
   // embedded slider a real, mapped, on-screen position for its own popup to
-  // open from (see _param_row_slider_precise_slider_mapped). A plain
+  // open from (see _param_row_slider_precise_open_idle). A plain
   // gtk_widget_set_opacity() has no effect here: darktable.css sets
   // "popover { opacity: 1; ... }" (needed elsewhere for the tooltip on/off
   // shortcut), and that CSS rule always wins over the widget property -- so
@@ -14542,15 +14261,10 @@ static void _param_row_slider_precise_open(GtkWidget *slider,
 }
 
 // right-click on one of this row's own range-slider nodes: instead of the
-// widget's own built-in "toggle marker selection" behaviour (see the
-// GDK_BUTTON_SECONDARY branch of _gradient_slider_button_press in
+// widget's own right-click handling (see _gradient_slider_button_pressed in
 // dtgtk/gradientslider.c), pop up the precise-entry UI above for the node
 // nearest the click, closing it again on a second right-click on the same
-// node (toggle). Connected with a plain g_signal_connect, not _after:
-// "button-press-event" is RUN_LAST, so a normally-connected handler runs
-// *before* the widget's own class handler and, by returning TRUE here,
-// fully replaces its right-click behaviour for this widget instead of also
-// running alongside it (see g_signal_connect's own ordering guarantees).
+// node (toggle). Returns TRUE for the right-clicks it handles
 static gboolean
 _param_row_slider_precise_press(GtkWidget *widget, GdkEventButton *ev, gpointer user_data)
 {
@@ -14710,8 +14424,7 @@ static dt_masks_param_row_editor_t *_param_row_editor_for_picker(dt_iop_module_t
 // default, or a previous row's channel), which for a mismatched channel
 // (say cst=RGB while this row is a JzCzhz "hz" channel) leaves that channel
 // unwritten by _blendif_scale_ex and both bounds collapse to the same
-// clamped default -- a zero-width range. Mirrors the classic shared
-// editor's _update_gradient_slider_pickers, which does the same on toggle.
+// clamped default -- a zero-width range.
 static void _update_param_row_slider_pickers(dt_masks_param_row_editor_t *ed);
 
 static void _param_row_arm_picker_cst(GtkWidget *button, dt_masks_param_row_editor_t *ed)
@@ -14722,8 +14435,7 @@ static void _param_row_arm_picker_cst(GtkWidget *button, dt_masks_param_row_edit
     ed->module, _picker_colorspace_for_channel(
                   (dt_develop_blend_colorspace_t)p->colorspace, (int)p->channel));
   // also refresh (or clear) this row's picker marker/label to match the
-  // button's new armed/disarmed state, mirroring the classic shared
-  // editor's _update_gradient_slider_pickers, which does both in one call.
+  // button's new armed/disarmed state
   _update_param_row_slider_pickers(ed);
 
   const gboolean btn_active = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(button));
@@ -14765,20 +14477,6 @@ static void _param_row_arm_picker_cst(GtkWidget *button, dt_masks_param_row_edit
   }
 }
 
-// consolidated front-end for a parametric row's two color pickers (saves a
-// slot in the row's action cluster): one visible button standing in for both
-// hidden-but-functional real ones. CAPTURE-phase claim mirrors how
-// dt_color_picker_new's own buttons suppress their default click-to-toggle
-// behaviour (see _color_picker_new in color_picker_proxy.c) -- this button
-// has no picker logic of its own, only the dispatch below, so its own
-// click/toggle must never fire.
-//   plain click   -> colorpicker_set_values, point mode is irrelevant (area-only);
-//                    applied from the input range (see _param_row_picker_apply)
-//   shift+click    -> same picker; applied from the output range instead
-//                    (the modifier is read again at apply time, on the canvas
-//                    pick/drag, not here)
-//   ctrl+click     -> colorpicker, point mode
-//   ctrl+right-click -> colorpicker, area mode
 // claim the event sequence in CAPTURE phase so master_picker's own internal
 // GtkGestureMultiPress (BUBBLE phase, click-to-toggle) never runs -- same
 // pattern as color_picker_proxy.c's _color_picker_new (that one's own
@@ -14790,6 +14488,17 @@ static void _param_row_master_picker_begin_claim(GtkGesture *gesture,
   gtk_gesture_set_sequence_state(gesture, sequence, GTK_EVENT_SEQUENCE_CLAIMED);
 }
 
+// consolidated front-end for a parametric row's two color pickers (saves a
+// slot in the row's action cluster): one visible button standing in for both
+// hidden-but-functional real ones. It has no picker logic of its own, only
+// this dispatch, so its own click/toggle must never fire (see the claim above)
+//   plain click      -> colorpicker_set_values (area only), applied to the
+//                       input range (see _param_row_picker_apply)
+//   shift+click      -> same picker, applied to the output range instead (the
+//                       modifier is read again at apply time, on the canvas
+//                       pick/drag, not here)
+//   ctrl+click       -> colorpicker, point mode
+//   ctrl+right-click -> colorpicker, area mode
 static void _param_row_master_picker_pressed(GtkGesture *gesture,
                                              gint n_press,
                                              gdouble x,
@@ -14811,10 +14520,8 @@ static void _param_row_master_picker_pressed(GtkGesture *gesture,
   }
 }
 
-// per-row equivalent of _update_gradient_slider_pickers -- the plain "pick
-// GUI color" button doesn't change any value, it only moves the little
-// picker-mean/min/max marker on this row's own slider (and its text label)
-// to reflect where the just-sampled color falls on this row's channel.
+// the "pick GUI color" picker doesn't change any value, it only moves the little
+// picker-mean/min/max marker on this row's own slider to reflect where the just-sampled color falls on this row's channel.
 static void _update_param_row_slider_pickers(dt_masks_param_row_editor_t *ed)
 {
   const dt_masks_point_parametric_t *p = _param_row_point(ed);
@@ -14850,7 +14557,6 @@ static void _update_param_row_slider_pickers(dt_masks_param_row_editor_t *ed)
        && (raw_min[0] != FLT_MAX))
     {
       float picker_mean[8], picker_min[8], picker_max[8];
-      float cooked[8];
 
       const dt_iop_colorspace_type_t cst = _picker_colorspace_for_channel(
         (dt_develop_blend_colorspace_t)p->colorspace, (int)p->channel);
@@ -14865,33 +14571,20 @@ static void _update_param_row_slider_pickers(dt_masks_param_row_editor_t *ed)
                         work_profile, in_out);
       _blendif_scale_ex(p->blendif_boost_factors, channels, cst, raw_max, picker_max,
                         work_profile, in_out);
-      _blendif_cook(cst, raw_mean, cooked, work_profile);
-
       const int tab = (int)p->channel;
-      gchar *text =
-        g_strdup_printf("(%.*f)", _blendif_print_digits_picker(cooked[tab]), cooked[tab]);
-
       dtgtk_gradient_slider_multivalue_set_picker_meanminmax(
         sl->slider, CLAMP(picker_mean[tab], 0.0f, 1.0f),
         CLAMP(picker_min[tab], 0.0f, 1.0f), CLAMP(picker_max[tab], 0.0f, 1.0f));
-      gtk_label_set_text(sl->picker_label, text);
-
-      g_free(text);
     }
     else
-    {
       dtgtk_gradient_slider_multivalue_set_picker(sl->slider, NAN);
-      gtk_label_set_text(sl->picker_label, "");
-    }
   }
 
   DT_LEAVE_GUI_UPDATE();
 }
 
-// per-row equivalent of blend_color_picker_apply's two branches -- applies a
-// picked color straight into this row's own form (no bp scratch), mirroring
-// the legacy math (see _blendif_scale_ex) with p->channel standing in for the
-// shared editor's bd->tab.
+// applies a picked color straight into this row's own form (no bp scratch),
+// for either of the row's two pickers (see blend_color_picker_apply)
 static gboolean _param_row_picker_apply(dt_iop_module_t *module,
                                         GtkWidget *picker,
                                         dt_dev_pixelpipe_t *pipe)
@@ -15031,7 +14724,8 @@ static gboolean _param_row_picker_apply(dt_iop_module_t *module,
     _update_param_row_display(ed);
     // a picked area routinely takes this element's range off (or, after a
     // reset, back onto) the no-op full span -- same as a manual drag/reset
-    // (see the matching call in _param_row_slider_callback/_reset_callback);
+    // (see the matching call in _param_row_slider_callback and
+    // _param_row_slider_reset_callback);
     // this path sets the range via dtgtk_gradient_slider_multivalue_set_value
     // directly rather than through that slider's own "value-changed", so
     // nothing else refreshes the badge for it.
@@ -15048,50 +14742,17 @@ static gboolean _param_row_picker_apply(dt_iop_module_t *module,
   return FALSE;
 }
 
-// build one input-or-output slider bundle -- mirrors the shared editor's
-// construction in dt_iop_gui_init_blendif, minus the per-slider polarity
-// button (single-channel forms replace it with the row's own ctrl+click invert).
-
+// build one input-or-output slider bundle. There is no per-slider polarity
+// button: the element's own invert (the row's actions menu) stands in for it
 static void _build_param_row_filter(dt_iop_gui_blendif_filter_t *sl, const int in_out)
 {
   sl->slider =
     DTGTK_GRADIENT_SLIDER_MULTIVALUE(dtgtk_gradient_slider_multivalue_new_with_name(
       4, in_out ? "mask-param-output-slider" : "mask-param-input-slider"));
   dt_gui_add_class(GTK_WIDGET(sl->slider), "mask-param-slider");
-  sl->polarity = NULL;
-
-  GtkWidget *label_box = gtk_grid_new();
-  gtk_grid_set_column_homogeneous(GTK_GRID(label_box), TRUE);
-  sl->label_box = label_box;
-
-  sl->head = GTK_LABEL(dt_ui_label_new(in_out ? _("output") : _("input")));
-  gtk_grid_attach(GTK_GRID(label_box), GTK_WIDGET(sl->head), 0, 0, 1, 1);
-
-  GtkWidget *overlay = gtk_overlay_new();
-  gtk_grid_attach(GTK_GRID(label_box), overlay, 1, 0, 3, 1);
-  sl->values_box = overlay;
-
-  sl->picker_label = GTK_LABEL(gtk_label_new(""));
-  gtk_widget_set_name(GTK_WIDGET(sl->picker_label), "blend-data");
-  gtk_label_set_xalign(sl->picker_label, .0);
-  gtk_label_set_yalign(sl->picker_label, 1.0);
-  gtk_container_add(GTK_CONTAINER(overlay), GTK_WIDGET(sl->picker_label));
-
-  for(int k = 0; k < 4; k++)
-  {
-    sl->label[k] = GTK_LABEL(gtk_label_new(NULL));
-    gtk_widget_set_name(GTK_WIDGET(sl->label[k]), "blend-data");
-    gtk_label_set_xalign(sl->label[k], .35 + k * .65 / 3);
-    gtk_label_set_yalign(sl->label[k], k % 2);
-    gtk_overlay_add_overlay(GTK_OVERLAY(overlay), GTK_WIDGET(sl->label[k]));
-  }
-
   gtk_widget_set_tooltip_text(GTK_WIDGET(sl->slider), _(slider_tooltip[in_out]));
-
-  sl->head_compact = GTK_LABEL(dt_ui_label_new(in_out ? _("output") : _("input")));
-  gtk_widget_set_tooltip_text(GTK_WIDGET(sl->head_compact), _(slider_tooltip[in_out]));
-  sl->compact_row = NULL;
-  sl->box = NULL;
+  sl->altmode = 0;
+  sl->altmode_name = NULL;
 }
 
 // the eye floats over the right end of its slider row instead of taking a
@@ -15172,8 +14833,8 @@ static GtkWidget *_make_param_bypass_slot(GtkWidget *btn)
 
 // build the always-visible per-row parametric editor for `form` (a single-channel
 // parametric mask). Returns the wrapper widget (sliders + boost factor) to pack
-// under the row; *picker_box_out receives the row's two color-picker buttons as
-// a separate small box, meant to be packed into the row's own header/actions
+// under the row; *picker_box_out receives the row's picker button (with its
+// two hidden pickers) as a separate small box, meant to be packed into the row's own header/actions
 // cluster instead (see _make_shape_row) -- they are per-channel controls, not
 // part of the slider editor itself. The editor struct is attached to the
 // returned wrap widget (freed automatically when the row is torn down by the
@@ -15205,17 +14866,14 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
     g_signal_connect(G_OBJECT(sl->slider), "value-reset",
                      G_CALLBACK(_param_row_slider_reset_callback), ed);
     // back-reference so _param_row_editor_channel can resolve THIS row's own
-    // channel from the slider alone, instead of the removed classic editor's shared
-    // data->channel[data->tab] (permanently NULL now, see dt_iop_gui_blend_data_t in
-    // blend.h -- dereferencing it here used to crash on 'c'/'C'/'m'/'M'/'a'/'A' while
-    // hovering this slider).
+    // channel from the slider alone
     g_object_set_data(G_OBJECT(sl->slider), "param-row-editor", ed);
     dt_gui_connect_motion(sl->slider, NULL, _blendop_blendif_enter_cb,
                           _blendop_blendif_leave_cb, module);
     dt_gui_connect_key(sl->slider, _blendop_blendif_key_press_cb, module);
     // right-click: precise numeric entry for the nearest node (see
     // _param_row_slider_precise_press), replacing this widget's own built-in
-    // right-click behaviour just for these range sliders.
+    // right-click behavior just for these range sliders.
     g_signal_connect(G_OBJECT(sl->slider), "button-press-event",
                      G_CALLBACK(_param_row_slider_precise_press), NULL);
   }
@@ -15256,16 +14914,16 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   // _param_row_master_picker_pressed for the modifier dispatch. Built the
   // same way dt_color_picker_new's own buttons are (dtgtk togglebutton +
   // CAPTURE-phase gesture claiming the press), since it needs the identical
-  // "my handler fully owns click/toggle state" behaviour but with no
+  // "my handler fully owns click/toggle state" behavior but with no
   // dt_iop_color_picker_t of its own to hand that off to.
   ed->master_picker = dtgtk_togglebutton_new(dtgtk_cairo_paint_colorpicker, 0, NULL);
   dt_gui_add_class(ed->master_picker, "dt_transparent_background");
   gtk_widget_set_valign(ed->master_picker, GTK_ALIGN_CENTER);
   gtk_widget_set_name(ed->master_picker, "keep-active");
   gtk_widget_set_tooltip_text(ed->master_picker,
-                              _("click: set range from input\n"
-                                "shift+click: set range from output\n"
-                                "ctrl+click: pick GUI color (point)\n"
+                              _("click: set the input range from an area picked on the image\n"
+                                "shift+click: set the output range the same way\n"
+                                "ctrl+click: pick GUI color, shown on the sliders (point)\n"
                                 "ctrl+right-click: pick GUI color (area)"));
   GtkGesture *master_gesture = gtk_gesture_multi_press_new(ed->master_picker);
   gtk_event_controller_set_propagation_phase(GTK_EVENT_CONTROLLER(master_gesture),
@@ -15544,27 +15202,17 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
 
   // column 0 -- drag handle (the reliable drag source for moving the shape onto
   // another group), showing this shape's own kind icon (circle/path/...), or,
-  // for a parametric row, its channel code (e.g. "hz", "Cz") instead -- every
-  // channel used the same generic "parametric" glyph, which carried no
-  // information the name didn't already have to say, and duplicated a
-  // separate badge that used to sit next to it. One slot doubling as the drag
-  // affordance and the "what kind is this" indicator either way (see
-  // _make_drag_handle / _make_channel_handle).
+  // for a parametric row, its channel code (e.g. "hz", "Cz") instead. One slot
+  // doubling as the drag affordance and the "what kind is this" indicator
+  // either way (see _make_drag_handle / _make_channel_handle).
   const guint kind = _form_kind(form);
   const gchar *channel_code =
     (form->type & DT_MASKS_PARAMETRIC) ? dt_masks_parametric_type_label(form) : NULL;
-  // every row kind's handle opens a full actions menu on a plain click
-  // instead of selecting/deselecting directly (see _row_click_press/
-  // _release, _build_shape_actions_menu) -- the menu's own contents adapt to
-  // what actually makes sense for this row kind (e.g. no "solo edit" for a
-  // raster/parametric row).
-  // a member that is a nested group shows its own groups under its row
-  // and so is an AI object stepped into on the canvas: it shows as the group it
-  // is, its paths rows of that group, edited one by one as they are there
+  // a member that is a nested group shows its own groups under its row, and
+  // so does the AI object stepped into on the canvas: it shows as the group it
+  // is, its paths as rows of that group, edited one by one as they are there
   const gboolean is_subgroup = (form->type & DT_MASKS_GROUP)
                                || ((form->type & DT_MASKS_OBJECT) && _entered_object() == fid);
-  const gboolean is_drawn_shape =
-    !(form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER | DT_MASKS_GROUP));
   // "use sliders for opacity": opacity is either the compact value in this
   // row's header or a full slider leading its expanded controls, never both.
   // Moving it into the expanded panel is also what gives a raster row anything
@@ -15583,64 +15231,37 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // row's "non-specific" click surfaces: the lead icon, the name, and the
   // row's own background (covering the gaps between actual controls, e.g.
   // the opacity slider). A click has the exact same effect no matter which
-  // of the three it lands on, so there is no reason for their tooltips (or
-  // their behaviour) to read differently any more. Freed once, after the
-  // last of the three widgets that needs it is built (see row_evbox below).
-  gchar *row_tip =
-    (form->type & DT_MASKS_RASTER)
-      ? g_strdup(expandable
-                 ? _("click to select, click again to deselect\n"
-                     "ctrl+click to rename\n"
-                     "shift+click to show/hide this raster mask's opacity slider\n"
-                     "right-click to open the actions menu "
-                     "(invert, solo, rename, delete)\n"
-                     "drag to rearrange, or onto a group to move "
-                     "this raster mask into it")
-                 : _("click to select, click again to deselect\n"
-                     "ctrl+click to rename\n"
-                     "right-click to open the actions menu "
-                     "(invert, solo, rename, delete)\n"
-                     "drag to rearrange, or onto a group to move "
-                     "this raster mask into it"))
-    : _is_multi_path_object(fid)
-      ? g_strdup(_entered_object() == fid
-                 ? _("an AI object whose paths are edited one by one, shown below it\n"
-                     "double-click to stop editing its paths\n"
-                     "click to select, click again to deselect\n"
-                     "ctrl+click to rename\n"
-                     "shift+click to show/hide its paths\n"
-                     "right-click to open the actions menu "
-                     "(invert, solo, rename, delete)\n"
-                     "drag to rearrange")
-                 : _("click to select, click again to deselect\n"
-                     "double-click to edit its paths one by one\n"
-                     "ctrl+click to rename\n"
-                     "shift+click to show/hide this object's expanded controls\n"
-                     "right-click to open the actions menu "
-                     "(invert, solo, solo-edit, rename, delete)\n"
-                     "drag to rearrange, or onto a different group to move"))
-    : is_subgroup
-      ? g_strdup(_("a group inside this group: its own groups are shown below it\n"
-                   "click to select, click again to deselect\n"
-                   "ctrl+click to rename\n"
-                   "shift+click to show/hide its groups\n"
-                   "right-click to open the actions menu "
-                   "(invert, solo, rename, delete)\n"
-                   "drag to rearrange"))
-    : is_drawn_shape
-      ? g_strdup(_("click to select, click again to deselect\n"
-                   "ctrl+click to rename\n"
-                   "shift+click to show/hide this shape's expanded controls\n"
-                   "right-click to open the actions menu "
-                   "(invert, solo, solo-edit, rename, delete)\n"
-                   "drag to rearrange, or onto a different group to move"))
-      : g_strdup(_("click to select, click again to deselect\n"
-                   "ctrl+click to rename\n"
-                   "shift+click to show/hide this channel's expanded controls\n"
-                   "right-click to open the actions menu "
-                   "(invert, solo, rename, delete)\n"
-                   "drag to rearrange, or onto a group to move "
-                   "this channel into it"));
+  // of the three it lands on, so their tooltips read the same. Built from what
+  // this row actually offers, line by line, so it cannot promise a gesture the
+  // row does not have. Freed once, after the last of the three widgets that
+  // needs it is built (see row_evbox below).
+  const gboolean multi_path = _is_multi_path_object(fid);
+  const gboolean entered = multi_path && _entered_object() == fid;
+  GString *tip = g_string_new(NULL);
+  if(entered)
+    g_string_append(tip, _("an AI object whose paths are edited one by one, shown below it\n"));
+  else if(is_subgroup)
+    g_string_append(tip, _("a group inside this group: its own groups are shown below it\n"));
+  g_string_append(tip, _("click to select, click again to deselect\n"));
+  if(multi_path)
+    g_string_append(tip, entered ? _("double-click to stop editing its paths\n")
+                                 : _("double-click to edit its paths one by one\n"));
+  g_string_append(tip, _("ctrl+click to rename\n"));
+  // what shift+click toggles: the chevron this row gets below, if any
+  if(is_subgroup)
+    g_string_append(tip, entered ? _("shift+click to show/hide its paths\n")
+                                 : _("shift+click to show/hide its groups\n"));
+  else if(form->type & DT_MASKS_PARAMETRIC)
+    g_string_append(tip, _("shift+click to show/hide this channel's expanded controls\n"));
+  else if(expandable)
+    g_string_append(tip, (form->type & DT_MASKS_RASTER)
+                           ? _("shift+click to show/hide this raster mask's opacity slider\n")
+                           : _("shift+click to show/hide its expanded controls\n"));
+  g_string_append(tip, _("right-click for its actions: disable, solo, invert, compose,"
+                         " rename, delete\n"));
+  g_string_append(tip, is_subgroup ? _("drag to rearrange")
+                                   : _("drag to rearrange, or onto a group to move it there"));
+  gchar *row_tip = g_string_free(tip, FALSE);
   GtkWidget *handle =
     channel_code ? _make_channel_handle(channel_code, row_tip)
                  : _make_drag_handle((form->type & DT_MASKS_GROUP) ? dtgtk_cairo_paint_masks_multi
@@ -15729,17 +15350,14 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   g_signal_connect(G_OBJECT(evbox), "button-release-event",
                    G_CALLBACK(_row_click_release), module);
 
-  // this slot holds a parametric row's "show output" toggle (see
-  // _masks_param_inout_toggled), keeping alignment with the shape rows
-  // above/below -- NULL for a drawn shape or a raster row (see their own
-  // branches below): solo-edit is now reachable from a drawn shape's own
-  // actions menu instead of a dedicated icon (see _build_shape_actions_menu).
+  // a parametric row's in/out chevron (see _masks_param_inout_toggled), NULL
+  // for every other row kind. Named for the solo-edit button this slot once held
   GtkWidget *soloedit;
   GtkWidget *param_editor = NULL;
   GtkWidget *param_picker_box = NULL;
   // properties expander: every drawn shape gets one (see
-  // _make_props_row_toggle), and a raster row gets one too once "show opacity
-  // slider in expanded elements" gives it something to show (see
+  // _make_props_row_toggle), and a raster row gets one too once "use sliders
+  // for opacity" gives it something to show (see
   // _model_row_is_expandable). Parametric rows do not -- their existing
   // in/out toggle above (soloedit, in this branch) already reveals opacity too.
   GtkWidget *props_toggle = NULL;
@@ -15759,8 +15377,8 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   // for this row kind (see below): the chevron the row header shows, which
   // shift+click on the lead handle or the title also drives programmatically
   // (see _row_click_release, and _auto_expand_selected_row). NULL for a row
-  // with nothing to expand, which is a raster row while "show opacity slider
-  // in expanded elements" is off.
+  // with nothing to expand: a raster row while "use sliders for opacity" is
+  // off, or a shape while "element properties in subpanel" is on.
   GtkWidget *expand_toggle = NULL;
   // a nested group's own groups, shown under its row (see _pack_subgroup)
   GtkWidget *subgroup_box = NULL;
@@ -15823,14 +15441,15 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
     dt_gui_add_class(soloedit, "dt_transparent_background");
     gtk_widget_set_tooltip_text(
       soloedit,
-      _("show/hide this channel's expanded controls (full input and output sliders)"));
+      _("show/hide this channel's expanded controls (input and output sliders,"
+        " boost factor)"));
     g_object_set_data(G_OBJECT(soloedit), "formid", GINT_TO_POINTER(fid));
     g_signal_connect(G_OBJECT(soloedit), "toggled",
                      G_CALLBACK(_masks_param_inout_toggled), module);
     expand_toggle = soloedit;
-    // built here (rather than after row_vbox exists, below) so its two picker
-    // buttons are ready to pack into the header actions cluster next to the
-    // expander/power icons -- they are per-channel controls, not part of the
+    // built here (rather than after row_vbox exists, below) so its picker
+    // button is ready to pack into the header actions cluster next to the
+    // expander -- it is a per-channel control, not part of the slider editor
     param_editor = _build_param_row_editor(module, form, &param_picker_box);
     dt_masks_param_row_editor_t *ped =
       param_editor ? g_object_get_data(G_OBJECT(param_editor), "param-editor") : NULL;
@@ -15875,10 +15494,6 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   }
   else
   {
-    // no more dedicated solo-edit icon -- solo-edit (like every other
-    // gesture this row offers) is now also reachable from the actions menu
-    // opened by a plain click on the row's own lead handle (see
-    // _build_shape_actions_menu / _row_click_press).
     soloedit = NULL;
 
     // opacity is shown inline in the header next to the name (see
@@ -15915,12 +15530,11 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
     g_object_set_data(G_OBJECT(evbox), "expand-toggle", expand_toggle);
   }
 
-  // solo/solo-edit status badge (mutually exclusive, see MASK_SOLO_BADGE_*):
-  // blank unless this element is currently soloed or solo-edited (see
-  // _toggle_solo_form/_toggle_soloedit/_update_shape_row_state) -- occupies a
-  // fixed cell in the row's own badge stack (see _make_badge_stack below)
-  // regardless. Only the solo state is clickable to clear (see
-  // _solo_badge_form_press) -- solo-edit is toggled from the actions menu.
+  // solo/disable status badge (mutually exclusive, see MASK_SOLO_BADGE_*):
+  // blank unless this element is soloed or disabled (see _toggle_solo_form,
+  // _toggle_element_disable, _update_shape_row_state) -- occupies a fixed cell
+  // in the row's own badge stack (see _make_badge_stack below) regardless. A
+  // click clears whichever it shows (see _solo_badge_form_press)
   const gboolean elem_disabled = (fpt->state & DT_MASKS_STATE_DISABLE) != 0;
   GtkWidget *solo_badge = _make_solo_status_badge();
   _set_solo_status_badge(solo_badge, elem_disabled ? MASK_SOLO_BADGE_DISABLE
@@ -16169,10 +15783,10 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
 
   // this element contributes nothing to the mask -- it is disabled, it is
   // suppressed by a solo, or the group holding it is bypassed -- so none of
-  // this row's controls can have any visible effect. Grey them out and dim the
+  // this row's controls can have any visible effect. Gray them out and dim the
   // row, exactly as _update_shape_row_state does for the same three states: it
   // is what every later refresh applies, so a freshly built row that skipped
-  // one of them showed live controls on a row labelled disabled until
+  // one of them showed live controls on a row labeled disabled until
   // something else repainted it. Only the editors and the actions column are
   // made insensitive -- never row_vbox/row_evbox itself, so the row stays
   // selectable and draggable, the same carve-out solo makes.
@@ -16467,9 +16081,9 @@ static void _pack_group(dt_iop_module_t *module,
   gtk_label_set_ellipsize(GTK_LABEL(lbl), PANGO_ELLIPSIZE_MIDDLE);
   gtk_label_set_max_width_chars(GTK_LABEL(lbl), 1);
   // soloed: only this group is used -- shown by a badge, packed into a
-  // fixed-size stack (see _make_badge_stack below) instead of a
-  // button icon (see _make_solo_badge / _toggle_solo_group, triggered by
-  // the header's own "solo" menu item, see _build_group_op_menu). Always present
+  // fixed-size stack (see _make_badge_stack below; _toggle_solo_group,
+  // triggered by the group's actions menu, see _build_group_actions_menu).
+  // Always present
   // (like an element row's own badge), just blank unless active, so
   // soloing an element elsewhere -- which only refreshes rows in place,
   // not headers, see _refresh_all_shape_rows/_apply_group_solo_badges --
@@ -16488,10 +16102,9 @@ static void _pack_group(dt_iop_module_t *module,
   // _refresh_lowop_badges, which also sets its initial state at the end of
   // this rebuild)
   GtkWidget *group_lowop_badge = _make_lowop_badge();
-  // just the (possibly swapped-for-a-rename-entry) title now -- the badges
-  // used to live in here too, but that let their visibility change this
-  // box's own width, throwing off the fixed title column every other row
-  // in the panel now shares (see labevt's size request below).
+  // just the (possibly swapped-for-a-rename-entry) title: badges in here would
+  // change this box's width with their visibility, throwing off the title
+  // column every other row shares (see labevt's size request below).
   GtkWidget *lbl_box = dt_gui_hbox();
   dt_gui_add_class(lbl_box, "mask-row-name");
   dt_gui_box_add(lbl_box, dt_gui_expand(lbl));
@@ -16510,23 +16123,6 @@ static void _pack_group(dt_iop_module_t *module,
   // gets squeezed to nothing on an unusually narrow/crowded row.
   gtk_widget_set_size_request(labevt, DT_PIXEL_APPLY_DPI(50), -1);
   gtk_widget_set_hexpand(labevt, TRUE);
-  gtk_widget_set_tooltip_text(
-    labevt, is_root ? _("the whole mask: every element and group is inside it\n"
-                        "click to select it, which also refines the whole mask\n"
-                        "right-click to open the mask's actions menu "
-                        "(also reachable from the lead icon)")
-            : empty ? _("empty group - select it, then draw a shape (or drop one here) to"
-                        " fill it\n"
-                        "ctrl+click to rename\n"
-                        "drag the row to rearrange\n"
-                        "right-click to open the group's actions menu")
-                    : _("click to select this group\n"
-                        "ctrl+click to rename\n"
-                        "drag the row to rearrange, holding shift when dropping to"
-                        " put it inside the group under the pointer\n"
-                        "right-click to open the group's actions menu "
-                        "(also reachable from the lead icon), which "
-                        "includes \"solo\": use only this group"));
 
   // column 0 is the group's operator (ghandle below). With only one group in
   // its list there is nothing to reorder against, so dragging is disabled
@@ -16541,27 +16137,57 @@ static void _pack_group(dt_iop_module_t *module,
   const dt_masks_point_group_t *nested_ref =
     nested && ngroups == 1 ? _group_point(_module_mask_group(module), grp->formid) : NULL;
   const gboolean shown_nested = nested_ref && _nested_as_group(nested_ref, grp);
+
+  // the title's tooltip, built from what this header offers: the mask's own
+  // group is neither renamed nor moved, and a lone group has nothing to be
+  // dragged against
+  GString *title_tip = g_string_new(NULL);
+  if(is_root)
+  {
+    g_string_append(title_tip, _("the whole mask: every element and group is inside it\n"
+                                 "click to select it: the refinements then act on the"
+                                 " whole mask\n"));
+    g_string_append(title_tip, _("right-click for the mask's actions (also on the lead icon)"));
+  }
+  else
+  {
+    if(empty)
+      g_string_append(title_tip, _("empty group: select it, then draw a shape, or drop"
+                                   " one here, to fill it\n"));
+    g_string_append(title_tip, _("click to select this group, click again to select the"
+                                 " whole mask\n"
+                                 "ctrl+click to rename\n"));
+    if(group_movable || shown_nested)
+      g_string_append(title_tip, _("drag to rearrange, holding shift when dropping to put"
+                                   " it inside the group under the pointer\n"));
+    g_string_append(title_tip, _("right-click for the group's actions (also on the lead"
+                                 " icon): disable, solo, invert, compose, rename, delete"));
+  }
+  gtk_widget_set_tooltip_text(labevt, title_tip->str);
+  g_string_free(title_tip, TRUE);
   // the group's operator: how it folds its own elements, from the bottom one
   // up (masks_revamp_nested_groups.md, Q8)
   gchar *ghandle_tip = g_strdup_printf(
     is_root && group_bypassed ? _("mask operator: %s (disabled)\n"
                                   "the mask keeps its elements, but contributes nothing\n"
+                                  "click its badge to switch it back on\n"
                                   "click to change the operator\n"
-                                  "right-click for actions")
+                                  "right-click for the mask's actions")
     : is_root ? _("mask operator: %s\n"
                   "how the mask combines its elements and groups, from the bottom"
                   " one up\n"
                   "click to change the operator\n"
-                  "right-click for actions (solo, inverting and emptying)")
+                  "right-click for the mask's actions")
     : group_bypassed ? _("group operator: %s (disabled)\n"
                        "this group keeps its elements and its place, but contributes"
                        " nothing to the mask\n"
+                       "click its badge to switch it back on\n"
                        "click to change the operator\n"
-                       "right-click for actions")
+                       "right-click for the group's actions")
                    : _("group operator: %s\n"
                        "how this group combines its elements, from the bottom one up\n"
                        "click to change the operator\n"
-                       "right-click for actions (solo, inverting, emptying and deleting)"),
+                       "right-click for the group's actions"),
     _within_name(group_within));
   GtkWidget *ghandle_btn = NULL;
   GtkWidget *ghandle =
@@ -16723,12 +16349,11 @@ static void _pack_group(dt_iop_module_t *module,
   }
 
   // a bypassed group has no effect on the mask, so none of its own controls
-  // can either -- grey them out, exactly as a solo-suppressed element's
-  // editors are (see _update_shape_row_state). The operator handle and the
-  // header's own event box stay live: the handle is the only way back (it
-  // opens the chooser, which collapses to "resume", see _build_group_op_menu)
-  // and the header must still be selectable/draggable, the same carve-out
-  // solo makes. Element rows inside the group are greyed by _make_shape_row,
+  // can either -- gray them out, exactly as a solo-suppressed element's
+  // editors are (see _update_shape_row_state). The operator handle, the badge
+  // and the header's own event box stay live: the badge and the actions menu
+  // are the way back, and the header must still be selectable/draggable, the
+  // same carve-out solo makes. Element rows inside the group are grayed by _make_shape_row,
   // which reads the bypass bit off each member's own state.
   if(group_bypassed)
   {
@@ -16738,7 +16363,7 @@ static void _pack_group(dt_iop_module_t *module,
 
   // an event box wraps the header so the canvas<->list hover sync can locate
   // this group by any member id (it carries "group-formids") and so clicking
-  // it selects the group / right-clicking deletes it.
+  // it selects the group / right-clicking opens its actions menu.
   GtkWidget *hdr_evbox = _make_group_header_evbox(
     module, hdr, lbl_box, G_CALLBACK(_group_header_press),
     G_CALLBACK(_group_header_release), G_CALLBACK(_masks_header_drag_received),
@@ -16763,10 +16388,9 @@ static void _pack_group(dt_iop_module_t *module,
   // "group-formids", which _masks_group_drag_get reads at drag time, is set
   // just above.
 
-  // selection / delete / reset: a plain primary press returns FALSE (so the group
-  // drag source can arm), the group is selected on release, and right-click
-  // deletes (shift+right-click resets) the group. The base group cannot be
-  // deleted; tag it so the delete handlers refuse it.
+  // a plain primary press returns FALSE (so the group drag source can arm), the
+  // group is selected on release, and right-click opens its actions menu (see
+  // _group_header_press). The base group is tagged, for that menu
   g_object_set_data(G_OBJECT(hdr_evbox), "group-key", GUINT_TO_POINTER(cid));
   g_object_set_data(G_OBJECT(hdr_evbox), "group-op", GINT_TO_POINTER(opstate));
   // "title-label-box" (ctrl+click rename) is tagged by
@@ -16797,8 +16421,8 @@ static void _pack_group(dt_iop_module_t *module,
   // The event box IS group_block (rather than a wrapper around it) on purpose:
   // everything below still refers to group_block for its CSS classes, its drop
   // target and drop-indicator classes, and its position among masks_list_box's
-  // children -- which _canonical_drop_frame walks to find a group's neighbour
-  // (see the one-insertion-slot work). Wrapping would have inserted a level
+  // children -- which _canonical_drop_frame walks to find a group's neighbor.
+  // Wrapping would have inserted a level
   // between the block and that sibling list and broken the drop indicator.
   // Children with their own windows (hdr_evbox, each row's own evbox) still
   // consume their clicks first; only what falls through reaches here.
@@ -16828,18 +16452,16 @@ static void _pack_group(dt_iop_module_t *module,
   // "group-header-widget"/"header-widget" above let other in-place walkers
   // reach this header without a full rebuild.
   g_object_set_data(G_OBJECT(hdr_evbox), "ghandle-widget", ghandle_btn);
-  // so _apply_group_header_dimming can grey these out in place too, not
+  // so _apply_group_header_dimming can gray these out in place too, not
   // just the header's opacity -- while another group/element is soloed,
   // this group contributes nothing, so its own controls should not be
-  // editable either (previously only a bypassed group's controls were
-  // disabled; a merely solo-suppressed group's stayed fully interactive
-  // despite reading as disabled).
+  // editable either.
   g_object_set_data(G_OBJECT(hdr_evbox), "within-sel-widget", within_sel);
   g_object_set_data(G_OBJECT(hdr_evbox), "group-opacity-widget", group_opacity_slider);
   // read back by _apply_group_header_dimming's in-place refresh, so a solo
   // change elsewhere never re-enables a group that is independently
   // bypassed (bypass and solo-suppression are separate reasons a group's
-  // controls stay grey, tracked and cleared independently)
+  // controls stay gray, tracked and cleared independently)
   if(group_bypassed)
     g_object_set_data(G_OBJECT(hdr_evbox), "group-bypassed", GINT_TO_POINTER(1));
 
@@ -17021,7 +16643,7 @@ static GtkWidget *_mask_row_header(GtkWidget *w)
 // its last member, with a tick across the indent to each member's header line
 // (a tree view's ├ and └). The CSS still sets all of it. The width is the
 // box's border-left-width, whose border is transparent and so only reserves
-// the room. The colour is the group HEADER's outline-color, which GTK computes
+// the room. The color is the group HEADER's outline-color, which GTK computes
 // but never draws with no outline-style: the header's own state rules
 // (selected, implied, hover) set it beside its background, so the rail follows
 // its header in every state, hover included, which no selector on the box
@@ -17056,7 +16678,7 @@ static gboolean _masks_rail_draw(GtkWidget *box, cairo_t *cr, gpointer user_data
     if(!gtk_widget_get_visible(child)) continue;
     GtkWidget *hdr = _mask_row_header(child);
     if(!hdr || !gtk_widget_get_visible(hdr)) continue;
-    // centre on the header's visible line, not on its allocation: a CSS margin
+    // center on the header's visible line, not on its allocation: a CSS margin
     // is part of a GTK3 widget's allocation, and a group header carries a
     // 12px top one (.mask-panel-row.mask-group-header), which put its tick
     // in the gap above it
@@ -17068,7 +16690,7 @@ static gboolean _masks_rail_draw(GtkWidget *box, cairo_t *cr, gpointer user_data
     if(!gtk_widget_translate_coordinates(hdr, box, margin.left, margin.top + line / 2,
                                          &hx, &hy))
       continue;
-    // from the rail's inner edge to the header's left edge, centred on its
+    // from the rail's inner edge to the header's left edge, centered on its
     // line; the lowest one is held back for the elbow
     const int top = hy - w / 2;
     if(top > last_top)
@@ -17097,7 +16719,7 @@ static gboolean _masks_rail_draw(GtkWidget *box, cairo_t *cr, gpointer user_data
   if(last_top >= 0)
   {
     // the elbow's outer radius comes from the CSS with the rail's width and
-    // colour. Read through the "border-radius" shorthand, the only radius GTK3
+    // color. Read through the "border-radius" shorthand, the only radius GTK3
     // lets a style context query: it reports the top-left corner, as an int
     // (pack_border_radius in gtkcssshorthandpropertyimpl.c). The per-corner
     // longhands have no query function at all, and asking for one aborts the
@@ -17154,7 +16776,7 @@ static void _hook_mask_rails(GtkWidget *w)
       g_signal_connect_object(G_OBJECT(w), "draw", G_CALLBACK(_masks_rail_draw), hdr,
                               G_CONNECT_AFTER);
       // a state change restyles the header, not its sibling box: redraw the
-      // rail with it, or it keeps the old state's colour
+      // rail with it, or it keeps the old state's color
       g_signal_connect_object(G_OBJECT(hdr), "style-updated",
                               G_CALLBACK(gtk_widget_queue_draw), w, G_CONNECT_SWAPPED);
     }
@@ -17289,8 +16911,8 @@ void _build_masks_list(dt_iop_module_t *module)
 
   // reconcile-by-skip: if nothing the tree is built from has changed since the
   // last build, the rebuilt tree would be identical -- skip the whole teardown/
-  // rebuild. Turns the many defensive/duplicate rebuild requests (see the ~30
-  // call sites) into a cheap hash compare. DT_INVALID_HASH (fresh bd) never
+  // rebuild. Turns the many defensive/duplicate rebuild requests into a cheap
+  // hash compare. DT_INVALID_HASH (fresh bd) never
   // matches, so the first build always runs.
   const dt_hash_t sig = _masks_list_signature(module);
   if(sig != DT_INVALID_HASH && sig == bd->masks_list_sig)
@@ -17326,9 +16948,6 @@ void _build_masks_list(dt_iop_module_t *module)
   // toggle widget, which has to still exist.
   dt_iop_color_picker_reset(module, FALSE);
 
-  // the "add group" button (masks_new_op_box) now lives permanently in
-  // masks_toolbar (see its field comment in blend.h), not in this list, so
-  // the unconditional wipe below no longer needs to spare it first.
   dt_gui_container_remove_children(GTK_CONTAINER(bd->masks_list_box));
 
   // the pending-row sliders (if any) are children of masks_list_box and were
@@ -17412,7 +17031,7 @@ _element_cluster_toggle(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module
 // the arrow toggles on its own press (see below); without this, that press's
 // matching release is unhandled by the arrow and bubbles up to the header
 // event box's own "button-release-event" (_element_cluster_toggle), toggling
-// a second time and cancelling the first -- clicking the chevron would then
+// a second time and canceling the first -- clicking the chevron would then
 // visibly do nothing. Consuming the release here (primary button only, so a
 // right-click still bubbles up for the header's own delete handling) stops
 // that bubble.
@@ -17422,9 +17041,8 @@ _element_cluster_arrow_release(GtkWidget *w, GdkEventButton *e, gpointer user_da
   return e->button == GDK_BUTTON_PRIMARY;
 }
 
-// right-click deletes every member of the cluster (like right-click on a
-// group header deletes the whole group, see _group_header_press); a plain
-// primary press must return FALSE so the drag source can arm (see the
+// right-click deletes every member of the cluster; a plain primary press must
+// return FALSE so the drag source can arm (see the
 // drag_source_set on hdr_evbox below) -- the toggle itself happens on
 // release instead, same press/release split every other draggable
 // row/header in this file uses (e.g. _row_click_press).
@@ -17440,15 +17058,6 @@ _element_cluster_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   return FALSE;
 }
 
-// pack one group's element rows into `container`, nested under that group's header.
-// `grp` is the group form whose list holds the group: the mask's own, or a
-// nested group's. `fids` is the run's member ids bottom-up (consumed/freed here). Same-kind drawn
-// shapes fold into expand/collapse clusters (no actions); parametric forms are never
-// folded (each keeps its own inline editor). `group_formids`/`group_frame` let
-// every element row also double as a group/empty-group reorder drop target (see
-// _make_shape_row): otherwise only the thin header row would accept such a drop,
-// and dragging a group over any of a target group's own elements -- very easy to
-// do by accident, since the header row is thin -- would be silently rejected.
 // A member that is a nested group, shown as a group of its own like a
 // top-level one: it holds one group, and its reference carries nothing the
 // group's header cannot show (migration moves a reference's opacity and
@@ -17467,6 +17076,14 @@ static gboolean _nested_as_group(const dt_masks_point_group_t *pt, const dt_mask
   return TRUE;
 }
 
+// pack one group's element rows into `container`, nested under that group's
+// header. `grp` is the group form whose list holds the group: the mask's own,
+// or a nested group's. `fids` is the run's member ids bottom-up
+// (consumed/freed here). Same-kind drawn shapes fold into expand/collapse
+// clusters; parametric forms are never folded (each keeps its own inline
+// editor). `group_formids`/`group_frame` let every element row also double as
+// a group/empty-group reorder drop target (see _make_shape_row): otherwise
+// only the thin header row would accept such a drop
 static void _pack_group_elements(dt_iop_module_t *module,
                                  dt_masks_form_t *grp,
                                  GtkWidget *container,
@@ -17584,8 +17201,8 @@ static void _pack_group_elements(dt_iop_module_t *module,
     // _make_shape_row), so a collapsed cluster still shows what it is -- just
     // column-aligned; the actual drag source is hdr_evbox below (the whole
     // header row, like a group's), not this icon itself
-    GtkWidget *kicon =
-      _make_drag_handle(_kind_icon_paint(kind), TRUE, _kind_name(kind, FALSE));
+    // no tooltip of its own: the header's, below, covers the icon too
+    GtkWidget *kicon = _make_drag_handle(_kind_icon_paint(kind), TRUE, NULL);
     // label and disclosure triangle side-by-side
     GtkWidget *lblbox = dt_gui_hbox();
     gtk_box_set_spacing(GTK_BOX(lblbox), DT_PIXEL_APPLY_DPI(4));
@@ -17599,10 +17216,12 @@ static void _pack_group_elements(dt_iop_module_t *module,
     GtkWidget *hdr_evbox = gtk_event_box_new();
     gtk_event_box_set_visible_window(GTK_EVENT_BOX(hdr_evbox), TRUE);
     gtk_container_add(GTK_CONTAINER(hdr_evbox), chdr);
-    gtk_widget_set_tooltip_text(hdr_evbox, _("click to expand or collapse\n"
-                                             "drag anywhere in the row to move every "
-                                             "member together, like a single element\n"
-                                             "right-click to delete every member"));
+    gtk_widget_set_tooltip_text(hdr_evbox, _("elements of one kind, next to each other,"
+                                             " folded into one row\n"
+                                             "click to expand or collapse\n"
+                                             "drag anywhere in the row to move them all"
+                                             " together, like a single element\n"
+                                             "right-click to delete them all"));
 
     GtkWidget *rev = gtk_revealer_new();
     gtk_container_add(GTK_CONTAINER(rev), inner);
@@ -17862,8 +17481,8 @@ static void _rebuild_param_channel_buttons(dt_iop_module_t *module)
 
 // add a raster mask element referencing the given upstream source module + mask
 // id. Raster elements are first-class: several can coexist in a module's group,
-// each referencing a different source, each composited with its own operator --
-// exactly like shapes and parametric channels. The source->this-module
+// each referencing a different source -- exactly like shapes and parametric
+// channels. The source->this-module
 // dependency is wired at commit time by _reconcile_raster_form_users
 // (imageop.c), which registers every raster FORM's source (and survives edit
 // reload), so nothing here touches the single legacy blend_params raster sink.
@@ -17918,9 +17537,8 @@ static void _add_raster_mask(dt_iop_module_t *self,
 // on the module's current panel selection (bd->panel_selected_formid /
 // panel_selected_group_cid), which changes as the user clicks around. Each one
 // is a thin wrapper around the same helper the matching click handler already
-// uses (see _toggle_element_hidden, _toggle_ids_hidden, _invert_element,
-// _invert_group_members, _toggle_soloedit, _build_group_op_menu,
-// _build_within_menu, _stage_new_group, _add_parametric_channel), so a
+// uses (see _invert_element, _invert_group_members, _group_op_apply,
+// _build_within_menu, _stage_new_group), so a
 // keyboard shortcut and the matching mouse click always do exactly the same
 // thing.
 //
@@ -17983,10 +17601,10 @@ static void _shortcut_change_group_mode(dt_action_t *action)
   _build_within_menu(anchor, module, bd->panel_selected_group_cid);
 }
 
-// toggle "bypass" on the selected group: the keyboard counterpart of the bypass
-// entry in the operator chooser (see _build_group_op_menu). Worth its own
-// shortcut because it is the one operator meant to be flipped back and forth
-// while judging an edit.
+// toggle "bypass" on the selected group: the keyboard counterpart of the
+// "disable" entry in the group's actions menu (see _build_group_actions_menu).
+// Worth its own shortcut because it is meant to be flipped back and forth while
+// judging an edit.
 static void _shortcut_toggle_group_bypass(dt_action_t *action)
 {
   dt_iop_module_t *module = dt_dev_gui_module();
@@ -17997,21 +17615,10 @@ static void _shortcut_toggle_group_bypass(dt_action_t *action)
   _group_op_apply(module, bd->panel_selected_group_cid, DT_MASKS_STATE_OP_BYPASS);
 }
 
-static void _shortcut_change_group_within_mode(dt_action_t *action)
-{
-  dt_iop_module_t *module = dt_dev_gui_module();
-  if(!module || !module->blend_data) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  dt_masks_form_t *grp = _module_mask_group(module);
-  if(!grp || !dt_is_valid_maskid(bd->panel_selected_group_cid)) return;
-  GtkWidget *anchor = bd->masks_list_box ? GTK_WIDGET(bd->masks_list_box) : module->widget;
-  _build_within_menu(anchor, module, bd->panel_selected_group_cid);
-}
-
-// the panel options (see _add_masks_panel_options_menu) are check items on a
-// menu that is rebuilt from conf on every popup, so there is no persistent
+// the panel options (see _add_masks_panel_options_box) are check buttons in a
+// popover that is rebuilt from conf on every opening, so there is no persistent
 // widget for dt_action_define_iop to bind to. These give each option a
-// bindable shortcut anyway, flipping the same conf key the menu item does.
+// bindable shortcut anyway, flipping the same conf key the check button does.
 static void _shortcut_toggle_preview_on_hover(dt_action_t *action)
 {
   _preview_on_hover_set(!_preview_on_hover_is_on());
@@ -18052,12 +17659,26 @@ static void _shortcut_toggle_masks_panel(dt_action_t *action)
   dt_iop_gui_blend_masks_panel_toggle();
 }
 
+// the "blend mask" caption folds the panel like the arrow beside it. The
+// sequence is claimed so that, in the canvas panel, the header around it
+// (_flexi_header_pressed in gui/gtk.c) does not fold it a second time
+static void _masks_caption_clicked(GtkGestureSingle *gesture,
+                                   gint n_press,
+                                   gdouble x,
+                                   gdouble y,
+                                   gpointer user_data)
+{
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  gtk_gesture_set_state(GTK_GESTURE(gesture), GTK_EVENT_SEQUENCE_CLAIMED);
+  if(n_press == 1) _flexi_inline_collapse_clicked(NULL, user_data);
+}
+
 // register every panel-selection shortcut above under "<blending> / masks", the
 // same shared tree the panel's own widget actions land in (dt_action_define_iop
 // routes a "blend`masks" section to darktable.control->actions_blend). Not under
 // module->so: none of these acts on a particular operation -- each resolves its
 // module through dt_dev_gui_module() -- so an owner per operation only listed
-// the same twelve entries again under every module that supports masking, mixed
+// the same entries again under every module that supports masking, mixed
 // in among that module's own parameters. Called once per instance init;
 // repeated registration of a path that already exists is expected and harmless
 // (dt_action_register only fills in a node still typed as a section).
@@ -18069,18 +17690,16 @@ static void _register_masks_action_shortcuts(void)
                      _shortcut_toggle_masks_panel, 0, 0);
   dt_action_register(masks, N_("add group above selected group"),
                      _shortcut_add_group_above_selected, 0, 0);
-  dt_action_register(masks, N_("invert selected group visibility"),
+  dt_action_register(masks, N_("invert all elements of selected group"),
                      _shortcut_invert_selected_group, 0, 0);
-  dt_action_register(masks, N_("invert selected element visibility"),
+  dt_action_register(masks, N_("invert selected element"),
                      _shortcut_invert_selected_element, 0, 0);
-  dt_action_register(masks, N_("toggle solo-edit for current shape"),
+  dt_action_register(masks, N_("toggle solo edit"),
                      _shortcut_toggle_soloedit, 0, 0);
-  dt_action_register(masks, N_("change mode for current group"),
+  dt_action_register(masks, N_("change operator of selected group"),
                      _shortcut_change_group_mode, 0, 0);
   dt_action_register(masks, N_("bypass/resume current group"),
                      _shortcut_toggle_group_bypass, 0, 0);
-  dt_action_register(masks, N_("change within-group mode for current group"),
-                     _shortcut_change_group_within_mode, 0, 0);
   dt_action_register(masks, N_("preview channel under cursor"),
                      _shortcut_toggle_preview_on_hover, 0, 0);
   dt_action_register(masks, N_("sticky opacity"),
@@ -18140,12 +17759,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     dt_gui_remove_class(bd->masks_new_op_box, "mask-op-combo");
     g_object_set_data(G_OBJECT(bd->masks_new_op), "module", module);
     _new_shape_op_update(bd->masks_new_op);
-    gtk_widget_set_tooltip_text(bd->masks_new_op_box,
-                                _("add a new group inside the selected group\n"
-                                  "(or at the top of the mask, if none is selected)\n"
-                                  "click to pick its operator\n"
-                                  "right-click for group layout presets, which"
-                                  " build a whole set of groups at once"));
     gtk_widget_show(bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
 
@@ -18167,8 +17780,8 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
 
     // solo edit sits on the panel header, next to "edit on canvas": it is used
     // interactively, and its state has to be visible while editing. The channel
-    // preview is a set-once mode, so it lives in the panel options menu instead
-    // (see _add_masks_panel_options_menu).
+    // preview is a set-once mode, so it lives in the panel options instead (see
+    // _add_masks_panel_options_box).
     bd->soloedit_mode = dt_iop_togglebutton_new(
       module, "blend`tools", N_("solo edit the selection"), NULL,
       G_CALLBACK(_soloedit_mode_toggled), FALSE, 0, 0,
@@ -18575,9 +18188,6 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   dt_bauhaus_slider_set(bd->details_slider, bp->details);
   _update_refine_sensitivity(module);
 
-  /* reset all alternative display modes for blendif */
-  memset(bd->altmode, 0, sizeof(bd->altmode));
-
   // keep the flexi "add parametric" channel buttons in sync with the csp
   _rebuild_param_channel_buttons(module);
 
@@ -18592,8 +18202,8 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
   const gboolean mode_parametric = mask_mode & DEVELOP_MASK_CONDITIONAL;
   // flexi reuses the drawn-group toolbar/renderer (see _blendop_masks_mode_callback)
   const gboolean mode_drawn_or_flexi = mode_drawn || mode_flexi;
-  // mask off shows the flexi panel greyed out rather than an empty panel --
-  // see _blendop_masks_mode_callback, which this mirrors
+  // mask off shows the flexi panel, live, rather than an empty panel -- see
+  // _blendop_masks_mode_callback, which this mirrors
   const gboolean show_mask_ui = !mode_raster;
   const gboolean show_flexi_ui = !mode_raster;
 
@@ -18641,7 +18251,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     if(module->mask_indicator)
       gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(module->mask_indicator), FALSE);
 
-    // mask off: still shown, greyed, as the preview described above
+    // mask off: still shown, as the rest of the panel is
     _box_set_visible(bd->refine_box,
                      !mask_enabled || (bd->raster_inited && mode_raster));
   }
@@ -18667,8 +18277,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     const gboolean has_group = grp && grp->points;
     const gboolean had_list = bd->masks_list_sig != DT_INVALID_HASH;
     if(mode_flexi || !has_group || !had_list) _build_masks_list(module);
-    // and nothing of an off mask belongs on canvas (this used to fall to the
-    // classic branch below, which is now reached only by a live classic mask)
+    // and nothing of an off mask belongs on canvas
     if(!mask_enabled) dt_masks_set_edit_mode(module, DT_MASKS_EDIT_OFF);
   }
   else if(bd->masks_inited)
@@ -18966,6 +18575,12 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     GtkWidget *caption_label = dt_ui_label_new(_("blend mask"));
     gtk_widget_set_name(caption_label, "blending-tabs-caption");
     bd->masks_blend_header_label = caption_label;
+    // expands over the gap up to the buttons, so all of it is the click target
+    GtkWidget *caption_evb = dt_gui_expand(gtk_event_box_new());
+    gtk_event_box_set_visible_window(GTK_EVENT_BOX(caption_evb), FALSE);
+    gtk_container_add(GTK_CONTAINER(caption_evb), caption_label);
+    dt_gui_connect_click(caption_evb, _masks_caption_clicked, NULL, module);
+    gtk_widget_set_tooltip_text(caption_evb, _("click to show or hide the mask panel"));
 
     // "blend mask" header, in one fixed reading order:
     //
@@ -18980,7 +18595,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // _masks_header_apply_side. The preferences gear stays hidden: the
     // blending options open on the on/off toggle's right-click.
     GtkWidget *gbox =
-      dt_gui_hbox(bd->flexi_inline_collapse_btn, caption_label);
+      dt_gui_hbox(bd->flexi_inline_collapse_btn, caption_evb);
     dt_gui_add_class(gbox, "dt_section_label");
     dt_gui_add_help_link(gbox, "masks_blending");
     gtk_widget_set_name(gbox, "blending-tabs");
@@ -19024,7 +18639,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     bd->mask_lock_btn = dt_iop_togglebutton_new(
       module, "blend`masks", N_("lock mask"), NULL,
       G_CALLBACK(_mask_lock_clicked), FALSE, 0, 0,
-      dtgtk_cairo_paint_lock, NULL);
+      dtgtk_cairo_paint_mask_lock, NULL);
     gtk_widget_set_valign(bd->mask_lock_btn, GTK_ALIGN_CENTER);
     // shown by _mask_lock_sync only, never by an ancestor's show_all
     gtk_widget_set_no_show_all(bd->mask_lock_btn, TRUE);
@@ -19140,10 +18755,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     // NB: the six "mask refinement" controls are deliberately *not* bound to
     // blend_params via dt_bauhaus_widget_set_field. They are driven by the
-    // unified _refine_control_changed handler so they can target one of three
-    // scopes (global / all shapes / a parametric form). In global scope it
-    // writes blend_params exactly as the old set_field bindings did, so classic
-    // and flexi-global refinement stay byte-identical.
+    // unified _refine_control_changed handler so they can target the scope the
+    // list selection implies (see the scoped mask refinement banner); only the
+    // GLOBAL scope writes blend_params.
     bd->masks_feathering_guide_combo = _combobox_new_from_list(
       module, N_("feathering guide"), dt_develop_feathering_guide_names, NULL,
       _("choose to guide mask by input or output image and\n"
@@ -19208,8 +18822,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     bd->masks_refine_section_label = dt_ui_section_label_new(_("refinement"));
     gtk_widget_set_tooltip_text(bd->masks_refine_section_label,
-                                _("the refinement of the selected element or group, or of"
-                                  " the whole mask if nothing is selected."));
+                                _("refines the selected element or group, or the whole"
+                                  " mask if nothing is selected\n"
+                                  "click to expand or collapse"));
     _stash_base_tooltip(bd->masks_refine_section_label);
 
     GtkWidget *header_evb = gtk_event_box_new();
@@ -19251,7 +18866,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_add_class(bd->masks_refine_name_label, "mask-refine-header-name");
     gtk_widget_set_tooltip_text(bd->masks_refine_name_label,
                                 _("the properties and refinement of the selected element or"
-                                  " group, or of the whole mask if nothing is selected"));
+                                  " group, or of the whole mask if nothing is selected\n"
+                                  "click to expand or collapse"));
 
     GtkWidget *details_evb = gtk_event_box_new();
     gtk_container_add(GTK_CONTAINER(details_evb),
@@ -19287,7 +18903,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_add_class(bd->masks_refine_bypass_btn, "mask-refine-bypass-btn");
     gtk_widget_set_tooltip_text(
       bd->masks_refine_bypass_btn,
-      _("temporarily disable the effect of refinements for this target"));
+      _("bypass the refinement of this target, keeping its settings\n"
+        "click again to bring it back"));
     g_signal_connect(G_OBJECT(bd->masks_refine_bypass_btn), "toggled",
                      G_CALLBACK(_refine_bypass_toggled), module);
     gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_bypass_btn, FALSE, FALSE, 0);
@@ -19336,7 +18953,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       GtkWidget *label = dt_ui_section_label_new(_("properties"));
       gtk_widget_set_tooltip_text(
         label, _("the properties of the selected element or group, or the creation"
-                 " controls of a shape being drawn"));
+                 " controls of a shape being drawn\n"
+                 "click to expand or collapse"));
       GtkWidget *label_evb = gtk_event_box_new();
       gtk_container_add(GTK_CONTAINER(label_evb), label);
       dt_gui_connect_click(label_evb, _props_panel_header_clicked, NULL, bd);
@@ -19398,7 +19016,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
       GtkWidget *label = dt_ui_section_label_new(_("mask consumers"));
       gtk_widget_set_tooltip_text(
         label, _("the modules further down the pipe that use this module's mask as"
-                 " a raster mask. click one to go to its mask panel."));
+                 " a raster mask. click one of them to go to its mask panel\n"
+                 "click here to expand or collapse"));
       GtkWidget *label_evb = gtk_event_box_new();
       gtk_container_add(GTK_CONTAINER(label_evb), label);
       dt_gui_connect_click(label_evb, _consumers_header_clicked, NULL, bd);
@@ -19430,12 +19049,6 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                                 _consumers_history_changed, module);
     }
     _sections_apply(bd);
-
-    // the standalone "element properties" panel that used to live here is
-    // gone -- per-shape/raster/group/parametric properties are now inline
-    // expanders on each row instead (see _build_props_row_editor /
-    // _make_props_row_toggle, wired from _make_shape_row and the group-header
-    // block in _build_masks_list).
 
     gtk_widget_set_name(GTK_WIDGET(iopw), "blending-wrapper");
 

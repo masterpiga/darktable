@@ -879,13 +879,13 @@ dialog .sidebar row:selected:hover label,
 @define-color mask_hover_top     rgba(255, 255, 255, 0.7);
 @define-color mask_hover         rgba(255, 255, 255, 0.4);
 
-/* every row/header kind in the panel (element/parametric/raster row, real
-   group header, empty-group header, cluster header) has its own unique widget
-   id for CSS -- #mask-shape-row, #mask-group-header-row, #mask-empty-header-row,
-   #mask-cluster-header-row -- but shares this .mask-panel-row class for base
+/* every row/header kind in the panel (element/parametric/raster row, group
+   header, cluster header) has its own unique widget id for CSS --
+   #mask-shape-row, #mask-group-header-row, #mask-cluster-header-row -- but
+   shares this .mask-panel-row class for base
    styling and state washes that apply identically to every kind, so none of
    that has to be repeated per id. A transparent border keeps the box model
-   stable across states (drag indicators colour one edge of it, see below).
+   stable across states (drag indicators color one edge of it, see below).
    The top margin is the one gap between a row and whatever is above it: a
    row, its group's header, or the end of a rail */
 .mask-panel-row
@@ -927,7 +927,7 @@ dialog .sidebar row:selected:hover label,
    panel, whatever its depth, so the panel reads as the darker ground behind
    them, and only brightens further when selected, implied or hovered (the
    state rules below). outline-color is never drawn here: it is
-   the colour of the rail hanging from this header (see .mask-group-elements
+   the color of the rail hanging from this header (see .mask-group-elements
    and _masks_rail_draw), set beside the background in every state so the two
    cannot disagree */
 .mask-element-header
@@ -939,8 +939,8 @@ dialog .sidebar row:selected:hover label,
   outline-color: @mask_rest;
 }
 
-/* "selected" wash, grayscale only: no accent colour, just a lighter shade of
-   the panel itself, so it reads as "highlighted" rather than "coloured".
+/* "selected" wash, grayscale only: no accent color, just a lighter shade of
+   the panel itself, so it reads as "highlighted" rather than "colored".
    Applied to the whole group block when a group is selected (see
    _apply_group_selection / "header-widget" in _build_masks_list, which points
    at the group's full body, not just its header) and to a single row when a
@@ -1001,8 +1001,8 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* transient hover wash (canvas <-> list sync). Also applied to a row/header
-   while the pointer is over the list row itself (_row_crossing) or over the
-   docked parametric editor's own controls (_parametric_wrap_crossing), so
+   while the pointer is over the list row itself or over its docked editors'
+   own controls (_row_crossing for both), so
    hovering the panel reads exactly like hovering the matching shape on the
    canvas. Brighter than the selection, and shown over it: see the id rules
    after the group solo wash below, which outrank the selected shades */
@@ -1031,7 +1031,7 @@ dialog .sidebar row:selected:hover label,
 
 /* group reorder DnD: a bright insertion line on the edge where the dragged group
    would land (top half of a header = above, bottom half = below). The base row
-   already carries a 2px transparent border, so colouring one edge does not shift
+   already carries a 2px transparent border, so coloring one edge does not shift
    the layout. */
 .mask-panel-row.mask-list-row-drop-above
 {
@@ -1044,13 +1044,13 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* each group (header + its element rows) is one visual block, separated from
-   its neighbours by its header's top margin (see .mask-panel-row) -- no
+   its neighbors by its header's top margin (see .mask-panel-row) -- no
    divider line, since the group header's own background (.mask-group-header)
    already reads as the start of a new group on its own. */
 .mask-group-block
 {
   /* the insertion line's transparent borders, reserved up front so showing
-     it only colours an existing edge. The block is an event box, which
+     it only colors an existing edge. The block is an event box, which
      reserves no room for them: the line overlaps the gap instead */
   margin-top: 0;
   border-top: 2px solid transparent;
@@ -1111,11 +1111,11 @@ dialog .sidebar row:selected:hover label,
   /* the rail, drawn in code (_masks_rail_draw) so it can stop at the last
      member and tick across to each member's header, like a tree view. Its
      width is this border's: the border itself stays transparent and only
-     reserves the room. Its colour is NOT set here but on the group's header,
+     reserves the room. Its color is NOT set here but on the group's header,
      as outline-color (see .mask-panel-row.mask-group-header): the header's
      state rules set it beside its background, so the rail follows the header
      into selection and hover alike. Every rail in the panel is 3px:
-     thickness is not a signal here, colour is. */
+     thickness is not a signal here, color is. */
   border-left: 3px solid transparent;
   /* the outer radius of the rounded elbow where the rail turns into its last
      tick (└). Top-left although the elbow is at the bottom: it is the one
@@ -1163,8 +1163,7 @@ dialog .sidebar row:selected:hover label,
   opacity: 1.0;
 }
 
-/* group headers (#mask-group-header-row and #mask-empty-header-row alike):
-   the same resting shade as an element's, and the same rail colour in
+/* group headers (#mask-group-header-row), empty groups' included: the same resting shade as an element's, and the same rail color in
    outline-color (see .mask-element-header) */
 .mask-panel-row.mask-group-header
 {
@@ -1225,25 +1224,13 @@ dialog .sidebar row:selected:hover label,
   outline-color: @mask_selected;
 }
 
-/* an empty group's own header doubles as its drag-drop highlight frame (see
-   _group_drop_motion's `frame` argument for _pack_empty_group_header) -- a
-   real group's frame is its group-block instead, so this collision (the drop
-   wash needing to outrank the resting background above) is empty-group-only.
-   Targeted by #mask-empty-header-row's own unique id (specificity always
-   beats a class-only selector, however many classes), rather than another
-   same-specificity class combo that would again depend on declaration order. */
-#mask-empty-header-row.mask-list-row-drop
-{
-  background-color: rgba(255, 255, 255, 0.20);
-}
-
 /* the solo wash on a soloed group's own header (see _build_masks_list, which
-   adds .mask-list-row-solo to the header row itself). Same collision as the
-   drop wash above: the plain .mask-panel-row.mask-list-row-solo rule shares
-   its two-class specificity with the resting background rule, which is
-   declared later and so swallowed it entirely, leaving a soloed group header
-   indistinguishable from any other. Same fix, and for the same reason: the
-   row's own id, so it does not come down to declaration order. */
+   adds .mask-list-row-solo to the header row itself). The plain
+   .mask-panel-row.mask-list-row-solo rule shares its two-class specificity
+   with the resting background rule, which is declared later and so swallowed
+   it entirely, leaving a soloed group header indistinguishable from any
+   other. The row's own id outranks any class-only selector, so this does not
+   come down to declaration order. */
 #mask-group-header-row.mask-list-row-solo
 {
   background-color: rgba(255, 255, 255, 0.14);
@@ -1255,7 +1242,6 @@ dialog .sidebar row:selected:hover label,
    gradient starts brighter than the selection's, so a hovered header is
    always the brightest, and the rail takes the shade it ends on */
 #mask-group-header-row.mask-list-row-hover,
-#mask-empty-header-row.mask-list-row-hover,
 #mask-shape-row.mask-list-row-hover > * > .mask-element-header
 {
   background-color: transparent;
@@ -1671,8 +1657,8 @@ button.mask-row-expander:hover
 }
 
 /* every bauhaus slider paints its own pill-shaped background from its own CSS
-   context (see dt_bauhaus_draw), which #bauhaus-slider fills with the plugin
-   background colour -- override it to transparent here so the boost factor
+   context (see _widget_draw in bauhaus.c), which #bauhaus-slider fills with the plugin
+   background color -- override it to transparent here so the boost factor
    and properties sliders stop reading as separate gray boxes. #bauhaus-slider
    + class beats the plain #bauhaus-slider rule on specificity. */
 #bauhaus-slider.mask-boost-factor-slider,
@@ -1713,9 +1699,8 @@ button.mask-row-expander:hover
      "button:disabled" rule (border: 0.07em solid ...) outranks a single class
      selector -- this is the "border appears only when nothing is selected"
      symptom.
-   - the buttons grab focus on hover (see _param_channel_button_enter, so a 'c'
-     keypress can toggle a preview), and "button:focus" is likewise more
-     specific than the plain class.
+   - the buttons grab focus on hover (see _preview_on_hover_enter), and
+     "button:focus" is likewise more specific than the plain class.
    Repeat the override on ":disabled"/":focus"/":hover"/":active" so it wins in
    every state. */
 .mask-channel-add-btn,
@@ -1754,7 +1739,7 @@ button.mask-row-expander:hover
 
 /* inverted components (shape drag handle, soloed badge) swap to light
    background / dark foreground for clear feedback at a glance. No padding
-   here: this rule is only a colour swap, and must not resize the box it
+   here: this rule is only a color swap, and must not resize the box it
    colors */
 .mask-list-handle-inverted,
 .mask-power-solo
@@ -1809,7 +1794,7 @@ button.mask-consumer-row:hover .mask-link-glyph
    opacity is under 10% is nearly (or entirely) invisible, which used to be
    prevented by a hard 5% floor rather than reported. Unlike the solo badge this
    is not a chip -- dtgtk_cairo_paint_warning is already a solid triangle, so it
-   only needs a foreground colour, and an amber one reads as a caution without
+   only needs a foreground color, and an amber one reads as a caution without
    the alarm of a full red. Transparent background so it sits in the row rather
    than on top of it. */
 .mask-lowop-warn
@@ -1822,7 +1807,7 @@ button.mask-consumer-row:hover .mask-link-glyph
 /* no-op badge (see _make_lowop_badge / _lowop_badge_draw's "badge-noop" data
    flag): a parametric channel still at its full/base range contributes
    nothing to the mask at all, which is a stronger, different fact than "low
-   opacity" -- a neutral grey (not the amber warning colour) in the same
+   opacity" -- a neutral gray (not the amber warning color) in the same
    slot, taking precedence over the opacity badge, since a no-op element's
    opacity is moot. */
 .mask-noop-warn
@@ -3378,7 +3363,7 @@ treeview *:checked:not(check),
 }
 
 /* a checked check button that has gone insensitive: the rule above paints the
-   indicator at full contrast whatever the state, so an option greyed out
+   indicator at full contrast whatever the state, so an option grayed out
    because it depends on another one still read as live and clickable */
 checkbutton check:checked:disabled
 {

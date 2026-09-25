@@ -33,7 +33,7 @@
 #endif
 #endif
 
-#define DEVELOP_MASKS_VERSION (10)
+#define DEVELOP_MASKS_VERSION (11)
 
 G_BEGIN_DECLS
 
@@ -878,6 +878,18 @@ int dt_masks_group_render_roi(dt_iop_module_t *module,
 int dt_masks_version(void);
 
 // update masks from older versions
+/** bytes one stored point of a `type` form takes in a blob written at masks
+    `version`, for a current point struct of `point_size` bytes */
+size_t dt_masks_point_stride(const dt_masks_type_t type,
+                             const int version,
+                             const size_t point_size);
+/** decode one stored point at `src`, written at masks `version`, into the
+    current layout at `point` (`point_size` bytes, zero-filled by the caller) */
+void dt_masks_point_from_blob(const dt_masks_type_t type,
+                              const int version,
+                              const size_t point_size,
+                              const char *src,
+                              char *point);
 int dt_masks_legacy_params(dt_develop_t *dev,
                            void *params,
                            const int old_version,

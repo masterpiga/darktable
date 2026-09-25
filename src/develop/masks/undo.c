@@ -393,7 +393,7 @@ typedef struct
   int compared, disagreed, live, undo_bad, redo_bad;
 } case_tally_t;
 
-/** Point an already-initialised replay at a state and render it. The replay
+/** Point an already-initialized replay at a state and render it. The replay
     keeps ownership of nothing here: `forms` is duplicated in. */
 static float *_render_state(replay_t *r, const state_t *s)
 {

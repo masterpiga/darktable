@@ -200,7 +200,7 @@ static inline double _marker_height_factor(const dt_bauhaus_marker_shape_t shape
 // one size for every handle, whatever its state: the selected one is picked
 // out by color alone, the way a bauhaus slider's indicator is. a handle that
 // grew under the pointer would shift its own outer edge off the widget
-// border and nudge the neighbouring positions' apparent spacing
+// border and nudge the neighboring positions' apparent spacing
 static double _marker_radius(GtkWidget *widget,
                              const dt_bauhaus_marker_shape_t shape)
 {
@@ -501,7 +501,7 @@ static void _gradient_slider_button_pressed(GtkGestureSingle *gesture,
 
   // claim the sequence so an ancestor's own gesture (e.g. the scrolled
   // panel this slider lives in) can't steal it once the pointer starts
-  // moving -- without this, dragging a marker is cancelled after the
+  // moving -- without this, dragging a marker is canceled after the
   // first move: the panel's gesture claims the in-progress sequence, and
   // this widget's own gesture receives "cancel" (see _gesture_cancel,
   // which synthesizes a "released" and ends the drag right there)
@@ -955,7 +955,7 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
   // A 4-point open/filled/filled/open marker set is the "range + feather"
   // convention (parametric blendif channels): paint the feather zones
   // directly on the gradient bar, white and fading from the open (feather)
-  // point to full opacity at the neighbouring filled (range) point, plus a
+  // point to full opacity at the neighboring filled (range) point, plus a
   // plain outline around the flat, fully-selected zone between the two
   // filled points. The open marker's own up/down bit decides which edge
   // (top or bottom) each wedge's point sits on, so this follows polarity
@@ -1017,7 +1017,7 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
   // input keeps targeting the last-touched marker -- see button_release),
   // so it tracks stale state, not the cursor; while dragging, follow the
   // grabbed marker instead so it stays highlighted even if the pointer
-  // drifts past a neighbour. gslider->active is recomputed on every motion
+  // drifts past a neighbor. gslider->active is recomputed on every motion
   // event via the same nearest-wins hit-test as clicking uses, so hover
   // tracks the closest point even without an exact hit.
   const gint hovered_marker = gslider->pinned >= 0 ? gslider->pinned
@@ -1245,7 +1245,7 @@ void dtgtk_gradient_slider_multivalue_set_value_pushing
                                                         value,
                                                         GRADIENT_SLIDER_SET),
                                0.0, 1.0);
-  // _slider_move (FREE_MARKERS branch) only ever pushes the neighbour that
+  // _slider_move (FREE_MARKERS branch) only ever pushes the neighbor that
   // lies on the side newpos is heading towards -- the same direction a mouse
   // drag would be moving in to reach it.
   const gint direction = (newpos < gslider->position[pos]) ? MOVE_LEFT : MOVE_RIGHT;

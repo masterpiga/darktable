@@ -30,7 +30,7 @@
  * Shared by --roundtrip-masks and --styleapply-masks, which both need an image
  * that exists only for the duration of one comparison. Every one of these
  * writes to the database, so they are only ever safe against a scratch library
- * (`--library :memory:`), never a real catalogue.
+ * (`--library :memory:`), never a real catalog.
  */
 
 /** Give `dev` the scratch image's identity, before reading its history.

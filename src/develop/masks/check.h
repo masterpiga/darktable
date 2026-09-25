@@ -44,7 +44,7 @@
 //
 // Like --roundtrip-masks and --styleapply-masks it drives the real history
 // writer against a scratch image id, so it needs `--library :memory:` and must
-// never be pointed at a real catalogue.
+// never be pointed at a real catalog.
 
 #include <glib.h>
 
