@@ -1352,26 +1352,6 @@ dialog .sidebar row:selected:hover label,
   padding-left: 8px;
 }
 
-/* the properties and the refinement are collapsibles inside the details
-   expander's own: one inset for the nesting, not two, so their controls use
-   the panel's full width however narrow it is hosted */
-.mask-details #collapsible
-{
-  padding-left: 0;
-  padding-right: 0;
-  border-left-width: 0;
-  border-right-width: 0;
-}
-
-/* the properties are wrapped for their own reveal, which names their box
-   #blending-box and so would inset them once more than the refinement beside
-   them (see #blending-box above) */
-.mask-details #blending-box
-{
-  padding-left: 0;
-  padding-right: 0;
-}
-
 /* the properties subpanel holds one element's or group's editor, or a pending
    shape's creation controls, as the refinements' section holds its sliders:
    no rail and no inset, since no row header sits above them there */
