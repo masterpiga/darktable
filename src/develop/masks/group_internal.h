@@ -26,7 +26,7 @@
 // can pin their semantics directly, on small buffers with known values, instead
 // of only inferring them from rendered images.
 //
-// That matters because these functions define behaviour the rest of the design
+// That matters because these functions define behavior the rest of the design
 // leans on and states as fact: that a group's members combine order-
 // independently (which is what lets a group be an unordered bag of shapes),
 // that an empty group is the identity for its operator (which is what stops an

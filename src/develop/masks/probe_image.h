@@ -41,19 +41,19 @@
 // then quietly falls outside what was ever verified, and the failure mode is
 // the silent one again -- vacuous passes, not visible errors.
 //
-// The bar is therefore set from the code and the colour space rather than from
+// The bar is therefore set from the code and the color space rather than from
 // anyone's data: cover every channel blendif offers, across every value that
 // channel can physically take.
 //
 // Rather than trying to hit each derived channel directly in its own
 // perceptual space, the probe covers the linear-RGB cube densely: hue, chroma,
 // luminance and the per-channel values are all functions of RGB, so covering
-// the cube covers all of them at once, using the pipeline's own colour maths
+// the cube covers all of them at once, using the pipeline's own color math
 // rather than a reimplementation of it here. What counts as adequate coverage
 // is derived the same way: test_probe_image.c sweeps the cube to discover what
 // each channel can actually take, and holds the probe to that.
 //
-// Two further properties do not follow from colour coverage, and are required
+// Two further properties do not follow from color coverage, and are required
 // separately:
 //
 //   - guided-filter feathering and detail masks both read structure out of the
@@ -62,11 +62,11 @@
 //     probe therefore carries hard edges at several scales, and texture at
 //     every octave a wavelet decomposition can look at.
 //
-//   - drawn masks sit at arbitrary normalised positions, so coverage has to be
+//   - drawn masks sit at arbitrary normalized positions, so coverage has to be
 //     spatially homogeneous: it is not enough for the image as a whole to span
 //     the cube if the region under some particular ellipse is flat. The probe
 //     is tiled so that each individual tile already sweeps a full 2D slice of
-//     the cube, and neighbouring tiles walk the remaining axes on
+//     the cube, and neighboring tiles walk the remaining axes on
 //     low-discrepancy sequences, so any local window of a few tiles is close
 //     to full coverage of the diffuse range.
 //

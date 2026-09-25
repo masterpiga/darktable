@@ -32,7 +32,7 @@
 
 // masks_panel_position conf values ("plugins/darkroom/blend/masks_panel_position")
 // -- where the flexi masks panel content lives. Shared between blend_gui.c
-// (relocation logic + hamburger menu) and libs/masks_flexi_host.c
+// (relocation logic + the position radios of the blending options) and libs/masks_flexi_host.c
 // (container()/collapsible setup for the shared host lib).
 #define MASKS_PANEL_POS_EMBEDDED 0
 #define MASKS_PANEL_POS_UTILITY  1
@@ -261,13 +261,12 @@ typedef struct dt_masks_point_parametric_t
   // additive refinements on the same channel, not alternatives -- a non-empty
   // output range still refines the mask even while its slider is hidden).
   // `invert` is the polarity, coupled to the form's invert. Older
-  // (pre-single-channel) parametric forms have these all 0, so single==0 ⇒
-  // legacy multi-channel form, edited with the full tabbed editor.
+  // (pre-single-channel) parametric forms have these all 0, so single==0 =>
+  // legacy multi-channel form.
   uint32_t single;                             // 1 = single-channel form
   uint32_t channel;                            // index into the colorspace's channel[] array
   uint32_t in_out;                             // GUI only: 0 = show input slider only, 1 = show output slider too
   uint32_t invert;                             // polarity, coupled to the form's invert
-  uint32_t compact;                            // GUI only: 1 = compact display (see _apply_param_row_filter_layout)
   uint32_t disabled;                           // bit 0: input channel disabled, bit 1: output channel disabled
 } dt_masks_point_parametric_t;
 
@@ -371,23 +370,11 @@ void dt_masks_path_resize_invalidate(const dt_mask_id_t formid);
 typedef struct dt_iop_gui_blendif_filter_t
 {
   GtkDarktableGradientSlider *slider;
-  GtkLabel *head;
-  GtkLabel *label[4];
-  GtkLabel *picker_label;
-  GtkWidget *polarity;
-  GtkBox *box;
-  // compact-mode extras, used only by the per-row parametric editor (see
-  // _build_param_row_filter / _apply_param_row_filter_layout in blend_gui.c);
-  // the classic shared editor leaves these NULL. values_box is the numeric
-  // values overlay (hidden in compact mode); label_box is the grid pairing
-  // head + values_box for the normal layout (hidden in compact mode, when
-  // the slider moves into compact_row instead); head_compact is a second
-  // label instance (same text as head) shown beside the slider in compact
-  // mode; compact_row holds head_compact and (when compact) the slider.
-  GtkWidget *values_box;
-  GtkWidget *label_box;
-  GtkLabel *head_compact;
-  GtkBox *compact_row;
+  // the slider's display scale: 0 linear, 1 the channel's alternative one
+  // (log or zoom), named by altmode_name. Named in the slider's tooltip, as
+  // the row has no text label to carry it
+  int altmode;
+  const char *altmode_name;
 } dt_iop_gui_blendif_filter_t;
 
 extern const dt_introspection_type_enum_tuple_t dt_develop_blend_colorspace_names[];
@@ -432,11 +419,9 @@ typedef struct dt_iop_gui_blend_data_t
   // panel (left/right) -- lets the user collapse it without a dedicated
   // panel header (see _masks_flexi_relocate in blend_gui.c)
   GtkWidget *flexi_inline_collapse_btn;
-  // hamburger options button in the blend-mask header (blend colorspace,
-  // masking panel position, ...) -- hidden when hosted in the utility lib,
-  // since that lib's own header hamburger is repurposed to the same menu
-  // there instead of showing two redundant ones (see _masks_flexi_relocate
-  // and dt_iop_gui_blend_masks_options_popup)
+  // blending options button (blend colorspace, masking panel position, ...),
+  // hidden in every position: the options open on the on/off toggle's
+  // right-click instead (see _blendop_mask_enable_toggled)
   GtkWidget *masks_options_btn;
   // holds the blend-mask header (masks_blend_header) plus everything below
   // it (blend/opacity, masks, raster, blendif, refinement). This box is the
@@ -456,7 +441,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkBox *masks_box;
   GtkBox *raster_box;
 
-  dt_iop_gui_blendif_filter_t filter[2];
   GtkWidget *showmask;
   // locks the mask against reset, presets, styles, paste and editing (see
   // dt_develop_blend_params_t's mask_lock). Left of showmask in the header
@@ -479,7 +463,6 @@ typedef struct dt_iop_gui_blend_data_t
 
   const dt_iop_gui_blendif_channel_t *channel;
   int tab;
-  int altmode[8][2];
   // "preview channel under cursor" state: the parametric range slider or
   // "add channel" button the pointer is currently over, the channel display
   // bits it stands for, whether a hover preview is on right now, and what
@@ -517,11 +500,10 @@ typedef struct dt_iop_gui_blend_data_t
   // "nothing to restore".
   dt_masks_edit_mode_t masks_shown_stash;
 
-  // in-module per-shape composition list + parametric forms (Phase 3 UI).
-  // masks_list_box: one row per form in this module's mask group, each with an
-  // operator chooser + inverse toggle + reorder. Each parametric row owns its
-  // own permanently-visible blendif editor (see _build_param_row_editor in
-  // blend_gui.c) -- there is no single shared/docked editor for flexi anymore.
+  // the mask list: masks_list_box holds one row per element of this module's
+  // mask, under the header of the group holding it (which carries the group's
+  // operator), reorderable by drag and drop. Each parametric row owns its own
+  // blendif editor (see _build_param_row_editor in blend_gui.c).
   // masks_param_channels_box: flexi-only cluster of one flat button per channel
   // of the module's blend colorspace, one of masks_toolbar_row2's children (see
   // masks_toolbar below). Clicking a button adds a single-channel parametric
@@ -534,19 +516,19 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_param_channels_inner;
   int param_channels_csp;
   // masks_new_op: the "add group" button (flexi-only), right after the shape
-  // buttons. Clicking it opens an operator chooser; picking one adds a new
-  // (empty) group with that operator inside the selected group, or at the top
-  // of the mask, which the next drawn shape joins.
+  // buttons. Clicking it opens an operator chooser; picking one nests a new,
+  // empty group with that operator in the target group (see _stage_new_group),
+  // selected, so the next drawn shape joins it.
   // masks_new_op_box: the wrapper holding it, one of masks_toolbar's children
   // at a fixed, always-visible position (placing it dynamically above
   // whichever group is selected turned out to rely on the panel being tall
   // enough to scroll, which is not always the case).
   GtkWidget *masks_new_op;
   GtkWidget *masks_new_op_box;
-  // masks_new_op_label: the "new group" caption next to the add-group button.
-  // masks_new_group_op: the operator state the next added group will use. It is
-  // driven ONLY by the user picking an operator from the add-group menu, never by
-  // the current selection, so the add-group icon stays put until explicitly changed.
+  // masks_new_op_label: unused, always NULL (the button is icon-only).
+  // masks_new_group_op: the operator the "add group above selected group"
+  // shortcut uses: the one last picked from the add-group menu, never derived
+  // from the current selection.
   GtkWidget *masks_new_op_label;
   int masks_new_group_op;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
@@ -641,18 +623,18 @@ typedef struct dt_iop_gui_blend_data_t
   GHashTable *masks_cluster_expanded;
   // solo state: solo_formid is the form being soloed (others hidden); un-soloing
   // just clears every hidden bit, since solo is the only thing that ever sets
-  // DT_MASKS_STATE_HIDDEN (real mute has been removed). INVALID when inactive.
+  // DT_MASKS_STATE_HIDDEN. INVALID when inactive.
   dt_mask_id_t solo_formid;
   // group solo: the group key currently soloed. 0 = no group soloed
   // (real keys are always >= 16).
   guint solo_group_key;
   // solo-edit: restrict which shape outlines are editable in the canvas overlay
   // (form_visible) without touching the mask computation, so the other shapes'
-  // effect still shows in the mask overlay. Per-element only -- groups have no
-  // solo-edit. INVALID = no solo-edit.
+  // effect still shows in the mask overlay. An element, or a group's marker for
+  // all its members (see _soloedit_formids). INVALID = no solo-edit.
   dt_mask_id_t soloedit_formid;
 
-  // Phase 2: scoped mask refinement. The "mask refinement" sliders follow the
+  // scoped mask refinement. The "mask refinement" sliders follow the
   // current list selection (see _flexi_refine_follow_selection): global (the
   // final group mask -- the legacy behavior), a whole group, or a single
   // element. masks_refine_scope_kind/_formid track the active target;
@@ -669,22 +651,12 @@ typedef struct dt_iop_gui_blend_data_t
   // handlers set this when they act so the next header release is ignored instead
   // of (de)selecting the group. Cleared on a genuine header-background press.
   gboolean masks_skip_group_select_release;
-  // event time the flag above was last set at (see _group_op_press): the operator
-  // handle's own plain-click branch sets the flag then returns FALSE so its own
-  // and the header's drag sources can still arm, which means the very same press
-  // event goes on to bubble into _group_header_press -- whose stale-flag cleanup
-  // must not clobber a flag that press itself just set. Comparing event times
-  // tells the two cases apart without needing a widget-identity check.
+  // event time the flag above was last set at: a control that sets the flag
+  // on a press lets that same press bubble on (so drag sources can still arm),
+  // and _row_click_press, which clears a stale flag, must not clear one its own
+  // press just set. Comparing event times tells the two cases apart without
+  // needing a widget-identity check.
   guint32 masks_skip_group_select_release_time;
-  // separate one-shot guard, set only by _group_drag_begin and consumed only by
-  // _group_op_release: a plain click on the operator handle must still open the
-  // operator chooser on release, but not if the press turned into a drag instead
-  // (the release then just ends the drag). Kept apart from
-  // masks_skip_group_select_release above -- that flag now stays TRUE for the
-  // whole plain-click press/release pair (see its own comment), so it can no
-  // longer double as "did a drag happen in between" without also suppressing
-  // the menu on every ordinary click.
-  gboolean masks_group_op_drag_started;
   // set around _auto_expand_selected_row's own programmatic
   // gtk_toggle_button_set_active calls (see blend_gui.c): its own
   // "toggling this row's expander also selects it" side effect is meant for
@@ -753,8 +725,9 @@ typedef struct dt_iop_gui_blend_data_t
   // live as a burst of GTK_IS_WIDGET/GTK_IS_BOX critical warnings right at
   // quit). 0 when nothing is pending (g_idle_add never returns 0).
   guint masks_rebuild_idle_id;
-  // masks_refine_header_label: section caption, updated to name the refinement
-  // target ("mask refinement — <group>" or "— whole mask").
+  // the refinement section's caption; its tooltip says why the section is
+  // inactive, when it is (see _update_refine_sensitivity). What it refines is
+  // named by masks_refine_name_label
   GtkWidget *masks_refine_section_label;
   GtkWidget *masks_refine_expander;
   GtkWidget *masks_refine_icon_box;
@@ -1087,11 +1060,10 @@ void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module);
 // inert when its source module is switched off or removed, and nothing in this
 // module's own mask list changes when that happens.
 void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module);
-// opens the masking options menu (blend colorspace, masking panel
-// position, ...) for whichever module is currently hosted in
-// the flexi masks panel utility lib -- used by masks_flexi_host.c to
-// repurpose that lib's own header hamburger instead of keeping a second,
-// redundant one in the "blend mask" header (see bd->masks_options_btn)
+// opens the blending options popover (blend colorspace, masking panel
+// position, options) for the focused module, else the hosted one, else just
+// the panel-wide sections -- the darkroom toolbar's mask panel button opens
+// it on a right-click
 void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data);
 // enable module's blend mask (flexi, empty if nothing was ever added yet) if
 // it is currently off; no-op if it is already on (mask/flexi/raster bit set)

@@ -261,7 +261,7 @@ gboolean _apply_geom(dt_masks_form_t *form, const geom_t g)
   switch(g)
   {
     // 5% of the frame, which at the replay's 512px long edge is 25 pixels: far
-    // enough to move a shape onto or off its neighbour (the point of doing
+    // enough to move a shape onto or off its neighbor (the point of doing
     // this at all), small enough that a shape near the border stays in frame
     case GEOM_TRANSLATE: _translate(form, 0.05f, 0.03f); break;
     case GEOM_NODE:      _drag_node(form, 0.04f, -0.03f); break;
