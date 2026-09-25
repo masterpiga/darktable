@@ -9877,6 +9877,14 @@ static gboolean _canvas_shows_form(const dt_mask_id_t formid)
 // elements have no outline to bring in
 static void _soloedit_hover_scope(dt_iop_module_t *module, const GList *hovered)
 {
+  // rebuilding the canvas would end the shape being drawn
+  if(darktable.develop->form_gui && darktable.develop->form_gui->creation)
+  {
+    g_list_free(_soloedit_hover_extra);
+    _soloedit_hover_extra = NULL;
+    return;
+  }
+
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!dt_is_valid_maskid(bd->soloedit_formid))
   {
