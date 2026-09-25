@@ -549,6 +549,17 @@ static GtkWidget *_pack_gap(GtkWidget *box)
   return gap;
 }
 
+// dt_history_item_get_name gives markup, which a plain-text label, menu or
+// tooltip would show escaped ("&amp;")
+static gchar *_module_plain_name(const dt_iop_module_t *m)
+{
+  gchar *markup = dt_history_item_get_name(m);
+  gchar *text = NULL;
+  if(!pango_parse_markup(markup, -1, 0, NULL, &text, NULL, NULL)) text = g_strdup(markup);
+  g_free(markup);
+  return text;
+}
+
 // defined much further down (grouping shape rows / naming clusters); forward
 // declared here so the import menu can group its shapes by kind the same way
 // the mask list clusters same-kind elements
@@ -870,13 +881,26 @@ static void _masks_import_pick_action(GSimpleAction *action, GVariant *parameter
   g_list_free(fids);
 }
 
+// a popover menu's entry reads its label with mnemonics (gtkmodelbutton.c:406
+// in GTK 3.24), so a single "_" in a shape's or module's name would vanish and
+// underline the next character instead. Caller frees
+static gchar *_menu_label_escape(const char *name)
+{
+  gchar **parts = g_strsplit(name ? name : "", "_", -1);
+  gchar *label = g_strjoinv("__", parts);
+  g_strfreev(parts);
+  return label;
+}
+
 static void _masks_import_append(GMenu *menu,
                                  const char *label,
                                  const _masks_import_op_t op,
                                  const int a,
                                  const int b)
 {
-  GMenuItem *it = g_menu_item_new(label ? label : "", NULL);
+  gchar *escaped = _menu_label_escape(label);
+  GMenuItem *it = g_menu_item_new(escaped, NULL);
+  g_free(escaped);
   g_menu_item_set_action_and_target_value(it, "masks_import.pick",
                                           g_variant_new("(iii)", (int)op, a, b));
   g_menu_append_item(menu, it);
@@ -1022,9 +1046,12 @@ static int _masks_import_fill_shapes(GMenu *menu,
     g_menu_append_section(sub, NULL, G_MENU_MODEL(each));
     g_object_unref(each);
 
-    gchar *mlabel = dt_history_item_get_name(src);
+    // a menu label is plain text, and an "&" would read "&amp;"
+    gchar *plain = _module_plain_name(src);
+    gchar *mlabel = _menu_label_escape(plain);
     g_menu_append_submenu(by_module, mlabel, G_MENU_MODEL(sub));
     g_free(mlabel);
+    g_free(plain);
     g_object_unref(sub);
     n += g_list_length(shapes);
     g_list_free(shapes);
@@ -1113,9 +1140,12 @@ static int _masks_import_fill_parametric(GMenu *menu, dt_iop_module_t *module, G
       if(n_ok) g_menu_append_section(sub, NULL, G_MENU_MODEL(ok));
       if(n_other)
         g_menu_append_section(sub, _("other blend colorspace"), G_MENU_MODEL(other));
-      gchar *mlabel = dt_history_item_get_name(src);
+      // a menu label is plain text, and an "&" would read "&amp;"
+      gchar *plain = _module_plain_name(src);
+      gchar *mlabel = _menu_label_escape(plain);
       g_menu_append_submenu(menu, mlabel, G_MENU_MODEL(sub));
       g_free(mlabel);
+      g_free(plain);
       g_object_unref(sub);
       n += n_ok + n_other;
     }
@@ -4357,14 +4387,12 @@ static const char *const _masks_section_collapsed_key[DT_MASKS_SECTION_COUNT] = 
   "plugins/darkroom/masks/refinements_collapsed",
   "plugins/darkroom/masks/properties_collapsed",
   "plugins/darkroom/masks/consumers_collapsed",
-  "plugins/darkroom/masks/element_details_collapsed",
 };
 
 gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing)
 {
-  // the creation controls sit in the properties, inside the details
-  if((section == DT_MASKS_SECTION_PROPS || section == DT_MASKS_SECTION_DETAILS) && drawing)
-    return TRUE;
+  // the creation controls sit in the properties
+  if(section == DT_MASKS_SECTION_PROPS && drawing) return TRUE;
   return !dt_conf_get_bool(_masks_section_collapsed_key[section]);
 }
 
@@ -4391,11 +4419,6 @@ static void _section_widgets(dt_iop_gui_blend_data_t *bd, const dt_masks_section
       *toggle = bd->props_panel_toggle_btn;
       *expander = bd->props_panel_expander;
       *content = bd->props_panel_content;
-      break;
-    case DT_MASKS_SECTION_DETAILS:
-      *toggle = bd->details_toggle_btn;
-      *expander = bd->details_expander;
-      *content = bd->details_content;
       break;
     default:
       *toggle = bd->consumers_toggle_btn;
@@ -4713,92 +4736,108 @@ static GtkWidget *_make_icon_widget(DTGTKCairoPaintIconFunc paint)
   return da;
 }
 
-// the details expander's header names what the properties and the refinement
-// inside it act on: <icon> <name> of the selected element or group, or the
-// mask's own icon and "whole mask"
+// what a section acts on, as the list shows it: the icon and name of an
+// element (scope REFINE_SCOPE_ELEMENT) or group (REFINE_SCOPE_GROUP), or the
+// mask's own operator icon and "whole mask". The name is plain text. Caller
+// frees it, and owns the icon, NULL when there is none
+static gchar *_target_describe(dt_iop_module_t *module,
+                               const int scope,
+                               const dt_mask_id_t id,
+                               GtkWidget **icon)
+{
+  *icon = NULL;
+  if(scope == REFINE_SCOPE_ELEMENT)
+  {
+    dt_masks_form_t *form = dt_masks_get_from_id(darktable.develop, id);
+    if(!form) return g_strdup(_("shape"));
+    if(form->type & DT_MASKS_PARAMETRIC)
+    {
+      const gchar *code = dt_masks_parametric_type_label(form);
+      if(code) *icon = _make_channel_handle(code, NULL);
+    }
+    else
+    {
+      DTGTKCairoPaintIconFunc paint = _kind_icon_paint(_form_kind(form));
+      if(paint) *icon = _make_icon_widget(paint);
+    }
+    // the name as its row shows it: the icon already says the type
+    return _form_display_name(form);
+  }
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(scope == REFINE_SCOPE_GROUP)
+  {
+    const dt_masks_point_group_t *head = _group_point(grp, id);
+    DTGTKCairoPaintIconFunc paint = _op_paint_for_state(head ? head->state : 0);
+    if(paint) *icon = _make_icon_widget(paint);
+    const char *custom_name = _group_custom_name(grp, id);
+    return custom_name ? g_strdup(custom_name)
+                       : g_strdup_printf("%s-%d", _within_name(head ? head->state : 0),
+                                         _group_ordinal_of_cid(module, id));
+  }
+  // the mask is its own top group, so it carries a combine operator like any
+  // other, and the header shows it the way the list's own root row does (see
+  // the ghandle in _pack_group)
+  const dt_masks_point_group_t *root = _group_point(grp, _mask_group_cid(module));
+  *icon = _make_icon_widget(_within_paint(root ? (root->state & DT_MASKS_STATE_WITHIN) : 0));
+  return g_strdup(_("whole mask"));
+}
+
+// show a target in a section header's icon box and name label. The name gets
+// its own tooltip, since a long one is ellipsized
+static void _target_show(GtkWidget *icon_box, GtkWidget *label, GtkWidget *icon,
+                         const gchar *name)
+{
+  if(icon_box)
+  {
+    dt_gui_container_destroy_children(GTK_CONTAINER(icon_box));
+    if(icon)
+    {
+      dt_gui_box_add(icon_box, icon);
+      gtk_widget_show_all(icon_box);
+    }
+  }
+  else if(icon)
+    gtk_widget_destroy(icon);
+  if(label)
+  {
+    gtk_label_set_text(GTK_LABEL(label), name ? name : "");
+    gtk_widget_set_tooltip_text(label, name);
+  }
+}
+
+// a section header's caption naming what the section acts on: the target's
+// icon and name, then the section's own `title` (see _target_show). The name
+// is what gives way to a narrow panel, never the title
+static GtkWidget *_section_caption_new(GtkWidget *title, GtkWidget **icon_box,
+                                       GtkWidget **name_label)
+{
+  gtk_label_set_ellipsize(GTK_LABEL(title), PANGO_ELLIPSIZE_NONE);
+
+  *icon_box = dt_gui_hbox();
+  gtk_widget_set_valign(*icon_box, GTK_ALIGN_CENTER);
+
+  *name_label = gtk_label_new(NULL);
+  // the middle, as the list's rows do, so that a module's instance name stays
+  gtk_label_set_ellipsize(GTK_LABEL(*name_label), PANGO_ELLIPSIZE_MIDDLE);
+  // centered, the caption sizes to its text: a long name would push the bar
+  // wider than the panel without a bound to ellipsize against
+  gtk_label_set_max_width_chars(GTK_LABEL(*name_label), 20);
+  dt_gui_add_class(*name_label, "mask-refine-header-name");
+
+  return dt_gui_hbox(*icon_box, *name_label, title);
+}
+
+// the refinement's header names what it refines, after the selection (see
+// _model_refine_scope_from_selection)
 static void _refine_update_header(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(!bd) return;
 
-
-  if(bd->masks_refine_icon_box)
-  {
-    // Clear existing icon widget
-    GList *children =
-      gtk_container_get_children(GTK_CONTAINER(bd->masks_refine_icon_box));
-    for(GList *c = children; c; c = g_list_next(c))
-      gtk_widget_destroy(GTK_WIDGET(c->data));
-    g_list_free(children);
-  }
-
-  gchar *name = NULL;
   GtkWidget *icon_w = NULL;
-
-  if(bd->masks_refine_scope_kind == REFINE_SCOPE_ELEMENT)
-  {
-    dt_masks_form_t *form =
-      dt_masks_get_from_id(darktable.develop, bd->masks_refine_scope_formid);
-    if(form)
-    {
-      // the name as its row shows it: the icon below already says the type
-      name = _form_display_name(form);
-      if(form->type & DT_MASKS_PARAMETRIC)
-      {
-        const gchar *code = dt_masks_parametric_type_label(form);
-        if(code) icon_w = _make_channel_handle(code, NULL);
-      }
-      else
-      {
-        const guint kind = _form_kind(form);
-        DTGTKCairoPaintIconFunc paint = _kind_icon_paint(kind);
-        if(paint) icon_w = _make_icon_widget(paint);
-      }
-    }
-    else
-    {
-      name = g_strdup(_("shape"));
-    }
-  }
-  else if(bd->masks_refine_scope_kind == REFINE_SCOPE_GROUP)
-  {
-    dt_masks_form_t *grp = _module_mask_group(module);
-    const dt_masks_point_group_t *head = _group_point(grp, bd->masks_refine_scope_formid);
-    const char *custom_name = _group_custom_name(grp, bd->masks_refine_scope_formid);
-    name =
-      custom_name
-        ? g_strdup(custom_name)
-        : g_strdup_printf("%s-%d", _within_name(head ? head->state : 0),
-                          _group_ordinal_of_cid(module, bd->masks_refine_scope_formid));
-
-    DTGTKCairoPaintIconFunc paint = _op_paint_for_state(head ? head->state : 0);
-    if(paint) icon_w = _make_icon_widget(paint);
-  }
-  else
-  {
-    name = g_strdup(_("whole mask"));
-    // the mask is its own top group, so it carries a combine operator like any
-    // other, and the header shows it the way the list's own root row does (see
-    // the ghandle in _pack_group): the static panel icon said nothing
-    // that was not already said by the caption
-    dt_masks_form_t *grp = _module_mask_group(module);
-    const dt_masks_point_group_t *root = _group_point(grp, _mask_group_cid(module));
-    icon_w = _make_icon_widget(_within_paint(root ? (root->state & DT_MASKS_STATE_WITHIN) : 0));
-  }
-
-  if(icon_w && bd->masks_refine_icon_box)
-  {
-    dt_gui_box_add(bd->masks_refine_icon_box, icon_w);
-    gtk_widget_show_all(bd->masks_refine_icon_box);
-  }
-
-  if(bd->masks_refine_name_label)
-  {
-    // what the section holds the details of, e.g. "#1 details"
-    gchar *caption = g_strdup_printf(_("%s details"), name ? name : "");
-    gtk_label_set_text(GTK_LABEL(bd->masks_refine_name_label), caption);
-    g_free(caption);
-  }
+  gchar *name = _target_describe(module, bd->masks_refine_scope_kind,
+                                 bd->masks_refine_scope_formid, &icon_w);
+  _target_show(bd->masks_refine_icon_box, bd->masks_refine_name_label, icon_w, name);
   g_free(name);
 
   // Update bypass button state
@@ -5632,15 +5671,6 @@ static GtkWidget *_build_props_panel_editor(dt_iop_module_t *module,
   return box;
 }
 
-static void _details_header_clicked(
-  GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
-{
-  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
-  dt_iop_gui_blend_data_t *bd = user_data;
-  GtkToggleButton *btn = GTK_TOGGLE_BUTTON(bd->details_toggle_btn);
-  gtk_toggle_button_set_active(btn, !gtk_toggle_button_get_active(btn));
-}
-
 static void _props_panel_header_clicked(
   GtkGestureSingle *gesture, gint n_press, gdouble x, gdouble y, gpointer user_data)
 {
@@ -5663,6 +5693,35 @@ static void _props_panel_show(dt_iop_gui_blend_data_t *bd)
                    && gtk_widget_get_visible(GTK_WIDGET(bd->masks_list_box)));
 }
 
+// the properties' header names what they belong to: the shape being drawn,
+// or else the element or group they are the properties of, as the refinement's
+// header does. The mask's own group is the whole mask there too
+static void _props_panel_update_header(dt_iop_module_t *module,
+                                       const dt_masks_props_target_t *t,
+                                       GtkWidget *pending)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  GtkWidget *icon_w = NULL;
+  gchar *name = NULL;
+  if(pending)
+  {
+    const guint kind = GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(pending), "mask-kind"));
+    DTGTKCairoPaintIconFunc paint = _kind_icon_paint(kind);
+    if(paint) icon_w = _make_icon_widget(paint);
+    // as the pending row names it (see _make_pending_shape_row)
+    name = g_strdup_printf(_("new %s"), _kind_name(kind, FALSE));
+  }
+  else if(dt_is_valid_maskid(t->id))
+  {
+    const int scope = !t->is_group ? REFINE_SCOPE_ELEMENT
+                      : t->id == _mask_group_cid(module) ? REFINE_SCOPE_GLOBAL
+                                                         : REFINE_SCOPE_GROUP;
+    name = _target_describe(module, scope, t->id, &icon_w);
+  }
+  _target_show(bd->props_panel_icon_box, bd->props_panel_name_label, icon_w, name);
+  g_free(name);
+}
+
 // fill the subpanel from the selection: the creation controls of a shape being
 // drawn, opened, or else the selected element's or group's properties, or else
 // nothing, and hidden. Kept while it still holds what the selection asks for,
@@ -5678,6 +5737,8 @@ static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
   const dt_masks_props_target_t t =
     pending || !on ? none : _model_props_panel_target(bd, _opacity_sliders());
   const gboolean placed = pending && gtk_widget_get_parent(pending) == bd->props_panel_content;
+  // renaming the target changes neither of what the check below keeps
+  _props_panel_update_header(module, &t, pending);
   // the section opens for the creation controls without saving that, so it
   // folds back once the shape is created or the drawing canceled. Only that
   // opening leaves it differing from its saved state
@@ -5686,10 +5747,6 @@ static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
     if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->props_panel_toggle_btn))
        != _model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE))
       _section_apply(bd, DT_MASKS_SECTION_PROPS);
-    if(bd->details_toggle_btn
-       && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(bd->details_toggle_btn))
-            != _model_section_expanded(DT_MASKS_SECTION_DETAILS, FALSE))
-      _section_apply(bd, DT_MASKS_SECTION_DETAILS);
   }
   if(!force
      && (pending ? placed
@@ -5707,8 +5764,6 @@ static void _props_panel_sync(dt_iop_module_t *module, const gboolean force)
   {
     if(!placed) dt_gui_box_add(bd->props_panel_content, pending);
     _section_set(bd, DT_MASKS_SECTION_PROPS, _model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
-    _section_set(bd, DT_MASKS_SECTION_DETAILS,
-                 _model_section_expanded(DT_MASKS_SECTION_DETAILS, TRUE));
   }
   else if(dt_is_valid_maskid(t.id))
     dt_gui_box_add(bd->props_panel_content, _build_props_panel_editor(module, &t));
@@ -9167,7 +9222,7 @@ gchar *_form_display_name(const dt_masks_form_t *form)
   if((form->type & DT_MASKS_RASTER) && !*rest)
   {
     const dt_iop_module_t *src = dt_masks_raster_source(form);
-    if(src) return dt_history_item_get_name(src);
+    if(src) return _module_plain_name(src);
     const dt_masks_point_raster_t *p = form->points ? form->points->data : NULL;
     return g_strdup(p ? p->source : "");
   }
@@ -9223,17 +9278,6 @@ gboolean _model_form_is_linked(const dt_masks_form_t *form)
   const gboolean linked = !g_list_shorter_than(users, 2);
   g_list_free(users);
   return linked;
-}
-
-// dt_history_item_get_name gives markup, which a plain-text tooltip would show
-// escaped ("&amp;")
-static gchar *_module_plain_name(const dt_iop_module_t *m)
-{
-  gchar *markup = dt_history_item_get_name(m);
-  gchar *text = NULL;
-  if(!pango_parse_markup(markup, -1, 0, NULL, &text, NULL, NULL)) text = g_strdup(markup);
-  g_free(markup);
-  return text;
 }
 
 static dt_iop_module_t *_linked_next_user(const dt_iop_module_t *module,
@@ -12687,6 +12731,8 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   if(_props_subpanel())
   {
     gtk_widget_show_all(props_box);
+    // for the subpanel's header to name the shape (see _props_panel_update_header)
+    g_object_set_data(G_OBJECT(props_box), "mask-kind", GUINT_TO_POINTER(kind));
     ((dt_iop_gui_blend_data_t *)module->blend_data)->pending_props_box = props_box;
   }
   else
@@ -18817,12 +18863,12 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     g_signal_connect(G_OBJECT(bd->contrast_slider), "value-changed",
                      G_CALLBACK(_refine_control_changed), bd);
 
-    // Expander header bar (darktable standard section expander): the
-    // reset button on the left, "refinement" centered on the whole bar, and on
-    // the right the bypass button and the solid arrow toggle. Both buttons go
-    // insensitive while there is nothing to reset or bypass, which is what says
-    // there are no refinements. What it refines is named by the details
-    // header above it (see _refine_update_header)
+    // Expander header bar (darktable standard section expander):
+    // "refinement" and what it refines centered on the whole bar (see
+    // _refine_update_header), and on the right the bypass and reset buttons
+    // and the solid arrow toggle. Both buttons go insensitive while
+    // there is nothing to reset or bypass, which is what says there are no
+    // refinements
     GtkWidget *destdisp_head = dt_gui_hbox();
     gtk_box_set_spacing(GTK_BOX(destdisp_head), DT_BAUHAUS_SPACE);
     dt_gui_add_class(destdisp_head, "dt_section_expander");
@@ -18836,7 +18882,10 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     _stash_base_tooltip(bd->masks_refine_section_label);
 
     GtkWidget *header_evb = gtk_event_box_new();
-    gtk_container_add(GTK_CONTAINER(header_evb), bd->masks_refine_section_label);
+    gtk_container_add(GTK_CONTAINER(header_evb),
+                      _section_caption_new(bd->masks_refine_section_label,
+                                           &bd->masks_refine_icon_box,
+                                           &bd->masks_refine_name_label));
     dt_gui_connect_click(header_evb, _refine_header_clicked, NULL, bd);
 
     bd->masks_refine_toggle_btn =
@@ -18854,49 +18903,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_toggle_btn, FALSE, FALSE,
                      0);
 
-    // the details expander, holding the properties and refinement sections
-    // that both act on what its header names: <icon> <name> of the selected
-    // element or group, or of the whole mask (see _refine_update_header)
-    GtkWidget *details_head = dt_gui_hbox();
-    gtk_box_set_spacing(GTK_BOX(details_head), DT_BAUHAUS_SPACE);
-    dt_gui_add_class(details_head, "dt_section_expander");
-    dt_gui_add_class(details_head, "mask-refine-section-expander");
-
-    bd->masks_refine_icon_box = dt_gui_hbox();
-    gtk_widget_set_valign(bd->masks_refine_icon_box, GTK_ALIGN_CENTER);
-
-    bd->masks_refine_name_label = gtk_label_new(_("whole mask"));
-    gtk_label_set_xalign(GTK_LABEL(bd->masks_refine_name_label), 0.5f);
-    gtk_label_set_ellipsize(GTK_LABEL(bd->masks_refine_name_label), PANGO_ELLIPSIZE_END);
-    // centered, the label sizes to its text: a long element name would push
-    // the bar wider than the panel without a bound to ellipsize against
-    gtk_label_set_max_width_chars(GTK_LABEL(bd->masks_refine_name_label), 24);
-    dt_gui_add_class(bd->masks_refine_name_label, "mask-refine-header-name");
-    gtk_widget_set_tooltip_text(bd->masks_refine_name_label,
-                                _("the properties and refinement of the selected element or"
-                                  " group, or of the whole mask if nothing is selected\n"
-                                  "click to expand or collapse"));
-
-    GtkWidget *details_evb = gtk_event_box_new();
-    gtk_container_add(GTK_CONTAINER(details_evb),
-                      dt_gui_hbox(bd->masks_refine_icon_box,
-                                  bd->masks_refine_name_label));
-    dt_gui_connect_click(details_evb, _details_header_clicked, NULL, bd);
-
-    bd->details_toggle_btn =
-      dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
-    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->details_toggle_btn), TRUE);
-    dt_gui_add_class(bd->details_toggle_btn, "dt_ignore_fg_state");
-    dt_gui_add_class(bd->details_toggle_btn, "dt_transparent_background");
-    gtk_widget_set_tooltip_text(bd->details_toggle_btn, _("toggle element details section"));
-    g_signal_connect(G_OBJECT(bd->details_toggle_btn), "toggled",
-                     G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_DETAILS));
-    // icon and caption centered together on the bar, as the refinement's
-    // caption is (see gtk_box_set_center_widget above)
-    gtk_box_set_center_widget(GTK_BOX(details_head), details_evb);
-    gtk_box_pack_end(GTK_BOX(details_head), bd->details_toggle_btn, FALSE, FALSE, 0);
-
-    // actions on the refinement header: reset on the left, bypass on the right
+    // actions on the refinement header, packed from the arrow leftward: reset
+    // right before it, then bypass. Nothing on the left, as in the other
+    // sections' headers
     bd->masks_refine_reset_btn = dtgtk_button_new(dtgtk_cairo_paint_reset, 0, NULL);
     gtk_widget_set_tooltip_text(bd->masks_refine_reset_btn,
                                 _("reset the refinement of the current target"));
@@ -18904,7 +18913,7 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                      G_CALLBACK(_refine_reset_clicked), bd);
     gtk_widget_set_no_show_all(bd->masks_refine_reset_btn, TRUE);
     gtk_widget_set_visible(bd->masks_refine_reset_btn, FALSE);
-    gtk_box_pack_start(GTK_BOX(destdisp_head), bd->masks_refine_reset_btn, FALSE, FALSE, 0);
+    gtk_box_pack_end(GTK_BOX(destdisp_head), bd->masks_refine_reset_btn, FALSE, FALSE, 0);
 
     bd->masks_refine_bypass_btn =
       dtgtk_togglebutton_new(dtgtk_cairo_paint_eye_toggle, 0, NULL);
@@ -18951,8 +18960,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
 
     // "element properties in subpanel": a collapsible like the refinements',
     // its content following the selection (see _props_panel_sync), packed
-    // with them under the selection header below. Built always, shown only
-    // while the option is on (see _blendop_masks_mode_callback)
+    // above them below. Built always, shown only while the option is on (see
+    // _blendop_masks_mode_callback)
     {
       GtkWidget *head = dt_gui_hbox();
       gtk_box_set_spacing(GTK_BOX(head), DT_BAUHAUS_SPACE);
@@ -18964,7 +18973,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                  " controls of a shape being drawn\n"
                  "click to expand or collapse"));
       GtkWidget *label_evb = gtk_event_box_new();
-      gtk_container_add(GTK_CONTAINER(label_evb), label);
+      gtk_container_add(GTK_CONTAINER(label_evb),
+                        _section_caption_new(label, &bd->props_panel_icon_box,
+                                             &bd->props_panel_name_label));
       dt_gui_connect_click(label_evb, _props_panel_header_clicked, NULL, bd);
       bd->props_panel_toggle_btn =
         dtgtk_togglebutton_new(dtgtk_cairo_paint_solid_arrow, CPF_DIRECTION_DOWN, NULL);
@@ -18975,7 +18986,8 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
                                   _("toggle properties section"));
       g_signal_connect(G_OBJECT(bd->props_panel_toggle_btn), "toggled",
                        G_CALLBACK(_section_toggled), GINT_TO_POINTER(DT_MASKS_SECTION_PROPS));
-      dt_gui_box_add(head, dt_gui_expand(label_evb));
+      // centered, as the refinement's caption is
+      gtk_box_set_center_widget(GTK_BOX(head), label_evb);
       gtk_box_pack_end(GTK_BOX(head), bd->props_panel_toggle_btn, FALSE, FALSE, 0);
 
       bd->props_panel_content = dt_gui_vbox();
@@ -19000,18 +19012,16 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->masks_refine_expander), TRUE);
     gtk_widget_set_name(bd->masks_refine_expander, "collapse-block");
 
-    // the properties keep their own revealer inside, since they show only while
-    // the option is on and the selection has some (see _props_panel_show)
-    bd->details_content = dt_gui_vbox();
-    gtk_widget_set_name(bd->details_content, "collapsible");
-    dt_gui_add_class(bd->details_content, "mask-details");
-    _add_wrapped_box(bd->details_content, bd->props_panel_box, "masks_drawn");
-    dt_gui_box_add(bd->details_content, bd->masks_refine_expander);
-    bd->details_expander = dtgtk_expander_new(details_head, bd->details_content);
-    dtgtk_expander_set_expanded(DTGTK_EXPANDER(bd->details_expander), TRUE);
-    gtk_widget_set_name(bd->details_expander, "collapse-block");
-
-    bd->refine_box = GTK_BOX(dt_gui_vbox(bd->details_expander));
+    // the properties and the refinement share one box, so that locking the
+    // mask and the mask modes show and disable them together (see
+    // _mask_lock_sync). The properties keep their own revealer inside it, since
+    // they show only while the option is on and the selection has some (see
+    // _props_panel_show). Renamed from the #blending-box the wrapper names it,
+    // whose padding would inset them once more than the refinement beside them
+    bd->refine_box = GTK_BOX(dt_gui_vbox());
+    _add_wrapped_box(GTK_WIDGET(bd->refine_box), bd->props_panel_box, "masks_drawn");
+    gtk_widget_set_name(GTK_WIDGET(bd->props_panel_box), "mask-props-section");
+    dt_gui_box_add(bd->refine_box, bd->masks_refine_expander);
     _add_wrapped_box(mask_panel, bd->refine_box, "masks_refinement");
 
     // "mask consumers": the modules reading this one's raster mask, shown only

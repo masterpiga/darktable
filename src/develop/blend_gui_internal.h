@@ -369,15 +369,12 @@ typedef enum dt_masks_section_t
   DT_MASKS_SECTION_REFINE,
   DT_MASKS_SECTION_PROPS,
   DT_MASKS_SECTION_CONSUMERS,
-  /** the expander holding the properties and refinement of the selection */
-  DT_MASKS_SECTION_DETAILS,
   DT_MASKS_SECTION_COUNT
 } dt_masks_section_t;
 
 /** whether a section shows unfolded: its saved state, except that the
-    properties section, and the details expander holding it, open while it
-    holds the creation controls of a shape being drawn, without that being
-    saved */
+    properties section opens while it holds the creation controls of a shape
+    being drawn, without that being saved */
 gboolean _model_section_expanded(const dt_masks_section_t section, const gboolean drawing);
 /** save a section's folded state, as a click on its toggle does */
 void _model_section_save(const dt_masks_section_t section, const gboolean expanded);
