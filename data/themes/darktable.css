@@ -868,16 +868,19 @@ dialog .sidebar row:selected:hover label,
    ----------------------------------------------------------------------------*/
 
 /* the panel's shades, one per state. Each header, the rail hanging from it and
-   the controls it owns take the same one, so a theme or user.css retints the
-   whole panel by redefining these. A selected or hovered header is a gradient
-   from the _top shade down to the plain one, and its rail and controls take
-   the plain one: that is the edge they meet */
+   the frame of the controls it owns take the same one, so a theme or user.css
+   retints the whole panel by redefining these. A selected or hovered header is
+   a gradient from the _top shade down to the plain one, and its rail and frame
+   take the plain one: that is the edge they meet */
 @define-color mask_rest          rgba(255, 255, 255, 0.1);
 @define-color mask_implied       rgba(255, 255, 255, 0.25);
 @define-color mask_selected_top  rgba(255, 255, 255, 0.5);
 @define-color mask_selected      rgba(255, 255, 255, 0.4);
 @define-color mask_hover_top     rgba(255, 255, 255, 0.7);
 @define-color mask_hover         rgba(255, 255, 255, 0.4);
+/* the ground of the controls under an open header, darker than the panel in
+   every state: the header's shade goes on their thin frame instead */
+@define-color mask_card          rgba(0, 0, 0, 0.1);
 
 /* every row/header kind in the panel (element/parametric/raster row, group
    header, cluster header) has its own unique widget id for CSS --
@@ -1183,8 +1186,9 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* an open element's header: squared off along its whole bottom edge onto its
-   controls, which carry the same resting shade (.mask-param-row-editor), so
-   header and controls meet as one block with no notch at either corner */
+   controls' card, whose frame carries the header's shade
+   (.mask-param-row-editor), so header and card meet as one block with no
+   notch at either corner */
 .mask-row-open > * > .mask-element-header
 {
   border-bottom-left-radius: 0;
@@ -1254,32 +1258,31 @@ dialog .sidebar row:selected:hover label,
   background-color: transparent;
 }
 
-/* each parametric mask row's own permanently-visible editor with a subtle left rail */
+/* each parametric mask row's own permanently-visible editor, framed as a card */
 .mask-param-row-editor
 {
-  /* an element's controls take their header's shade in every state (the
-     element state rules below), so an expanded element reads as one card
-     with its header, with nothing drawn between the two. Clipped to the
-     padding box so the rail sits on the panel,
-     as its header does, not stacked on this tint: rail and controls then
-     match exactly in every state. The rail is a plain CSS border: it borders
-     one element's controls rather than a list of members, so it needs neither
-     ticks nor an end. */
-  background-color: @mask_rest;
+  /* an element's controls sit on the card ground, framed on three sides in
+     their header's shade, which follows the header into every state (the
+     element state rules below): the header closes the frame's open top, so an
+     expanded element reads as one card. Clipped to the padding box so the
+     ground does not tint the translucent frame, which then matches the
+     header exactly */
+  background-color: @mask_card;
   background-clip: padding-box;
-  border-left: 3px solid @mask_rest;
+  border: 1px solid @mask_rest;
+  border-top-width: 0;
   border-bottom-left-radius: 3px;
   border-bottom-right-radius: 3px;
   padding-bottom: 0;
   padding-top: 0;
-  /* the rail runs down the row's own left edge */
   margin-left: 0;
-  /* no right margin, unlike the left rail: this puts the editor's right edge
-     flush with the row header's above it, which is what lets the per-channel
-     bypass eyes line up under the header's expander button rather than sitting
-     in a column of their own a little to its left */
+  /* this puts the editor's right edge flush with the row header's above it,
+     which is what lets the per-channel bypass eyes line up under the header's
+     expander button rather than sitting in a column of their own a little to
+     its left */
   margin-right: 0;
-  padding-left: 6px;
+  /* with the 1px frame, the same 9px inset the controls had before it */
+  padding-left: 8px;
 }
 
 
@@ -1329,22 +1332,24 @@ dialog .sidebar row:selected:hover label,
   min-height: 1.2em;
 }
 
-/* every row/group's own inline "properties" expander with a subtle left rail */
+/* every row/group's own inline "properties" expander, framed as a card */
 .mask-props-row-editor
 {
-  /* see .mask-param-row-editor: same element-level card, rail and line */
-  background-color: @mask_rest;
+  /* see .mask-param-row-editor: the same element-level card and frame */
+  background-color: @mask_card;
   background-clip: padding-box;
-  border-left: 3px solid @mask_rest;
+  border: 1px solid @mask_rest;
+  border-top-width: 0;
   border-bottom-left-radius: 3px;
   border-bottom-right-radius: 3px;
   padding-top: 0;
   padding-bottom: 0;
   margin-left: 0;
-  /* no right inset: the block's tint runs out to the header's right edge, and
-     the sliders stop short by their own margin (see .mask-param-opacity-box) */
+  /* no right inset: the card runs out to the header's right edge, and the
+     sliders stop short by their own margin (see .mask-param-opacity-box) */
   padding-right: 0;
-  padding-left: 6px;
+  /* see .mask-param-row-editor */
+  padding-left: 8px;
 }
 
 /* the properties and the refinement are collapsibles inside the details
@@ -1374,58 +1379,58 @@ dialog .sidebar row:selected:hover label,
 .mask-props-panel .mask-boost-factor-box,
 .mask-props-panel .mask-group-opacity-editor
 {
-  border-left-width: 0;
+  border-width: 0;
   padding: 0;
   margin: 0;
   /* no header above them there, so no block to extend */
   background-color: transparent;
 }
 
-/* an element's controls, rail and background both, follow its row's header
-   into each state, at the shade the header's outline-color takes (see
-   .mask-element-header and the header state rules): where a header carries a
-   gradient, the shade it ENDS on, since that is the edge the controls meet.
+/* an element's card frame follows its row's header into each state, at the
+   shade the header's outline-color takes (see .mask-element-header and the
+   header state rules): where a header carries a gradient, the shade it ENDS
+   on, since that is the edge the frame meets. The ground stays @mask_card.
    Child selectors, so a selected group does not light up the controls of
    the elements it holds. Implied before selected, as everywhere, and hover
    last: its id outranks both */
 .mask-list-row-implied > * > .mask-param-row-editor,
 .mask-list-row-implied > * > .mask-props-row-editor
 {
-  background-color: @mask_implied;
-  border-left-color: @mask_implied;
+  border-color: @mask_implied;
 }
 
 .mask-list-row-selected > * > .mask-param-row-editor,
 .mask-list-row-selected > * > .mask-props-row-editor
 {
-  background-color: @mask_selected;
-  border-left-color: @mask_selected;
+  border-color: @mask_selected;
 }
 
 #mask-shape-row.mask-list-row-hover > * > .mask-param-row-editor,
 #mask-shape-row.mask-list-row-hover > * > .mask-props-row-editor
 {
-  background-color: @mask_hover;
-  border-left-color: @mask_hover;
+  border-color: @mask_hover;
 }
 
 /* "use sliders for opacity": the slider leading a group's expanded contents.
    It is the group's own control, not a member, so it hangs off the header as
    one block with it and the rail, the way an element's controls hang off the
-   element's header (.mask-param-row-editor): same resting shade, no gap
-   above, and flush left against the group's rail rather than indented like
-   the members below -- the negative margin takes back the members' indent
-   (.mask-group-elements' 8px padding). Only the bottom-right corner is
-   rounded: the rail runs on past the bottom-left one. It takes its header's
-   shade in every state (the rules below). No rail of its own, even on a nested
-   group's row, where the box also carries .mask-props-row-editor (declared
-   earlier, so this wins the tie). No right inset, so the tint runs to the
-   right edge: the slider stops short by its own margin (see
-   .mask-param-opacity-box) */
+   element's header (.mask-param-row-editor): the same card, no gap above,
+   and flush left against the group's rail rather than indented like the
+   members below -- the negative margin takes back the members' indent
+   (.mask-group-elements' 8px padding). The rail is the card's left edge, so
+   the frame has no left side, which would thicken the rail, and only the
+   bottom-right corner is rounded: the rail runs on past the bottom-left one.
+   The frame takes its header's shade in every state (the rules below). This
+   holds on a nested group's row too, where the box also carries
+   .mask-props-row-editor (declared earlier, so this wins the tie). No right
+   inset, so the card runs to the right edge: the slider stops short by its
+   own margin (see .mask-param-opacity-box) */
 .mask-group-opacity-editor
 {
-  background-color: @mask_rest;
+  background-color: @mask_card;
   background-clip: padding-box;
+  border: 1px solid @mask_rest;
+  border-top-width: 0;
   border-left-width: 0;
   border-radius: 0 0 3px 0;
   margin-top: 0;
@@ -1443,26 +1448,27 @@ dialog .sidebar row:selected:hover label,
 .mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-opacity-editor,
 .mask-root-implied > box > .mask-group-elements > .mask-group-opacity-editor
 {
-  background-color: @mask_implied;
+  border-color: @mask_implied;
 }
 
 .mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-opacity-editor,
 .mask-root-selected > box > .mask-group-elements > .mask-group-opacity-editor
 {
-  background-color: @mask_selected;
+  border-color: @mask_selected;
 }
 
 .mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-opacity-editor
 {
-  background-color: @mask_hover;
+  border-color: @mask_hover;
 }
 
 /* a group with no members holds the slider alone and draws no rail (the rail
    runs to the last member's tick): drop the rail's reserved room, so the
-   slider's block runs flush under the whole header, and round the bottom-left
-   corner the rail would otherwise have run past. Scoped under .masks-list so
-   it outranks a user.css rule on .masks-list .mask-group-elements that sets
-   the rail's width: a tie went to user.css, and the notch came back */
+   slider's card runs flush under the whole header, and close its frame on the
+   left, rounding the corner the rail would otherwise have run past. Scoped
+   under .masks-list so it outranks a user.css rule on .masks-list
+   .mask-group-elements that sets the rail's width: a tie went to user.css,
+   and the notch came back */
 .masks-list .mask-group-elements.mask-group-slider-only
 {
   border-left-width: 0;
@@ -1470,6 +1476,7 @@ dialog .sidebar row:selected:hover label,
 
 .masks-list .mask-group-elements.mask-group-slider-only > .mask-group-opacity-editor
 {
+  border-left-width: 1px;
   border-bottom-left-radius: 3px;
 }
 
