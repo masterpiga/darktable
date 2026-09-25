@@ -606,7 +606,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     }
 
     /* A drawn-ONLY style is the one case where a dangling mask is the correct,
-       pre-existing outcome rather than a regression, and it is recognised
+       pre-existing outcome rather than a regression, and it is recognized
        precisely rather than by mask_mode alone: migration reuses the classic
        mask_id verbatim for drawn-only (see _dispatch()), so the mask_id that
        comes back must be the very same id the style was saved with -- an id

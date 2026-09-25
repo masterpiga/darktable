@@ -22,7 +22,7 @@
 // file, so that migration to the flexi mask model can be verified against real
 // edits instead of only against ones we thought to invent.
 //
-// Run as `darktable --harvest-masks out.json`, honouring --library and
+// Run as `darktable --harvest-masks out.json`, honoring --library and
 // --configdir to pick which library to read.
 //
 // Or as `darktable --harvest-masks-xmp DIR out.json`, which walks DIR
@@ -71,7 +71,7 @@
 //        anyone auditing the file.
 //
 //    Image identity is reduced to width and height, which is all the verifier
-//    needs (masks are stored in normalised coordinates; the pixels underneath
+//    needs (masks are stored in normalized coordinates; the pixels underneath
 //    are irrelevant and are replaced by a generated probe -- see
 //    probe_image.h). Image ids are renumbered sequentially so they cannot be
 //    correlated with anything outside the file.

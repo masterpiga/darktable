@@ -58,7 +58,7 @@
 //
 // The image underneath is the generated probe (see probe_image.h) rather than
 // the user's photo, which we deliberately never collect. That substitution is
-// sound because masks are stored in normalised coordinates and, for the
+// sound because masks are stored in normalized coordinates and, for the
 // parametric ones, evaluated against whatever pixels are present -- but it is
 // also the point where this whole exercise can quietly become vacuous, since
 // two all-zero masks compare equal however wrong the migration was. Hence the

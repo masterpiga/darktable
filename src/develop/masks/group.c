@@ -71,7 +71,7 @@ gboolean dt_masks_gui_step_object(dt_iop_module_t *module,
 // after a bundle-wide edit (coordinated resize/drag) has mutated every
 // child's own points directly, force-rebuild each child's own display buffer
 // in `gui->points` -- dt_masks_gui_form_create (unlike its "only if the pipe
-// hash changed" _test_create sibling) always recomputes unconditionally, the
+// hash changed" dt_masks_gui_form_test_create sibling) always recomputes, the
 // same call path.c's own scroll/drag handlers use after mutating one form.
 static void _bundle_refresh_children(dt_masks_form_t *scratch_grp,
                                      const dt_masks_form_t *bundle,
@@ -1276,14 +1276,14 @@ gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
   return TRUE;
 }
 
-// Flexi group-composition fold (group-composition model, flexi masks only):
-// consecutive *visible* shapes sharing one operator form a "group". A group's
-// members are combined into a sub-mask by union (default) or screen — both
-// order-independent, so a group is an unordered bag of shapes. That sub-mask is
-// refined once (per-group refinement, stored broadcast on the members), then
-// composited into the result with the group's operator a single time. An empty
-// group (no visible members) contributes nothing (identity), so an empty
-// intersect group never blanks the mask. The classic sequential fold below is
+// Flexi group-composition fold (flexi masks only): each marker starts a group
+// and holds its settings, up to the next marker. A group folds its visible
+// members into a sub-mask in list order with its within-group operator (see
+// the list below), refines that sub-mask once with the refinement its marker
+// holds, inverts and scales it, then composites it into the result with its
+// between-group operator; the first group seeds the result. An empty group (no
+// visible members) contributes nothing (identity), so an empty intersect group
+// never blanks the mask. The classic sequential fold below is
 // left untouched, so legacy (non-flexi) masks render byte-identically.
 static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict module,
                                      const dt_dev_pixelpipe_iop_t *const restrict piece,
@@ -1455,8 +1455,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       fpts = g_list_next(fpts);
     }
 
-    if(bypassed) continue;        // disabled group → contributes nothing
-    if(nb_members == 0) continue; // empty group → identity
+    if(bypassed) continue;        // disabled group: contributes nothing
+    if(nb_members == 0) continue; // empty group: identity
 
     // per-group refinement, applied once to the finished sub-mask (skipped
     // while this group is bypassed for preview). A group is keyed by its
@@ -1471,8 +1471,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // invert-output (true group invert, see DT_MASKS_STATE_OP_INVERT):
     // applied to this run's finished sub-mask, after its members have folded
     // and any group refinement has run, but before it composites onto the
-    // accumulator below -- so a difference-op group seeding the accumulator
-    // (the `continue` case right below) also seeds it already inverted.
+    // accumulator below -- so the first group, which seeds the accumulator,
+    // also seeds it already inverted.
     if(group_op & DT_MASKS_STATE_OP_INVERT)
       for(size_t i = 0; i < npixels; i++) grp[i] = 1.0f - grp[i];
 

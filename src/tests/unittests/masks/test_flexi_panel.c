@@ -803,24 +803,6 @@ static void test_masks_panel_header_markup(void **state)
   free(m_embedded);
 }
 
-// corner icon tooltip reflects module name, instance name, and action hints
-static void test_masks_corner_icon_tooltip(void **state)
-{
-  char *tt_off = _model_masks_corner_icon_tooltip("exposure", "foreground", FALSE, NULL);
-  assert_non_null(strstr(tt_off, "exposure (foreground)"));
-  assert_non_null(strstr(tt_off, "mask - off"));
-  // showing the panel is a view action: it never switches the mask on
-  assert_null(strstr(tt_off, "enable mask"));
-  assert_non_null(strstr(tt_off, "click to expand"));
-  free(tt_off);
-
-  char *tt_on = _model_masks_corner_icon_tooltip("exposure", "", TRUE, "drawn mask");
-  assert_non_null(strstr(tt_on, "exposure"));
-  assert_non_null(strstr(tt_on, "drawn mask"));
-  assert_non_null(strstr(tt_on, "click to expand"));
-  free(tt_on);
-}
-
 static void test_param_channel_tooltips(void **state)
 {
   const int csps[] = { DEVELOP_BLEND_CS_LAB, DEVELOP_BLEND_CS_RGB_DISPLAY, DEVELOP_BLEND_CS_RGB_SCENE };
@@ -833,7 +815,8 @@ static void test_param_channel_tooltips(void **state)
     {
       assert_non_null(ch->tooltip);
       char expected[128];
-      snprintf(expected, sizeof(expected), "add a parametric element of type %s", ch->label);
+      snprintf(expected, sizeof(expected), "add a parametric element selecting by %s (%s)",
+               ch->name, ch->label);
       assert_string_equal(ch->tooltip, expected);
     }
   }
@@ -921,7 +904,6 @@ int main(void)
     cmocka_unit_test_teardown(test_panel_state_no_separate_panel_for_utility_or_embedded, _teardown),
     cmocka_unit_test_teardown(test_pinning_collapsed_module_expands_iop, _teardown),
     cmocka_unit_test_teardown(test_masks_panel_header_markup, _teardown),
-    cmocka_unit_test_teardown(test_masks_corner_icon_tooltip, _teardown),
     cmocka_unit_test_teardown(test_param_channel_tooltips, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);

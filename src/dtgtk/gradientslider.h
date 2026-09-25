@@ -189,7 +189,7 @@ void dtgtk_gradient_slider_multivalue_get_values(GtkDarktableGradientSlider *gsl
 void dtgtk_gradient_slider_multivalue_set_value(GtkDarktableGradientSlider *gslider, gdouble value, gint position);
 /** same as above, but for FREE_MARKERS sliders: pushes the adjacent marker
  *  along instead of leaving position[] out of order when value crosses it --
- *  the same "drag past a neighbour and take it with you" behaviour a mouse
+ *  the same "drag past a neighbor and take it with you" behavior a mouse
  *  drag already gets via the private _slider_move(). Used by callers that set
  *  a marker's value programmatically (e.g. a precise-entry popup) and need it
  *  to behave exactly like a drag, not a raw clamped set. */

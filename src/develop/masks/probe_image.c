@@ -103,7 +103,7 @@ static inline float _fbm(const float x,
 // ---------------------------------------------------------------------------
 // low-discrepancy sequences
 //
-// Used to walk the third colour axis (blue) and the exposure ladder across
+// Used to walk the third color axis (blue) and the exposure ladder across
 // tiles. A low-discrepancy sequence rather than a hash because we want the
 // *first few* tiles a small mask covers to already be well spread, which is
 // exactly the property these have and a hash does not.
@@ -143,7 +143,7 @@ static inline float _radical_inverse_3(uint32_t n)
     properties against each other. Each tile sweeps red and green internally,
     so a larger tile resolves that sweep more finely; but blue and exposure
     only change *between* tiles, so a larger tile means a small drawn mask
-    sees fewer distinct slices of the colour cube.
+    sees fewer distinct slices of the color cube.
 
     16px is chosen from the measured failure of the second property: at 48px a
     window one eighth of the image across spans barely two tiles, and the
@@ -189,11 +189,11 @@ void dt_masks_probe_generate(float *const buf,
       // Base layer: each tile sweeps a full (R,G) slice of the linear-RGB
       // cube, and the slice's blue level walks a base-2 radical inverse
       // across tiles. So one tile alone already spans all of red and all of
-      // green, and a handful of neighbouring tiles span blue too.
+      // green, and a handful of neighboring tiles span blue too.
       float rgb[3] = { u, v, _radical_inverse_2(n + 1u) };
 
       // Texture, at every scale the detail mask can look at. Different seed
-      // per channel, so the noise moves through colour space rather than only
+      // per channel, so the noise moves through color space rather than only
       // along the neutral axis -- otherwise it would add luminance coverage
       // but no hue coverage.
       const float nx = (float)x / (float)width * nscale;
@@ -241,7 +241,7 @@ void dt_masks_probe_generate(float *const buf,
         const int cy = (y + 29 * level) / cell;
         const uint32_t h = _hash3(cx, cy, 0xa511e9b3u + (uint32_t)level);
 
-        // half-plane through the cell centre, at a hashed angle
+        // half-plane through the cell center, at a hashed angle
         const float angle = (float)(h >> 8) * (DT_2PI_F / 16777216.0f);
         const float dx = (float)x - ((float)cx * cell + cell * 0.5f);
         const float dy = (float)y - ((float)cy * cell + cell * 0.5f);
@@ -257,7 +257,7 @@ void dt_masks_probe_generate(float *const buf,
       // The base sweep is a rectangular walk of the RGB cube, so it reaches
       // the cube's corners only at exact tile corners, and the additive noise
       // above pulls even those back towards neutral. The most saturated
-      // colours the colour space can express are therefore never produced,
+      // colors the color space can express are therefore never produced,
       // and the coverage test measured exactly that: the top bins of Cz were
       // unreachable. This pushes a quarter of the tiles away from their own
       // mean, towards (and past) the gamut boundary; the clamp to zero at the

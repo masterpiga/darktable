@@ -185,6 +185,8 @@ void dtgtk_cairo_paint_dropdown(cairo_t *cr, gint x, gint y, gint w, gint h, gin
 void dtgtk_cairo_paint_bracket(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint lock icon */
 void dtgtk_cairo_paint_lock(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** paint the blend mask's lock icon */
+void dtgtk_cairo_paint_mask_lock(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint check mark icon */
 void dtgtk_cairo_paint_check_mark(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint an over/under exposure icon */

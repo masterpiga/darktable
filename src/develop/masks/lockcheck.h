@@ -31,7 +31,7 @@
  * against two scratch images, and reads the result back the same way.
  *
  * Writes to the database: run it with `--library :memory:` only, never on a
- * real catalogue. Prints one line per case and returns TRUE if all passed.
+ * real catalog. Prints one line per case and returns TRUE if all passed.
  */
 gboolean dt_masks_lock_check(void);
 

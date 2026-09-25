@@ -23,12 +23,12 @@
 // the module's own expander (the default), inside the masks_flexi_host utility
 // lib, or inside the separate grid panel owned by gui/gtk.c
 // (dt_ui_flexi_panel_*). This file owns moving it between them -- the
-// relocate/release pair, the host lib's re-configure poke, and the menu
-// section the user picks a position from -- and nothing else. It builds no
+// relocate/release pair, the host lib's re-configure poke, and the section of
+// the blending options the user picks a position from -- and nothing else. It builds no
 // panel content of its own; blend_gui.c does that.
 //
 // Split out of blend_gui.c. The seam is small on purpose: it needs one helper
-// from there (_reparent_into) and exports five entry points back, all declared
+// from there (_reparent_into) and exports its entry points back, all declared
 // in blend_gui_internal.h.
 
 #include "develop/blend_gui_internal.h"
@@ -60,7 +60,7 @@ int _masks_panel_position(void)
   return MASKS_PANEL_POS_CANVAS;
 }
 
-// which edge the panel is docked against. Not part of the position choice: a
+// which edge the panel is docked against. Not part of the position choice:
 // the panel opens on whichever edge was clicked, and stays there.
 //
 // Until the user has pinned it once the key does not exist yet, and the panel
@@ -95,7 +95,8 @@ static void _masks_flexi_host_reconfigure(void)
     darktable.develop->proxy.masks_flexi_host.reconfigure(host);
 }
 
-// human-readable mask type name for the collapsed corner icon's tooltip
+// human-readable mask type name for the canvas panel's edge-strip hint (see
+// _flexi_sliver_hint in gui/gtk.c)
 static const char *_mask_mode_label(const uint32_t mask_mode)
 {
   switch(mask_mode)
@@ -233,7 +234,7 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
         ? _("unavailable: the focused module does not support masks")
         : _("unavailable: the blend mask panel shows the mask of the focused"
             " module, and no module is focused.\n"
-            "click a module's header to focus it."),
+            "click a module's header to focus it"),
       rc);
     gtk_widget_set_tooltip_text(btn, tt);
     g_free(tt);
@@ -303,31 +304,6 @@ static void _masks_embedded_apply_collapsed(dt_iop_module_t *module,
                                 : _("hide the blend mask panel"));
 }
 
-// The header's reading order is:
-//
-// Embedded (left):
-//   expander | caption | <space> | overlay | edit | toggle
-//
-// Embedded (mirrored):
-//   caption | <space> | overlay | edit | toggle | expander
-//
-// Utility and canvas positions:
-//   caption | <space> | overlay | edit | toggle
-//
-// (in the utility position those three sit on the lib's own header, which
-// stands in for this one)
-//
-// with the same controls on the right in every case: the mask lock, the mask
-// overlay, the edit run (edit on canvas and solo edit, between two gaps, see
-// masks_header_edit_box), and the mask on/off toggle at the very end. They act
-// on the canvas, so they stay wherever the panel is hosted. The old
-// preferences button is gone from all of
-// them -- the blending options open on a right-click of the on/off toggle now
-// (see _blendop_mask_enable_right_click), the way guide settings hang off the
-// guides icon. The expander is embedded-only: the utility position already has
-// the lib's own expander to its left, and out on the canvas the panel is opened
-// and closed from the darkroom toolbar button, which is a bigger and more
-// findable target than an icon on a floating panel.
 // the lock sits immediately left of the mask overlay, so it goes wherever the
 // overlay is reparented: the panel's header, or the utility lib's in its place
 static void _place_mask_lock(dt_iop_gui_blend_data_t *bd)
@@ -345,6 +321,23 @@ static void _place_mask_lock(dt_iop_gui_blend_data_t *bd)
                         lock_pos < showmask_pos ? showmask_pos - 1 : showmask_pos);
 }
 
+// The header's reading order, in every position:
+//
+//   [expander] | caption | <space> | lock | overlay | edit | toggle
+//
+// with the same controls on the right in every case: the mask lock, the mask
+// overlay, the edit run (edit on canvas and solo edit, between two gaps, see
+// masks_header_edit_box), and the mask on/off toggle at the very end. They act
+// on the canvas, so they stay wherever the panel is hosted; in the utility
+// position they sit on the lib's own header, which stands in for this one.
+// There is no preferences button: the blending options open on a right-click
+// of the on/off toggle (see _blendop_mask_enable_toggled), the way guide
+// settings hang off the guides icon. The expander is embedded-only: the
+// utility position already has the lib's own expander to its left, and out on
+// the canvas the panel is opened and closed from the darkroom toolbar button,
+// which is a bigger and more findable target than an icon on a floating panel.
+// `mirrored` (the canvas panel docked on the right) would move the expander to
+// the far right, where it is hidden anyway
 static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
                                      const gboolean mirrored)
 {
@@ -584,7 +577,7 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed)
 // blend/mask panel inline, whether it fell back here because the position
 // preference IS "embedded", or because it used to be hosted elsewhere
 // (utility/left/right) and just lost focus -- both are the same case from
-// the user's point of view (BUG, previously only the first was covered).
+// the user's point of view.
 void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
 {
   _masks_flexi_relocate(module);
@@ -701,26 +694,6 @@ gboolean _model_masks_pin_should_expand_iop(const gboolean is_expanded,
                                             const gboolean is_collapsed)
 {
   return !is_expanded && is_collapsed;
-}
-
-char *_model_masks_corner_icon_tooltip(const char *module_name,
-                                       const char *instance_name,
-                                       const gboolean is_active,
-                                       const char *mask_label)
-{
-  const char *mname = module_name ? module_name : _("blend mask");
-  gchar *mod_name = (instance_name && strlen(instance_name) > 0)
-    ? g_strdup_printf("%s (%s)", mname, instance_name)
-    : g_strdup(mname);
-
-  // showing the panel never switches the mask on, in any position, so the off
-  // state promises the same thing the on state does: the panel
-  gchar *tooltip = is_active
-    ? g_strdup_printf(_("%s: blend mask - %s\nclick to expand"),
-        mod_name, mask_label ? mask_label : _("active"))
-    : g_strdup_printf(_("%s: blend mask - off\nclick to expand"), mod_name);
-  g_free(mod_name);
-  return tooltip;
 }
 
 char *_model_masks_panel_header_markup(const char *module_name,
@@ -877,7 +850,7 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
 
     _masks_flexi_host_reconfigure();
     // dev->gui_module is already updated to the new focus target (or NULL)
-    // by the time this runs -- see dt_iop_gui_set_focus in imageop.c, which
+    // by the time this runs -- see dt_iop_request_focus in imageop.c, which
     // sets it before calling lose_focus on the outgoing module
     dt_iop_module_t *next = darktable.develop->gui_module;
     dt_iop_gui_blend_data_t *next_bd = next ? next->blend_data : NULL;
@@ -924,17 +897,6 @@ void _masks_flexi_release(dt_iop_module_t *module)
   _masks_flexi_release_full(module, TRUE);
 }
 
-// (re)decide where this module's masking panel content should live, per
-// the current "plugins/darkroom/blend/masks_panel_position" preference:
-// embedded (default) keeps it inline; utility uses the masks_flexi_host lib
-// (LEFT_CENTER); left/right use the genuine extra grid panel owned by
-// gui/gtk.c (dt_ui_flexi_panel_*). Hosting only depends on the module being
-// focused and masking-capable -- NOT on the current mask mode, so the
-// mode-select row stays reachable via the panel/corner-icon even with the
-// mask off (see request: "overlay button ... should show" with no mask).
-// With no mask the panel auto-collapses to just that icon; the collapse is
-// visual only (persist=FALSE) so it doesn't clobber the user's own
-// expand/collapse preference for when a mask *is* active.
 // Guarantee the host shows exactly one module's panel.
 //
 // hosted_module is what normally does this: relocate releases it before
@@ -966,6 +928,14 @@ static void _release_stray_hosted(dt_iop_module_t *keep)
   }
 }
 
+// (re)decide where this module's masking panel content should live, per
+// the current "plugins/darkroom/blend/masks_panel_position" preference:
+// embedded (default) keeps it inline; utility uses the masks_flexi_host lib
+// (DT_UI_CONTAINER_PANEL_LEFT_CENTER); the canvas position uses the extra
+// grid panel owned by gui/gtk.c (dt_ui_flexi_panel_*). Hosting only depends
+// on the module being focused and masking-capable -- NOT on the current mask
+// mode, so the panel's controls stay reachable with the mask off, and whether
+// it shows follows the shared fold preference (see _model_masks_panel_state)
 void _masks_flexi_relocate(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
@@ -1171,16 +1141,16 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
       if(levb)
       {
         gtk_widget_set_sensitive(levb, TRUE);
-        gtk_widget_set_tooltip_text(levb, _("blend mask"));
+        gtk_widget_set_tooltip_text(levb, _("click to show or hide the blend mask panel"));
       }
     }
     if(host && host->preset_label)
       gtk_widget_set_visible(host->preset_label, FALSE);
 
-    // the shared state, like the other two positions. Previously this derived
-    // expansion from mask_mode alone, so a relocate (a focus change, a mode
-    // change) re-expanded a lib the user had just folded -- and, since
-    // dt_lib_gui_set_expanded persists, overwrote the folded state as it went.
+    // the shared state, like the other two positions: deriving expansion from
+    // mask_mode would make a relocate (a focus change, a mode change)
+    // re-expand a lib the user had just folded -- and, since
+    // dt_lib_gui_set_expanded persists, overwrite the folded state.
     if(host && focus_changed)
       _masks_utility_apply_collapsed(host, state.panel_collapsed);
   }
@@ -1213,10 +1183,6 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
     g_free(markup);
   }
 
-  // in the utility lib, that lib's own header hamburger is repurposed to
-  // this same options menu (see masks_flexi_host.c's view_enter and
-  // dt_iop_gui_blend_masks_options_popup) -- don't show a second, redundant
-  // one in the mode-select row too
   gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
 
   if(pos == MASKS_PANEL_POS_CANVAS)
@@ -1270,12 +1236,9 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
   // lib's expander header before the module's own gui update has had anything
   // to say about it. Re-assert it from the params, which are the truth.
   //
-  // Both symptoms of letting it drift point at the toggle rather than at the
-  // mask, which is why they read as unrelated: the accent is styled on
-  // :checked, so an out-of-date toggle simply loses it, and
-  // _blendop_mask_enable_toggled branches on the button rather than on
-  // mask_mode, so its first click runs the enable path on an already enabled
-  // mask, does nothing, and only leaves the two back in step for the second.
+  // An out-of-date toggle shows the wrong state: the accent is styled on
+  // :checked, so it simply loses it. (_blendop_mask_enable_toggled branches on
+  // mask_mode rather than on the button for the same reason.)
   _sync_mask_enable_toggle(bd);
 
   // focus moved, or the hosted module's masking changed: the toolbox button
@@ -1288,10 +1251,7 @@ void _masks_flexi_relocate(dt_iop_module_t *module)
 static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t *module)
 {
   // a real GtkRadioButton group, which fires "toggled" on both the item losing
-  // the selection and the one gaining it -- only act on the latter. (The menu
-  // this replaced had to use plain check *menu items* and enforce exclusion by
-  // hand, because the theme styles no "radio" node for menu items; radio
-  // buttons in a popover are styled and used elsewhere, see global_toolbox.c.)
+  // the selection and the one gaining it -- only act on the latter
   if(darktable.gui->reset || !gtk_toggle_button_get_active(mi)) return;
 
   const int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "dt-panel-pos"));
@@ -1309,9 +1269,9 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
 
   // repositioning is a deliberate user action -- make sure the result is
   // actually visible, in every position: unfold the panel and store that,
-  // before the relocate below applies it. Overriding _masks_flexi_relocate's
-  // "no mask -> fold to the corner icon / the collapsed header" is the point:
-  // explicitly picking a position should show what was picked.
+  // before the relocate below applies it. Overriding a fold the user made
+  // earlier is the point: explicitly picking a position should show what was
+  // picked.
   _masks_panel_set_collapsed_pref(FALSE);
 
   // decide where this (focused) module's content should live now
@@ -1354,10 +1314,8 @@ void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
   GtkWidget *header = gtk_label_new(_("blend mask panel position"));
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements, refinements)"
-              " is shown.\n"
-              "moving to/from the utility module or a separate panel takes effect"
-              " the next time the panel is rebuilt (e.g. after reopening darkroom)."));
+  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements,"
+                                        " refinements) is shown. a change applies at once"));
   dt_gui_box_add(box, header);
 
   static const struct

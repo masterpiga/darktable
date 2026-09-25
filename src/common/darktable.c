@@ -278,7 +278,7 @@ static int usage(const char *argv0)
          "    Exits 0 only if all three passed.\n"
          "\n"
          "    Use --library :memory: with this: it writes to a scratch image id\n"
-         "    and must never be pointed at a real catalogue.\n"
+         "    and must never be pointed at a real catalog.\n"
          "\n"
          "    FILE may be gzipped; the .gz a contributor sends is read directly,\n"
          "    with no need to unpack it first. The same is true of\n"
@@ -2581,7 +2581,7 @@ int dt_init(int argc,
   {
     // Positioned here on purpose, and unlike --harvest-masks this one cannot
     // run early: replaying a mask means running the real blend, which needs
-    // the colour profiles (dt_colorspaces_init, above) and a genuine module
+    // the color profiles (dt_colorspaces_init, above) and a genuine module
     // instance from the iop registry (dt_iop_load_modules_so, just above) --
     // a hand-built module struct crashes in dt_develop_blend_process, which
     // calls through its function pointers.
@@ -2604,7 +2604,7 @@ int dt_init(int argc,
     // real history reader and writer, so it needs a working library database
     // as well. That is the whole point -- it exists to test the trip through
     // the database that the in-memory verifier cannot see -- so run it against
-    // a throwaway one, `--library :memory:`, and never a real catalogue: it
+    // a throwaway one, `--library :memory:`, and never a real catalog: it
     // creates and repeatedly wipes a scratch image id.
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(roundtrip_masks_input, ".roundtrip.json");
@@ -2617,7 +2617,7 @@ int dt_init(int argc,
   {
     // Same placement and same database requirement as --roundtrip-masks above:
     // it drives the real history reader and writer against a scratch image, so
-    // it needs `--library :memory:` and never a real catalogue.
+    // it needs `--library :memory:` and never a real catalog.
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(styleapply_masks_input, ".styleapply.json");
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
@@ -2629,8 +2629,8 @@ int dt_init(int argc,
   {
     // Renders through the real blend like --verify-masks, AND drives the real
     // history reader and writer like --roundtrip-masks, so it needs both what
-    // those need: the colour profiles and the iop registry, and a scratch
-    // database. `--library :memory:`, never a real catalogue.
+    // those need: the color profiles and the iop registry, and a scratch
+    // database. `--library :memory:`, never a real catalog.
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(persist_masks_input, ".persist.json");
     const gboolean ok = dt_masks_persist_harvest(persist_masks_input, report);
@@ -2642,7 +2642,7 @@ int dt_init(int argc,
   {
     // Same needs as --persist-masks: it renders through the real blend and
     // drives the real history reader and writer against a scratch image, so it
-    // wants `--library :memory:` and never a real catalogue.
+    // wants `--library :memory:` and never a real catalog.
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(undo_masks_input, ".undo.json");
     const gboolean ok = dt_masks_undo_harvest(undo_masks_input, report);
@@ -2653,7 +2653,7 @@ int dt_init(int argc,
   if(lock_masks)
   {
     // drives the real history reader and writer, paste and styles against two
-    // scratch images: `--library :memory:` only, never a real catalogue
+    // scratch images: `--library :memory:` only, never a real catalog
     dt_splash_screen_destroy();
     exit(dt_masks_lock_check() ? 0 : 1);
   }
@@ -2664,7 +2664,7 @@ int dt_init(int argc,
     // and yields one file. Same placement and same database requirement as the
     // individual flags above: it drives the real history reader and writer
     // against a scratch image, so it needs `--library :memory:` and never a
-    // real catalogue.
+    // real catalog.
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(check_masks_input, ".check.json");
     const gboolean ok = dt_masks_check_harvest(check_masks_input, report);

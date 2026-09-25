@@ -1134,12 +1134,12 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
   //
   // - Domino, not a theatrical face mask. At 16px the box is ~14px. A face is
   //   TALL, so it stacks eyes above a mouth along its shortest budget and every
-  //   feature lands at ~2px, where the cutouts blur into a grey smear. A domino
+  //   feature lands at ~2px, where the cutouts blur into a gray smear. A domino
   //   is WIDE: it runs along the axis with the most pixels and separates the
   //   two holes horizontally, so each stays ~3px and reads.
   // - Drawn FLAT, deliberately. Rotating it to exploit the diagonal was tried
   //   and is worse: an eye hole is only ~3px, so once its edges stop landing on
-  //   pixel boundaries it becomes a grey gradient with no dark core, and the
+  //   pixel boundaries it becomes a gray gradient with no dark core, and the
   //   band's crisp horizontal edges turn into anti-aliased ramps. The rotated
   //   forms read as a blob at 16px. Diagonal also BUYS nothing geometrically --
   //   for this aspect ratio (0.92 x 0.67) the largest rotated fit is a shorter
@@ -1165,7 +1165,7 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
     cairo_curve_to(cr, 0.30, 0.15, 0.70, 0.15, 0.96, 0.28);                     \
     /* right cheek down to the outer corner */                                  \
     cairo_curve_to(cr, 0.94, 0.59, 0.80, 0.84, 0.62, 0.84);                     \
-    /* the nose notch: dip to a point at the centre */                          \
+    /* the nose notch: dip to a point at the center */                          \
     cairo_curve_to(cr, 0.54, 0.84, 0.52, 0.72, 0.50, 0.72);                     \
     cairo_curve_to(cr, 0.48, 0.72, 0.46, 0.84, 0.38, 0.84);                     \
     /* left cheek back up to the start */                                       \
@@ -2669,6 +2669,30 @@ void dtgtk_cairo_paint_lock(cairo_t *cr, const gint x, const gint y, const gint 
   cairo_scale(cr, .2, .4);
   cairo_arc(cr, 0, 0, 1, M_PI, 0);
   cairo_stroke(cr);
+
+  FINISH
+}
+
+void dtgtk_cairo_paint_mask_lock(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
+{
+  PREAMBLE(1, 1.6, 0, 0)
+
+  // shackle stroked in unscaled units: dtgtk_cairo_paint_lock strokes it under
+  // a 0.2 x 0.4 scale, which squashes the arc and thins its sides
+  cairo_move_to(cr, 0.32, 0.5);
+  cairo_arc(cr, 0.5, 0.3, 0.18, M_PI, 0);
+  cairo_line_to(cr, 0.68, 0.5);
+  cairo_stroke(cr);
+
+  // body, a little wider than tall
+  const double r = 0.06;
+  cairo_new_sub_path(cr);
+  cairo_arc(cr, 0.8 - r, 0.47 + r, r, -M_PI_2, 0);
+  cairo_arc(cr, 0.8 - r, 0.92 - r, r, 0, M_PI_2);
+  cairo_arc(cr, 0.2 + r, 0.92 - r, r, M_PI_2, M_PI);
+  cairo_arc(cr, 0.2 + r, 0.47 + r, r, M_PI, 3 * M_PI_2);
+  cairo_close_path(cr);
+  cairo_fill(cr);
 
   FINISH
 }

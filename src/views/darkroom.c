@@ -3789,7 +3789,7 @@ void gui_init(dt_view_t *self)
   }
 
   /* mask panel toggle, last so it sits at the right-hand end of the toolbar.
-     The fixed, labelled, discoverable way to the mask panel: the panel's own
+     The fixed, labeled, discoverable way to the mask panel: the panel's own
      edge sliver is quicker to reach from the canvas but is only visible while
      the panel is folded, and says nothing about itself until hovered. */
   {
@@ -4299,9 +4299,9 @@ void leave(dt_view_t *self)
     dt_dev_pixelpipe_set_shutdown(dev0->full.pipe, DT_DEV_PIXELPIPE_STOP_NODES);
   }
 
-  // flexi masks panel (separate panel, left/right positions) is darkroom-only
-  // window chrome, not per-view lib content -- hide it and its corner icon
-  // explicitly, since nothing else does this when leaving the view
+  // flexi masks panel (the canvas position) is darkroom-only window chrome,
+  // not per-view lib content -- hide it and its edge strips explicitly, since
+  // nothing else does this when leaving the view
   dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
 
   dt_iop_color_picker_cleanup();

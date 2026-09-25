@@ -219,7 +219,7 @@ void dt_bauhaus_widget_set_popup_position(GtkWidget *widget,
 
 // hover-preview hook for a "dt-bauhaus-static-popup" slider (a popup opened
 // away from the pointer via dt_bauhaus_widget_show_popup(), which therefore
-// opts out of the normal "hover alone drags the value" popup behaviour --
+// opts out of the normal "hover alone drags the value" popup behavior --
 // see the static_popup comment in bauhaus.c's _window_motion_handle). Set it
 // with g_object_set_data(G_OBJECT(widget), "dt-bauhaus-static-hover-preview",
 // hook) and, if the hook needs its own user_data, also

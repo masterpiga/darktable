@@ -284,7 +284,7 @@ static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
   if(_flexi_layout_has_content(module)
      && !dt_gui_show_yes_no_dialog(
        _("apply mask layout preset?"), "",
-       _("this replaces the group layout and removes every shape "
+       _("this replaces the group layout and removes every element "
          "currently in this mask. continue?")))
     return;
   _flexi_layout_apply(module, nodes, n);
@@ -306,6 +306,7 @@ typedef struct _flexi_group_spec_t
 typedef struct _flexi_builtin_t
 {
   const char *name;                  // untranslated preset name
+  const char *tooltip;               // untranslated
   const _flexi_group_spec_t *groups; // pre-order, as _flexi_layout_node_t
   int n;
 } _flexi_builtin_t;
@@ -326,10 +327,17 @@ static const _flexi_group_spec_t _spec_drawn_parametric[] = {
 };
 
 static const _flexi_builtin_t _flexi_builtins[] = {
-  { N_("drawn (classic)"), _spec_drawn, G_N_ELEMENTS(_spec_drawn) },
-  { N_("parametric (classic)"), _spec_parametric, G_N_ELEMENTS(_spec_parametric) },
-  { N_("drawn + parametric (classic)"), _spec_drawn_parametric,
-    G_N_ELEMENTS(_spec_drawn_parametric) }
+  { N_("drawn (classic)"),
+    N_("one group combining its shapes by union, as a classic drawn mask did"),
+    _spec_drawn, G_N_ELEMENTS(_spec_drawn) },
+  { N_("parametric (classic)"),
+    N_("one group multiplying its parametric channels together, as a classic\n"
+       "parametric mask did"),
+    _spec_parametric, G_N_ELEMENTS(_spec_parametric) },
+  { N_("drawn + parametric (classic)"),
+    N_("a \"shapes\" group (union) and a \"parametric\" group (multiply),\n"
+       "multiplied together, as a classic drawn & parametric mask did"),
+    _spec_drawn_parametric, G_N_ELEMENTS(_spec_drawn_parametric) }
 };
 
 // materializes one built-in into the node array the apply path takes. Caller
@@ -442,8 +450,7 @@ static void _flexi_preset_save_action(GSimpleAction *action,
 }
 
 // appends a "presets" section (group-layout presets) directly to `menu` --
-// used by _blendif_options_callback, the "blend mask" header's hamburger
-// (formerly its own separate hamburger on the "mask elements" header)
+// the right-click menu of the "add group" button (see _new_shape_op_press)
 void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
 {
   GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_presets");
@@ -468,6 +475,7 @@ void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *mo
     const _flexi_builtin_t *b = &_flexi_builtins[i];
     GMenuItem *item = g_menu_item_new(_(b->name), NULL);
     g_menu_item_set_action_and_target_value(item, "masks_presets.builtin", g_variant_new_int32(i));
+    g_menu_item_set_attribute(item, "tooltip", "s", _(b->tooltip));
     g_menu_append_item(sec_builtins, item);
     g_object_unref(item);
   }

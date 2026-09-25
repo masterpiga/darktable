@@ -18,21 +18,21 @@
 
 // Host lib for the flexi masks panel's relocatable content, "utility
 // module" position only (masks_panel_position == MASKS_PANEL_POS_UTILITY,
-// see develop/blend_gui.c). Docked at DT_UI_CONTAINER_PANEL_LEFT_CENTER
-// like any ordinary lib (mask manager is the sibling precedent) -- always
+// see develop/masks_gui_panel_host.c). Docked at
+// DT_UI_CONTAINER_PANEL_LEFT_CENTER like any ordinary lib -- always
 // visible while registered, and collapsed through its own expander like any
 // other lib (see expanded_state below, which ties on-canvas mask editing to
 // that, as the other two positions do to their own collapse controls).
 //
-// The "separate panel, left/right" positions do NOT use this lib at all --
-// those are a genuine extra grid column owned by src/gui/gtk.c
-// (dt_ui_flexi_panel_*), since the user explicitly wants a real independent
-// panel, not more content stacked inside the existing left/right panels.
-// See _masks_flexi_relocate in develop/blend_gui.c for how the two
-// mechanisms are picked between.
+// The canvas position does NOT use this lib at all -- it is a genuine extra
+// grid column owned by src/gui/gtk.c (dt_ui_flexi_panel_*), a real
+// independent panel rather than more content stacked inside the existing
+// left/right panels. See _masks_flexi_relocate in
+// develop/masks_gui_panel_host.c for how the two mechanisms are picked
+// between.
 //
 // This lib is deliberately kept dt_lib-visible (dt_lib_is_visible) at all
-// times, for the same reason as before: src/views/view.c only calls
+// times: src/views/view.c only calls
 // dt_lib_gui_get_expander() (which builds and packs self->expander) for
 // libs that are visible *at view-enter time* -- a lib hidden via
 // dt_lib_set_visible() never gets its expander built/packed at all until
@@ -85,8 +85,8 @@ uint32_t container(dt_lib_module_t *self)
 
 int position(const dt_lib_module_t *self)
 {
-  // sorts right under navigation/histogram (LEFT_TOP), above the mask
-  // manager lib's position of 10
+  // sorts before the libs sharing its container: the duplicate manager (850),
+  // history (900) and snapshots (1000)
   return 2;
 }
 
@@ -109,8 +109,8 @@ static void _reconfigure(dt_lib_module_t *self)
 }
 
 // this lib's expander is the collapse control for the masking panel in the
-// "utility module" position -- the counterpart of the grid panel's corner icon
-// and of the embedded position's in-header arrow. Folding it hides the shapes
+// "utility module" position -- the counterpart of the canvas panel's edge
+// strip and of the embedded position's in-header arrow. Folding it hides the shapes
 // list, so the on-canvas editing it drives goes with it (and comes back on
 // expand), and a fold the user asked for is recorded as the panel's shared
 // collapse preference, the same as in the other two positions. Both are

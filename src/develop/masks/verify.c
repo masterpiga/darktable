@@ -68,7 +68,7 @@
 // Replaying at full sensor resolution would spend most of the run in
 // rasterisation for no extra discrimination -- a difference in mask geometry
 // shows up at any resolution. The harvested aspect ratio is preserved, since
-// masks are stored normalised and a wrong aspect would distort every shape.
+// masks are stored normalized and a wrong aspect would distort every shape.
 
 typedef enum
 {
@@ -711,7 +711,7 @@ static float *_synthetic_raster_mask(const int w, const int h)
     {
       const float dx = ((float)x - cx) * norm;
       const float dy = ((float)y - cy) * norm;
-      // radial soft disc, saturating to exactly 1 near the centre and exactly
+      // radial soft disc, saturating to exactly 1 near the center and exactly
       // 0 in the corners; the diagonal term breaks the symmetry so a
       // transpose-style error cannot pass
       const float rad = sqrtf(dx * dx + dy * dy) * 1.6f;
@@ -756,7 +756,7 @@ static const char *_attach_raster_source(replay_t *r,
   // refuses the fetch outright (and pops a dt_control_log about it). In the
   // edit this came from it necessarily did -- darktable would not have let the
   // user pick it otherwise -- so pinning it just below the target reproduces
-  // the real arrangement rather than inventing a favourable one. Asking the
+  // the real arrangement rather than inventing a favorable one. Asking the
   // order list would not do: the harvested instance number often has no entry,
   // and a source and target of the same op differ only by instance.
   r->source_module.iop_order = r->module.iop_order - 1.0;
@@ -802,9 +802,9 @@ static const char *_attach_raster_source(replay_t *r,
 
     The module has to be a genuine instance rather than a hand-filled struct.
     dt_develop_blend_process() calls through it -- self->flags() at minimum,
-    and the blend colourspace is decided by the module's own
+    and the blend colorspace is decided by the module's own
     blend_colorspace() -- so a stub would either crash (it did) or, worse,
-    silently replay every edit in the wrong colour space. Loading the module
+    silently replay every edit in the wrong color space. Loading the module
     the edit actually names is also what makes the replay faithful: an edit on
     a Lab module and one on a scene-referred RGB module take different paths
     through the blendif code. */
@@ -904,7 +904,7 @@ const char *_replay_init(replay_t *r,
 
   r->pipe.forms = forms;
   r->pipe.type = DT_DEV_PIXELPIPE_EXPORT; // never the focused GUI pipe
-  // the *full* image dimensions: mask geometry is stored normalised against
+  // the *full* image dimensions: mask geometry is stored normalized against
   // these, so they must be the original size even though we rasterise smaller
   r->pipe.iwidth = full_width;
   r->pipe.iheight = full_height;
@@ -927,7 +927,7 @@ const char *_replay_init(replay_t *r,
   r->piece.raster_masks =
     g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, dt_free_align_ptr);
 
-  // Colour management, without which the whole comparison is quietly hollow.
+  // Color management, without which the whole comparison is quietly hollow.
   //
   // The per-channel branch of every blendif_*_make_mask() calls
   // dt_develop_blendif_init_masking_profile() and, if it cannot get a profile,
@@ -953,7 +953,7 @@ const char *_replay_init(replay_t *r,
                                         DT_COLORSPACE_LIN_REC2020, "", DT_INTENT_PERCEPTUAL);
 
   // The INPUT profile matters too, and for a reason worth spelling out: with a
-  // scene-referred blend colourspace, dt_develop_blendif_init_masking_profile()
+  // scene-referred blend colorspace, dt_develop_blendif_init_masking_profile()
   // asks dt_ioppr_get_pipe_current_profile_info(), which picks input / work /
   // output by comparing this module's iop_order against colorin's and
   // colorout's. Those two lookups fail on this replay's order list -- the
@@ -970,7 +970,7 @@ const char *_replay_init(replay_t *r,
   // zero and agreed, which is a pass that proves nothing.
   // Set on the pipe directly rather than through
   // dt_ioppr_set_pipe_input_profile_info(): that setter consults the image
-  // cache for the dev's imgid to reconcile the EXIF colourspace, and this
+  // cache for the dev's imgid to reconcile the EXIF colorspace, and this
   // replay has no image behind it, so it dereferences a NULL image and
   // crashes. The list entry is all the profile lookup above actually needs.
   r->pipe.input_profile_info =
@@ -1115,7 +1115,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   int w = full_w, h = full_h;
   if(w <= 0 || h <= 0) { rep->skip_reason = "no image dimensions"; return; }
 
-  // scale down, preserving aspect (masks are normalised, so a wrong aspect
+  // scale down, preserving aspect (masks are normalized, so a wrong aspect
   // would distort every shape)
   if(w > VERIFY_MAX_EDGE || h > VERIFY_MAX_EDGE)
   {

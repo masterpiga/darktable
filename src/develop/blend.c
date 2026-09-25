@@ -1031,8 +1031,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
   // at all yet) -- gates the mask-display overlay further down: showing that
   // fallback as the usual yellow tint would just paint the entire canvas
   // opaque, which is not informative and makes it hard to see where to place
-  // a new shape or picker (see _group_has_no_active_content in blend_gui.c
-  // for the GUI-side warning shown when this triggers).
+  // a new shape or picker.
   gboolean mask_is_uniform_fallback = FALSE;
 
   if(uniform)

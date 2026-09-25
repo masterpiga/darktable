@@ -3400,7 +3400,7 @@ _dev_mask_overlay_bounds(const dt_develop_t *dev, float *x0, float *y0, float *x
 //     the edge), plus MASK_HANDLE_MARGIN so it isn't flush to the border.
 // boxw/boxh are the viewport extents in image units along each axis.
 // `occl0`/`occl1` are how much of the canvas is hidden behind an overlay on the
-// left and right, in the same normalised image units as boxw -- 0 unless the
+// left and right, in the same normalized image units as boxw -- 0 unless the
 // flexi masks panel is showing (see dt_dev_viewport_t::occlusion_left).
 static void _clamp_zoom_to_mask(const dt_develop_t *dev,
                                 const float boxw,
@@ -3462,7 +3462,7 @@ static void _clamp_zoom_to_mask(const dt_develop_t *dev,
   const float homeh = boxh >= 1.0f ? 0.0f : 0.5f - halfh;
   // An overlay covers a strip of the canvas but the image is still laid out for
   // all of it, so the plain bound stops with that strip's content stranded
-  // underneath. Letting the centre travel one strip further on that side lets
+  // underneath. Letting the center travel one strip further on that side lets
   // any of it be pulled out into the part that can actually be seen -- the
   // image never moves when the overlay appears, and nothing becomes
   // unreachable while it is there. Both are 0 with no overlay, and then these
@@ -4489,7 +4489,7 @@ gboolean dt_dev_equal_chroma(const float *f, const double *d)
 // written commit-side by temperature.c and channelmixerrgb.c and never
 // invalidated when the module list they point into is torn down. Dereferencing
 // one after that is a hard, reproducible SIGSEGV inside
-// dt_iop_set_module_trouble_message below, reached from _try_enter (darkroom.c),
+// dt_iop_set_module_trouble_message below, reached from try_enter (darkroom.c),
 // which resets chroma on every darkroom entry -- at which point dev->iop is the
 // *previous* session's list, or empty. dt_iop_cleanup_module now clears these
 // when it frees a module they name, but this cache is written from too many

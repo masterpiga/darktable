@@ -396,8 +396,9 @@ typedef struct dt_develop_t
       // children) so _masks_flexi_relocate can cheaply tell whether it needs
       // to move a previous occupant out first.
       struct dt_iop_module_t *hosted_module;
-      // called by blend_gui.c right after the hamburger menu writes a new
-      // masks_panel_position, so the lib can show/hide itself live
+      // called right after the blending options write a new
+      // masks_panel_position (see _masks_flexi_host_reconfigure), so the lib
+      // can show/hide itself live
       void (*reconfigure)(struct dt_lib_module_t *self);
     } masks_flexi_host;
   } proxy;

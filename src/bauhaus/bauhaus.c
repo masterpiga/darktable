@@ -2289,7 +2289,7 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
 
 // paint the baseline as a checkerboard fading into solid white left-to-right,
 // the standard alpha/opacity affordance (transparency shown as a checker,
-// solid colour as the value approaches 1) -- see _draw_baseline. Mutually
+// solid color as the value approaches 1) -- see _draw_baseline. Mutually
 // exclusive with the grad_col/grad_pos stops set by dt_bauhaus_slider_set_stop.
 void dt_bauhaus_slider_set_checker_gradient(GtkWidget *widget,
                                             const gboolean enable)
@@ -2348,7 +2348,7 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   const float border_width = bh->border_width;
   const float size = bh->marker_size;
   const float htM = bh->baseline_size - border_width;
-  // a labelled slider always reserves a text line above the baseline; one
+  // a labeled slider always reserves a text line above the baseline; one
   // with its label suppressed (content_height > 0, see the flexi group
   // header's own opacity slider in blend_gui.c) has nothing there any more,
   // so center the baseline/indicator in the height it actually has instead
@@ -2368,10 +2368,10 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   {
     // a checker-gradient track runs from a dark checkerboard to a near-white
     // fade (see _draw_baseline), so the theme's usual fg/border pairing --
-    // two values close to each other, meant for one flat baseline colour --
+    // two values close to each other, meant for one flat baseline color --
     // leaves the marker invisible at one end or the other. Give it a light
     // outline around a dark body instead: the outline holds up over the dark
-    // half, the body over the pale half, in any theme. Moderate greys rather
+    // half, the body over the pale half, in any theme. Moderate grays rather
     // than pure white/black, so it still reads as the same kind of marker as
     // every other slider's.
     //
@@ -3312,17 +3312,12 @@ static void _widget_get_preferred_width(GtkWidget *widget,
 
   *natural_width = _natural_width(widget, FALSE)
                    + w->margin.left + w->margin.right + w->padding.left + w->padding.right;
-  // this was previously left unset entirely (uninitialized stack garbage) --
-  // harmless as long as nothing called gtk_widget_get_preferred_size()
-  // directly on a bauhaus widget, which held until an earlier version of
-  // _opacity_slot_size_allocate (blend_gui.c) started doing exactly that and
-  // got a garbage width back (now fixed there without needing this value at
-  // all -- it only asks for preferred *height*). Explicitly 0 rather than
-  // *natural_width: every panel that hosts sliders (not just flexi masks)
-  // sizes off this, and a real minimum equal to natural (each slider's full
-  // numeric-label width) stopped every such panel from being shrunk below
-  // that sum -- a regression from the UB's de-facto lenient behaviour, which
-  // this restores deliberately instead of by accident.
+  // this used to be left unset, so gtk_widget_get_preferred_size() on a bauhaus
+  // widget returned stack garbage. Explicitly 0 rather than *natural_width:
+  // every panel that hosts sliders (not just flexi masks) sizes off this, and a
+  // real minimum equal to natural (each slider's full numeric-label width)
+  // stopped every such panel from being shrunk below that sum. 0 keeps the
+  // lenient behavior the garbage value happened to give
   *minimum_width = 0;
 }
 

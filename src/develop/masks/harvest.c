@@ -31,7 +31,7 @@
 
 #define HARVEST_FORMAT_VERSION 1
 
-// An XMP sidecar records no image dimensions. Mask geometry is normalised, so
+// An XMP sidecar records no image dimensions. Mask geometry is normalized, so
 // what a replay needs from them is an aspect ratio; 3:2 is the commonest
 // photographic one, and whichever is chosen applies equally to the classic and
 // migrated renders a verification compares.
@@ -42,10 +42,10 @@
 // JSON emission
 //
 // Hand-rolled rather than pulled from a library, because the output has a
-// property no generic serialiser can be asked to guarantee: every value in it
+// property no generic serializer can be asked to guarantee: every value in it
 // must be one we deliberately decided to include. Writing the fields out by
 // hand means a field can only appear here if someone typed its name, which is
-// the point -- a reflective serialiser over the structs would happily emit the
+// the point -- a reflective serializer over the structs would happily emit the
 // user-typed group name this format exists to leave out.
 // ---------------------------------------------------------------------------
 
@@ -175,25 +175,11 @@ static const char *_form_type_name(const int type)
   return "unknown";
 }
 
-/** Bytes of a stored group point for a given masks version.
-
-    Mirrors the stride selection in dt_masks_read_masks_history(): group points
-    have grown fields over time (refinement in v7, name in v8, group_opacity in
-    v9, group_start in v10) and an older blob is shorter than the current
-    struct. Reading with the wrong stride would silently misinterpret every
-    field after the first, so this has to track that function exactly. */
-static size_t _group_point_stride(const int version)
-{
-  if(version < 7)  return offsetof(dt_masks_point_group_t, refinement);
-  if(version < 8)  return offsetof(dt_masks_point_group_t, name);
-  if(version < 9)  return offsetof(dt_masks_point_group_t, group_opacity);
-  if(version < 10) return offsetof(dt_masks_point_group_t, group_start);
-  return sizeof(dt_masks_point_group_t);
-}
-
 static size_t _point_stride(const int type, const int version)
 {
-  if(type & DT_MASKS_GROUP)    return _group_point_stride(version);
+  // the reader's own stride, so the two cannot drift apart
+  if(type & DT_MASKS_GROUP)
+    return dt_masks_point_stride(type, version, sizeof(dt_masks_point_group_t));
   if(type & DT_MASKS_CIRCLE)   return sizeof(dt_masks_point_circle_t);
   if(type & DT_MASKS_ELLIPSE)  return sizeof(dt_masks_point_ellipse_t);
   if(type & DT_MASKS_PATH)     return sizeof(dt_masks_point_path_t);
@@ -381,7 +367,7 @@ static void _emit_one_form(json_t *j,
     // `masks_history.name` is deliberately not selected: user-renameable.
 
     // source point, for clone/heal forms. Historic rows stored 2, 3 or 4
-    // floats (the 4-float form carried an unused scale field); normalise to
+    // floats (the 4-float form carried an unused scale field); normalize to
     // the three the current code keeps, as dt_masks_read_masks_history does.
     float source[3] = { 0.0f, 0.0f, 0.0f };
     if(src && src_bytes >= (int)(sizeof(float) * 2))
@@ -449,7 +435,7 @@ static int _emit_forms(json_t *j,
   // getting it wrong here produced 22 spurious "the migration changed this
   // mask" results whose real cause was that half the geometry was missing.
   //
-  // SQLite's documented bare-column behaviour applies: with MAX(num) in the
+  // SQLite's documented bare-column behavior applies: with MAX(num) in the
   // select list, the other columns come from the row that supplied the
   // maximum, which is exactly the latest version of each form.
   const char *q = "SELECT formid, form, version, points, points_count, source,"
@@ -1027,7 +1013,7 @@ gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path)
          "read from each sidecar's own image file, metadata only, nothing else "
          "about it opened. Where that file is missing a nominal 3:2 canvas is "
          "used instead and the edit is marked dimensions_known: 0; mask geometry "
-         "is stored normalised, so that only sets the aspect a replay draws on, "
+         "is stored normalized, so that only sets the aspect a replay draws on, "
          "identically for the classic and migrated renders it compares.");
 
   _j_open(&j, "edits", '[');

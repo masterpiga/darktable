@@ -81,7 +81,7 @@ typedef enum
    shape onto another turns those from "compared, inert" into "compared, live".
 
    For the storage checks the stake is different and larger: geometry is the one
-   part of a mask with a per-type serialised representation (a blob of
+   part of a mask with a per-type serialized representation (a blob of
    dt_masks_point_<type>_t in masks_history), so a shape that has been edited is
    the only thing that exercises writing a point struct the harvest did not
    supply. path.c's resize even keeps a cached baseline alongside the points --
@@ -155,9 +155,9 @@ typedef enum
 
 /* `k` carries the poke for STEP_POKE and the geom_t for STEP_GEOM -- the two
    never appear in the same step, and a second field would have to be spelled
-   out in every sequence initialiser just to say "unused". STEP_POKE is 0 so
+   out in every sequence initializer just to say "unused". STEP_POKE is 0 so
    the sequences written before the other kinds existed keep their two-field
-   initialisers. */
+   initializers. */
 typedef struct { poke_t k; scope_t s; step_kind_t kind; } step_t;
 
 #define GEOM_STEP(g, sc) { (poke_t)(g), (sc), STEP_GEOM }

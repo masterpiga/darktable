@@ -130,7 +130,7 @@ static gchar *_snapshot(dt_develop_t *dev)
 
     This used to also require every non-union group to hold one member, since
     classic applies a non-union operator once per member. Migration now
-    dissolves nested groups (_dissolve_member in masks.c), and a subtracted
+    dissolves nested groups, and a subtracted
     group of several shapes becomes one difference group of several members,
     exactly. That is indistinguishable here from a run that was wrongly left
     merged, so that case is left to --verify-masks, which renders both.

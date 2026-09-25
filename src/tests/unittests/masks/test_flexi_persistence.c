@@ -31,10 +31,11 @@
 //     for most of them -- but group_opacity is multiplicative, so a zero-fill
 //     would silently blank out every pre-v9 group's mask.
 //
-// The read-time stride selection itself is SQLite-coupled and not reachable
-// here; what these tests cover is the migration chain that runs after it, on a
-// form whose points have already been zero-filled the way that reader leaves
-// them.
+// Most of these cover the migration chain that runs after the read, on a form
+// whose points have already been zero-filled the way the reader leaves them.
+// The read-time layout conversion (dt_masks_point_stride and
+// dt_masks_point_from_blob) is tested on its own, for the one struct that lost
+// a field.
 
 #include "flexi_fixture.h"
 
@@ -182,6 +183,82 @@ static void test_v10_operator_change_still_nests_old_edits(void **state)
 
 // migrating is idempotent: a form already at the current version comes out
 // unchanged, structurally and by hash
+// masks v11 dropped the parametric point's unused `compact` field, which sat
+// right before `disabled`. The v10 layout, spelled out here since the struct
+// no longer has it
+typedef struct
+{
+  uint32_t blendif;
+  float blendif_parameters[4 * DEVELOP_BLENDIF_SIZE];
+  float blendif_boost_factors[DEVELOP_BLENDIF_SIZE];
+  uint32_t colorspace, single, channel, in_out, invert, compact, disabled;
+} _parametric_v10_t;
+
+// an old blob is one field longer, and every field comes through, `disabled`
+// from its old place past `compact`
+static void test_v11_reads_a_v10_parametric_point(void **state)
+{
+  const size_t size = sizeof(dt_masks_point_parametric_t);
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_PARAMETRIC, 10, size),
+                   sizeof(_parametric_v10_t));
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_PARAMETRIC, 11, size), size);
+
+  _parametric_v10_t old;
+  memset(&old, 0, sizeof(old));
+  old.blendif = 0x5;
+  old.blendif_parameters[3] = 0.75f;
+  old.blendif_boost_factors[1] = 2.0f;
+  old.colorspace = 3;
+  old.single = 1;
+  old.channel = 2;
+  old.in_out = 1;
+  old.invert = 1;
+  old.compact = 0xdeadbeef;
+  old.disabled = 2;
+
+  dt_masks_point_parametric_t p;
+  memset(&p, 0, sizeof(p));
+  dt_masks_point_from_blob(DT_MASKS_PARAMETRIC, 10, size, (const char *)&old, (char *)&p);
+  assert_int_equal(p.blendif, 0x5);
+  assert_true(p.blendif_parameters[3] == 0.75f);
+  assert_true(p.blendif_boost_factors[1] == 2.0f);
+  assert_int_equal(p.colorspace, 3);
+  assert_int_equal(p.single, 1);
+  assert_int_equal(p.channel, 2);
+  assert_int_equal(p.in_out, 1);
+  assert_int_equal(p.invert, 1);
+  assert_int_equal(p.disabled, 2);
+}
+
+// a v11 blob is the struct as it is
+static void test_v11_reads_a_v11_parametric_point_as_is(void **state)
+{
+  const size_t size = sizeof(dt_masks_point_parametric_t);
+  dt_masks_point_parametric_t src, p;
+  memset(&src, 0, sizeof(src));
+  memset(&p, 0, sizeof(p));
+  src.channel = 4;
+  src.disabled = 1;
+  dt_masks_point_from_blob(DT_MASKS_PARAMETRIC, 11, size, (const char *)&src, (char *)&p);
+  assert_memory_equal(&p, &src, size);
+}
+
+// the group strides the reader used before the helpers existed
+static void test_group_point_strides_are_unchanged(void **state)
+{
+  const size_t size = sizeof(dt_masks_point_group_t);
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 6, size),
+                   offsetof(dt_masks_point_group_t, refinement));
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 7, size),
+                   offsetof(dt_masks_point_group_t, name));
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 8, size),
+                   offsetof(dt_masks_point_group_t, group_opacity));
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 9, size),
+                   offsetof(dt_masks_point_group_t, group_start));
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 10, size), size);
+  assert_int_equal(dt_masks_point_stride(DT_MASKS_GROUP, 11, size), size);
+}
+
 static void test_migration_is_idempotent(void **state)
 {
   dt_masks_form_t *grp = _build_legacy("u:1,2 | i:3,4", 8);
@@ -402,6 +479,9 @@ int main(void)
     cmocka_unit_test_teardown(test_v9_does_not_overwrite_an_explicit_opacity, _teardown),
     cmocka_unit_test_teardown(test_v10_carries_break_bit_into_group_start, _teardown),
     cmocka_unit_test_teardown(test_v10_without_break_bit_yields_one_group, _teardown),
+    cmocka_unit_test_teardown(test_v11_reads_a_v10_parametric_point, _teardown),
+    cmocka_unit_test_teardown(test_v11_reads_a_v11_parametric_point_as_is, _teardown),
+    cmocka_unit_test_teardown(test_group_point_strides_are_unchanged, _teardown),
     cmocka_unit_test_teardown(test_v10_operator_change_still_nests_old_edits, _teardown),
     cmocka_unit_test_teardown(test_migration_is_idempotent, _teardown),
     cmocka_unit_test_teardown(test_migration_rejects_impossible_versions, _teardown),

@@ -40,9 +40,9 @@
 
 G_BEGIN_DECLS
 
-// masks are stored normalised, so the replay renders at a bounded size rather
+// masks are stored normalized, so the replay renders at a bounded size rather
 // than the edit's own: 512 on the long edge keeps every shape's proportions
-// and every parametric channel's behaviour while making a few thousand
+// and every parametric channel's behavior while making a few thousand
 // renders affordable
 #define VERIFY_MAX_EDGE 512
 

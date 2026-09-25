@@ -2034,7 +2034,7 @@ void dt_iop_cleanup_module(dt_iop_module_t *module)
   // now, cleared only by dt_dev_reset_chroma. Leaving a freed module in them is a
   // real crash, not a theoretical one: dt_dev_reset_chroma calls
   // dt_dev_clear_chroma_troubles, which dereferences BOTH pointers before nulling
-  // them, and _try_enter (darkroom.c) calls it on every darkroom entry -- so
+  // them, and try_enter (darkroom.c) calls it on every darkroom entry -- so
   // opening any image after leaving darkroom dereferenced the previous image's
   // long-freed temperature module.
   if(module->dev)
@@ -3463,7 +3463,7 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
 #endif
     if(rasters > 0)
       g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             rasters, (rasters == 1 ? _("raster") : _("rasters")));
+                             rasters, (rasters == 1 ? _("raster mask") : _("raster masks")));
 
     GHashTableIter iter;
     gpointer key, value;
@@ -3488,7 +3488,13 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
   gchar *part2 = NULL;
   if(raster && module->raster_mask.sink.source)
   {
-    gchar *source = dt_history_item_get_name(module->raster_mask.sink.source);
+    // the name is markup and the tooltip plain text: unescaped, a "&" in an
+    // instance name would read "&amp;"
+    gchar *markup = dt_history_item_get_name(module->raster_mask.sink.source);
+    gchar *source = NULL;
+    if(!pango_parse_markup(markup, -1, 0, NULL, &source, NULL, NULL))
+      source = g_strdup(markup);
+    g_free(markup);
     part2 = g_strdup_printf(_("taken from module %s"), source);
     g_free(source);
   }
@@ -3583,7 +3589,7 @@ void dt_iop_add_remove_mask_lock_indicator(dt_iop_module_t *module, const gboole
     // a plain button rather than a toggle: it only ever shows the locked
     // state, and only the panel's own lock button locks
     module->mask_lock_indicator =
-      dtgtk_button_new_full(dtgtk_cairo_paint_lock, 0, NULL,
+      dtgtk_button_new_full(dtgtk_cairo_paint_mask_lock, 0, NULL,
                             &(dtgtk_button_config_t){
                               .tooltip = _("mask locked\nclick to unlock"),
                             });
