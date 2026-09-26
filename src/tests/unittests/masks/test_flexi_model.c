@@ -2335,6 +2335,29 @@ static void test_a_nested_group_goes_deeper(void **state)
   _free_nested_points(other);
 }
 
+// a cluster moves between nesting levels as its elements do, one by one
+static void test_a_cluster_moves_across_levels(void **state)
+{
+  dt_masks_form_t *grp = _two_levels();
+  GList *ids = g_list_append(g_list_append(NULL, GINT_TO_POINTER(11)), GINT_TO_POINTER(12));
+  assert_true(_masks_cluster_move(&flexi_module, ids, 3, FALSE, TRUE));
+  assert_layout("u:1,2 | i:3,11,12,2000");
+  assert_layout_of(_sub, "[u] | d:13");
+  assert_int_equal(_group_point(grp, 11)->parentid, flexi_group()->formid);
+  g_list_free(ids);
+
+  ids = g_list_append(g_list_append(NULL, GINT_TO_POINTER(1)), GINT_TO_POINTER(2));
+  assert_true(_masks_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
+  assert_layout("[u] | i:3,11,12,2000");
+  assert_layout_of(_sub, "[u] | d:13,1,2");
+  assert_int_equal(_group_point(grp, 1)->parentid, 2000);
+
+  // onto the group it is already in: nothing to do, as for one element
+  assert_false(_masks_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
+  assert_layout_of(_sub, "[u] | d:13,1,2");
+  g_list_free(ids);
+}
+
 // a shape the mask holds twice, once in a nested group: a drop acts on the
 // reference its row shows, not on the first one with its form id
 static void test_a_drop_acts_on_the_row_reference(void **state)
@@ -2952,6 +2975,7 @@ int main(void)
     cmocka_unit_test_teardown(test_nested_drop_stays_in_its_list, _teardown_nested),
     cmocka_unit_test_teardown(test_nested_drop_moves_across_levels, _teardown_nested),
     cmocka_unit_test_teardown(test_a_nested_group_goes_deeper, _teardown_nested),
+    cmocka_unit_test_teardown(test_a_cluster_moves_across_levels, _teardown_nested),
     cmocka_unit_test_teardown(test_a_drop_acts_on_the_row_reference, _teardown_nested),
     cmocka_unit_test_teardown(test_nesting_stops_where_walks_stop, _teardown_nested),
     cmocka_unit_test_teardown(test_add_a_group_inside_a_group, _teardown_nested),

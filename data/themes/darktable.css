@@ -916,12 +916,15 @@ dialog .sidebar row:selected:hover label,
   border-width: 2px;
 }
 
-#mask-shape-row.mask-list-row-drop-above
+/* a cluster is dropped beside as one element, so it takes the same line */
+#mask-shape-row.mask-list-row-drop-above,
+.mask-cluster.mask-list-row-drop-above
 {
   box-shadow: inset 0 2px #ffffff;
 }
 
-#mask-shape-row.mask-list-row-drop-below
+#mask-shape-row.mask-list-row-drop-below,
+.mask-cluster.mask-list-row-drop-below
 {
   box-shadow: inset 0 -2px #ffffff;
 }
