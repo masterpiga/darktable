@@ -43,7 +43,7 @@
 // The panel changes a mask in two different ways, and they need different
 // coverage arguments:
 //
-//   - per-member fields (an operator, an opacity, a refinement, a break).
+//   - per-member fields (an operator, an opacity, a refinement).
 //     That is what the poke vocabulary is, and what this file pins.
 //   - the member LIST (delete a shape, reorder rows). A run is a maximal
 //     stretch of the list, so both move boundaries -- but neither is
@@ -90,33 +90,25 @@ static const struct
   const char *where;
 } _panel_bits[] =
 {
-  // the operator menu writes the whole DT_MASKS_STATE_OP field at once
-  // (blend_gui.c _group_op_apply, and the drag-and-drop paths that copy an
-  // operator between rows)
-  { DT_MASKS_STATE_UNION,           TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_INTERSECTION,    TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_DIFFERENCE,      TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_EXCLUSION,       TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_SUM,             TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_MULTIPLY,        TRUE,  "blend_gui.c:_group_op_apply" },
-  { DT_MASKS_STATE_OP_SCREEN,       TRUE,  "blend_gui.c:_group_op_apply" },
+  // the group operator menu, on the marker
+  { DT_MASKS_STATE_SCREEN,            TRUE, "blend_gui.c:_within_mode_apply" },
+  { DT_MASKS_STATE_ISECT,             TRUE, "blend_gui.c:_within_mode_apply" },
+  { DT_MASKS_STATE_WITHIN_MULTIPLY,   TRUE, "blend_gui.c:_within_mode_apply" },
+  { DT_MASKS_STATE_WITHIN_SUM,        TRUE, "blend_gui.c:_within_mode_apply" },
+  { DT_MASKS_STATE_WITHIN_DIFFERENCE, TRUE, "blend_gui.c:_within_mode_apply" },
+  { DT_MASKS_STATE_WITHIN_EXCLUSION,  TRUE, "blend_gui.c:_within_mode_apply" },
 
-  // the within-group combine mode
-  { DT_MASKS_STATE_SCREEN,          TRUE,  "blend_gui.c within-mode callback" },
-  { DT_MASKS_STATE_ISECT,           TRUE,  "blend_gui.c within-mode callback" },
-  { DT_MASKS_STATE_WITHIN_MULTIPLY, TRUE,  "blend_gui.c within-mode callback" },
-
-  // broadcast across a run by dt_masks_group_set_state()
-  { DT_MASKS_STATE_OP_DISABLE,      TRUE,  "blend_gui.c:9990 (bypass)" },
-  { DT_MASKS_STATE_OP_INVERT,       TRUE,  "blend_gui.c:10127 (invert output)" },
+  // on the marker
+  { DT_MASKS_STATE_OP_DISABLE,      TRUE,  "blend_gui.c:_group_toggle_bypass" },
+  { DT_MASKS_STATE_OP_INVERT,       TRUE,  "blend_gui.c:_group_toggle_output_invert" },
 
   // per element
   { DT_MASKS_STATE_DISABLE,         TRUE,  "blend_gui.c:6570 (enable/disable)" },
   { DT_MASKS_STATE_HIDDEN,          TRUE,  "blend_gui.c:4988 (hide)" },
   { DT_MASKS_STATE_INVERSE,         TRUE,  "blend_gui.c:10102 (invert shape)" },
 
-  /* Exempt: neither masks/group.c nor blend.c reads these, so no setting of
-     them can change a rendered mask.
+  /* Exempt: neither the flexi fold (masks/group.c) nor blend.c reads these,
+     so no setting of them can change a rendered flexi mask.
 
      SHOW is canvas visibility -- whether the shape is drawn on screen while
      editing. The fold's skip test is
@@ -124,9 +116,14 @@ static const struct
      and the flexi fold at group.c:1229/1242); SHOW appears in neither.
 
      USE is set once when a member is created (blend_gui.c:7756) and never
-     cleared by any control. */
+     cleared by any control.
+
+     UNION is a classic member operator. New members and markers carry it
+     from creation (masks.c dt_masks_group_insert_point, dt_masks_marker_new),
+     and the flexi fold reads no classic operator. */
   { DT_MASKS_STATE_SHOW,            FALSE, "blend_gui.c:5028, canvas only" },
   { DT_MASKS_STATE_USE,             FALSE, "blend_gui.c:7756, set at creation" },
+  { DT_MASKS_STATE_UNION,           FALSE, "masks.c, set at creation" },
 };
 
 #define PANEL_BITS_N ((int)(sizeof(_panel_bits) / sizeof(_panel_bits[0])))
@@ -208,8 +205,7 @@ static void test_exempt_bits_are_not_quietly_swept(void **state)
 
 /* The non-state fields the panel writes: per-shape opacity (blend_gui.c:3926),
    group opacity (10187) and refinement (3523/3533/3540/14714). `name` is
-   deliberately absent -- it is a label the renderer never reads. A group
-   break writes no field: it inserts a marker. */
+   deliberately absent -- it is a label the renderer never reads. */
 static void test_every_panel_written_field_is_swept(void **state)
 {
   int covered = 0;

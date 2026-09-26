@@ -516,7 +516,8 @@ dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
   }
   else
   {
-    if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
+    if(grp->points)
+      grpt->state |= form->type == DT_MASKS_BRUSH ? DT_MASKS_STATE_SUM : DT_MASKS_STATE_UNION;
     grp->points = g_list_append(grp->points, grpt);
   }
   return grpt;
@@ -1247,7 +1248,6 @@ static int _within_of_op(const int op)
     case DT_MASKS_STATE_EXCLUSION:    return DT_MASKS_STATE_WITHIN_EXCLUSION;
     case DT_MASKS_STATE_SUM:          return DT_MASKS_STATE_WITHIN_SUM;
     case DT_MASKS_STATE_MULTIPLY:     return DT_MASKS_STATE_WITHIN_MULTIPLY;
-    case DT_MASKS_STATE_OP_SCREEN:    return DT_MASKS_STATE_SCREEN;
     default:                          return 0; // union
   }
 }
@@ -2155,15 +2155,6 @@ GList *dt_masks_group_find_node(GList *forms,
                                 dt_masks_form_t **owner)
 {
   return _find_node(forms, root, id, owner, 0);
-}
-
-dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
-                                                   dt_masks_form_t *root,
-                                                   const dt_mask_id_t cid,
-                                                   dt_masks_form_t **owner)
-{
-  GList *node = _find_node(forms, root, cid, owner, 0);
-  return node && dt_masks_point_is_marker(node->data) ? node->data : NULL;
 }
 
 static const dt_masks_point_raster_t *_find_raster_of(GList *forms,
@@ -3200,23 +3191,6 @@ void dt_masks_set_edit_mode_forms(dt_iop_module_t *module,
   dt_control_queue_redraw_center();
 }
 
-void dt_masks_iop_edit_toggle_callback(GtkToggleButton *togglebutton,
-                                       dt_iop_module_t *module)
-{
-  if(!module) return;
-  dt_iop_gui_blend_data_t *bd = module->blend_data;
-  if(module->blend_params->mask_id == NO_MASKID)
-  {
-    bd->masks_shown = DT_MASKS_EDIT_OFF;
-    return;
-  }
-
-  // reset the gui
-  dt_masks_set_edit_mode(
-    module,
-    (bd->masks_shown == DT_MASKS_EDIT_OFF ? DT_MASKS_EDIT_FULL : DT_MASKS_EDIT_OFF));
-}
-
 void dt_masks_group_update_name(dt_iop_module_t *module)
 {
   dt_masks_form_t *grp = _group_from_module(darktable.develop, module);
@@ -3547,51 +3521,6 @@ static int _find_in_group(const dt_masks_form_t *grp,
   return nb;
 }
 
-dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form)
-{
-  // parametric forms are ordinary group members now: a new one adopts the
-  // selected group's operator (the shared default_operator pref, set when a group
-  // or staged group is the active target), exactly like a drawn shape. With no
-  // group selected (pref unset / "automatic") fall back to multiply, the
-  // historic sensible default for a parametric "limit" mask. This only ever
-  // affects flexi forms (parametric-as-form does not exist in legacy edits).
-  if(form && (form->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)))
-  {
-    const char *pop = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
-    if(pop && *pop)
-    {
-      if(!strcmp(pop, "union")) return DT_MASKS_STATE_UNION;
-      if(!strcmp(pop, "intersection")) return DT_MASKS_STATE_INTERSECTION;
-      if(!strcmp(pop, "difference")) return DT_MASKS_STATE_DIFFERENCE;
-      if(!strcmp(pop, "sum")) return DT_MASKS_STATE_SUM;
-      if(!strcmp(pop, "exclusion")) return DT_MASKS_STATE_EXCLUSION;
-      if(!strcmp(pop, "multiply")) return DT_MASKS_STATE_MULTIPLY;
-    }
-    return DT_MASKS_STATE_MULTIPLY;
-  }
-
-  // the user can pick a default composition operator for newly added
-  // shapes in the mask manager. when unset (or "automatic") we keep the
-  // historic behavior: brushes default to sum, everything else to union.
-  // this only affects forms added from now on, never existing edits.
-  const char *op = dt_conf_get_string_const("plugins/darkroom/masks/default_operator");
-  if(op && *op)
-  {
-    if(!strcmp(op, "union")) return DT_MASKS_STATE_UNION;
-    if(!strcmp(op, "intersection")) return DT_MASKS_STATE_INTERSECTION;
-    if(!strcmp(op, "difference")) return DT_MASKS_STATE_DIFFERENCE;
-    if(!strcmp(op, "sum")) return DT_MASKS_STATE_SUM;
-    if(!strcmp(op, "exclusion")) return DT_MASKS_STATE_EXCLUSION;
-    if(!strcmp(op, "multiply")) return DT_MASKS_STATE_MULTIPLY;
-  }
-  // "automatic" / unset: historic default
-  const dt_masks_state_t st =
-    (form && form->type == DT_MASKS_BRUSH) ? DT_MASKS_STATE_SUM : DT_MASKS_STATE_UNION;
-  dt_print(DT_DEBUG_MASKS, "[masks] default operator for new form (pref='%s') -> 0x%x",
-           (op && *op) ? op : "automatic", st);
-  return st;
-}
-
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form)
 {
@@ -3606,7 +3535,7 @@ dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
     grpt->formid = form->formid;
     grpt->parentid = grp->formid;
     grpt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
-    if(grp->points) grpt->state |= dt_masks_get_default_operator(form);
+    if(grp->points) grpt->state |= DT_MASKS_STATE_UNION;
     grpt->opacity = _new_shape_default_opacity(form->type);
     grpt->group_opacity = 1.0f;
     grp->points = g_list_append(grp->points, grpt);
@@ -3623,23 +3552,6 @@ static gboolean _id_in_list(GList *formids, const dt_mask_id_t formid)
   for(GList *l = formids; l; l = g_list_next(l))
     if(GPOINTER_TO_INT(l->data) == formid) return TRUE;
   return FALSE;
-}
-
-void dt_masks_group_set_state(dt_masks_form_t *grp,
-                              GList *formids,
-                              const dt_masks_state_t bits,
-                              const gboolean set)
-{
-  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
-  for(GList *l = grp->points; l; l = g_list_next(l))
-  {
-    dt_masks_point_group_t *pt = l->data;
-    if(!_id_in_list(formids, pt->formid)) continue;
-    if(set)
-      pt->state |= bits;
-    else
-      pt->state &= ~bits;
-  }
 }
 
 // does the nested group `grp` hold, at any depth, a point named in `formids`?

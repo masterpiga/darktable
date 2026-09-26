@@ -72,116 +72,68 @@ typedef enum dt_masks_state_t
   DT_MASKS_STATE_DIFFERENCE = 1 << 5,
   DT_MASKS_STATE_EXCLUSION = 1 << 6,
   DT_MASKS_STATE_SUM = 1 << 7,
-  // a hidden form is skipped by the group renderer. Defaults off, so legacy
-  // edits (which never set it) render identically. Used by the in-module
-  // per-shape list's hide/solo controls.
+  // a hidden member is skipped by the group renderer: what solo sets on every
+  // member it does not keep. Defaults off.
   DT_MASKS_STATE_HIDDEN = 1 << 8,
-  // screen (flexi group composition): within-group members combine by the
-  // soft union a+b-ab instead of max, smoothing feathered overlaps. Broadcast
-  // across a group's members. Additive new flag, so legacy edits (which never
-  // set it) render identically; only consulted on the flexi group-fold path.
+  // flexi group operators: how a group folds its members, in list order. They
+  // are set on the group's marker and are mutually exclusive; none set is
+  // union (max), the default. See DT_MASKS_STATE_WITHIN and
+  // _group_get_mask_roi_flexi in group.c.
+  //   screen: the soft union a + b - ab, smoothing feathered overlaps
   DT_MASKS_STATE_SCREEN = 1 << 9,
-  // multiply: composite by multiplying into the accumulator (dest *= mask),
-  // mirroring how legacy parametric masks combine. Additive new operator, so
-  // legacy edits (which never set it) render identically.
+  // a classic member's operator, like the ones above: multiply into the mask
+  // (dest *= mask). Migration gives it to the parametric channels it builds
+  // and folds them into a WITHIN_MULTIPLY group
   DT_MASKS_STATE_MULTIPLY = 1 << 10,
-  // intersect (flexi group composition): within-group members combine by the
-  // intersection (min) instead of max, so a group can express the product of
-  // its members -- e.g. reproducing a legacy multi-channel parametric mask as a
-  // group of single-channel parametric elements. Mutually exclusive with SCREEN
-  // (see DT_MASKS_STATE_WITHIN); neither set = union (default). Broadcast across
-  // a group's members like SCREEN. Additive new flag, so legacy edits (which
-  // never set it) render identically; only consulted on the flexi group fold.
+  //   intersect: min
   DT_MASKS_STATE_ISECT = 1 << 12,
-  // between-group operator counterpart to DT_MASKS_STATE_SCREEN: composites a
-  // finished group sub-mask onto the accumulator with the soft union a+b-ab
-  // instead of max, so two groups with feathered edges blend across their
-  // overlap instead of showing a crease. Distinct bit from the within-group
-  // SCREEN flag, since a group's state carries both roles at once (its own
-  // operator and its members' within-group combine mode) and the two must
-  // stay independently settable. Additive new operator, so legacy edits
-  // (which never set it) render identically.
-  DT_MASKS_STATE_OP_SCREEN = 1 << 13,
-  // disabled (group-level modifier): the group is skipped entirely by the group fold,
-  // contributing nothing to the accumulated mask -- the "temporarily disable this group"
-  // switch. Unlike the operators above it is a MODIFIER, not an alternative:
-  // it is set alongside the group's real between-group operator (which stays
-  // in the state untouched), so re-enabling restores exactly the operator the
-  // group had. It is part of DT_MASKS_STATE_OP so that a disabled group and an
-  // adjacent same-operator live one still read as two distinct runs where runs
-  // are inferred (see dt_masks_group_mark_classic_runs). Use
-  // DT_MASKS_STATE_OP_COMBINE wherever the *combining* operator alone is
-  // wanted. Additive new bit, 0 in every pre-existing edit.
+  // bypass (on a group's marker): the group contributes nothing, as if it were
+  // not there. A modifier, so its operator stays as it was
   DT_MASKS_STATE_OP_DISABLE = 1 << 14,
   DT_MASKS_STATE_OP_BYPASS = DT_MASKS_STATE_OP_DISABLE,
-  // within-group counterpart to the between-group DT_MASKS_STATE_MULTIPLY:
-  // members fold together by true per-pixel multiplication (dest *= member)
-  // instead of ISECT's min() -- the two agree only for hard 0/1 membership,
-  // not for feathered/fractional values, so this is what exactly reproduces
-  // classic's own multi-channel parametric combination (`mask *= factor` per
-  // channel) as a group of single-channel elements (see migrate_legacy.c).
-  // Mutually exclusive with SCREEN/ISECT (see DT_MASKS_STATE_WITHIN).
-  // Additive new flag, so legacy edits (which never set it) render
-  // identically; only consulted on the flexi group-fold path.
+  //   multiply: the true per-pixel product. Not ISECT's min(): the two agree
+  //   only for hard 0/1 membership, and this is what reproduces classic's
+  //   multi-channel parametric mask (`mask *= factor` per channel) as a group
+  //   of single-channel elements (see migrate_legacy.c)
   DT_MASKS_STATE_WITHIN_MULTIPLY = 1 << 15,
-  // invert-output (per-run, "true" group invert): flips this run's own finished
-  // sub-mask (1-grp) after its members have folded together and any per-group
-  // refinement has been applied, but before it composites onto the accumulator
-  // -- distinct from DT_MASKS_STATE_INVERSE (flips one member's raw mask before
-  // it folds into the run) and from DEVELOP_COMBINE_MASKS_POS (a per-MODULE bit
-  // that flips the whole mask after every run/group has already combined).
-  // Inverting a run's output is NOT the same as inverting each of its members:
-  // for anything but a single-member run the two differ (e.g. two disjoint
-  // shapes unioned then inverted is 0 only on their union; each shape inverted
-  // then unioned is 1 almost everywhere). This is what lets one specific
-  // first-class group's own contribution be inverted without touching its
-  // members' own state and without affecting any other group in the module.
-  // A MODIFIER like disable, not an operator of its own: broadcast across every
-  // member of the run (same reason disable is), so it is part of
-  // DT_MASKS_STATE_OP and participates in run-boundary detection like disable
-  // does. Additive new bit, 0 in every pre-existing edit.
+  // invert output (on a group's marker): flips the group's folded mask after
+  // its refinement and before its opacity. Not DT_MASKS_STATE_INVERSE, which
+  // flips one member's mask before it is folded in: for more than one member
+  // the two differ (two disjoint shapes unioned then inverted are 0 only on
+  // their union; each inverted then unioned is 1 almost everywhere)
   DT_MASKS_STATE_OP_INVERT = 1 << 16,
   // disabled (element-level): this element is skipped by the group fold,
   // contributing nothing to the group's mask. Defaults off.
   DT_MASKS_STATE_DISABLE = 1 << 17,
   // a flexi group's own record in its module's point list: it refers to no
   // form (its formid is an id of its own, see dt_masks_new_marker_id) and
-  // holds the group's settings once, followed by the group's members up to
-  // the next marker. See dt_masks_point_is_marker below
+  // holds the group's settings once, followed by the group's members. See
+  // dt_masks_point_is_marker below
   DT_MASKS_STATE_GROUP_MARKER = 1 << 18,
-  // within-group counterpart to the between-group DT_MASKS_STATE_SUM: members
-  // fold together by min(1, a + b). Classic applies its own per-shape sum with
-  // the same clamp after every shape (_combine_masks_sum in group.c), and a
-  // clamp at 1 is absorbing for non-negative terms, so folding the whole group
-  // in one order-free step renders exactly what classic's chain does. That is
-  // what lets a classic nested sum group migrate as one group instead of a run
-  // per shape (masks_revamp_nested_groups.md, Q7). Mutually exclusive with
-  // SCREEN/ISECT/WITHIN_MULTIPLY (see DT_MASKS_STATE_WITHIN). Additive new
-  // flag, so legacy edits (which never set it) render identically.
+  //   sum: min(1, a + b). Classic applies its per-shape sum with the same
+  //   clamp after every shape (_combine_masks_sum in group.c), and a clamp at
+  //   1 is absorbing for non-negative terms, so folding the whole group in any
+  //   order renders exactly what classic's chain does
   DT_MASKS_STATE_WITHIN_SUM = 1 << 19,
-  // within-group difference: the first visible member is the base and every
-  // later one is subtracted from it in turn, exactly as classic's per-shape
-  // difference (masks_revamp_nested_groups.md, Q8). The only within-group
-  // mode where one member's place in the list is special
+  //   difference: the first visible member is the base and every later one is
+  //   subtracted from it in turn, exactly as classic's per-shape difference.
+  //   The only operator where one member's place in the list is special
   DT_MASKS_STATE_WITHIN_DIFFERENCE = 1 << 20,
-  // within-group exclusion: classic's own exclusion combiner, member by
-  // member in list order. It is not associative, so the order is part of it
+  //   exclusion: classic's own exclusion combiner, member by member in list
+  //   order. It is not associative, so the order is part of it
   DT_MASKS_STATE_WITHIN_EXCLUSION = 1 << 21,
-  // the between-group combining operators: exactly one of these is set on a
-  // group's members (disable/invert are modifiers on top, not one of these)
+  // a classic member's operator: exactly one of these is set on every member
+  // of a classic group but the bottom one
   DT_MASKS_STATE_OP_COMBINE = DT_MASKS_STATE_UNION
                             | DT_MASKS_STATE_INTERSECTION
                             | DT_MASKS_STATE_DIFFERENCE
                             | DT_MASKS_STATE_SUM
                             | DT_MASKS_STATE_EXCLUSION
-                            | DT_MASKS_STATE_MULTIPLY
-                            | DT_MASKS_STATE_OP_SCREEN,
+                            | DT_MASKS_STATE_MULTIPLY,
   DT_MASKS_STATE_OP = DT_MASKS_STATE_OP_COMBINE
                      | DT_MASKS_STATE_OP_DISABLE
                      | DT_MASKS_STATE_OP_INVERT,
-  // within-group combine mode: how a group's own members fold together, in
-  // list order. The bits are mutually exclusive; none set = union (max, the
-  // default).
+  // a flexi group's operator
   DT_MASKS_STATE_WITHIN = DT_MASKS_STATE_SCREEN
                         | DT_MASKS_STATE_ISECT
                         | DT_MASKS_STATE_WITHIN_MULTIPLY
@@ -190,17 +142,17 @@ typedef enum dt_masks_state_t
                         | DT_MASKS_STATE_WITHIN_EXCLUSION
 } dt_masks_state_t;
 
-// One `state` word carries three INDEPENDENT roles at once, so their bit sets
-// must never overlap:
-//   - the point's own between-group operator + modifiers (DT_MASKS_STATE_OP)
-//   - its group's within-group combine mode      (DT_MASKS_STATE_WITHIN)
+// One `state` word carries independent roles, so their bit sets must never
+// overlap:
+//   - a classic member's operator, and a group's bypass/invert (DT_MASKS_STATE_OP)
+//   - a flexi group's operator                 (DT_MASKS_STATE_WITHIN)
 //   - per-element flags (USE/SHOW/INVERSE/HIDDEN/DISABLE)
 // A collision would not fail loudly; it would read as some unrelated feature
 // silently switching itself on. And every one of these bits is SERIALIZED (in
 // masks blobs and XMP), so a clashing value can never simply be reassigned to
 // fix it -- the migration would have to be written instead. Hence compile-time.
 _Static_assert((DT_MASKS_STATE_OP & DT_MASKS_STATE_WITHIN) == 0,
-               "between-group operator bits overlap the within-group combine bits");
+               "classic operator bits overlap the flexi group operator bits");
 _Static_assert((DT_MASKS_STATE_OP_COMBINE
                 & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT)) == 0,
                "the combining operators overlap the disable/invert modifiers;"
@@ -209,16 +161,10 @@ _Static_assert((DT_MASKS_STATE_GROUP_MARKER
                 & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
                "the group marker bit overlaps a group setting a marker carries");
 
-// A group member's effective between-group operator. A member carrying no
-// combine bit at all is what classic's dt_masks_group_add_form() gives a
-// group's *first* shape, so every group inherited from a classic edit has one
-// at the bottom; in that position it means "union onto what is not there yet".
-//
-// The classic to flexi migration partitions a classic list into groups with
-// it (dt_masks_group_mark_classic_runs), so it has to resolve a missing
-// operator the way the flexi fold does. When the panel and the fold resolved
-// it differently, every group-level control on a migrated group silently did
-// nothing (#21905).
+// A classic member's effective operator. A member carrying no combine bit at
+// all is what classic's dt_masks_group_add_form() gives a group's *first*
+// shape; in that position it means "union onto what is not there yet".
+// Migration converts classic lists with it (dt_masks_group_mark_classic_runs)
 static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
 {
   // cast: masks.h is included from C++ too (common/exif.cc), where the masked
@@ -226,11 +172,6 @@ static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
   const dt_masks_state_t op = (dt_masks_state_t)(state & DT_MASKS_STATE_OP);
   // what is missing is a *combining* operator, so that is what decides. Bypass
   // and invert-output are modifiers layered on one, never a substitute for it
-  // (the same reading _normalize_group_operators() in blend_gui.c applies when
-  // it writes the default out): testing the whole of DT_MASKS_STATE_OP instead
-  // would let an operator-less head that carries one of them keep reading as
-  // "no union needed", and the two partitions would part company again the
-  // moment the user bypassed or inverted such a group.
   return (op & DT_MASKS_STATE_OP_COMBINE)
              ? op
              : (dt_masks_state_t)(op | DT_MASKS_STATE_UNION);
@@ -1041,15 +982,6 @@ dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
 // without going through the rest of that function's GUI-creation-state and
 // history-item side effects (see migrate_legacy.c)
 void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form);
-/** Set (`set`) or clear (`!set`) `bits` on every member of `grp` whose formid
- * appears in `formids` (a GList of GINT_TO_POINTER ids). Members not named are
- * left untouched; ids naming no member are ignored. This is the "broadcast one
- * attribute across a run" primitive -- a group is a maximal same-operator run
- * of `grp->points`, so its callers pass that run's member ids. */
-void dt_masks_group_set_state(dt_masks_form_t *grp,
-                              GList *formids,
-                              const dt_masks_state_t bits,
-                              const gboolean set);
 /** Solo: clear `bits` on the members named by `formids` and set them on every
  * other member of `grp`. A nested group holding a named point keeps its own
  * member clear and is isolated the same way, at any depth; one that is named
@@ -1105,12 +1037,6 @@ gboolean dt_masks_group_mark_classic_runs(GList **forms,
     change its result, stays, and one another module renders as its mask
     keeps its own settings. TRUE if anything changed */
 gboolean dt_masks_group_simplify(GList *forms, dt_masks_form_t *grp);
-/** the marker of group `cid` in the mask `root`, at any depth. `*owner`, when
-    given, is set to the group form whose list holds it. NULL if none does */
-dt_masks_point_group_t *dt_masks_group_find_marker(GList *forms,
-                                                   dt_masks_form_t *root,
-                                                   const dt_mask_id_t cid,
-                                                   dt_masks_form_t **owner);
 /** the list node of point `id` of the mask `root`, a member or a marker, at
     any depth. `*owner`, when given, is set to the group form whose list holds
     it. NULL if none does */
@@ -1128,10 +1054,6 @@ const struct dt_masks_point_raster_t *dt_masks_group_find_raster_of(GList *forms
                                                                     const gboolean any_id);
 dt_masks_point_group_t *dt_masks_group_add_form(dt_masks_form_t *grp,
                                                 const dt_masks_form_t *form);
-/** returns the composition operator state to assign to a newly added form,
- * honoring the user's "default operator" preference (or the historic
- * brush=sum / else=union behavior when unset). */
-dt_masks_state_t dt_masks_get_default_operator(const dt_masks_form_t *form);
 
 dt_masks_edit_mode_t dt_masks_get_edit_mode(void);
 void dt_masks_set_edit_mode(struct dt_iop_module_t *module,

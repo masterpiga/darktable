@@ -210,7 +210,7 @@ char *flexi_layout_of(const dt_masks_form_t *g)
     if(_starts_group(l))
     {
       if(pending) g_string_append_printf(s, "%s[%c]", s->len ? " | " : "", pending);
-      pending = _letter_from_op(_eff_group_op(pt->state) & DT_MASKS_STATE_OP_COMBINE);
+      pending = _letter_from_op(dt_masks_eff_group_op(pt->state) & DT_MASKS_STATE_OP_COMBINE);
       open_group = FALSE;
       continue;
     }
@@ -304,7 +304,7 @@ void flexi_assert_tree_(const dt_masks_form_t *g,
 dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid)
 {
   const dt_masks_point_group_t *marker = _group_point(_grp, _group_cid_of_form(_grp, fid));
-  return marker ? _eff_group_op(marker->state) & DT_MASKS_STATE_OP_COMBINE : 0;
+  return marker ? dt_masks_eff_group_op(marker->state) & DT_MASKS_STATE_OP_COMBINE : 0;
 }
 
 void flexi_set_ordinal(const dt_mask_id_t cid, const int ord)

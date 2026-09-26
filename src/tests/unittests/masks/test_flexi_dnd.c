@@ -293,113 +293,8 @@ static void test_cluster_move_with_no_members_is_rejected(void **state)
 }
 
 // ---------------------------------------------------------------------------
-// whole-group reorder
+// emptying and deleting groups
 // ---------------------------------------------------------------------------
-
-static void test_reorder_group_above_another(void **state)
-{
-  flexi_build("u:1,2 | i:3 | d:4");
-  // move the union group above the difference group
-  assert_true(_masks_reorder_groups(&flexi_module, FLEXI_GID(0), FLEXI_GID(2), TRUE));
-  assert_layout("i:3 | d:4 | u:1,2");
-  _assert_group_count(3);
-}
-
-static void test_reorder_group_below_another(void **state)
-{
-  flexi_build("u:1,2 | i:3 | d:4");
-  assert_true(_masks_reorder_groups(&flexi_module, FLEXI_GID(2), FLEXI_GID(0), FALSE));
-  assert_layout("d:4 | u:1,2 | i:3");
-  _assert_group_count(3);
-}
-
-// a group moves as a unit -- its members keep their relative order
-static void test_reorder_keeps_members_together_and_ordered(void **state)
-{
-  flexi_build("u:1,2,3 | i:4");
-  _masks_reorder_groups(&flexi_module, FLEXI_GID(0), FLEXI_GID(1), TRUE);
-  assert_layout("i:4 | u:1,2,3");
-}
-
-// two same-operator groups that end up adjacent stay two groups
-static void test_reorder_does_not_merge_same_op_neighbours(void **state)
-{
-  flexi_build("u:1,2 | i:3 | u:4");
-  _masks_reorder_groups(&flexi_module, FLEXI_GID(1), FLEXI_GID(2), TRUE);
-  assert_layout("u:1,2 | u:4 | i:3");
-  _assert_group_count(3);
-}
-
-static void test_reorder_onto_itself_is_rejected(void **state)
-{
-  flexi_build("u:1,2 | i:3");
-  assert_false(_masks_reorder_groups(&flexi_module, FLEXI_GID(0), FLEXI_GID(0), TRUE));
-  assert_layout("u:1,2 | i:3");
-}
-
-// a group is named by its own id, not by an element's
-static void test_reorder_with_element_id_is_rejected(void **state)
-{
-  flexi_build("u:1,2 | i:3");
-  assert_false(_masks_reorder_groups(&flexi_module, 2, FLEXI_GID(1), TRUE));
-  assert_layout("u:1,2 | i:3");
-}
-
-// empty groups have their place in the same order, and move like any group
-static void test_reorder_past_an_empty_group(void **state)
-{
-  flexi_build("u:1,2 | [d] | i:3");
-  assert_true(_masks_reorder_groups(&flexi_module, FLEXI_GID(0), FLEXI_GID(2), TRUE));
-  assert_layout("[d] | i:3 | u:1,2");
-}
-
-static void test_empty_group_can_be_reordered(void **state)
-{
-  flexi_build("[d] | u:1,2 | i:3");
-  assert_true(_masks_reorder_groups(&flexi_module, FLEXI_GID(0), FLEXI_GID(2), TRUE));
-  assert_layout("u:1,2 | i:3 | [d]");
-}
-
-// ---------------------------------------------------------------------------
-// adding, emptying, deleting and merging groups
-// ---------------------------------------------------------------------------
-
-static void test_add_group_above_a_group(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  const dt_mask_id_t cid = _model_add_group(grp, DT_MASKS_STATE_DIFFERENCE, FLEXI_GID(0),
-                                            FALSE);
-  assert_layout("u:1 | [d] | i:2");
-  assert_true(dt_masks_point_is_marker(_group_point(grp, cid)));
-}
-
-static void test_add_group_below_a_group(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  _model_add_group(grp, DT_MASKS_STATE_DIFFERENCE, FLEXI_GID(1), TRUE);
-  assert_layout("u:1 | [d] | i:2");
-  _model_add_group(grp, DT_MASKS_STATE_SUM, FLEXI_GID(0), TRUE);
-  assert_layout("[s] | u:1 | [d] | i:2");
-}
-
-// with no group to add it next to, a group goes on top, or at the bottom
-static void test_add_group_with_no_group_named(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1");
-  _model_add_group(grp, DT_MASKS_STATE_DIFFERENCE, INVALID_MASKID, FALSE);
-  _model_add_group(grp, DT_MASKS_STATE_SUM, INVALID_MASKID, TRUE);
-  assert_layout("[s] | u:1 | [d]");
-}
-
-// a new group is live, whatever it was asked for
-static void test_added_group_is_never_bypassed(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1");
-  const dt_mask_id_t cid =
-    _model_add_group(grp, DT_MASKS_STATE_DIFFERENCE | DT_MASKS_STATE_OP_BYPASS,
-                     INVALID_MASKID, FALSE);
-  assert_false(_group_point(grp, cid)->state & DT_MASKS_STATE_OP_BYPASS);
-}
 
 static void test_emptying_a_group_keeps_it(void **state)
 {
@@ -431,22 +326,6 @@ static void test_deleting_the_bottom_group(void **state)
   assert_layout("i:2");
 }
 
-// merging a group down makes its elements the group below's
-static void test_merge_group_down(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1 | i:2,3 | d:4");
-  assert_true(_model_merge_group_down(grp, FLEXI_GID(1)));
-  assert_layout("u:1,2,3 | d:4");
-  assert_int_equal(flexi_group_op_of(2), DT_MASKS_STATE_UNION);
-}
-
-static void test_merge_of_the_bottom_group_is_rejected(void **state)
-{
-  dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  assert_false(_model_merge_group_down(grp, FLEXI_GID(0)));
-  assert_layout("u:1 | i:2");
-}
-
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -471,23 +350,9 @@ int main(void)
     cmocka_unit_test_teardown(test_cluster_onto_an_empty_group, _teardown),
     cmocka_unit_test_teardown(test_cluster_emptying_group_leaves_it, _teardown),
     cmocka_unit_test_teardown(test_cluster_move_with_no_members_is_rejected, _teardown),
-    cmocka_unit_test_teardown(test_reorder_group_above_another, _teardown),
-    cmocka_unit_test_teardown(test_reorder_group_below_another, _teardown),
-    cmocka_unit_test_teardown(test_reorder_keeps_members_together_and_ordered, _teardown),
-    cmocka_unit_test_teardown(test_reorder_does_not_merge_same_op_neighbours, _teardown),
-    cmocka_unit_test_teardown(test_reorder_onto_itself_is_rejected, _teardown),
-    cmocka_unit_test_teardown(test_reorder_with_element_id_is_rejected, _teardown),
-    cmocka_unit_test_teardown(test_reorder_past_an_empty_group, _teardown),
-    cmocka_unit_test_teardown(test_empty_group_can_be_reordered, _teardown),
-    cmocka_unit_test_teardown(test_add_group_above_a_group, _teardown),
-    cmocka_unit_test_teardown(test_add_group_below_a_group, _teardown),
-    cmocka_unit_test_teardown(test_add_group_with_no_group_named, _teardown),
-    cmocka_unit_test_teardown(test_added_group_is_never_bypassed, _teardown),
     cmocka_unit_test_teardown(test_emptying_a_group_keeps_it, _teardown),
     cmocka_unit_test_teardown(test_deleting_a_group_takes_its_elements, _teardown),
     cmocka_unit_test_teardown(test_deleting_the_bottom_group, _teardown),
-    cmocka_unit_test_teardown(test_merge_group_down, _teardown),
-    cmocka_unit_test_teardown(test_merge_of_the_bottom_group_is_rejected, _teardown),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

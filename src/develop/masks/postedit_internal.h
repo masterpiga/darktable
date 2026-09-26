@@ -41,19 +41,15 @@ G_BEGIN_DECLS
 
 typedef enum
 {
-  // per run, broadcast across every member of it -- the fold reads all of
-  // these from the run's head
-  POKE_OP_UNION = 0,
-  POKE_OP_INTERSECTION,
-  POKE_OP_DIFFERENCE,
-  POKE_OP_SUM,
-  POKE_OP_EXCLUSION,
-  POKE_OP_MULTIPLY,
-  POKE_OP_SCREEN,
-  POKE_WITHIN_UNION,
+  // per group, broadcast across the group's marker and members -- the fold
+  // reads all of these from the marker
+  POKE_WITHIN_UNION = 0,
   POKE_WITHIN_SCREEN,
   POKE_WITHIN_ISECT,
   POKE_WITHIN_MULTIPLY,
+  POKE_WITHIN_SUM,
+  POKE_WITHIN_DIFFERENCE,
+  POKE_WITHIN_EXCLUSION,
   POKE_GROUP_BYPASS,
   POKE_GROUP_INVERT,
   POKE_GROUP_OPACITY,
@@ -64,7 +60,6 @@ typedef enum
   POKE_ELEM_INVERSE,
   POKE_ELEM_OPACITY,
   POKE_ELEM_REFINE,
-  POKE_ELEM_BREAK,
   POKE_N
 } poke_t;
 

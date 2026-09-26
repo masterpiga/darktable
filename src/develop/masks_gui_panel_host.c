@@ -79,11 +79,6 @@ gboolean _masks_panel_side_right(void)
   return dt_conf_get_bool(key);
 }
 
-void _masks_panel_set_side_right(const gboolean right)
-{
-  dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", right);
-}
-
 // let the utility-mode host lib re-apply its live visibility (see
 // _reconfigure in masks_flexi_host.c) -- only relevant for
 // MASKS_PANEL_POS_UTILITY, a no-op otherwise (its expander just stays
