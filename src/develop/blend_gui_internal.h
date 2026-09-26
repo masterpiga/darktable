@@ -68,8 +68,6 @@ dt_masks_form_t *_module_mask_group(dt_iop_module_t *module);
 dt_masks_form_t *_module_flexi_group(dt_iop_module_t *module, dt_mask_id_t *cid);
 /** the point for `id` within `grp` -- a member, or a group's marker -- or NULL */
 dt_masks_point_group_t *_group_point(dt_masks_form_t *grp, const dt_mask_id_t id);
-/** a group's effective between-group operator bits */
-dt_masks_state_t _eff_group_op(const int state);
 /** is this points-list node a group's marker, the start of a group? */
 gboolean _starts_group(GList *l);
 /** remove every shape and reset the panel's scratch state (no confirmation) */
@@ -105,13 +103,6 @@ GList *_group_partition_heads(dt_masks_form_t *grp);
 GList *_selected_group_formids(dt_masks_form_t *grp, const dt_mask_id_t id);
 /** the id of the group `fid` is in -- its marker's -- or INVALID_MASKID */
 dt_mask_id_t _group_cid_of_form(dt_masks_form_t *grp, const dt_mask_id_t fid);
-/** a new empty group of operator `op` right above group `cid`, or below it
-    with `below`; above or below every group when `cid` names none. Returns
-    its id */
-dt_mask_id_t _model_add_group(dt_masks_form_t *grp,
-                              const dt_masks_state_t op,
-                              const dt_mask_id_t cid,
-                              const gboolean below);
 /** a new empty nested group on top of the members of group `cid`, folding
     its members with the within-group operator `within`. Returns that group's
     id, or INVALID_MASKID where groups may not nest any deeper */
@@ -144,9 +135,6 @@ GList *_model_delete_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
 /** remove the members of group `cid`, keeping the group. Returns their ids,
     which the caller frees */
 GList *_model_empty_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
-/** fold group `cid` into the group below it, whose settings apply to both
-    groups' members. FALSE for the bottom group */
-gboolean _model_merge_group_down(dt_masks_form_t *grp, const dt_mask_id_t cid);
 
 // Gesture semantics, split out from their GTK handlers so the handler and the
 // test drive identical code. These mutate the mask structure and the panel's
@@ -208,12 +196,6 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
                              const dt_mask_id_t dst,
                              const gboolean dst_is_group,
                              const gboolean above);
-/** move group `src_cid` with its members right above group `dst_cid`, or
-    right below it */
-gboolean _masks_reorder_groups(dt_iop_module_t *module,
-                               const dt_mask_id_t src_cid,
-                               const dt_mask_id_t dst_cid,
-                               const gboolean above);
 /** the nested group whose one group is `cid`, which the panel shows as that
     group, or NULL */
 dt_masks_form_t *_model_nested_group_of(dt_masks_form_t *grp, const dt_mask_id_t cid);
@@ -249,16 +231,6 @@ dt_masks_solo_canvas_t _model_toggle_solo_group(dt_iop_module_t *module,
 dt_masks_solo_canvas_t _model_toggle_soloedit(dt_iop_module_t *module,
                                               dt_masks_form_t *grp,
                                               const dt_mask_id_t id);
-
-/** the warning badge a row shows, if any. NOOP outranks LOW_OPACITY. */
-typedef enum dt_masks_badge_kind_t
-{
-  DT_MASKS_BADGE_NONE = 0,
-  DT_MASKS_BADGE_LOW_OPACITY,
-  DT_MASKS_BADGE_NOOP,
-} dt_masks_badge_kind_t;
-
-dt_masks_badge_kind_t _model_badge_kind(const float opacity, const gboolean is_noop);
 
 /** does an element row of this kind carry an expander chevron of its own?
     `opacity_sliders` is "use sliders for opacity", which is what gives a
@@ -416,11 +388,10 @@ GList *_model_import_forms(dt_iop_module_t *module,
                            dt_iop_module_t *src,
                            GList *fids,
                            const gboolean copy);
-/** replace linked form `fid` in `module`'s mask with its own copy, carrying
-    the panel's references over. Returns the copy's id. Records no history. */
-dt_mask_id_t _model_unlink_form(dt_iop_module_t *module, const dt_mask_id_t fid);
-// the same, for one named reference: a mask can hold the same shape twice, and
-// each reference unlinks on its own (NULL pt: the first one the mask holds)
+/** replace linked form `fid` in `module`'s mask with its own copy, for the
+    reference `pt`, carrying the panel's references over: a mask can hold the
+    same shape twice, and each reference unlinks on its own (NULL pt: the
+    first one the mask holds). Returns the copy's id. Records no history. */
 dt_mask_id_t _model_unlink_form_point(dt_iop_module_t *module,
                                       const dt_mask_id_t fid,
                                       dt_masks_point_group_t *pt);
@@ -490,7 +461,6 @@ int _masks_panel_position(void);
 // which edge the canvas-side panel is docked against, and where pinning it
 // records that -- not part of the position choice (see MASKS_PANEL_POS_CANVAS)
 gboolean _masks_panel_side_right(void);
-void _masks_panel_set_side_right(const gboolean right);
 /** append the "blend mask panel position" section to an existing menu */
 void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module);
 

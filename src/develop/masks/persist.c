@@ -91,9 +91,9 @@ static const seq_t _sequences[] =
   // ---- one edit, one save. The floor: if these do not hold, nothing longer
   // means anything, and a failure names the single control that did not
   // survive rather than an interaction.
-  { "single:op-difference", "a between-group operator does not survive a save",
-    1, { { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
-  { "single:within-isect", "a within-group mode does not survive a save",
+  { "single:within-difference", "a group operator does not survive a save",
+    1, { { POKE_WITHIN_DIFFERENCE, SCOPE_RUN } } },
+  { "single:within-isect", "a group operator does not survive a save",
     1, { { POKE_WITHIN_ISECT, SCOPE_RUN } } },
   { "single:group-opacity", "a group opacity does not survive a save",
     1, { { POKE_GROUP_OPACITY, SCOPE_RUN } } },
@@ -103,36 +103,20 @@ static const seq_t _sequences[] =
     1, { { POKE_GROUP_INVERT, SCOPE_RUN } } },
   { "single:group-bypass", "a bypass does not survive a save",
     1, { { POKE_GROUP_BYPASS, SCOPE_RUN } } },
-  { "single:elem-break", "a group break does not survive a save",
-    1, { { POKE_ELEM_BREAK, SCOPE_LAST } } },
   { "single:elem-disable", "a disabled element does not survive a save",
     1, { { POKE_ELEM_DISABLE, SCOPE_LAST } } },
   { "single:elem-opacity", "an element opacity does not survive a save",
     1, { { POKE_ELEM_OPACITY, SCOPE_FIRST } } },
 
-  // ---- a run boundary created by an operator change, then read back through
-  // a control the fold takes from the run's head. This is issue #21905 with
-  // the user in place of migration: the boundary is only implied by the
-  // operator, so if the save stores the operator without the boundary the
-  // second edit addresses a group the renderer does not have.
-  { "boundary:difference then within", "a run boundary implied by an operator is not stored",
-    2, { { POKE_OP_DIFFERENCE, SCOPE_RUN }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
-  { "boundary:intersection then opacity", "a run boundary implied by an operator is not stored",
-    2, { { POKE_OP_INTERSECTION, SCOPE_RUN }, { POKE_GROUP_OPACITY, SCOPE_RUN } } },
-  { "boundary:sum then invert", "a run boundary implied by an operator is not stored",
-    2, { { POKE_OP_SUM, SCOPE_RUN }, { POKE_GROUP_INVERT, SCOPE_RUN } } },
-  { "boundary:exclusion then refine", "a run boundary implied by an operator is not stored",
-    2, { { POKE_OP_EXCLUSION, SCOPE_RUN }, { POKE_GROUP_REFINE, SCOPE_RUN } } },
-
-  // ---- the same, but with the boundary made explicitly. A break inserts a
-  // marker, a record the edit did not have before, so if anything is going to
-  // be dropped by the writer it is this.
-  { "break:then within", "an explicit group break is not stored",
-    2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_WITHIN_MULTIPLY, SCOPE_RUN } } },
-  { "break:then opacity", "an explicit group break is not stored",
-    2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_GROUP_OPACITY, SCOPE_RUN } } },
-  { "break:then operator", "an explicit group break is not stored",
-    2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
+  // ---- an operator change, then another group control. Both are read from
+  // the group's marker, so a save that stores one and drops the other shows
+  // up here.
+  { "operator:difference then opacity", "a group's settings do not survive a save together",
+    2, { { POKE_WITHIN_DIFFERENCE, SCOPE_RUN }, { POKE_GROUP_OPACITY, SCOPE_RUN } } },
+  { "operator:sum then invert", "a group's settings do not survive a save together",
+    2, { { POKE_WITHIN_SUM, SCOPE_RUN }, { POKE_GROUP_INVERT, SCOPE_RUN } } },
+  { "operator:exclusion then refine", "a group's settings do not survive a save together",
+    2, { { POKE_WITHIN_EXCLUSION, SCOPE_RUN }, { POKE_GROUP_REFINE, SCOPE_RUN } } },
 
   // ---- migration's own output, built on. The first step changes nothing
   // structural, so the second is applied to a group whose markers and
@@ -143,34 +127,30 @@ static const seq_t _sequences[] =
   { "migrated:disable then within", "a disable bit set on a migrated group is lost by a save",
     2, { { POKE_ELEM_DISABLE, SCOPE_LAST }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
 
-  // ---- a run-level modifier set before the save and read after it. These
-  // four distinguish one run of two members from two runs of one, so a
-  // partition that failed to survive shows itself here even when the operator
-  // bits came back intact.
-  { "modifier:bypass then within", "a modifier and the partition it reads disagree across a save",
+  // ---- a group modifier set before the save and an operator or setting
+  // changed after it: the modifier must leave the rest of the group alone.
+  { "modifier:bypass then within", "a modifier and the group it sits on disagree across a save",
     2, { { POKE_GROUP_BYPASS, SCOPE_RUN }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
-  { "modifier:invert then operator", "a modifier and the partition it reads disagree across a save",
-    2, { { POKE_GROUP_INVERT, SCOPE_RUN }, { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
-  { "modifier:bypass then opacity", "a modifier and the partition it reads disagree across a save",
+  { "modifier:invert then operator", "a modifier and the group it sits on disagree across a save",
+    2, { { POKE_GROUP_INVERT, SCOPE_RUN }, { POKE_WITHIN_DIFFERENCE, SCOPE_RUN } } },
+  { "modifier:bypass then opacity", "a modifier and the group it sits on disagree across a save",
     2, { { POKE_GROUP_BYPASS, SCOPE_RUN }, { POKE_GROUP_OPACITY, SCOPE_RUN } } },
 
   // ---- the member list itself. Deleting a shape and reordering rows are
-  // ordinary panel actions, and a run is a maximal stretch of the list, so
-  // both move boundaries that a later control then reads back. Nothing in the
-  // poke vocabulary can express either, which is why they are here: without
-  // them the checks are silent about a whole axis of what the panel can do.
-  { "structural:remove then within", "a deletion moves a run boundary the save does not carry",
+  // ordinary panel actions, and difference and exclusion fold in list order,
+  // so both change what a later control reads back. Nothing in the poke
+  // vocabulary can express either, which is why they are here: without them
+  // the checks are silent about a whole axis of what the panel can do.
+  { "structural:remove then within", "a deletion is not carried by the save",
     2, { { POKE_N, SCOPE_LAST, STEP_REMOVE }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
-  { "structural:remove then opacity", "a deletion moves a run boundary the save does not carry",
+  { "structural:remove then opacity", "a deletion is not carried by the save",
     2, { { POKE_N, SCOPE_FIRST, STEP_REMOVE }, { POKE_GROUP_OPACITY, SCOPE_RUN } } },
-  { "structural:reorder then operator", "a reorder moves a run boundary the save does not carry",
-    2, { { POKE_N, SCOPE_LAST, STEP_MOVE_UP }, { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
-  { "structural:reorder then within", "a reorder moves a run boundary the save does not carry",
+  { "structural:reorder then operator", "a reorder is not carried by the save",
+    2, { { POKE_N, SCOPE_LAST, STEP_MOVE_UP }, { POKE_WITHIN_DIFFERENCE, SCOPE_RUN } } },
+  { "structural:reorder then within", "a reorder is not carried by the save",
     2, { { POKE_N, SCOPE_LAST, STEP_MOVE_UP }, { POKE_WITHIN_ISECT, SCOPE_RUN } } },
-  { "structural:operator then remove", "a deletion after an operator change loses the boundary",
-    2, { { POKE_OP_DIFFERENCE, SCOPE_RUN }, { POKE_N, SCOPE_LAST, STEP_REMOVE } } },
-  { "structural:break then reorder", "a reorder across an explicit break loses it",
-    2, { { POKE_ELEM_BREAK, SCOPE_LAST }, { POKE_N, SCOPE_LAST, STEP_MOVE_UP } } },
+  { "structural:operator then remove", "a deletion after an operator change is not carried",
+    2, { { POKE_WITHIN_DIFFERENCE, SCOPE_RUN }, { POKE_N, SCOPE_LAST, STEP_REMOVE } } },
 
   /* ---- the shapes themselves. Everything above edits how members combine;
      these edit what they are, which is the one part of a mask with a per-type
@@ -186,17 +166,17 @@ static const seq_t _sequences[] =
      wrong renders at the wrong size on the second open and at the right one on
      the first.
 
-     Paired with a control that reads a run boundary, for the same reason as
-     every other block: a lost boundary and a lost shape look nothing alike in
-     the report, and pairing them costs one step. */
+     Paired with a group control, for the same reason as every other block: a
+     lost group setting and a lost shape look nothing alike in the report, and
+     pairing them costs one step. */
   { "geom:translate then within", "a moved shape does not survive a save",
     2, { GEOM_STEP(GEOM_TRANSLATE, SCOPE_FIRST), { POKE_WITHIN_ISECT, SCOPE_RUN } } },
   { "geom:size then operator", "a resized shape does not survive a save",
-    2, { GEOM_STEP(GEOM_SIZE, SCOPE_FIRST), { POKE_OP_DIFFERENCE, SCOPE_RUN } } },
+    2, { GEOM_STEP(GEOM_SIZE, SCOPE_FIRST), { POKE_WITHIN_DIFFERENCE, SCOPE_RUN } } },
   { "geom:feather then opacity", "a re-feathered shape does not survive a save",
     2, { GEOM_STEP(GEOM_FEATHER, SCOPE_FIRST), { POKE_GROUP_OPACITY, SCOPE_RUN } } },
-  { "geom:node then break", "a dragged node does not survive a save",
-    2, { GEOM_STEP(GEOM_NODE, SCOPE_FIRST), { POKE_ELEM_BREAK, SCOPE_LAST } } },
+  { "geom:node then exclusion", "a dragged node does not survive a save",
+    2, { GEOM_STEP(GEOM_NODE, SCOPE_FIRST), { POKE_WITHIN_EXCLUSION, SCOPE_RUN } } },
   { "geom:rotation then within", "a rotated shape does not survive a save",
     2, { GEOM_STEP(GEOM_ROTATION, SCOPE_FIRST), { POKE_WITHIN_MULTIPLY, SCOPE_RUN } } },
   { "geom:translate then translate", "a shape edited twice across two saves drifts",
@@ -208,20 +188,16 @@ static const seq_t _sequences[] =
     2, { { POKE_N, SCOPE_FIRST, STEP_REMOVE },
          GEOM_STEP(GEOM_TRANSLATE, SCOPE_FIRST) } },
 
-  // ---- three steps, where the seam needs one: make a boundary, cross a save
-  // with an unrelated change, then read the boundary back. Two saves, and the
-  // middle edit is what stops the third from being a repeat of the first.
-  { "chain:operator break opacity", "a boundary does not survive an intervening save",
-    3, { { POKE_OP_DIFFERENCE, SCOPE_RUN },
-         { POKE_ELEM_BREAK, SCOPE_LAST },
-         { POKE_GROUP_OPACITY, SCOPE_RUN } } },
-  { "chain:break operator invert", "a boundary does not survive an intervening save",
-    3, { { POKE_ELEM_BREAK, SCOPE_LAST },
-         { POKE_OP_INTERSECTION, SCOPE_RUN },
+  // ---- three steps: change the group, cross a save with an unrelated
+  // change, then read the group back. Two saves, and the middle edit is what
+  // stops the third from being a repeat of the first.
+  { "chain:operator opacity invert", "a group setting does not survive an intervening save",
+    3, { { POKE_WITHIN_DIFFERENCE, SCOPE_RUN },
+         { POKE_ELEM_OPACITY, SCOPE_FIRST },
          { POKE_GROUP_INVERT, SCOPE_RUN } } },
   { "chain:refine operator within", "a refinement's scope moves across a save",
     3, { { POKE_GROUP_REFINE, SCOPE_RUN },
-         { POKE_OP_SUM, SCOPE_RUN },
+         { POKE_WITHIN_SUM, SCOPE_RUN },
          { POKE_WITHIN_ISECT, SCOPE_RUN } } },
 };
 

@@ -15,9 +15,9 @@ ctest --test-dir build-test -R flexi --output-on-failure
 | `test_flexi_model` | grouping and partitioning, element drag-and-drop, the selection state machine, marking classic runs as groups, solo/mute primitives |
 | `test_flexi_cache` | which edits must — and must not — invalidate the pixelpipe's mask cache |
 | `test_flexi_persistence` | mask blob version migration, i.e. carrying already-saved edits forward |
-| `test_flexi_dnd` | the drop paths other than element-onto-element: group headers, empty groups, clusters, whole-group reorder, adding, deleting, emptying and merging groups |
+| `test_flexi_dnd` | the drop paths other than element-onto-element: group headers, empty groups, clusters, deleting and emptying groups |
 | `test_flexi_groups` | the solo family's mutual exclusivity, group numbering, refinement scope |
-| `test_flexi_panel` | what the panel shows: warning badges, adaptive parametric rows, preferences |
+| `test_flexi_panel` | what the panel shows: the no-op badge, adaptive parametric rows, preferences |
 | `test_flexi_migrate` | the classic → flexi migration case table (structure, not pixels) |
 | `test_flexi_compose` | the mask operators themselves: what union/intersection/… compute, and the algebraic properties the design relies on |
 
@@ -134,11 +134,10 @@ rendering an image and comparing pixels — which proves the pipeline agrees wit
 itself on the fixtures it has, but does not pin what an operator *means*, and
 cannot state the properties the rest of the design leans on:
 
-- **the group-fold operators are commutative and associative.** This is the
-  entire justification for treating a group as an unordered bag of shapes, and
-  for letting the panel reorder members freely within a group. Difference is
-  asserted *not* to be — it is a between-group operator, where order is the
-  user's choice.
+- **the order-free group operators are commutative and associative.** This is
+  what lets the panel reorder members freely within such a group. Difference
+  is asserted *not* to be: a difference group takes its first member as the
+  base, so order is the user's choice.
 - **each operator's identity element.** An empty group contributes nothing,
   which the compositor implements by skipping it. These tests pin the
   arithmetic that makes skipping the right choice — in particular that
@@ -146,8 +145,6 @@ cannot state the properties the rest of the design leans on:
   could never be allowed to composite as all-zero and blank the whole mask.
 - **every operator keeps the mask in [0,1]**, across opacity and invert, for
   every input in range.
-- **operator dispatch**: `_flexi_apply_group_op` routes each state bit to the
-  right operator, and an operator-less state falls back to union.
 
 ## test_probe_image — is the probe adequate?
 

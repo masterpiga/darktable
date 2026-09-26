@@ -62,9 +62,8 @@
 // where a save can lose something, listed in _sequences[] with the seam each
 // one covers. In outline:
 //
-//   - a run boundary the user creates (an operator change, a group break) and
-//     then reads back through a run-level control on the next edit. This is
-//     the shape of the original bug, with the user in place of migration
+//   - a group operator the user changes and then reads back through another
+//     group control on the next edit
 //   - the base-case repair's disable bits, written by migration and then built
 //     on
 //   - the run-level modifiers (bypass, invert-output, group opacity, group

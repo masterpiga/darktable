@@ -81,13 +81,6 @@ void _combine_masks_screen(float *const restrict dest,
                            const float opacity,
                            const int inverted);
 
-/** composite a finished group sub-mask with the group's own operator, once
-    (opacity/invert are already baked into it, so op=1, inverted=0) */
-void _flexi_apply_group_op(float *const restrict buffer,
-                           float *const restrict grp,
-                           const size_t npixels,
-                           const guint group_op);
-
 G_END_DECLS
 
 // modelines: These editor modelines have been set for all relevant files

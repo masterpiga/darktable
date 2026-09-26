@@ -91,10 +91,10 @@
  *
  * Upstream's invariant is that only the BOTTOM member of a group carries no
  * combine operator: dt_masks_group_add_form() sets one on every member after
- * the first (`if(grp->points) state |= default_operator`), the classic mask
- * manager draws no operator icon for a member without one, and it repairs any
- * it finds -- "ensure that at least an operator is defined as we are going to
- * show this mask operator" (libs/masks.c). The bottom member has nothing to
+ * the first (`if(grp->points) state |= DT_MASKS_STATE_UNION`), the classic
+ * mask manager draws no operator icon for a member without one, and it repairs
+ * any it finds -- "ensure that at least an operator is defined as we are going
+ * to show this mask operator" (libs/masks.c on master). The bottom member has nothing to
  * combine with, which is why classic's fold ends in a bare
  * `buffer[i] = op * mask[i]`: that is the base shape seeding an empty buffer,
  * indistinguishable there from a union.
@@ -108,9 +108,9 @@
  * nothing references, which is exactly what dt_masks_set_edit_mode_single_form()
  * builds).
  *
- * Flexi cannot reproduce the overwrite: _flexi_apply_group_op() folds an
- * operator-less run head as a union, and blend_gui.c repairs the same bit
- * pattern to DT_MASKS_STATE_UNION on sight. Left alone, migration therefore
+ * Flexi cannot reproduce the overwrite: conversion reads an operator-less
+ * member as a union (dt_masks_eff_group_op), since a flexi group folds all
+ * its members with one operator. Left alone, migration therefore
  * brings back the members classic threw away, at full strength -- the
  * nested-group failures the harvest campaign found. (Nesting was only a
  * correlate: wrapping shapes in a group is what produces a second

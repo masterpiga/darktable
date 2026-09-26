@@ -89,14 +89,12 @@ typedef struct
 
 static const undo_case_t _cases[] =
 {
-  // --- the run-level controls, all read back from the run's head
-  { "op-difference",  "a between-group operator is not restored",
-    { POKE_OP_DIFFERENCE, SCOPE_RUN } },
-  { "op-intersection", "a between-group operator is not restored",
-    { POKE_OP_INTERSECTION, SCOPE_RUN } },
-  { "within-isect",   "a within-group mode is not restored",
+  // --- the group controls, all read back from the group's marker
+  { "within-difference", "a group operator is not restored",
+    { POKE_WITHIN_DIFFERENCE, SCOPE_RUN } },
+  { "within-isect",   "a group operator is not restored",
     { POKE_WITHIN_ISECT, SCOPE_RUN } },
-  { "within-multiply", "a within-group mode is not restored",
+  { "within-multiply", "a group operator is not restored",
     { POKE_WITHIN_MULTIPLY, SCOPE_RUN } },
   { "group-opacity",  "a group opacity is not restored",
     { POKE_GROUP_OPACITY, SCOPE_RUN } },
@@ -116,8 +114,6 @@ static const undo_case_t _cases[] =
     { POKE_ELEM_OPACITY, SCOPE_FIRST } },
   { "elem-refine",    "an element refinement is not restored",
     { POKE_ELEM_REFINE, SCOPE_FIRST } },
-  { "elem-break",     "a group break is not restored",
-    { POKE_ELEM_BREAK, SCOPE_LAST } },
   { "elem-hidden",    "a hidden element is not restored",
     { POKE_ELEM_HIDDEN, SCOPE_LAST } },
 

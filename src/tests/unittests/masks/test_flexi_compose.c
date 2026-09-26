@@ -202,8 +202,8 @@ static void test_group_fold_operators_are_associative(void **state)
   _assert_close(abc, a_bc, "screen is not associative");
 }
 
-// difference is deliberately NOT commutative -- it is a between-group
-// operator, where order is the user's choice and must be respected
+// difference is deliberately NOT commutative: a group folding by difference
+// takes its first member as the base, so its order is the user's choice
 static void test_difference_is_order_dependent(void **state)
 {
   float ab[N], ba[N];
@@ -216,8 +216,8 @@ static void test_difference_is_order_dependent(void **state)
 }
 
 // ---------------------------------------------------------------------------
-// the nested forms -- what lets a between-group operator become a group
-// (masks_revamp_nested_groups.md, Q7)
+// the nested forms: difference and exclusion expressed with order-free
+// operators (masks_revamp_nested_groups.md, Q7)
 // ---------------------------------------------------------------------------
 
 // fold `src` into a group seeded empty, at `opacity`, by screen; then invert
@@ -463,47 +463,6 @@ static void test_double_invert_is_identity(void **state)
   }
 }
 
-// ---------------------------------------------------------------------------
-// operator dispatch
-// ---------------------------------------------------------------------------
-
-// _flexi_apply_group_op routes a state word to the right operator. A group
-// whose state carries no operator bit at all must fall back to union, matching
-// _eff_group_op's own back-compat rule -- otherwise an old or hand-edited blob
-// composites as something arbitrary.
-static void test_group_op_dispatch_matches_each_operator(void **state)
-{
-  const struct { dt_masks_state_t bit; combine_fn fn; const char *name; } cases[] = {
-    { DT_MASKS_STATE_UNION, _combine_masks_union, "union" },
-    { DT_MASKS_STATE_INTERSECTION, _combine_masks_intersect, "intersection" },
-    { DT_MASKS_STATE_DIFFERENCE, _combine_masks_difference, "difference" },
-    { DT_MASKS_STATE_SUM, _combine_masks_sum, "sum" },
-    { DT_MASKS_STATE_EXCLUSION, _combine_masks_exclusion, "exclusion" },
-    { DT_MASKS_STATE_MULTIPLY, _combine_masks_multiply, "multiply" },
-    { DT_MASKS_STATE_OP_SCREEN, _combine_masks_screen, "screen" },
-  };
-
-  for(size_t c = 0; c < sizeof(cases) / sizeof(*cases); c++)
-  {
-    float via_dispatch[N], via_direct[N], src[N];
-    memcpy(via_dispatch, A, sizeof(A));
-    memcpy(src, B, sizeof(B));
-    _flexi_apply_group_op(via_dispatch, src, N, cases[c].bit);
-    _apply(cases[c].fn, A, B, via_direct, 1.0f, 0);
-    _assert_close(via_dispatch, via_direct, cases[c].name);
-  }
-}
-
-static void test_group_op_dispatch_defaults_to_union(void **state)
-{
-  float via_dispatch[N], via_union[N], src[N];
-  memcpy(via_dispatch, A, sizeof(A));
-  memcpy(src, B, sizeof(B));
-  _flexi_apply_group_op(via_dispatch, src, N, 0); // no operator bit at all
-  _apply(_combine_masks_union, A, B, via_union, 1.0f, 0);
-  _assert_close(via_dispatch, via_union, "operator-less group did not default to union");
-}
-
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -531,8 +490,6 @@ int main(void)
     cmocka_unit_test(test_zero_opacity_neutralizes_a_union_member),
     cmocka_unit_test(test_invert_complements_the_incoming_mask),
     cmocka_unit_test(test_double_invert_is_identity),
-    cmocka_unit_test(test_group_op_dispatch_matches_each_operator),
-    cmocka_unit_test(test_group_op_dispatch_defaults_to_union),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

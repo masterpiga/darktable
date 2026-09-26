@@ -1239,43 +1239,15 @@ void _combine_masks_screen(float *const restrict dest,
   }
 }
 
-// Composite a finished group sub-mask into the accumulator with the group's
-// own operator, exactly once (opacity/invert already baked into `grp`, so
-// op=1, inverted=0). Never called for the base (bottom) group -- its own
-// operator is never evaluated at all, see the base-group handling in
-// _group_get_mask_roi_flexi.
-void _flexi_apply_group_op(float *const restrict buffer,
-                           float *const restrict grp,
-                           const size_t npixels,
-                           const guint group_op)
-{
-  if(group_op & DT_MASKS_STATE_UNION)
-    _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_INTERSECTION)
-    _combine_masks_intersect(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_DIFFERENCE)
-    _combine_masks_difference(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_SUM)
-    _combine_masks_sum(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_EXCLUSION)
-    _combine_masks_exclusion(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_MULTIPLY)
-    _combine_masks_multiply(buffer, grp, npixels, 1.0f, 0);
-  else if(group_op & DT_MASKS_STATE_OP_SCREEN)
-    _combine_masks_screen(buffer, grp, npixels, 1.0f, 0);
-  else
-    _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
-}
-
-// Flexi group-composition fold (flexi masks only): each marker starts a group
-// and holds its settings, up to the next marker. A group folds its visible
-// members into a sub-mask in list order with its within-group operator (see
-// the list below), refines that sub-mask once with the refinement its marker
-// holds, inverts and scales it, then composites it into the result with its
-// between-group operator; the first group seeds the result. An empty group (no
-// visible members) contributes nothing (identity), so an empty intersect group
-// never blanks the mask. The classic sequential fold below is
-// left untouched, so legacy (non-flexi) masks render byte-identically.
+// Flexi group fold (flexi masks only). A group's list starts with its marker,
+// which holds the group's settings, followed by its members. The members fold
+// into the mask in list order with the group's operator (see the list below);
+// the result is then refined once with the refinement the marker holds,
+// inverted and scaled. A nested group renders through here as a member of its
+// parent. A group with no visible member contributes nothing: the caller skips
+// it, so an empty intersect group never blanks the mask. The classic
+// sequential fold below is left untouched, so legacy (non-flexi) masks render
+// byte-identically.
 static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict module,
                                      const dt_dev_pixelpipe_iop_t *const restrict piece,
                                      dt_masks_form_t *const form,
@@ -1286,16 +1258,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   const int height = roi->height;
   const size_t npixels = (size_t)width * height;
 
-  float *const restrict bufs = dt_alloc_align_float(npixels); // one raw shape
-  float *const restrict grp = dt_alloc_align_float(npixels);  // group sub-mask
-  if(bufs == NULL || grp == NULL)
-  {
-    dt_free_align(bufs);
-    dt_free_align(grp);
-    return 0;
-  }
-
-  memset(buffer, 0, npixels * sizeof(float));
+  float *const restrict bufs = dt_alloc_align_float(npixels); // one raw member
+  if(bufs == NULL) return 0;
 
   // transient (non-serialized, flexi-only) refinement bypass: the GUI toggles
   // it on the module's blend_data and triggers a reprocess, which re-commits
@@ -1303,206 +1267,138 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   // Never read blend_data directly from this thread.
   const dt_dev_refine_bypass_t *const bypass = &piece->refine_bypass;
 
-  // the members a list holds before its first marker fold as one plain union
-  // group. Only a flexi edit stored before markers has them: the panel and
-  // the migration give every list a marker first (dt_masks_group_ensure_marker)
-  static const dt_masks_point_group_t unmarked = { .state = DT_MASKS_STATE_UNION,
-                                                   .group_opacity = 1.0f };
-
-  int nb_groups = 0; // how many groups have composited into `buffer`
+  // the panel and the migration give every list a marker first
+  // (dt_masks_group_ensure_marker). A list without one folds as a plain union
+  // group, and a marker anywhere else holds nothing the fold reads
+  static const dt_masks_point_group_t unmarked = { .group_opacity = 1.0f };
   GList *fpts = form->points;
-  while(fpts)
+  const dt_masks_point_group_t *head = &unmarked;
+  if(fpts && dt_masks_point_is_marker(fpts->data))
   {
-    // a marker starts a group and holds its settings, up to the next marker
-    const dt_masks_point_group_t *head = &unmarked;
-    if(dt_masks_point_is_marker(fpts->data))
-    {
-      head = fpts->data;
-      fpts = g_list_next(fpts);
-    }
-
-    const guint group_op = dt_masks_eff_group_op(head->state);
-    // a bypassed group is skipped whole: its members are still walked (so the
-    // next group starts in the right place) but none of their masks are
-    // rendered and nothing is composited, exactly as if the group were not
-    // there. Its real operator is still in `group_op`, untouched, so
-    // un-bypassing restores it.
-    const gboolean bypassed = (group_op & DT_MASKS_STATE_OP_BYPASS) != 0;
-    // within-group combine mode (how members fold together, in list order):
-    // union (default), screen (soft union), intersect (min), multiply (true
-    // per-pixel product), sum (min(1, a + b)), difference (the first member
-    // less the others) or exclusion
-    const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
-    const gboolean isect = (head->state & DT_MASKS_STATE_ISECT) != 0;
-    const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
-    const gboolean within_sum = (head->state & DT_MASKS_STATE_WITHIN_SUM) != 0;
-    const gboolean within_difference = (head->state & DT_MASKS_STATE_WITHIN_DIFFERENCE) != 0;
-    const gboolean within_exclusion = (head->state & DT_MASKS_STATE_WITHIN_EXCLUSION) != 0;
-    // the group's own refinement. A member's ELEMENT one belongs to that
-    // member alone and is applied to its own mask in the fold below
-    dt_masks_refinement_t group_refine = { 0 };
-    if(head->refinement.enabled == DT_MASKS_REFINE_GROUP) group_refine = head->refinement;
-
-    // build the group sub-mask by folding its visible members. Intersect and
-    // multiply seed at 1.0 (everything, then min/multiply each member in);
-    // union/screen/sum/exclusion seed at 0.0 (nothing, then max/soft-union/add/
-    // exclusion in, each of which copies its first member onto 0). Difference
-    // has no seed that copies, so its first member is copied explicitly below.
-    // (a bypassed group folds
-    // nothing into `grp`, so it needs no seed either)
-    if(!bypassed)
-    {
-      if(isect || within_multiply)
-        for(size_t i = 0; i < npixels; i++) grp[i] = 1.0f;
-      else
-        memset(grp, 0, npixels * sizeof(float));
-    }
-    int nb_members = 0; // members whose mask actually folded into `grp`
-    int nb_folded = 0;  // the same, counting no-op parametric channels too
-    while(fpts)
-    {
-      dt_masks_point_group_t *const m = fpts->data;
-      // the next marker starts the next group
-      if(dt_masks_point_is_marker(m)) break;
-      if(m->state & DT_MASKS_STATE_HIDDEN)
-      {
-        fpts = g_list_next(fpts);
-        continue;
-      }
-      if(bypassed || (m->state & DT_MASKS_STATE_DISABLE)) // nothing to render, just walk
-                                                          // to the next marker
-      {
-        fpts = g_list_next(fpts);
-        continue;
-      }
-      dt_masks_form_t *const sel =
-        dt_masks_get_from_id_ext(piece->pipe->forms, m->formid);
-      if(!sel)
-      {
-        fpts = g_list_next(fpts);
-        continue;
-      }
-
-      memset(bufs, 0, npixels * sizeof(float));
-      if(dt_masks_get_mask_roi(module, piece, sel, roi, bufs))
-      {
-        // this member's own refinement, applied to its raw mask before inversion
-        // and compositing -- the same point the classic renderer applies it (see
-        // _group_get_mask_roi below). No-op unless this member carries one.
-        const gboolean elem_bypassed =
-          dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_element(m->formid));
-        if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
-          dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
-                                            (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
-                                            &m->refinement);
-
-        const float op = m->opacity;
-        // A raster element whose source module is gone renders as all-zero
-        // (_raster_unresolved() in raster.c) and contributes nothing -- but
-        // zero is not a fixed point of the compositor: inverting it would turn
-        // "this element selects nothing" into "this element selects the entire
-        // frame", so a broken reference would apply the module at full strength
-        // everywhere. Drop the inversion instead, matching what the classic
-        // renderer does with the same situation (its raster branch fills 0.0f
-        // and never reaches the invert, see blend.c) and keeping a broken
-        // element harmless until the user fixes it. The panel badges the row
-        // so it is visible rather than silent.
-        const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
-                             && !dt_masks_raster_is_unresolved(module, piece, sel);
-        if(isect)
-          _combine_masks_intersect(grp, bufs, npixels, op, inverted);
-        else if(screen)
-          _combine_masks_screen(grp, bufs, npixels, op, inverted);
-        else if(within_multiply)
-          _combine_masks_multiply(grp, bufs, npixels, op, inverted);
-        else if(within_sum)
-          _combine_masks_sum(grp, bufs, npixels, op, inverted);
-        else if(within_difference && nb_folded > 0)
-          _combine_masks_difference(grp, bufs, npixels, op, inverted);
-        else if(within_exclusion)
-          _combine_masks_exclusion(grp, bufs, npixels, op, inverted);
-        else
-          // union, and the base of a difference: max onto the zero seed is a copy
-          _combine_masks_union(grp, bufs, npixels, op, inverted);
-        nb_folded++;
-        // a parametric channel still at its full range renders all ones and
-        // restricts nothing. Not counting it lets a group of nothing else take
-        // the "no active mask element" fallback (nb_groups == 0 below: fully
-        // opaque, no yellow overlay) while the user is still setting up a
-        // fresh channel. Decided from the form's own ranges, the test the
-        // panel's no-op badge uses, never from the pixels: a narrowed channel
-        // that happens to cover this image is a real element, and skipping it
-        // would drop the group's invert and opacity along with it
-        if(!dt_masks_parametric_is_noop(sel)) nb_members++;
-      }
-      fpts = g_list_next(fpts);
-    }
-
-    if(bypassed) continue;        // disabled group: contributes nothing
-    if(nb_members == 0) continue; // empty group: identity
-
-    // per-group refinement, applied once to the finished sub-mask (skipped
-    // while this group is bypassed for preview). A group is keyed by its
-    // marker.
-    const gboolean group_bypassed =
-      dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_group(head->formid));
-    if(group_refine.enabled && !group_bypassed)
-      dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
-                                        (dt_dev_pixelpipe_iop_t *)piece, grp, roi,
-                                        &group_refine);
-
-    // invert-output (true group invert, see DT_MASKS_STATE_OP_INVERT):
-    // applied to this run's finished sub-mask, after its members have folded
-    // and any group refinement has run, but before it composites onto the
-    // accumulator below -- so the first group, which seeds the accumulator,
-    // also seeds it already inverted.
-    if(group_op & DT_MASKS_STATE_OP_INVERT)
-      for(size_t i = 0; i < npixels; i++) grp[i] = 1.0f - grp[i];
-
-    // group-level opacity (see dt_masks_point_group_t.group_opacity): a
-    // persistent, multiplicative gain on this run's own finished sub-mask,
-    // applied on top of -- not instead of -- each member's own independent
-    // opacity (already folded into `grp` above; the two multiply together).
-    // Applied after invert-output, for the
-    // same reason element opacity multiplies a shape's already-inverted mask
-    // in _combine_masks_union et al: it scales the run's actual finished
-    // contribution, whatever its state, not some pre-invert intermediate.
-    for(size_t i = 0; i < npixels; i++) grp[i] *= head->group_opacity;
-
-    if(nb_groups == 0)
-    {
-      // the base group has no predecessor to combine with, so its own
-      // operator is never evaluated: its finished sub-mask becomes the
-      // initial accumulator directly, whatever operator happens to be shown
-      // on it (every operator's own identity element reduces to exactly this
-      // anyway -- union/sum/exclusion/screen from empty and
-      // intersect/multiply from full all equal `grp` unchanged; only
-      // difference has no identity element at all, so this is also its
-      // fallback). Invert the group (or its members) for the complement
-      // instead.
-      memcpy(buffer, grp, npixels * sizeof(float));
-    }
-    else
-    {
-      _flexi_apply_group_op(buffer, grp, npixels, group_op);
-    }
-    nb_groups++;
+    head = fpts->data;
+    fpts = g_list_next(fpts);
   }
 
-  if(nb_groups == 0)
-  {
-    // no group actually contributed anything (every group hidden, bypassed,
-    // or member-less) -- this must render as "no active mask element", which
-    // in dt is a fully opaque mask (the module stays 100% active), matching
-    // the `mode_drawn && !form` fallback in dt_develop_blend. Leaving
-    // `buffer` at its initial all-zero state here would instead silently
-    // disable the module, which is not classic's convention.
+  // a bypassed group contributes nothing, exactly as if it were not there
+  const gboolean bypassed = (head->state & DT_MASKS_STATE_OP_BYPASS) != 0;
+  // the group's operator (how members fold together, in list order): union
+  // (default), screen (soft union), intersect (min), multiply (true per-pixel
+  // product), sum (min(1, a + b)), difference (the first member less the
+  // others) or exclusion
+  const gboolean screen = (head->state & DT_MASKS_STATE_SCREEN) != 0;
+  const gboolean isect = (head->state & DT_MASKS_STATE_ISECT) != 0;
+  const gboolean within_multiply = (head->state & DT_MASKS_STATE_WITHIN_MULTIPLY) != 0;
+  const gboolean within_sum = (head->state & DT_MASKS_STATE_WITHIN_SUM) != 0;
+  const gboolean within_difference = (head->state & DT_MASKS_STATE_WITHIN_DIFFERENCE) != 0;
+  const gboolean within_exclusion = (head->state & DT_MASKS_STATE_WITHIN_EXCLUSION) != 0;
+
+  // intersect and multiply seed at 1.0 (everything, then min/multiply each
+  // member in); union/screen/sum/exclusion seed at 0.0 (nothing, then
+  // max/soft-union/add/exclusion in, each of which copies its first member onto
+  // 0). Difference has no seed that copies, so its first member is copied
+  // explicitly below
+  if(isect || within_multiply)
     for(size_t i = 0; i < npixels; i++) buffer[i] = 1.0f;
+  else
+    memset(buffer, 0, npixels * sizeof(float));
+
+  int nb_members = 0; // members whose mask actually folded into `buffer`
+  int nb_folded = 0;  // the same, counting no-op parametric channels too
+  for(; fpts && !bypassed; fpts = g_list_next(fpts))
+  {
+    dt_masks_point_group_t *const m = fpts->data;
+    if(dt_masks_point_is_marker(m)) continue;
+    if(m->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    dt_masks_form_t *const sel = dt_masks_get_from_id_ext(piece->pipe->forms, m->formid);
+    if(!sel) continue;
+
+    memset(bufs, 0, npixels * sizeof(float));
+    if(!dt_masks_get_mask_roi(module, piece, sel, roi, bufs)) continue;
+
+    // this member's own refinement, applied to its raw mask before inversion
+    // and compositing -- the same point the classic renderer applies it (see
+    // _group_get_mask_roi below). No-op unless this member carries one.
+    const gboolean elem_bypassed =
+      dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_element(m->formid));
+    if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
+      dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
+                                        (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
+                                        &m->refinement);
+
+    const float op = m->opacity;
+    // A raster element whose source module is gone renders as all-zero
+    // (_raster_unresolved() in raster.c) and contributes nothing -- but
+    // zero is not a fixed point of the compositor: inverting it would turn
+    // "this element selects nothing" into "this element selects the entire
+    // frame", so a broken reference would apply the module at full strength
+    // everywhere. Drop the inversion instead, matching what the classic
+    // renderer does with the same situation (its raster branch fills 0.0f
+    // and never reaches the invert, see blend.c) and keeping a broken
+    // element harmless until the user fixes it. The panel badges the row
+    // so it is visible rather than silent.
+    const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
+                         && !dt_masks_raster_is_unresolved(module, piece, sel);
+    if(isect)
+      _combine_masks_intersect(buffer, bufs, npixels, op, inverted);
+    else if(screen)
+      _combine_masks_screen(buffer, bufs, npixels, op, inverted);
+    else if(within_multiply)
+      _combine_masks_multiply(buffer, bufs, npixels, op, inverted);
+    else if(within_sum)
+      _combine_masks_sum(buffer, bufs, npixels, op, inverted);
+    else if(within_difference && nb_folded > 0)
+      _combine_masks_difference(buffer, bufs, npixels, op, inverted);
+    else if(within_exclusion)
+      _combine_masks_exclusion(buffer, bufs, npixels, op, inverted);
+    else
+      // union, and the base of a difference: max onto the zero seed is a copy
+      _combine_masks_union(buffer, bufs, npixels, op, inverted);
+    nb_folded++;
+    // a parametric channel still at its full range renders all ones and
+    // restricts nothing. Not counting it lets a group of nothing else take
+    // the "no active mask element" fallback below (fully opaque, no yellow
+    // overlay) while the user is still setting up a fresh channel. Decided
+    // from the form's own ranges, the test the panel's no-op badge uses,
+    // never from the pixels: a narrowed channel that happens to cover this
+    // image is a real element, and skipping it would drop the group's invert
+    // and opacity along with it
+    if(!dt_masks_parametric_is_noop(sel)) nb_members++;
+  }
+  dt_free_align(bufs);
+
+  if(bypassed || nb_members == 0)
+  {
+    // nothing contributed (bypassed, or every member hidden, disabled or
+    // gone). As the mask, this renders as "no active mask element", which in
+    // dt is a fully opaque mask (the module stays 100% active), matching the
+    // `mode_drawn && !form` fallback in dt_develop_blend. As a nested group,
+    // returning 0 makes its parent skip it
+    for(size_t i = 0; i < npixels; i++) buffer[i] = 1.0f;
+    return 0;
   }
 
-  dt_free_align(bufs);
-  dt_free_align(grp);
-  return nb_groups != 0;
+  // per-group refinement, applied once to the folded mask (skipped while this
+  // group is bypassed for preview). A group is keyed by its marker.
+  const gboolean group_bypassed =
+    dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_group(head->formid));
+  if(head->refinement.enabled == DT_MASKS_REFINE_GROUP && !group_bypassed)
+    dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
+                                      (dt_dev_pixelpipe_iop_t *)piece, buffer, roi,
+                                      &head->refinement);
+
+  // invert-output (true group invert, see DT_MASKS_STATE_OP_INVERT): applied
+  // to the folded mask, after any group refinement
+  if(head->state & DT_MASKS_STATE_OP_INVERT)
+    for(size_t i = 0; i < npixels; i++) buffer[i] = 1.0f - buffer[i];
+
+  // group-level opacity (see dt_masks_point_group_t.group_opacity): a
+  // multiplicative gain on the group's finished mask, on top of each member's
+  // own opacity. Applied after invert-output, for the same reason element
+  // opacity multiplies a shape's already-inverted mask in _combine_masks_union
+  // et al: it scales the group's actual contribution
+  for(size_t i = 0; i < npixels; i++) buffer[i] *= head->group_opacity;
+
+  return 1;
 }
 
 static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,

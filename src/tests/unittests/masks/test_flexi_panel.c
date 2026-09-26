@@ -43,30 +43,7 @@ static int _teardown(void **state)
 }
 
 // ---------------------------------------------------------------------------
-// warning badges
-// ---------------------------------------------------------------------------
-
-// an element contributing (almost) nothing is worth flagging, because on canvas
-// 9% and 0% look nearly identical to "off"
-static void test_low_opacity_badge_threshold(void **state)
-{
-  assert_int_equal(_model_badge_kind(1.0f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(0.5f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(0.10f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(0.099f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
-  assert_int_equal(_model_badge_kind(0.0f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
-}
-
-// no-op outranks low opacity: a channel that restricts nothing contributes
-// nothing whatever its opacity, so reporting the opacity would be noise
-static void test_noop_badge_outranks_low_opacity(void **state)
-{
-  assert_int_equal(_model_badge_kind(0.0f, TRUE), DT_MASKS_BADGE_NOOP);
-  assert_int_equal(_model_badge_kind(1.0f, TRUE), DT_MASKS_BADGE_NOOP);
-}
-
-// ---------------------------------------------------------------------------
-// the no-op predicate behind that badge
+// the no-op predicate behind the no-op badge
 // ---------------------------------------------------------------------------
 
 // build a single-channel parametric form whose sub-ranges are all at the full
@@ -572,15 +549,6 @@ static void test_old_collapse_refinements_option_is_ignored(void **state)
   assert_true(_model_section_expanded(DT_MASKS_SECTION_REFINE, FALSE));
 }
 
-// the panel's default operator for new groups is a string key; an unset or
-// unknown value must not leave the panel without an operator
-static void test_default_operator_preference_roundtrips(void **state)
-{
-  dt_conf_set_string("plugins/darkroom/masks/default_operator", "intersection");
-  assert_string_equal(
-    dt_conf_get_string_const("plugins/darkroom/masks/default_operator"), "intersection");
-}
-
 // the mask panel position drives where the panel is hosted; the values the
 // panel switches on must round-trip as integers
 static void test_panel_position_preference_roundtrips(void **state)
@@ -715,16 +683,6 @@ static void test_pinning_collapsed_module_expands_iop(void **state)
   assert_false(_model_masks_pin_should_expand_iop(FALSE, FALSE));
 }
 
-// overall module blend opacity slider uses 0..100 range and maps to 0..1 fraction
-static void test_main_opacity_badge_threshold(void **state)
-{
-  assert_int_equal(_model_badge_kind(100.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(74.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(10.0f / 100.0f, FALSE), DT_MASKS_BADGE_NONE);
-  assert_int_equal(_model_badge_kind(9.9f / 100.0f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
-  assert_int_equal(_model_badge_kind(0.0f / 100.0f, FALSE), DT_MASKS_BADGE_LOW_OPACITY);
-}
-
 // in utility position, panel state follows user preference and does not collapse when IOP is collapsed
 static void test_panel_state_utility_position_follows_pref(void **state)
 {
@@ -813,8 +771,6 @@ static void test_param_channel_tooltips(void **state)
 int main(void)
 {
   const struct CMUnitTest tests[] = {
-    cmocka_unit_test_teardown(test_low_opacity_badge_threshold, _teardown),
-    cmocka_unit_test_teardown(test_noop_badge_outranks_low_opacity, _teardown),
     cmocka_unit_test_teardown(test_untouched_parametric_is_a_noop, _teardown),
     cmocka_unit_test_teardown(test_narrowed_parametric_is_not_a_noop, _teardown),
     cmocka_unit_test_teardown(test_output_range_alone_is_not_a_noop, _teardown),
@@ -873,8 +829,6 @@ int main(void)
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_old_collapse_refinements_option_is_ignored,
                                     _conf_setup, _conf_teardown),
-    cmocka_unit_test_setup_teardown(test_default_operator_preference_roundtrips,
-                                    _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_panel_position_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_panel_side_defaults_to_the_processing_modules_side,
@@ -885,7 +839,6 @@ int main(void)
     cmocka_unit_test_teardown(test_panel_state_expanded_module_respects_pref, _teardown),
     cmocka_unit_test_teardown(test_panel_state_mask_disabled_does_not_collapse, _teardown),
     cmocka_unit_test_teardown(test_panel_state_unsupported_or_unfocused_hides_all, _teardown),
-    cmocka_unit_test_teardown(test_main_opacity_badge_threshold, _teardown),
     cmocka_unit_test_teardown(test_panel_state_utility_position_follows_pref, _teardown),
     cmocka_unit_test_teardown(test_panel_state_no_separate_panel_for_utility_or_embedded, _teardown),
     cmocka_unit_test_teardown(test_pinning_collapsed_module_expands_iop, _teardown),

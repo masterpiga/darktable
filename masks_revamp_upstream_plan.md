@@ -46,24 +46,25 @@ Against master:
 ### Size
 
 Code going upstream (`src/` and `data/`, without tests and docs): about
-**+38.6k / −5.6k lines**. More than half is the panel in `blend_gui.c`.
+**+42.6k / −5.6k lines**. The panel in `blend_gui.c` is the largest part, at
+about 18k.
 
 | PR | Files | Lines |
 |---|---|---:|
-| 1 model | `masks.h`, `masks/masks.c`, `blend.h` | +3.3k / −0.4k |
-| 2 engine | `masks/group.c`, `group_internal.h` | +1.1k |
-| | `masks/{parametric,raster,object}.c` | +1.0k |
+| 1 model | `masks.h`, `masks/masks.c`, `blend.h` | +3.0k / −0.4k |
+| 2 engine | `masks/group.c`, `group_internal.h` | +1.0k / −0.1k |
+| | `masks/{parametric,raster,object}.c` | +1.0k / −0.1k |
 | | `blend.c`, `pixelpipe_hb`, `imageop`, `develop`, `blendop.cl`, `blends/*`, `imagebuf.c` | +1.6k / −0.2k |
-| | `masks/migrate_legacy.c` | +1.6k |
-| 3 tests | `masks/{harvest,verify,check,probe_image,scratch_image}` and the CLI flags | +4.8k |
-| 4 UI | `blend_gui.c`, `blend_gui_internal.h`, `masks_gui_presets.c` | +18.4k / −2.0k |
+| | `masks/migrate_legacy.c` | +1.7k |
+| 3 tests | `masks/{harvest,verify,check,persist,undo,roundtrip,styleapply,lockcheck,postedit,probe_image,scratch_image}` and the CLI flags | +9.5k |
+| 4 UI | `blend_gui.c`, `blend_gui_internal.h`, `masks_gui_presets.c` | +18.1k / −2.0k |
 | | `gtk.c`, panel host, darkroom toolbar | +3.5k |
-| | CSS | +1.6k |
+| | CSS | +1.6k / −0.1k |
 | | `dtgtk/*`, `bauhaus/*` | +1.1k / −0.1k |
-| | `history.c`, color picker, preferences, small touches | +0.4k |
+| | `history.c`, color picker, shape tools, preferences, small touches | +0.5k / −0.1k |
 | | `libs/masks.c` | −2.5k |
 
-Tests add ~11.5k lines of cmocka suites and a 44-scenario pixel suite.
+Tests add ~11.1k lines of cmocka suites and a 44-scenario pixel suite.
 
 ## PR sequence
 

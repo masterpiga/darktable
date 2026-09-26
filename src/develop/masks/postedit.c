@@ -32,12 +32,11 @@
 
 static const char *const _poke_name[POKE_N] =
 {
-  "op:union",     "op:intersection", "op:difference", "op:sum",
-  "op:exclusion", "op:multiply",     "op:screen",
   "within:union", "within:screen",   "within:intersect", "within:multiply",
+  "within:sum",   "within:difference", "within:exclusion",
   "group:bypass", "group:invert",    "group:opacity",    "group:refine",
   "elem:disable", "elem:hidden",     "elem:inverse",     "elem:opacity",
-  "elem:refine",  "elem:break",
+  "elem:refine",
 };
 
 const char *_poke_label(const poke_t k)
@@ -65,8 +64,7 @@ static const dt_masks_refinement_t _refine_probe =
 
    A run-level poke is broadcast across the whole range, which starts at the
    group's marker, the record the fold reads. An element-level poke is passed
-   first == last. A group break is no poke: it inserts a marker
-   (_break_before). */
+   first == last. */
 void _apply_poke(GList *points, const poke_t k,
                  const int first, const int last)
 {
@@ -78,36 +76,21 @@ void _apply_poke(GList *points, const poke_t k,
 
     switch(k)
     {
-      // the combining operator replaces whatever one is there, leaving the
-      // bypass/invert modifiers alone -- the panel's operator menu does the
-      // same, which is the whole reason DT_MASKS_STATE_OP_COMBINE exists
-      // apart from DT_MASKS_STATE_OP
-      case POKE_OP_UNION:
-      case POKE_OP_INTERSECTION:
-      case POKE_OP_DIFFERENCE:
-      case POKE_OP_SUM:
-      case POKE_OP_EXCLUSION:
-      case POKE_OP_MULTIPLY:
-      case POKE_OP_SCREEN:
-      {
-        static const dt_masks_state_t ops[] =
-          { DT_MASKS_STATE_UNION,     DT_MASKS_STATE_INTERSECTION,
-            DT_MASKS_STATE_DIFFERENCE, DT_MASKS_STATE_SUM,
-            DT_MASKS_STATE_EXCLUSION,  DT_MASKS_STATE_MULTIPLY,
-            DT_MASKS_STATE_OP_SCREEN };
-        pt->state = (pt->state & ~(int)DT_MASKS_STATE_OP_COMBINE)
-                    | (int)ops[k - POKE_OP_UNION];
-        break;
-      }
-
+      // the operator replaces whatever one is there, leaving the bypass and
+      // invert modifiers alone, as the panel's operator menu does
       case POKE_WITHIN_UNION:
       case POKE_WITHIN_SCREEN:
       case POKE_WITHIN_ISECT:
       case POKE_WITHIN_MULTIPLY:
+      case POKE_WITHIN_SUM:
+      case POKE_WITHIN_DIFFERENCE:
+      case POKE_WITHIN_EXCLUSION:
       {
         static const dt_masks_state_t within[] =
           { DT_MASKS_STATE_NONE, DT_MASKS_STATE_SCREEN,
-            DT_MASKS_STATE_ISECT, DT_MASKS_STATE_WITHIN_MULTIPLY };
+            DT_MASKS_STATE_ISECT, DT_MASKS_STATE_WITHIN_MULTIPLY,
+            DT_MASKS_STATE_WITHIN_SUM, DT_MASKS_STATE_WITHIN_DIFFERENCE,
+            DT_MASKS_STATE_WITHIN_EXCLUSION };
         pt->state = (pt->state & ~(int)DT_MASKS_STATE_WITHIN)
                     | (int)within[k - POKE_WITHIN_UNION];
         break;
@@ -359,25 +342,6 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
   }
 }
 
-/* A group break: a copy of the enclosing group's marker before member `idx`,
-   so the new group keeps the settings its members were folded with. Nothing
-   happens where `idx` already heads its group, or is in none */
-static void _break_before(dt_develop_t *dev, dt_masks_form_t *grp,
-                          const int idx)
-{
-  GList *node = g_list_nth(grp->points, idx);
-  if(!node || dt_masks_point_is_marker(node->data)) return;
-  GList *m = node->prev;
-  while(m && !dt_masks_point_is_marker(m->data)) m = m->prev;
-  if(!m || m == node->prev) return;
-
-  dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
-  if(!pt) return;
-  memcpy(pt, m->data, sizeof(dt_masks_point_group_t));
-  pt->formid = dt_masks_new_marker_id(dev ? dev->forms : NULL);
-  grp->points = g_list_insert_before(grp->points, node, pt);
-}
-
 void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 {
   int first = 0, last = 0;
@@ -385,10 +349,7 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 
   if(st->kind == STEP_POKE)
   {
-    if(st->k == POKE_ELEM_BREAK)
-      _break_before(dev, grp, first);
-    else
-      _apply_poke(grp->points, st->k, first, last);
+    _apply_poke(grp->points, st->k, first, last);
     return;
   }
 
