@@ -1110,8 +1110,12 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     // returns 0 for a member-less group *without writing `mask`* -- form_ok only
     // gates the cache and the log line, so falling through here would blend
     // against an uninitialized buffer. An empty group contributes nothing, which
-    // is exactly the "no form" case handled below.
-    if(form && form->points && mode_drawn && dt_blend_may_render_group(self, mask_mode))
+    // is exactly the "no form" case handled below. A classic mask still renders
+    // an existing empty group, as master does: the classic fold clears the mask,
+    // so it comes out empty rather than full (see _drawn_content_t in
+    // migrate_legacy.c)
+    if(form && (form->points || !(mask_mode & DEVELOP_MASK_FLEXI)) && mode_drawn
+       && dt_blend_may_render_group(self, mask_mode))
     {
       // expose the in/out images as feathering guides for optional per-shape
       // refinement inside the group renderer (only consumed when a shape has
@@ -1690,8 +1694,12 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     // returns 0 for a member-less group *without writing `mask`* -- form_ok only
     // gates the cache and the log line, so falling through here would blend
     // against an uninitialized buffer. An empty group contributes nothing, which
-    // is exactly the "no form" case handled below.
-    if(form && form->points && mode_drawn && dt_blend_may_render_group(self, mask_mode))
+    // is exactly the "no form" case handled below. A classic mask still renders
+    // an existing empty group, as master does: the classic fold clears the mask,
+    // so it comes out empty rather than full (see _drawn_content_t in
+    // migrate_legacy.c)
+    if(form && (form->points || !(mask_mode & DEVELOP_MASK_FLEXI)) && mode_drawn
+       && dt_blend_may_render_group(self, mask_mode))
     {
       // The mask group is rendered on the CPU even in the OpenCL pipe, so
       // per-shape detail/blur/contrast/brightness refinement still applies here.

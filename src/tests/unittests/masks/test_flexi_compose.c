@@ -504,28 +504,6 @@ static void test_group_op_dispatch_defaults_to_union(void **state)
   _assert_close(via_dispatch, via_union, "operator-less group did not default to union");
 }
 
-// ---------------------------------------------------------------------------
-// the "contributes nothing" detector
-// ---------------------------------------------------------------------------
-
-// a parametric channel still at its full range renders as an all-one mask, and
-// must not count as an active group member
-static void test_uniform_one_detector(void **state)
-{
-  float buf[N] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
-  assert_true(_mask_buffer_is_uniform_one(buf, N));
-
-  buf[2] = 0.99f;
-  assert_false(_mask_buffer_is_uniform_one(buf, N));
-
-  // the tolerance is one-sided: values at or above the threshold count as one
-  buf[2] = 0.99999f;
-  assert_true(_mask_buffer_is_uniform_one(buf, N));
-
-  float zero[N] = { 0 };
-  assert_false(_mask_buffer_is_uniform_one(zero, N));
-}
-
 int main(void)
 {
   const struct CMUnitTest tests[] = {
@@ -555,7 +533,6 @@ int main(void)
     cmocka_unit_test(test_double_invert_is_identity),
     cmocka_unit_test(test_group_op_dispatch_matches_each_operator),
     cmocka_unit_test(test_group_op_dispatch_defaults_to_union),
-    cmocka_unit_test(test_uniform_one_detector),
   };
   return cmocka_run_group_tests(tests, NULL, NULL);
 }

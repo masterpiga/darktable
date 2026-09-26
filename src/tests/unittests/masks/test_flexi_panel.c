@@ -101,7 +101,7 @@ static void _free_parametric(dt_masks_form_t *f)
 static void test_untouched_parametric_is_a_noop(void **state)
 {
   dt_masks_form_t *f = _make_parametric();
-  assert_true(_parametric_form_is_noop(f));
+  assert_true(dt_masks_parametric_is_noop(f));
   _free_parametric(f);
 }
 
@@ -114,7 +114,7 @@ static void test_narrowed_parametric_is_not_a_noop(void **state)
   // narrow the input sub-range of the form's own channel
   p->blendif_parameters[4 * ch[0].param_channels[0] + 2] = 0.5f;
 
-  assert_false(_parametric_form_is_noop(f));
+  assert_false(dt_masks_parametric_is_noop(f));
   _free_parametric(f);
 }
 
@@ -128,7 +128,7 @@ static void test_output_range_alone_is_not_a_noop(void **state)
   dt_masks_point_parametric_t *p = f->points->data;
   p->blendif_parameters[4 * ch[0].param_channels[1] + 2] = 0.5f;
 
-  assert_false(_parametric_form_is_noop(f));
+  assert_false(dt_masks_parametric_is_noop(f));
   _free_parametric(f);
 }
 
@@ -138,7 +138,7 @@ static void test_inverted_parametric_is_never_a_noop(void **state)
 {
   dt_masks_form_t *f = _make_parametric();
   ((dt_masks_point_parametric_t *)f->points->data)->invert = 1;
-  assert_false(_parametric_form_is_noop(f));
+  assert_false(dt_masks_parametric_is_noop(f));
   _free_parametric(f);
 }
 
@@ -146,7 +146,7 @@ static void test_inverted_parametric_is_never_a_noop(void **state)
 static void test_a_shape_is_never_a_noop(void **state)
 {
   flexi_build("u:1,2");
-  assert_false(_parametric_form_is_noop(dt_masks_get_from_id(&flexi_dev, 1)));
+  assert_false(dt_masks_parametric_is_noop(dt_masks_get_from_id(&flexi_dev, 1)));
 }
 
 // ---------------------------------------------------------------------------

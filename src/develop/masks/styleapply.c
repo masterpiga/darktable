@@ -163,9 +163,9 @@ static gchar *_describe_mask(dt_develop_t *dev,
   for(GList *p = grp->points; p; p = g_list_next(p))
   {
     const dt_masks_point_group_t *pt = p->data;
-    g_string_append_printf(s, "%s%d:state=%d,start=%d,op=%.4f",
+    g_string_append_printf(s, "%s%d:state=%d,op=%.4f",
                            p == grp->points ? "" : " ",
-                           pt->formid, pt->state, pt->group_start, pt->opacity);
+                           pt->formid, pt->state, pt->opacity);
   }
   g_string_append_c(s, ']');
 

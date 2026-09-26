@@ -192,6 +192,57 @@ static void _repair_base_case_overwrite(GList *forms,
   }
 }
 
+/* Classic applies every member's operator to the accumulator, the bottom
+ * member's included, and the accumulator starts empty. Intersection and
+ * difference leave an empty accumulator empty, so a member carrying one below
+ * the first member that adds anything contributes nothing at all. The flexi
+ * fold copies a group's first member whatever its operator, so migrated as it
+ * is that member would suddenly show.
+ *
+ * Each such member becomes a union at zero opacity: a zero term on an empty
+ * accumulator, which is exactly what classic computed. It is not dropped,
+ * because a group can consist of nothing else, and classic renders such a
+ * group as an empty mask where the flexi fold renders a group with no members
+ * as no mask at all. Kept at zero, the group still renders empty, a nested one
+ * still combines into its parent as an empty term, and the panel shows the
+ * shape at the opacity it really had.
+ *
+ * Runs after _repair_base_case_overwrite, whose surviving bottom member has no
+ * operator and so adds its shape. */
+static void _zero_empty_base_members(GList *forms,
+                                     dt_masks_form_t *grp,
+                                     const int depth)
+{
+  if(!grp || !(grp->type & DT_MASKS_GROUP)) return;
+  if(depth > DT_MASKS_NESTING_MAX) return;
+
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    dt_masks_point_group_t *pt = l->data;
+    // a marked list is already flexi
+    if(dt_masks_point_is_marker(pt)) return;
+    if(pt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)) continue;
+    // a member whose form is gone takes no part in the fold (group.c)
+    if(!dt_masks_get_from_id_ext(forms, pt->formid)) continue;
+    const int op = pt->state & DT_MASKS_STATE_OP_COMBINE;
+    if(op != DT_MASKS_STATE_INTERSECTION && op != DT_MASKS_STATE_DIFFERENCE) break;
+    pt->state = (pt->state & ~DT_MASKS_STATE_OP_COMBINE) | DT_MASKS_STATE_UNION;
+    pt->opacity = 0.0f;
+    dt_print(DT_DEBUG_ALWAYS,
+             "[masks] group %d: member %d combines with an empty mask, which"
+             " leaves nothing -- keeping it as a zero-opacity union",
+             grp->formid, pt->formid);
+  }
+
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt)) continue;
+    _zero_empty_base_members(forms, dt_masks_get_from_id_ext(forms, pt->formid),
+                             depth + 1);
+  }
+}
+
 /* Classic applies each member's own operator to the accumulator in turn; a
  * flexi group folds its members in order with one operator. Migration makes a
  * group of each run of members sharing an operator, the groups before it
@@ -208,9 +259,10 @@ static void _repair_base_case_overwrite(GList *forms,
  * no-op duplicate prune next, reading that same live list. Idempotent: a
  * marked list is left as it is, which is what lets this run on every load. */
 /* A member that composites as `max(dest, mask)`: union is
- * `dest = MAX(dest, opacity * mask)` (group.c:1018-1024), and the first
- * visible member is a plain copy whatever its operator (group.c:867-870), so
- * both seed or grow the same maximum -- but only at full opacity, uninverted
+ * `dest = MAX(dest, opacity * mask)`, and the first visible member adds its
+ * shape to the empty accumulator whatever its operator, since
+ * _zero_empty_base_members has already turned the ones that do not, so both
+ * seed or grow the same maximum -- but only at full opacity, uninverted
  * (inversion is baked into the member's own buffer, group.c:827-834) and
  * unrefined, since each of those changes what the member contributes. */
 static gboolean _is_union_equivalent(const dt_masks_point_group_t *pt,
@@ -381,6 +433,7 @@ static void _mark_classic_runs(const dt_develop_t *dev, GList **forms, dt_masks_
 static void _normalize_group(const dt_develop_t *dev, GList **forms, dt_masks_form_t *grp)
 {
   _repair_base_case_overwrite(*forms, grp, 0);
+  _zero_empty_base_members(*forms, grp, 0);
   _prune_noop_duplicate_refs(*forms, grp);
   _mark_classic_runs(dev, forms, grp);
 }
@@ -712,11 +765,18 @@ static dt_cond_branch_t _classify_conditional(const int32_t blend_cst,
   return DT_COND_PASSTHROUGH;
 }
 
-// does `mask_id` resolve to a form with actual content? Mirrors exactly the
-// condition dt_develop_blend_process() itself uses to decide whether a drawn
-// mask has something to render (`form && form->points`, see blend.c) -- not
-// "is it specifically typed DT_MASKS_GROUP", since the renderer does not
-// require that either.
+// what a classic drawn mask renders, from its form tree alone
+typedef enum
+{
+  DRAWN_MISSING, // mask_id resolves to nothing: blend.c fills 1.0 (0.0 inverted)
+  DRAWN_EMPTY,   // a group that renders nothing: master's classic fold writes no
+                 // pixel, blending reads a buffer it never initialized, which in
+                 // practice is 0.0 (1.0 inverted); the classic fold here clears it
+  DRAWN_CONTENT, // at least one shape
+} _drawn_content_t;
+
+// the member ids of form `id` into `members` when it is a group. FALSE when it
+// does not resolve.
 //
 // dev->forms cannot be trusted for this while inside the darkroom
 // history-load loop: dt_masks_read_masks_history() (which populates it from
@@ -727,30 +787,89 @@ static dt_cond_branch_t _classify_conditional(const int32_t blend_cst,
 // directly in that case; everywhere else (style/preset application, both of
 // which operate on a dev whose forms are already fully loaded) dev->forms is
 // reliable and cheaper to use.
-static gboolean _mask_id_has_content(dt_iop_module_t *module,
-                                     const dt_mask_id_t mask_id,
-                                     const int history_num)
+static gboolean _form_members(dt_iop_module_t *module,
+                              const dt_mask_id_t id,
+                              const int history_num,
+                              gboolean *is_group,
+                              GArray *members)
 {
-  if(!dt_is_valid_maskid(mask_id)) return FALSE;
-
   if(history_num < 0)
   {
-    const dt_masks_form_t *form = dt_masks_get_from_id(module->dev, mask_id);
-    return form && form->points != NULL;
+    const dt_masks_form_t *form = dt_masks_get_from_id(module->dev, id);
+    if(!form) return FALSE;
+    *is_group = (form->type & DT_MASKS_GROUP) != 0;
+    if(*is_group)
+      for(const GList *l = form->points; l; l = g_list_next(l))
+        g_array_append_val(members, ((const dt_masks_point_group_t *)l->data)->formid);
+    return TRUE;
   }
 
   sqlite3_stmt *stmt;
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
-                              "SELECT points_count FROM main.masks_history"
+                              "SELECT form, version, points, points_count"
+                              " FROM main.masks_history"
                               " WHERE imgid = ?1 AND formid = ?2"
                               " ORDER BY num DESC LIMIT 1",
                               -1, &stmt, NULL);
   DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, module->dev->image_storage.id);
-  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, mask_id);
-  gboolean has_content = FALSE;
-  if(sqlite3_step(stmt) == SQLITE_ROW) has_content = sqlite3_column_int(stmt, 0) > 0;
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, id);
+  const gboolean found = sqlite3_step(stmt) == SQLITE_ROW;
+  if(found)
+  {
+    *is_group = (sqlite3_column_int(stmt, 0) & DT_MASKS_GROUP) != 0;
+    if(*is_group)
+    {
+      const size_t stride = dt_masks_point_stride(DT_MASKS_GROUP, sqlite3_column_int(stmt, 1),
+                                                  sizeof(dt_masks_point_group_t));
+      const char *blob = sqlite3_column_blob(stmt, 2);
+      const size_t bytes = sqlite3_column_bytes(stmt, 2);
+      const int count = sqlite3_column_int(stmt, 3);
+      for(int i = 0; blob && i < count && (i + 1) * stride <= bytes; i++)
+      {
+        dt_mask_id_t member;
+        memcpy(&member, blob + i * stride + offsetof(dt_masks_point_group_t, formid),
+               sizeof(member));
+        g_array_append_val(members, member);
+      }
+    }
+  }
   sqlite3_finalize(stmt);
-  return has_content;
+  return found;
+}
+
+// does form `id` render nothing at all: gone, or a group of such members?
+static gboolean _renders_nothing(dt_iop_module_t *module,
+                                 const dt_mask_id_t id,
+                                 const int history_num,
+                                 const int depth)
+{
+  // a cyclic tree: say it renders, which leaves the mask as it is
+  if(depth > DT_MASKS_NESTING_MAX) return FALSE;
+  GArray *members = g_array_new(FALSE, FALSE, sizeof(dt_mask_id_t));
+  gboolean is_group = FALSE;
+  gboolean nothing = TRUE;
+  if(_form_members(module, id, history_num, &is_group, members))
+  {
+    nothing = is_group;
+    for(guint i = 0; nothing && i < members->len; i++)
+      nothing = _renders_nothing(module, g_array_index(members, dt_mask_id_t, i),
+                                 history_num, depth + 1);
+  }
+  g_array_free(members, TRUE);
+  return nothing;
+}
+
+static _drawn_content_t _drawn_content(dt_iop_module_t *module,
+                                       const dt_mask_id_t mask_id,
+                                       const int history_num)
+{
+  if(!dt_is_valid_maskid(mask_id)) return DRAWN_MISSING;
+  GArray *members = g_array_new(FALSE, FALSE, sizeof(dt_mask_id_t));
+  gboolean is_group = FALSE;
+  const gboolean found = _form_members(module, mask_id, history_num, &is_group, members);
+  g_array_free(members, TRUE);
+  if(!found) return DRAWN_MISSING;
+  return _renders_nothing(module, mask_id, history_num, 0) ? DRAWN_EMPTY : DRAWN_CONTENT;
 }
 
 // ---------------------------------------------------------------------------
@@ -949,9 +1068,13 @@ static void _migrate_drawn_and_parametric(dt_iop_module_t *module,
   //    "opaque", or the same with opacity forced to 0 for "zero" -- opacity
   //    multiplies the mask everywhere in the blend math, so opacity=0
   //    reproduces "contributes nothing" exactly.
-  if(!_mask_id_has_content(module, o->mask_id, history_num))
+  const _drawn_content_t drawn = _drawn_content(module, o->mask_id, history_num);
+  if(drawn != DRAWN_CONTENT)
   {
-    const gboolean masks_pos = (o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0;
+    // an empty group renders the opposite of a missing form, so it reads as
+    // one with the invert flipped (see _drawn_content_t)
+    const gboolean masks_pos = ((o->mask_combine & DEVELOP_COMBINE_MASKS_POS) != 0)
+                               != (drawn == DRAWN_EMPTY);
     const gboolean incl = (o->mask_combine & DEVELOP_COMBINE_INCL) != 0;
     if(masks_pos == incl)
     {
@@ -1167,8 +1290,22 @@ static void _dispatch(dt_iop_module_t *module,
     // member's combine operator once per run rather than once per member.
     // _queue_group_split() marks the run boundaries that make the two agree;
     // see its comment for why that is all it takes.
-    n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
-    _queue_group_split(module, o->mask_id);
+    if(_drawn_content(module, o->mask_id, history_num) == DRAWN_EMPTY)
+    {
+      // nothing to draw, which classic renders as an empty mask and flexi
+      // would render as no mask at all: a uniform blend at zero opacity is
+      // the same empty mask (at full opacity when inverted), as for an
+      // always-empty parametric mask (_migrate_parametric_only)
+      n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
+      n->mask_id = NO_MASKID;
+      if(!(o->mask_combine & DEVELOP_COMBINE_MASKS_POS)) n->opacity = 0.0f;
+      n->mask_combine &= ~(uint32_t)DEVELOP_COMBINE_MASKS_POS;
+    }
+    else
+    {
+      n->mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI;
+      _queue_group_split(module, o->mask_id);
+    }
   }
   else // DEVELOP_MASK_CONDITIONAL alone
   {

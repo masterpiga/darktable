@@ -48,8 +48,8 @@ static gint _form_by_id(gconstpointer a, gconstpointer b)
 /** Render the mask-relevant state of a loaded dev as a canonical string.
 
     Text rather than a struct comparison so that a mismatch names the field
-    that moved: this test exists to catch persistence bugs, and "group_start
-    0 vs 1 on member 3" is an answer, where "the snapshots differ" is another
+    that moved: this test exists to catch persistence bugs, and "group_opacity
+    1 vs 0 on member 3" is an answer, where "the snapshots differ" is another
     investigation.
 
     Forms are emitted in formid order, not list order. The list order out of
@@ -104,9 +104,9 @@ static gchar *_snapshot(dt_develop_t *dev)
       const dt_masks_point_group_t *pt = p->data;
       g_string_append_printf(s,
         "  member %d parent=%d state=%d opacity=%.6f group_opacity=%.6f"
-        " group_start=%d refine=%d\n",
+        " refine=%d\n",
         pt->formid, pt->parentid, pt->state, pt->opacity,
-        pt->group_opacity, pt->group_start, pt->refinement.enabled);
+        pt->group_opacity, pt->refinement.enabled);
     }
   }
   g_list_free(sorted);

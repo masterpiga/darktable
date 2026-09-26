@@ -170,7 +170,6 @@ dt_masks_form_t *flexi_build_classic(const char *layout)
 {
   dt_masks_form_t *grp = flexi_build(layout);
   dt_masks_state_t op = DT_MASKS_STATE_UNION;
-  gboolean first_member = FALSE;
   GList *l = grp->points;
   while(l)
   {
@@ -179,17 +178,11 @@ dt_masks_form_t *flexi_build_classic(const char *layout)
     if(dt_masks_point_is_marker(pt))
     {
       op = pt->state & DT_MASKS_STATE_OP;
-      // the bottom point of the whole list cannot carry a break
-      first_member = l != grp->points;
       free(pt);
       grp->points = g_list_delete_link(grp->points, l);
     }
     else
-    {
       pt->state = (pt->state & ~DT_MASKS_STATE_OP) | op;
-      pt->group_start = first_member ? 1 : 0;
-      first_member = FALSE;
-    }
     l = next;
   }
   return grp;

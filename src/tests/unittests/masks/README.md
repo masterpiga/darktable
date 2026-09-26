@@ -121,10 +121,10 @@ data nobody can regenerate (a user's existing library), it fails silently, and
 it is the one place where a zero-filled field is not automatically safe:
 appended fields are read at the historic stride and zero-filled, which is
 neutral for most of them, but `group_opacity` is multiplicative — a zero-fill
-would blank out every pre-v9 group's mask.
+would blank out every pre-v7 group's mask.
 
-The read-time stride selection itself is SQLite-coupled and out of reach here;
-these tests cover the migration chain that runs after it.
+The tests cover the v6 → v7 step that runs after the read, and the read-time
+stride (`dt_masks_point_stride`).
 
 ## test_flexi_compose — what the operators mean
 

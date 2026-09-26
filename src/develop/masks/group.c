@@ -901,8 +901,8 @@ static int _group_get_mask(const dt_iop_module_t *const module,
 
   // and we copy each buffer inside, row by row
   // the first *visible* shape always composites as a plain copy onto the
-  // (uninitialized) buffer, whatever its explicit operator: the rendered mask
-  // must match the algebra of the visible shapes only (see _group_get_mask_roi).
+  // (uninitialized) buffer, whatever its explicit operator, so that no
+  // operator reads the uninitialized values
   gboolean first_visible = TRUE;
   for(int i = 0; i < nb; i++)
   {
@@ -1185,8 +1185,8 @@ void _combine_masks_multiply(float *const restrict dest,
                              const int inverted)
 {
   // multiply the running accumulator by this shape, the way legacy parametric
-  // masks combine. Onto the empty base this is degenerate (0), so the
-  // first-visible-as-add rule promotes a base multiply to a plain copy.
+  // masks combine. Onto the empty base this is degenerate (0), as intersection
+  // is.
   if(inverted)
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
@@ -1265,18 +1265,6 @@ void _flexi_apply_group_op(float *const restrict buffer,
     _combine_masks_screen(buffer, grp, npixels, 1.0f, 0);
   else
     _combine_masks_union(buffer, grp, npixels, 1.0f, 0);
-}
-
-// true iff every pixel is (within float rounding) exactly 1.0 -- a rendered
-// mask member that changes nothing, used to keep a parametric channel still
-// sitting at its full/base range from counting as an "active" group member
-// (see the nb_members bookkeeping in _group_get_mask_roi_flexi below).
-gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
-                                     const size_t npixels)
-{
-  for(size_t i = 0; i < npixels; i++)
-    if(buffer[i] < 0.9999f) return FALSE;
-  return TRUE;
 }
 
 // Flexi group-composition fold (flexi masks only): each marker starts a group
@@ -1359,8 +1347,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // multiply seed at 1.0 (everything, then min/multiply each member in);
     // union/screen/sum/exclusion seed at 0.0 (nothing, then max/soft-union/add/
     // exclusion in, each of which copies its first member onto 0). Difference
-    // has no seed that copies, so its first member is copied explicitly below,
-    // as classic's fold copies its first visible shape. (a bypassed group folds
+    // has no seed that copies, so its first member is copied explicitly below.
+    // (a bypassed group folds
     // nothing into `grp`, so it needs no seed either)
     if(!bypassed)
     {
@@ -1437,23 +1425,15 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
           // union, and the base of a difference: max onto the zero seed is a copy
           _combine_masks_union(grp, bufs, npixels, op, inverted);
         nb_folded++;
-        // a parametric channel still sitting at its base/full-range state (or
-        // one whose refinement scope happens to cover nothing) renders as a
-        // uniform, fully-opaque buffer -- exactly a no-op, indistinguishable
-        // in its effect from the member not being there at all. Checked on
-        // the rendered result (after refinement, above) rather than by
-        // inspecting the form's own range fields, so it also covers a
-        // refinement that empties out an otherwise-narrowed channel. Not
-        // counting it here means a group made up entirely of such members is
-        // treated the same as a truly empty one by the nb_members==0 check
-        // below, which is what lets the "no active mask element -> fully
-        // opaque, no yellow overlay" fallback (see nb_groups==0 further down)
-        // apply while the user is still setting up a fresh channel, instead
-        // of showing a yellow wall that has nothing to do with their actual
-        // (not yet narrowed) selection.
-        const gboolean is_uniform_noop =
-          (sel->type & DT_MASKS_PARAMETRIC) && _mask_buffer_is_uniform_one(bufs, npixels);
-        if(!is_uniform_noop) nb_members++;
+        // a parametric channel still at its full range renders all ones and
+        // restricts nothing. Not counting it lets a group of nothing else take
+        // the "no active mask element" fallback (nb_groups == 0 below: fully
+        // opaque, no yellow overlay) while the user is still setting up a
+        // fresh channel. Decided from the form's own ranges, the test the
+        // panel's no-op badge uses, never from the pixels: a narrowed channel
+        // that happens to cover this image is a real element, and skipping it
+        // would drop the group's invert and opacity along with it
+        if(!dt_masks_parametric_is_noop(sel)) nb_members++;
       }
       fpts = g_list_next(fpts);
     }
@@ -1531,14 +1511,12 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
                                const dt_iop_roi_t *const roi,
                                float *const restrict buffer)
 {
-  if(!form->points) return 0;
-
   // flexi masks use the group-composition fold; legacy masks fall through to
   // the classic sequential fold below, byte-identically.
   const dt_develop_blend_params_t *const bp =
     piece ? (const dt_develop_blend_params_t *)piece->blendop_data : NULL;
   if(bp && (bp->mask_mode & DEVELOP_MASK_FLEXI))
-    return _group_get_mask_roi_flexi(module, piece, form, roi, buffer);
+    return form->points ? _group_get_mask_roi_flexi(module, piece, form, roi, buffer) : 0;
 
   double start = dt_get_debug_wtime();
   int nb_ok = 0;
@@ -1547,14 +1525,16 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
   const int height = roi->height;
   const size_t npixels = (size_t)width * height;
 
+  // start from an empty result: an empty group renders an empty mask, and a
+  // hidden/absent base form does not leave the first composited shape reading
+  // uninitialized memory
+  memset(buffer, 0, npixels * sizeof(float));
+  if(!form->points) return 0;
+
   // we need to allocate a zeroed temporary buffer for intermediate
   // creation of individual shapes
   float *const restrict bufs = dt_alloc_align_float(npixels);
   if(bufs == NULL) return 0;
-
-  // start from an empty result so a hidden/absent base form does not leave the
-  // first composited shape reading uninitialized memory
-  memset(buffer, 0, npixels * sizeof(float));
 
   // and we get all masks
   for(GList *fpts = form->points; fpts; fpts = g_list_next(fpts))
@@ -1601,13 +1581,11 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
         const int inverted = (state & DT_MASKS_STATE_INVERSE)
                              && !dt_masks_raster_is_unresolved(module, piece, sel);
 
-        // the first *visible* shape always composites as ADD onto the empty
-        // accumulator, whatever its explicit operator says: the rendered mask
-        // must match the algebra of the visible shapes only. e.g. hiding the
-        // base promotes the next visible shape to the implicit base (add),
-        // so [add][intersect][union] with the first two hidden renders as the
-        // third shape alone. (nb_ok == 0 means nothing has composited yet.)
-        if(nb_ok == 0 || (state & DT_MASKS_STATE_UNION))
+        // every shape applies its own operator, the bottom one included, as
+        // master's fold does: onto the empty accumulator, intersection and
+        // difference leave nothing. Migration turns such shapes into
+        // zero-opacity unions (_zero_empty_base_members in migrate_legacy.c)
+        if(state & DT_MASKS_STATE_UNION)
         {
           _combine_masks_union(buffer, bufs, npixels, op, inverted);
         }

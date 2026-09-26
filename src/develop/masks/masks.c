@@ -996,88 +996,20 @@ static int _masks_legacy_params_v5_to_v6(dt_develop_t *dev, void *params)
   return 0;
 }
 
-static int dt_masks_legacy_params_v6_to_v7(dt_develop_t *dev, void *params)
+static int _masks_legacy_params_v6_to_v7(dt_develop_t *dev, void *params)
 {
   /*
-   * masks v7 appended an optional per-shape refinement block to the group
-   * point struct (dt_masks_point_group_t.refinement). The block is already
-   * zero-filled at read time (enabled == 0), which disables it and keeps
-   * rendering identical to v6. Nothing to convert; just bump the version.
-   */
-  dt_masks_form_t *m = (dt_masks_form_t *)params;
-  m->version = 7;
-  return 0;
-}
-
-static int dt_masks_legacy_params_v7_to_v8(dt_develop_t *dev, void *params)
-{
-  /*
-   * masks v8 appended an optional custom group-name field to the group point
-   * struct (dt_masks_point_group_t.name), for flexi first-class groups. The
-   * field is already zero-filled at read time (empty string), which means no
-   * custom name and keeps rendering identical to v7. Nothing to convert;
-   * just bump the version.
-   */
-  dt_masks_form_t *m = (dt_masks_form_t *)params;
-  m->version = 8;
-  return 0;
-}
-
-static int dt_masks_legacy_params_v8_to_v9(dt_develop_t *dev, void *params)
-{
-  /*
-   * masks v9 appended a persistent, multiplicative group-level opacity to
-   * the group point struct (dt_masks_point_group_t.group_opacity), broadcast
-   * to every member of a run the same way refinement/name are. Unlike those,
-   * 0.0 (what the read-time zero-fill above leaves it at) is not a neutral
-   * value for a multiplicative gain -- it would silently zero out every
-   * pre-v9 group's mask -- so every group point explicitly gets the
-   * identity value (1.0) here instead.
+   * masks v7 appended the per-shape refinement block, the group name and the
+   * group opacity to the group point struct. The loader zero-fills them,
+   * which disables refinement and leaves no custom name. Zero is not neutral
+   * for group_opacity, a multiplicative gain that would blank every group's
+   * mask, so every group point gets the identity value instead.
    */
   dt_masks_form_t *m = (dt_masks_form_t *)params;
   if(m->type & DT_MASKS_GROUP)
     for(GList *l = m->points; l; l = g_list_next(l))
       ((dt_masks_point_group_t *)l->data)->group_opacity = 1.0f;
-  m->version = 9;
-  return 0;
-}
-
-static int dt_masks_legacy_params_v9_to_v10(dt_develop_t *dev, void *params)
-{
-  /*
-   * masks v10 replaced the temporary DT_MASKS_STATE_GROUP_BREAK bit
-   * (borrowed from the group point's `state` field) with a real, dedicated
-   * field, dt_masks_point_group_t.group_start -- see that enum value's own
-   * comment. Zero-fill is neutral for the new field (0 = "no explicit
-   * break," same as "bit not set"), so there is nothing to backfill; the
-   * only work here is carrying forward any break that was actually set in
-   * the old bit, and clearing that bit from `state` so it doesn't linger
-   * as stale data once nothing reads it from there anymore.
-   */
-  dt_masks_form_t *m = (dt_masks_form_t *)params;
-  if(m->type & DT_MASKS_GROUP)
-    for(GList *l = m->points; l; l = g_list_next(l))
-    {
-      dt_masks_point_group_t *pt = (dt_masks_point_group_t *)l->data;
-      if(pt->state & DT_MASKS_STATE_GROUP_BREAK)
-      {
-        pt->group_start = 1;
-        pt->state &= ~DT_MASKS_STATE_GROUP_BREAK;
-      }
-    }
-  m->version = 10;
-  return 0;
-}
-
-static int dt_masks_legacy_params_v10_to_v11(dt_develop_t *dev, void *params)
-{
-  /*
-   * masks v11 dropped the parametric point's unused `compact` field. The
-   * layout change is undone where the blob is read (dt_masks_read_masks_history),
-   * since only the reader knows the old stride; nothing is left to do here
-   */
-  dt_masks_form_t *m = (dt_masks_form_t *)params;
-  m->version = 11;
+  m->version = 7;
   return 0;
 }
 
@@ -1085,47 +1017,12 @@ size_t dt_masks_point_stride(const dt_masks_type_t type,
                              const int version,
                              const size_t point_size)
 {
-  // the on-disk stride may be smaller than the current struct when an older
-  // edit predates a field being appended to a point struct. So far this
-  // affects group points, which gained the per-shape refinement block in
-  // masks v7, the custom group-name field in masks v8, the persistent
-  // group-opacity field in masks v9, and the first-class group_start field in
-  // masks v10. The remainder is zero-filled, so older masks load with
-  // refinements disabled, no custom name, and no explicit group break (all
-  // neutral at 0). The zero-filled group_opacity is NOT neutral (0 would zero
-  // out the whole group): the version migration fixes it up to 1.0
-  // explicitly; group_start's zero-fill is neutral (see its own comment in
-  // masks.h), but the migration still has to carry forward any break that was
-  // set in the old, pre-v10 bit
-  if(type & DT_MASKS_GROUP)
-  {
-    if(version < 7) return offsetof(dt_masks_point_group_t, refinement);
-    if(version < 8) return offsetof(dt_masks_point_group_t, name);
-    if(version < 9) return offsetof(dt_masks_point_group_t, group_opacity);
-    if(version < 10) return offsetof(dt_masks_point_group_t, group_start);
-  }
-  // parametric points went the other way in masks v11, which dropped the
-  // unused `compact` field from before `disabled`: an older blob is one field
-  // longer
-  if((type & DT_MASKS_PARAMETRIC) && version < 11) return point_size + sizeof(uint32_t);
+  // a group point stored before masks v7 stops where the refinement block
+  // starts; the loader zero-fills the rest and _masks_legacy_params_v6_to_v7
+  // fixes up what zero does not suit
+  if((type & DT_MASKS_GROUP) && version < 7)
+    return offsetof(dt_masks_point_group_t, refinement);
   return point_size;
-}
-
-void dt_masks_point_from_blob(const dt_masks_type_t type,
-                              const int version,
-                              const size_t point_size,
-                              const char *src,
-                              char *point)
-{
-  if((type & DT_MASKS_PARAMETRIC) && version < 11)
-  {
-    // the old `disabled` sits one field further on, past `compact`
-    const size_t head = offsetof(dt_masks_point_parametric_t, disabled);
-    memcpy(point, src, head);
-    memcpy(point + head, src + head + sizeof(uint32_t), sizeof(uint32_t));
-    return;
-  }
-  memcpy(point, src, MIN(dt_masks_point_stride(type, version, point_size), point_size));
 }
 
 int dt_masks_legacy_params(dt_develop_t *dev,
@@ -1150,15 +1047,7 @@ int dt_masks_legacy_params(dt_develop_t *dev,
   if(!res && old_version < 6 && new_version >= 6)
     res = _masks_legacy_params_v5_to_v6(dev, params);
   if(!res && old_version < 7 && new_version >= 7)
-    res = dt_masks_legacy_params_v6_to_v7(dev, params);
-  if(!res && old_version < 8 && new_version >= 8)
-    res = dt_masks_legacy_params_v7_to_v8(dev, params);
-  if(!res && old_version < 9 && new_version >= 9)
-    res = dt_masks_legacy_params_v8_to_v9(dev, params);
-  if(!res && old_version < 10 && new_version >= 10)
-    res = dt_masks_legacy_params_v9_to_v10(dev, params);
-  if(!res && old_version < 11 && new_version >= 11)
-    res = dt_masks_legacy_params_v10_to_v11(dev, params);
+    res = _masks_legacy_params_v6_to_v7(dev, params);
 
   return res;
 }
@@ -1370,7 +1259,6 @@ static void _plain_element(dt_masks_point_group_t *pt)
   pt->state = (pt->state & ~(DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) | DT_MASKS_STATE_UNION;
   pt->name[0] = '\0';
   pt->group_opacity = 1.0f;
-  pt->group_start = 0;
   if(pt->refinement.enabled == DT_MASKS_REFINE_GROUP)
     memset(&pt->refinement, 0, sizeof(pt->refinement));
 }
@@ -1405,10 +1293,7 @@ static void _fold_classic_list(GList **forms, dt_masks_form_t *grp, GHashTable *
     if(live && seeded)
     {
       const int op = _combine_op(pt->state);
-      // a flexi edit stored before markers set its own run boundaries
-      // (group_start), which are groupings of their own even where the
-      // operator does not change
-      if(pt->group_start || (cur.op && op != cur.op))
+      if(cur.op && op != cur.op)
       {
         g_array_append_val(runs, cur);
         cur.op = op;
@@ -2486,8 +2371,7 @@ void dt_masks_read_masks_history(dt_develop_t *dev, const dt_imgid_t imgid)
       for(int i = 0; i < nb_points; i++)
       {
         char *point = calloc(1, point_size);
-        dt_masks_point_from_blob(type, form->version, point_size,
-                                 ptbuf + i * read_size, point);
+        memcpy(point, ptbuf + i * read_size, MIN(read_size, point_size));
         form->points = g_list_append(form->points, point);
       }
     }
@@ -3908,12 +3792,12 @@ static dt_hash_t _group_hash(dt_hash_t hash,
         // state & opacity
         hash = dt_hash(hash, &grpt->state, sizeof(int));
         hash = dt_hash(hash, &grpt->opacity, sizeof(float));
-        // group-level opacity (masks v9) multiplies the group's finished
+        // group-level opacity (masks v7) multiplies the group's finished
         // sub-mask in the group renderer (see _group_get_mask_roi_flexi in
         // group.c), so it is a rendering input exactly as the per-shape
         // opacity above is. Left out, dragging the group opacity slider
         // produced no visible change until some unrelated edit forced a
-        // reprocess. Zero-filled on pre-v9 blobs, so neutral for old edits.
+        // reprocess. Pre-v7 blobs load at 1.0, so neutral for old edits.
         hash = dt_hash(hash, &grpt->group_opacity, sizeof(float));
         // per-shape/per-group refinement (masks v7) is a rendering input consumed
         // by the group renderer, so it must feed the pixelpipe cache hash too;

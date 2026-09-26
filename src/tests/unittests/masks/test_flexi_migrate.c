@@ -47,9 +47,9 @@ static int _teardown(void **state)
 }
 
 // a module carrying a classic blend_params with `mode` set, ready to migrate
-static void _classic(const uint32_t mode)
+static void _classic_layout(const char *layout, const uint32_t mode)
 {
-  flexi_build_classic("u:1,2");   // gives us a real group at FLEXI_GROUP_ID
+  flexi_build_classic(layout);   // gives us a real group at FLEXI_GROUP_ID
   g_strlcpy(flexi_module.op, "exposure", sizeof(flexi_module.op)); // logs only
   flexi_bp.mask_mode = mode;
   flexi_bp.blendif = 0;
@@ -60,6 +60,11 @@ static void _classic(const uint32_t mode)
   flexi_bp.mask_combine = DEVELOP_COMBINE_NORM_EXCL;
   flexi_bp.opacity = 1.0f;
   flexi_bp.raster_mask_source[0] = '\0';
+}
+
+static void _classic(const uint32_t mode)
+{
+  _classic_layout("u:1,2", mode);
 }
 
 // a blendif value with one genuinely active channel for the fixture's
@@ -198,6 +203,53 @@ static void test_uniform_enabled_becomes_flexi(void **state)
 // case 2: drawn only -- zero transform
 // ---------------------------------------------------------------------------
 
+// the opacity the migrated mask holds shape `formid` at, wherever it went
+static float _member_opacity(const dt_mask_id_t formid)
+{
+  for(const GList *f = flexi_dev.forms; f; f = g_list_next(f))
+  {
+    const dt_masks_form_t *form = f->data;
+    if(!(form->type & DT_MASKS_GROUP)) continue;
+    for(const GList *l = form->points; l; l = g_list_next(l))
+    {
+      const dt_masks_point_group_t *pt = l->data;
+      if(!dt_masks_point_is_marker(pt) && pt->formid == formid) return pt->opacity;
+    }
+  }
+  fail_msg("shape %d is no longer in the mask", (int)formid);
+  return -1.0f;
+}
+
+// classic applies the bottom shape's own operator to an empty mask, where
+// difference leaves nothing; the flexi fold would copy the shape instead
+static void test_an_empty_base_member_becomes_a_zero_union(void **state)
+{
+  _classic_layout("d:1 | u:2", DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  _migrate();
+  _assert_flexi();
+  assert_float_equal(_member_opacity(1), 0.0f, 1e-6);
+  assert_float_equal(_member_opacity(2), 1.0f, 1e-6);
+}
+
+// a group of nothing else renders empty in classic; dropped members would
+// leave no group, which renders as no mask at all
+static void test_a_group_of_empty_base_members_keeps_them(void **state)
+{
+  _classic_layout("i:1,2", DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  _migrate();
+  assert_float_equal(_member_opacity(1), 0.0f, 1e-6);
+  assert_float_equal(_member_opacity(2), 0.0f, 1e-6);
+}
+
+// once a shape has added something, intersection means intersection
+static void test_an_intersection_above_the_base_is_untouched(void **state)
+{
+  _classic_layout("u:1 | i:2", DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  _migrate();
+  assert_float_equal(_member_opacity(1), 1.0f, 1e-6);
+  assert_float_equal(_member_opacity(2), 1.0f, 1e-6);
+}
+
 // flexi renders a drawn group through the identical code path, so the group is
 // reused verbatim: no new form, and mask_id untouched
 static void test_drawn_only_reuses_the_group(void **state)
@@ -327,14 +379,12 @@ static void test_a_modifier_is_not_an_operator(void **state)
   }
 }
 
-// a flexi edit stored before markers bounds its runs with group_start, where
-// the operator need not change, and stores a group-scope refinement broadcast
-// on the run's members. The conversion has to keep the runs apart and move
-// the refinement onto the run's own group: merged or dropped, a refinement of
-// the first run only applies to the wrong pixels or to none
-static void test_a_group_break_keeps_its_run_and_refinement(void **state)
+// a group-scope refinement is stored broadcast on the run's members. The
+// conversion has to move it onto the run's own group: merged or dropped, a
+// refinement of the first run only applies to the wrong pixels or to none
+static void test_a_run_keeps_its_group_refinement(void **state)
 {
-  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | u:3");
+  dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3");
   const dt_masks_refinement_t refine = { .enabled = DT_MASKS_REFINE_GROUP,
                                          .blur_radius = 9.0f };
   for(GList *l = grp->points; l; l = g_list_next(l))
@@ -397,6 +447,49 @@ static void test_a_group_another_module_renders_keeps_its_settings(void **state)
   flexi_dev.forms = g_list_remove(flexi_dev.forms, other);
   g_list_free_full(other->points, free);
   free(other);
+}
+
+// the mask group holds only an empty group: nothing to draw
+static void _mask_of_an_empty_group(void)
+{
+  dt_masks_form_t *grp = flexi_group();
+  g_list_free_full(grp->points, free);
+  dt_masks_form_t *empty = calloc(1, sizeof(dt_masks_form_t));
+  empty->formid = 4000;
+  empty->type = DT_MASKS_GROUP;
+  flexi_dev.forms = g_list_append(flexi_dev.forms, empty);
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
+  pt->formid = empty->formid;
+  pt->parentid = grp->formid;
+  pt->state = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE;
+  pt->opacity = 1.0f;
+  pt->group_opacity = 1.0f;
+  grp->points = g_list_append(NULL, pt);
+}
+
+// classic renders a group with nothing to draw as an empty mask, where flexi
+// would render it as no mask at all and apply the module everywhere
+static void test_a_mask_that_draws_nothing_stays_empty(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  _mask_of_an_empty_group();
+  _migrate();
+  _assert_flexi();
+  assert_int_equal(flexi_bp.mask_id, NO_MASKID);
+  assert_float_equal(flexi_bp.opacity, 0.0f, 1e-6);
+}
+
+// inverted, the same empty mask is a full one
+static void test_an_inverted_mask_that_draws_nothing_is_full(void **state)
+{
+  _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
+  flexi_bp.mask_combine |= DEVELOP_COMBINE_MASKS_POS;
+  _mask_of_an_empty_group();
+  _migrate();
+  _assert_flexi();
+  assert_int_equal(flexi_bp.mask_id, NO_MASKID);
+  assert_float_equal(flexi_bp.opacity, 1.0f, 1e-6);
+  assert_false(flexi_bp.mask_combine & DEVELOP_COMBINE_MASKS_POS);
 }
 
 // defensive: a mask_id that resolves to nothing must still migrate cleanly --
@@ -2001,10 +2094,15 @@ int main(void)
     cmocka_unit_test_teardown(test_classic_head_without_an_operator_keeps_its_group,
                               _teardown),
     cmocka_unit_test_teardown(test_a_modifier_is_not_an_operator, _teardown),
-    cmocka_unit_test_teardown(test_a_group_break_keeps_its_run_and_refinement, _teardown),
+    cmocka_unit_test_teardown(test_a_run_keeps_its_group_refinement, _teardown),
     cmocka_unit_test_teardown(test_a_group_another_module_renders_keeps_its_settings,
                               _teardown),
     cmocka_unit_test_teardown(test_every_history_snapshot_is_normalized, _teardown),
+    cmocka_unit_test_teardown(test_an_empty_base_member_becomes_a_zero_union, _teardown),
+    cmocka_unit_test_teardown(test_a_group_of_empty_base_members_keeps_them, _teardown),
+    cmocka_unit_test_teardown(test_an_intersection_above_the_base_is_untouched, _teardown),
+    cmocka_unit_test_teardown(test_a_mask_that_draws_nothing_stays_empty, _teardown),
+    cmocka_unit_test_teardown(test_an_inverted_mask_that_draws_nothing_is_full, _teardown),
     cmocka_unit_test_teardown(test_drawn_with_dangling_mask_id, _teardown),
     cmocka_unit_test_teardown(test_parametric_only_synthesizes_a_parametric_form, _teardown),
     cmocka_unit_test_teardown(test_drawn_and_parametric_stacks_a_parametric_element, _teardown),

@@ -88,12 +88,6 @@ void _flexi_apply_group_op(float *const restrict buffer,
                            const size_t npixels,
                            const guint group_op);
 
-/** is every pixel (within float rounding) exactly 1.0? Used to keep a
-    parametric channel still at its full range from counting as an active
-    group member. */
-gboolean _mask_buffer_is_uniform_one(const float *const restrict buffer,
-                                     const size_t npixels);
-
 G_END_DECLS
 
 // modelines: These editor modelines have been set for all relevant files

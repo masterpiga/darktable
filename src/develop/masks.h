@@ -33,7 +33,7 @@
 #endif
 #endif
 
-#define DEVELOP_MASKS_VERSION (11)
+#define DEVELOP_MASKS_VERSION (7)
 
 G_BEGIN_DECLS
 
@@ -85,17 +85,6 @@ typedef enum dt_masks_state_t
   // mirroring how legacy parametric masks combine. Additive new operator, so
   // legacy edits (which never set it) render identically.
   DT_MASKS_STATE_MULTIPLY = 1 << 10,
-  // HISTORIC, migration-only: pre-v10 forms borrowed this spare `state` bit
-  // to mark a group's bottom-most member ("head") as forcing a NEW group
-  // even when its operator matches the group below it -- what lets two
-  // same-operator groups sit adjacent, something the implicit "groups ==
-  // maximal same-operator runs" model cannot express on its own. Since
-  // masks v10 this is a real per-point field,
-  // dt_masks_point_group_t.group_start (masks.h below); nothing sets or
-  // reads this bit via `state` anymore. It stays defined only so
-  // dt_masks_legacy_params_v9_to_v10() (masks.c) can still interpret
-  // pre-v10 blobs, which carry the marker here.
-  DT_MASKS_STATE_GROUP_BREAK = 1 << 11,
   // intersect (flexi group composition): within-group members combine by the
   // intersection (min) instead of max, so a group can express the product of
   // its members -- e.g. reproducing a legacy multi-channel parametric mask as a
@@ -216,16 +205,8 @@ _Static_assert((DT_MASKS_STATE_OP_COMBINE
                 & (DT_MASKS_STATE_OP_DISABLE | DT_MASKS_STATE_OP_INVERT)) == 0,
                "the combining operators overlap the disable/invert modifiers;"
                " DT_MASKS_STATE_OP_COMBINE would stop isolating the operator");
-// DT_MASKS_STATE_GROUP_BREAK (bit 11) is historic and migration-only, which
-// makes it look like a free bit to reuse. It is not: pre-v10 blobs still carry
-// the marker there and dt_masks_legacy_params_v9_to_v10() still reads it.
-_Static_assert((DT_MASKS_STATE_GROUP_BREAK
-                & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
-               "the historic GROUP_BREAK bit has been reused by a live flag;"
-               " pre-v10 edits would be misread by the v9->v10 migration");
 _Static_assert((DT_MASKS_STATE_GROUP_MARKER
-                & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN | DT_MASKS_STATE_GROUP_BREAK))
-                 == 0,
+                & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
                "the group marker bit overlaps a group setting a marker carries");
 
 // A group member's effective between-group operator. A member carrying no
@@ -436,30 +417,22 @@ typedef struct dt_masks_point_group_t
   int state;
   float opacity;
   dt_masks_refinement_t refinement;  // since masks v7; zero-filled = disabled
-  // since masks v8: a user-given group name (flexi first-class groups only),
+  // since masks v7: a user-given group name (flexi first-class groups only),
   // broadcast to every member of the run so any one of them reflects the
   // whole group -- same convention as refinement above. Empty = no custom
   // name, the group shows its auto "<operator>-<ordinal>" label alone.
   char name[128];
-  // since masks v9: a persistent, multiplicative group-level opacity
+  // since masks v7: a persistent, multiplicative group-level opacity
   // (flexi first-class groups only), broadcast to every member of the run
   // the same way refinement/name above are. Applied to the group's own
   // finished sub-mask at render time (see _group_get_mask_roi_flexi in
   // group.c), on top of -- not instead of -- each member's own independent
   // opacity; the two multiply together. Unlike refinement/name, 0.0 is NOT
   // a neutral zero-fill value here (it would silently zero out the whole
-  // group), so pre-v9 edits are explicitly set to the identity value (1.0)
+  // group), so pre-v7 edits are explicitly set to the identity value (1.0)
   // by the version migration instead of relying on zero-fill (see
-  // dt_masks_legacy_params_v8_to_v9 in masks/masks.c).
+  // _masks_legacy_params_v6_to_v7 in masks/masks.c).
   float group_opacity;
-  // since masks v10, historic: 1 = this point started a new group even if
-  // its operator matched the point below it, in a list without group
-  // markers. It carries the DT_MASKS_STATE_GROUP_BREAK bit pre-v10 blobs
-  // hold (dt_masks_legacy_params_v9_to_v10 in masks/masks.c). Only the
-  // classic to flexi migration reads it, from old data, and clears it
-  // (dt_masks_group_mark_classic_runs); a group marker is the boundary
-  // everywhere else. Zero-fill is neutral: no break
-  int group_start;
 } dt_masks_point_group_t;
 
 // Is `pt` a group's marker rather than a member? A marker's formid resolves to
@@ -883,13 +856,6 @@ int dt_masks_version(void);
 size_t dt_masks_point_stride(const dt_masks_type_t type,
                              const int version,
                              const size_t point_size);
-/** decode one stored point at `src`, written at masks `version`, into the
-    current layout at `point` (`point_size` bytes, zero-filled by the caller) */
-void dt_masks_point_from_blob(const dt_masks_type_t type,
-                              const int version,
-                              const size_t point_size,
-                              const char *src,
-                              char *point);
 int dt_masks_legacy_params(dt_develop_t *dev,
                            void *params,
                            const int old_version,

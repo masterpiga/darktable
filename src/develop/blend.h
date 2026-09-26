@@ -337,6 +337,9 @@ const dt_iop_gui_blendif_channel_t *dt_develop_blendif_channels_for_csp(const in
 // masks/parametric.c. Used by blend_gui.c to keep a stable "what is this"
 // prefix on a form's name across renames.
 const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form);
+/** does this single-channel parametric form still cover its channel's whole
+    span, i.e. restrict the mask not at all? */
+gboolean dt_masks_parametric_is_noop(const dt_masks_form_t *const sel);
 
 // group-composition mask renderers (defined in masks/group.c, non-static so
 // masks/object.c can reuse them by direct reference for a committed

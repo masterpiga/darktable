@@ -291,9 +291,6 @@ dt_masks_chevron_click_t _model_element_chevron_click(const dt_iop_gui_blend_dat
     expanded, so this needs no kind test. */
 dt_mask_id_t _model_auto_expand_group_anchor(const dt_iop_gui_blend_data_t *bd);
 
-/** does this parametric form still cover its channel's whole span, i.e.
-    restrict the mask not at all? */
-gboolean _parametric_form_is_noop(const dt_masks_form_t *const sel);
 /** has the user touched this channel's input (0) / output (1) sub-range? */
 gboolean _param_channel_is_used(const dt_masks_point_parametric_t *p,
                                 const dt_iop_gui_blendif_channel_t *channel,
