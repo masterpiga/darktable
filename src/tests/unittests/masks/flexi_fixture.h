@@ -77,9 +77,9 @@ extern dt_develop_blend_params_t flexi_bp;
 /** build a mask group from a layout string; returns the group. */
 dt_masks_form_t *flexi_build(const char *layout);
 
-/** the same group the way a classic edit, or a flexi one stored before group
-    markers, holds it: no markers, each member carrying its group's operator,
-    and a later group's first member its group_start */
+/** the same group the way a classic edit holds it: no markers, each member
+    carrying its group's operator. Adjacent groups sharing an operator become
+    one run, as classic cannot tell them apart */
 dt_masks_form_t *flexi_build_classic(const char *layout);
 
 /** the group built by the last flexi_build() */

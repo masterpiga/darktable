@@ -67,9 +67,7 @@ static void test_layout_roundtrip(void **state)
 }
 
 // Two adjacent groups sharing one operator must stay two groups: each has its
-// own marker. Before group markers the partition was inferred, from operator
-// changes and then from group_start, and same-op neighbours merged whenever
-// that inference slipped.
+// own marker, where a classic list would merge them into one run.
 static void test_adjacent_same_op_groups_stay_separate(void **state)
 {
   flexi_build("u:1,2 | u:3");
@@ -385,7 +383,6 @@ static void test_marking_leaves_members_plain(void **state)
   assert_float_equal(member->group_opacity, 1.0f, 1e-6f);
   assert_string_equal(member->name, "");
   assert_int_equal(member->refinement.enabled, DT_MASKS_REFINE_OFF);
-  assert_int_equal(member->group_start, 0);
 }
 
 // the same run marked twice -- say in two history snapshots -- gets the same

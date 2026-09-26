@@ -63,6 +63,40 @@ const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form)
   return _("parametric");
 }
 
+// true iff `sel` is a single-channel parametric form still sitting at its
+// full/base range ({0,0,1,1} per channel). The group fold skips such an
+// element and the panel badges it as a no-op, both from this test, so a row
+// is badged exactly when it does not render. A legacy multi-channel form
+// (single == 0) has too many
+// independent ranges to summarize as one badge, so it is never flagged here.
+// `p->channel` indexes the colorspace's channel[] array, NOT the
+// blendif_parameters slot directly -- that slot is
+// channels[p->channel].param_channels[in_out] (same indirection every other
+// reader of blendif_parameters in this file goes through, e.g.
+// _blendif_scale_ex). Both input and
+// output sub-ranges are checked: per dt_masks_point_parametric_t's own field
+// comment, a non-empty output range still refines the mask even while its
+// slider is hidden, so it must count too, not just whichever one the UI
+// happens to show. Inverted polarity is excluded outright: a full range
+// selects everything, but its complement selects nothing, which is a very
+// different (and not currently detected/badged) kind of "wrong", not a no-op.
+gboolean dt_masks_parametric_is_noop(const dt_masks_form_t *const sel)
+{
+  if(!sel || !(sel->type & DT_MASKS_PARAMETRIC) || !sel->points) return FALSE;
+  const dt_masks_point_parametric_t *const p = sel->points->data;
+  if(!p->single || p->invert) return FALSE;
+  const dt_iop_gui_blendif_channel_t *const channels =
+    dt_develop_blendif_channels_for_csp((int)p->colorspace);
+  if(!channels) return FALSE;
+  for(int in_out = 0; in_out < 2; in_out++)
+  {
+    const int ch = channels[p->channel].param_channels[in_out];
+    const float *const r = &p->blendif_parameters[4 * ch];
+    if(r[0] != 0.0f || r[1] != 0.0f || r[2] != 1.0f || r[3] != 1.0f) return FALSE;
+  }
+  return TRUE;
+}
+
 static void _parametric_set_form_name(dt_masks_form_t *const form, const size_t nb)
 {
   // a single-channel form's name leads with its channel -- "parametric" in

@@ -270,9 +270,8 @@ static void _emit_point(json_t *j,
       _j_float(j, "brightness", g->refinement.brightness);
       _j_float(j, "details", g->refinement.details);
       _j_close(j, '}');
+      _j_float(j, "group_opacity", g->group_opacity);
     }
-    if(version >= 9) _j_float(j, "group_opacity", g->group_opacity);
-    if(version >= 10) _j_int(j, "group_start", g->group_start);
   }
 
   _j_close(j, '}');
@@ -307,7 +306,7 @@ typedef struct
   int case_drawn_only, case_parametric_only, case_drawn_and_parametric;
   int case_raster, case_already_flexi;
   int uses_feathering, uses_details, uses_blur, uses_contrast_or_brightness;
-  int per_shape_refinement, custom_group_opacity, explicit_group_start;
+  int per_shape_refinement, custom_group_opacity;
   int blendop_version[HARVEST_MAX_VERSION];
   int masks_version[HARVEST_MAX_VERSION];
   int form_type_circle, form_type_ellipse, form_type_path;
@@ -377,8 +376,20 @@ static void _emit_one_form(json_t *j,
     const size_t stride = _point_stride(type, version);
     _j_int(j, "points_count", pts_count);
 
-    if(stride > 0 && pts && pts_count > 0
-       && (size_t)pts_bytes >= stride * (size_t)pts_count)
+    if(version > dt_masks_version())
+    {
+      // a newer darktable's layout, which this build cannot know
+      _j_int(j, "points_blob_bytes", pts_bytes);
+      _j_str(j, "points_error", "masks version newer than this build");
+    }
+    else if(pts_count == 0 && pts_bytes == 0)
+    {
+      // a group whose members were all removed: empty, not undecodable
+      _j_open(j, "points", '[');
+      _j_close(j, ']');
+    }
+    else if(stride > 0 && pts && pts_count > 0
+            && (size_t)pts_bytes >= stride * (size_t)pts_count)
     {
       _j_open(j, "points", '[');
       for(int i = 0; i < pts_count; i++)
@@ -395,8 +406,7 @@ static void _emit_one_form(json_t *j,
         {
           const dt_masks_point_group_t *g = (const dt_masks_point_group_t *)point;
           if(version >= 7 && g->refinement.enabled) st->per_shape_refinement++;
-          if(version >= 9 && g->group_opacity != 1.0f) st->custom_group_opacity++;
-          if(version >= 10 && g->group_start) st->explicit_group_start++;
+          if(version >= 7 && g->group_opacity != 1.0f) st->custom_group_opacity++;
         }
       }
       _j_close(j, ']');
@@ -597,7 +607,6 @@ static void _emit_coverage(json_t *j, const harvest_stats_t *st)
   _j_int(j, "contrast_or_brightness", st->uses_contrast_or_brightness);
   _j_int(j, "per_shape_refinement", st->per_shape_refinement);
   _j_int(j, "custom_group_opacity", st->custom_group_opacity);
-  _j_int(j, "explicit_group_start", st->explicit_group_start);
   _j_close(j, '}');
   _j_open(j, "form_types", '{');
   _j_int(j, "circle", st->form_type_circle);

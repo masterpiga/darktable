@@ -11,7 +11,7 @@ os.makedirs(OUTDIR, exist_ok=True)
 
 # ---------------------------------------------------------------------------
 # dt_develop_blend_params_t (blend version 14, 420 bytes, confirmed against a
-# real darktable-generated default blob: identical layout to current v15/v8).
+# real darktable-generated default blob: identical layout to current v15/v7).
 # ---------------------------------------------------------------------------
 DEVELOP_MASK_ENABLED = 1
 DEVELOP_MASK_MASK = 1 << 1
@@ -43,16 +43,11 @@ DT_MASKS_STATE_INTERSECTION = 1 << 4
 DT_MASKS_STATE_DIFFERENCE = 1 << 5
 DT_MASKS_STATE_EXCLUSION = 1 << 6
 DT_MASKS_STATE_SUM = 1 << 7
-# pre-v10 encoding of a first-class group boundary (see
-# dt_masks_point_group_t.group_start in masks.h); used by J7/J8 below to
-# exercise the v9->v10 migration that carries this bit forward into the real
-# field.
-DT_MASKS_STATE_GROUP_BREAK = 1 << 11
 
 DT_MASKS_CIRCLE = 1
 DT_MASKS_PATH = 1 << 1
 DT_MASKS_GROUP = 1 << 2
-DEVELOP_MASKS_VERSION = 8
+DEVELOP_MASKS_VERSION = 7
 DT_MASKS_POINT_STATE_USER = 2
 
 # dt_masks_refine_scope_t (src/develop/masks.h)
@@ -131,10 +126,10 @@ def channel_curve(channels, taper_in=(0.0, 0.3), taper_off=(0.5, 0.8),
 # ---------------------------------------------------------------------------
 CIRCLE_FMT = "<4f"          # center[2], radius, border
 PATH_PT_FMT = "<8fI"        # corner[2], ctrl1[2], ctrl2[2], border[2], state
-GROUP_MEMBER_FMT = "<iiif" + "i6f" + "128s"
+GROUP_MEMBER_FMT = "<iiif" + "i6f" + "128s" + "f"
 # formid(i) parentid(i) state(i) opacity(f) refinement{enabled(i) details(f)
 # feathering_radius(f) feathering_guide(I->i) blur_radius(f) contrast(f)
-# brightness(f)} name[128]
+# brightness(f)} name[128] group_opacity(f)
 
 
 def pack_circle(cx, cy, radius, border):
@@ -151,25 +146,14 @@ def pack_path(corners, border=(0.02, 0.02)):
 
 def pack_group_member(formid, parentid, state, opacity=1.0,
                        refine_enabled=0, details=0.0, feathering_radius=0.0,
-                       blur_radius=0.0, contrast=0.0, brightness=0.0):
+                       blur_radius=0.0, contrast=0.0, brightness=0.0,
+                       group_opacity=1.0):
     # feathering_guide is left 0 (its 0 bit pattern is identical whether the
     # reader treats this refinement slot as int or float -- not exercised
     # here, see the FMT comment above)
     data = struct.pack(GROUP_MEMBER_FMT, formid, parentid, state, opacity,
                         refine_enabled, details, feathering_radius, 0,
-                        blur_radius, contrast, brightness, b"")
-    assert len(data) == 172, len(data)
-    return data
-
-
-GROUP_MEMBER_V9_FMT = GROUP_MEMBER_FMT + "f"
-# adds group_opacity(f) (masks v9) after pack_group_member's v8 layout
-
-
-def pack_group_member_v9(formid, parentid, state, opacity=1.0, group_opacity=1.0,
-                          **kwargs):
-    data = pack_group_member(formid, parentid, state, opacity=opacity, **kwargs)
-    data += struct.pack("<f", group_opacity)
+                        blur_radius, contrast, brightness, b"", group_opacity)
     assert len(data) == 176, len(data)
     return data
 
@@ -248,6 +232,26 @@ def _history_item(num, op, modversion, params_hex, blend_params_bytes,
       darktable:blendop_params="{blend_params_bytes.hex()}"/>'''
 
 
+# what masks v7 appended to a group member, left at its v6 meaning: refinement
+# off, no name, group opacity 1
+_V7_NEUTRAL_TAIL = struct.pack("<i6f128sf", 0, 0, 0, 0, 0, 0, 0, b"", 1.0)
+_V6_MEMBER_SIZE = 16
+
+
+def _as_classic(mask_type, points_hex):
+    """A form in the format master writes (masks v6) whenever it carries
+    nothing v7 added, so that a stock master build can render the fixture;
+    otherwise the v7 form as packed. Only group points differ between the two."""
+    if not mask_type & DT_MASKS_GROUP:
+        return points_hex, DEVELOP_MASKS_VERSION - 1
+    data = bytes.fromhex(points_hex)
+    size = struct.calcsize(GROUP_MEMBER_FMT)
+    members = [data[i:i + size] for i in range(0, len(data), size)]
+    if any(m[_V6_MEMBER_SIZE:] != _V7_NEUTRAL_TAIL for m in members):
+        return points_hex, DEVELOP_MASKS_VERSION
+    return b"".join(m[:_V6_MEMBER_SIZE] for m in members).hex(), DEVELOP_MASKS_VERSION - 1
+
+
 def build_xmp(name, blend_params_bytes, masks_rows, outdir=None,
               exposure_enabled=True, exposure_params_hex=None,
               extra_items=()):
@@ -274,12 +278,13 @@ def build_xmp(name, blend_params_bytes, masks_rows, outdir=None,
 
     masks_items = []
     for (mask_num, mask_id, mask_type, mask_name, points_hex, mask_nb) in masks_rows:
+        points_hex, version = _as_classic(mask_type, points_hex)
         masks_items.append(f'''     <rdf:li
       darktable:mask_num="{mask_num}"
       darktable:mask_id="{mask_id}"
       darktable:mask_type="{mask_type}"
       darktable:mask_name="{mask_name}"
-      darktable:mask_version="{DEVELOP_MASKS_VERSION}"
+      darktable:mask_version="{version}"
       darktable:mask_points="{points_hex}"
       darktable:mask_nb="{mask_nb}"
       darktable:mask_src="0000000000000000"/>''')
@@ -553,25 +558,17 @@ scenario("H2_combined_opacity_refinement", DEVELOP_MASK_MASK_CONDITIONAL,
 #
 # Nothing else in this matrix pins that in pixels: the A series uses one
 # operator-carrying member, where per-member and per-run application coincide.
-# These two use two members over the SAME overlapping circle+square geometry,
-# where the two readings are far apart:
+# These two use two members over the SAME overlapping circle+square geometry:
 #
-#   I1  intersect: per-member gives min(circle, square) -- the overlap alone;
-#       a merged run would give max(circle, square), the whole pair.
+#   I1  intersect: classic applies the bottom member's operator too, to an
+#       empty mask, so both members leave nothing and the mask is empty. The
+#       flexi fold would copy the bottom member; migration keeps both as
+#       zero-opacity unions instead (_zero_empty_base_members).
 #   I2  sum: the operator that compounds per application, so a merged run
 #       under-composites exactly the way the brush mask above did.
 #
 # Both are ordinary classic-authorable configurations, so unlike the J series
 # below they also pass --verify-masks (see its note there).
-#
-# What was here before: a four-member scenario built to prove the masks v9->v10
-# carry-forward of DT_MASKS_STATE_GROUP_BREAK into dt_masks_point_group_t.
-# group_start. It became inert once the split above landed -- migration re-derives
-# the run boundary from the operators, so the scenario rendered identically with
-# and without the marker (both empty, since its two runs did not overlap), and
-# --verify-masks classified it inert too. J7/J8 cover that carry-forward and do
-# discriminate: they use union runs, which migration does not re-split, so
-# dropping the marker merges them and moves 16,877 pixels.
 def build_operator_chain_scenarios():
     """Two members over the shared circle+square geometry, both carrying the
     same non-union operator, so each becomes its own run."""
@@ -580,8 +577,8 @@ def build_operator_chain_scenarios():
                          ("I2_sum_chain", DT_MASKS_STATE_SUM)):
         ids = MaskIds(999000 if op_bit == DT_MASKS_STATE_INTERSECTION else 999200)
         op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | op_bit
-        members = (pack_group_member_v9(ids.circle, ids.group, op)
-                   + pack_group_member_v9(ids.path, ids.group, op))
+        members = (pack_group_member(ids.circle, ids.group, op)
+                   + pack_group_member(ids.path, ids.group, op))
         masks_rows = [
             (ids.circle, DT_MASKS_CIRCLE, "circle #1",
              pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
@@ -600,13 +597,7 @@ def build_operator_chain_scenarios():
             blendif=0,
         )
 
-        global DEVELOP_MASKS_VERSION
-        saved = DEVELOP_MASKS_VERSION
-        DEVELOP_MASKS_VERSION = 9  # same v9 -> v10 load path as the J series
-        try:
-            written.append((name, build_xmp(name, bp, masks_rows)))
-        finally:
-            DEVELOP_MASKS_VERSION = saved
+        written.append((name, build_xmp(name, bp, masks_rows)))
     return written
 
 
@@ -661,7 +652,6 @@ def _j_refine(scope):
 def build_refinement_scenarios():
     """One union group of two overlapping shapes (the shared circle+square
     geometry), rendered with refinement applied at each scope in turn."""
-    global DEVELOP_MASKS_VERSION
     written = []
     base = 998000
     cases = [
@@ -690,9 +680,9 @@ def build_refinement_scenarios():
         # both members carry the same union operator so they form one group
         op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION
         members = (
-            pack_group_member_v9(ids.circle, ids.group, op,
-                                  **(_j_refine(circle_scope) if circle_scope else {}))
-            + pack_group_member_v9(ids.path, ids.group, op,
+            pack_group_member(ids.circle, ids.group, op,
+                               **(_j_refine(circle_scope) if circle_scope else {}))
+            + pack_group_member(ids.path, ids.group, op,
                                     **(_j_refine(square_scope) if square_scope else {}))
         )
         masks_rows = [
@@ -714,13 +704,7 @@ def build_refinement_scenarios():
             **global_kw,
         )
 
-        saved = DEVELOP_MASKS_VERSION
-        DEVELOP_MASKS_VERSION = 9  # GROUP_BREAK is a pre-v10 bit
-        try:
-            path = build_xmp(name, bp, masks_rows)
-        finally:
-            DEVELOP_MASKS_VERSION = saved
-        written.append((name, path))
+        written.append((name, build_xmp(name, bp, masks_rows)))
 
     # Two groups, refinement on the FIRST group only, at group scope (J7) and
     # at global scope (J8) with identical values. Necessary because with a
@@ -728,12 +712,13 @@ def build_refinement_scenarios():
     # accumulator directly, so "this group's finished sub-mask" and "the whole
     # mask" are the same buffer, and J1 renders pixel-identical to J5. Only
     # once a second group composites on top does group scope become
-    # observable: J7 refines group A alone and then unions B onto the result,
-    # J8 refines the union of both. If J7 and J8 ever match, group-scope
+    # observable: J7 refines group A alone and then sums B onto the result,
+    # J8 refines the sum of both. If J7 and J8 ever match, group-scope
     # refinement has collapsed into the global pass.
     ids = MaskIds(base + 900)
     circleB_id, squareB_id = ids.circle + 100, ids.path + 100
     op = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_UNION
+    op_sum = DT_MASKS_STATE_SHOW | DT_MASKS_STATE_USE | DT_MASKS_STATE_SUM
     shape_rows = [
         (ids.circle, DT_MASKS_CIRCLE, "circle #1",
          pack_circle(CIRCLE_CX, CIRCLE_CY, CIRCLE_R, CIRCLE_BORDER).hex(), 1),
@@ -747,15 +732,15 @@ def build_refinement_scenarios():
     for name, group_scoped in (("J7_refine_group_of_two", True),
                                ("J8_refine_global_of_two", False)):
         # group A carries the refinement broadcast on both its members (the
-        # renderer reads it off the run head); group B carries none. The
-        # GROUP_BREAK on circle #2 is what keeps two same-operator runs apart.
+        # renderer reads it off the run head); group B carries none, and sums
+        # onto A, since a classic list only splits a run where the operator
+        # changes.
         ref = _j_refine(DT_MASKS_REFINE_GROUP) if group_scoped else {}
         members = (
-            pack_group_member_v9(ids.circle, ids.group, op, **ref)
-            + pack_group_member_v9(ids.path, ids.group, op, **ref)
-            + pack_group_member_v9(circleB_id, ids.group,
-                                    op | DT_MASKS_STATE_GROUP_BREAK)
-            + pack_group_member_v9(squareB_id, ids.group, op)
+            pack_group_member(ids.circle, ids.group, op, **ref)
+            + pack_group_member(ids.path, ids.group, op, **ref)
+            + pack_group_member(circleB_id, ids.group, op_sum)
+            + pack_group_member(squareB_id, ids.group, op_sum)
         )
         exposure_num = len(PIPELINE)
         masks_rows = [(exposure_num,) + r for r in shape_rows]
@@ -771,13 +756,7 @@ def build_refinement_scenarios():
             blendif=0,
             **global_kw,
         )
-        saved = DEVELOP_MASKS_VERSION
-        DEVELOP_MASKS_VERSION = 9
-        try:
-            path = build_xmp(name, bp, masks_rows)
-        finally:
-            DEVELOP_MASKS_VERSION = saved
-        written.append((name, path))
+        written.append((name, build_xmp(name, bp, masks_rows)))
 
     return written
 

@@ -124,13 +124,9 @@ static const struct
      and the flexi fold at group.c:1229/1242); SHOW appears in neither.
 
      USE is set once when a member is created (blend_gui.c:7756) and never
-     cleared by any control.
-
-     GROUP_BREAK is the historical bit that the first-class `group_start`
-     field replaced (see its comment in masks.h); nothing reads it any more. */
+     cleared by any control. */
   { DT_MASKS_STATE_SHOW,            FALSE, "blend_gui.c:5028, canvas only" },
   { DT_MASKS_STATE_USE,             FALSE, "blend_gui.c:7756, set at creation" },
-  { DT_MASKS_STATE_GROUP_BREAK,     FALSE, "superseded by group_start" },
 };
 
 #define PANEL_BITS_N ((int)(sizeof(_panel_bits) / sizeof(_panel_bits[0])))
@@ -237,15 +233,14 @@ static void test_every_panel_written_field_is_swept(void **state)
 static void test_the_struct_has_not_grown(void **state)
 {
   // formid + parentid + state + opacity + refinement + name[128]
-  // + group_opacity + group_start
+  // + group_opacity
   assert_int_equal(sizeof(dt_masks_point_group_t),
                    sizeof(dt_mask_id_t) * 2
                    + sizeof(int)
                    + sizeof(float)
                    + sizeof(dt_masks_refinement_t)
                    + 128
-                   + sizeof(float)
-                   + sizeof(int));
+                   + sizeof(float));
 }
 
 int main(void)

@@ -217,7 +217,6 @@ static void _read_point(JsonObject *p, const int type, void *out)
     g->state = (int)_obj_int(p, "state", 0);
     g->opacity = _obj_float(p, "opacity", 1.0f);
     g->group_opacity = _obj_float(p, "group_opacity", 1.0f);
-    g->group_start = (int)_obj_int(p, "group_start", 0);
 
     if(json_object_has_member(p, "refinement"))
     {
@@ -336,7 +335,11 @@ GList *dt_masks_harvest_read_forms(JsonArray *forms_arr)
     snprintf(form->name, sizeof(form->name), "form %d", form->formid);
     _obj_float_array(fo, "source", form->source, 3);
 
-    if(json_object_has_member(fo, "points_error"))
+    // harvests made before empty forms were emitted as such flag them as
+    // errors: a form with no points and no bytes is just empty
+    const gboolean empty = _obj_int(fo, "points_count", -1) == 0
+                           && _obj_int(fo, "points_blob_bytes", -1) == 0;
+    if(json_object_has_member(fo, "points_error") && !empty)
     {
       dt_masks_free_form(form);
       goto fail;
