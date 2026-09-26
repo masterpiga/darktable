@@ -6838,16 +6838,14 @@ static GtkWidget *_masks_row_for_point(dt_iop_gui_blend_data_t *bd,
   return rows && rows->next ? NULL : _masks_row_widget(bd, pt->formid);
 }
 
-// The panel's four DnD payload types. Named here because each one is written
-// twice -- once in a GtkTargetEntry table below, once in the hover classifier
-// (_dnd_hover_kind) that compares the negotiated target's name back against it.
-// A typo in either copy fails silently, as a drag that simply never matches.
+// The panel's three DnD payload types, each written into more than one
+// GtkTargetEntry table below. A typo in one copy would fail silently, as a
+// drag that simply never matches.
 #define DND_TARGET_ROW "dt-mask-row"
 #define DND_TARGET_GROUP "dt-mask-group"
 #define DND_TARGET_CLUSTER "dt-mask-cluster"
 
-// drag-and-drop reordering of rows. Each row's name widget is both a drag
-// source and a drop target carrying the form id; dropping reorders grp->points.
+// an element dragged by its handle or its name, which carry its form id
 static const GtkTargetEntry _mask_row_dnd[] = { { (gchar *)DND_TARGET_ROW,
                                                   GTK_TARGET_SAME_APP, 0 } };
 
@@ -8256,84 +8254,58 @@ gboolean _model_drop_point_onto_point(dt_iop_module_t *module,
   return TRUE;
 }
 
-// a nested group dragged by its header, which lands beside an element row it
-// is dropped on as an element would (see the header build in _pack_group)
-static gboolean _drags_as_element(GdkDragContext *ctx)
-{
-  GtkWidget *source = gtk_drag_get_source_widget(ctx);
-  return source && g_object_get_data(G_OBJECT(source), "drags-as-element");
-}
-
-// the reference the element row of widget `w` shows, while it is still in the
-// mask and still shape `id`; else the first reference to `id`. A mask can hold
-// a shape twice, and then its form id alone names the wrong row
+// the reference the element row of widget `w` (the row itself, or a widget
+// inside it) shows, while it is still in the mask and still shape `id`; else
+// the first reference to `id`. A mask can hold a shape twice, and then its
+// form id alone names the wrong row
 static const dt_masks_point_group_t *_row_reference(dt_masks_form_t *grp,
                                                     GtkWidget *w,
                                                     const dt_mask_id_t id)
 {
   GtkWidget *row = w ? g_object_get_data(G_OBJECT(w), "row-vbox") : NULL;
+  if(!row) row = w;
   const dt_masks_point_group_t *pt = row ? g_object_get_data(G_OBJECT(row), "row-point") : NULL;
   if(pt && _point_node_at(grp, pt, NULL, 0) && pt->formid == id) return pt;
   return _group_point(grp, id);
 }
 
-static void _masks_row_drag_received(GtkWidget *w,
-                                     GdkDragContext *ctx,
-                                     gint x,
-                                     gint y,
-                                     GtkSelectionData *sel,
-                                     guint info,
-                                     guint time,
-                                     dt_iop_module_t *module)
+// the element row a drop on target `w` lands next to: the row itself, or a
+// cluster's top row when landing above it and its bottom row below
+static GtkWidget *_element_drop_row(GtkWidget *w, const gboolean above)
 {
-  gboolean ok = FALSE;
-  if(gtk_selection_data_get_length(sel) == (gint)sizeof(dt_mask_id_t))
-  {
-    dt_masks_form_t *grp = _module_mask_group(module);
-    dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
-    // a nested group dragged by its header carries its group's id
-    const gboolean nested = _drags_as_element(ctx);
-    if(nested)
-    {
-      const dt_masks_form_t *sub = _model_nested_group_of(grp, src);
-      src = sub ? sub->formid : INVALID_MASKID;
-    }
-    const dt_mask_id_t dst = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
-    // rows display bottom-up: dropping on the top half of a row places the
-    // shape visually above the target (= later in the list).
-    const int h = gtk_widget_get_allocated_height(w);
-    const gboolean above = (h > 0 && y < h / 2);
-    const dt_masks_point_group_t *sp =
-      nested ? _group_point(grp, src) : _row_reference(grp, gtk_drag_get_source_widget(ctx), src);
-    ok = _model_drop_point_onto_point(module, grp, sp, _row_reference(grp, w, dst), above);
-    if(ok)
-    {
-      dt_print(DT_DEBUG_MASKS, "[masks] form %d drag-moved near %d", src, dst);
-      dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-    }
-  }
-  gtk_drag_finish(ctx, ok, FALSE, time);
-  if(ok) _queue_masks_list_rebuild(module);
+  GtkWidget *row = g_object_get_data(G_OBJECT(w), above ? "drop-row-top" : "drop-row-bottom");
+  return row ? row : w;
 }
 
-// group-header drag-and-drop: reorder a whole group, its marker and its
-// members, as a unit. A separate target type from the per-shape row DnD so the
-// two don't interfere.
+// say why a group dropped somewhere stays put, when the reason is one the
+// user cannot see: it would go inside itself, or nest too deep. Every other
+// refused drop is a no-op the drop line already showed
+static void _explain_refused_drop(dt_masks_form_t *grp,
+                                  const dt_masks_point_group_t *sp,
+                                  const dt_mask_id_t dst)
+{
+  dt_masks_form_t *sowner = NULL, *downer = NULL;
+  const dt_masks_form_t *f = sp ? dt_masks_get_from_id(darktable.develop, sp->formid) : NULL;
+  if(!f || !(f->type & DT_MASKS_GROUP) || !_point_node_at(grp, sp, &sowner, 0)
+     || !_point_node_owner(grp, dst, &downer))
+    return;
+  if(!_may_move_into(grp, sowner, downer, sp->formid))
+    dt_control_log(_("a group cannot go inside itself, and groups nest at most %d deep"),
+                   DT_MASKS_NESTING_MAX);
+}
+
+// a group dragged by its header: its marker and its members move as a unit
 static const GtkTargetEntry _mask_group_dnd[] = { { (gchar *)DND_TARGET_GROUP,
                                                     GTK_TARGET_SAME_APP, 0 } };
 
-// a same-kind element cluster's own drag-and-drop: moves every one of its
-// members together, as one contiguous block preserving their relative order --
-// like a group drag, but for just this same-kind run within a group (see
-// _masks_cluster_move). A separate target type from both the per-shape row
-// and per-group DnD so all three coexist without interfering.
+// a same-kind element cluster dragged by its header: every one of its members
+// moves together, as one contiguous block preserving their relative order (see
+// _masks_cluster_move)
 static const GtkTargetEntry _mask_cluster_dnd[] = { { (gchar *)DND_TARGET_CLUSTER,
                                                       GTK_TARGET_SAME_APP, 0 } };
 
-// a group header accepts every kind of drop: a whole group (reorder), a single
-// shape (drop onto a group to move the shape into it), and a whole cluster
-// (move every member together). The receive handler routes on the entry info
-// below.
+// the list takes all three payloads (see _drop_target_at); the receive handler
+// routes on the entry info below
 enum
 {
   DND_MASK_GROUP = 0,
@@ -8346,43 +8318,176 @@ static const GtkTargetEntry _mask_hdr_dnd[] = {
   { (gchar *)DND_TARGET_CLUSTER, GTK_TARGET_SAME_APP, DND_MASK_CLUSTER }
 };
 
-// The frame a group-level drop target belongs to: the widget the insertion line
-// is drawn on, and the rectangle an above/below decision is measured against.
-// A group is covered by several drop targets -- its header event box, its block,
-// each element row, each cluster header -- and they all resolve to the same
-// frame (the group block), which is what makes the group one target rather than
-// a stack of them. Falls back to the widget itself for a target that belongs to
-// no group.
-static GtkWidget *_group_frame_of(GtkWidget *w)
+// Where a drop lands, placed against the innermost of these under the pointer
+// (see _drop_target_at). The line the motion handler draws and the move the
+// receive handler makes both come from here, so the two cannot disagree:
+//
+// - an element: an element row or a cluster (tagged "drop-item"), header line
+//   and body. Its top half lands above it, its bottom half below. Rows display
+//   bottom-up, so above is later in the list
+// - a list: a group's elements box, or an open cluster's (tagged
+//   "drop-list-owner"). Its elements are targets of their own, so what is left
+//   to hit are the gaps between them, which land above the element under the
+//   gap. Above its first element or below its last, the list's owner decides
+// - a group: its block, title included (see _drop_on_group)
+typedef struct dt_masks_drop_t
 {
-  GtkWidget *f = g_object_get_data(G_OBJECT(w), "group-frame");
-  if(!f) f = g_object_get_data(G_OBJECT(w), "header-widget");
-  return f ? f : w;
+  GtkWidget *frame; // the element or group it lands beside, or the group it goes in
+  gboolean inside;  // inside the group `frame`, on top of it
+  gboolean above;   // beside `frame`: above it, else below
+} dt_masks_drop_t;
+
+// the list child standing for drop frame `f`: the frame itself, or for a
+// nested group shown as its group, the box its block is packed in
+static GtkWidget *_drop_item_of(GtkWidget *f)
+{
+  GtkWidget *item = g_object_get_data(G_OBJECT(f), "drop-list-item");
+  return item ? item : f;
 }
 
-// Where a group-reorder drop lands relative to the group under the pointer:
-// TRUE = above it (later in the bottom-up list), FALSE = below.
-//
-// Measured against the group's frame, never the sub-widget that happened to
-// receive the event -- each of those reports `y` relative to itself, so taking
-// its own midpoint gave every sub-widget its own flip point. Dragging up
-// through a single group then flipped the indicator repeatedly (below over the
-// body's lower half, above over its upper half, below again over the header's
-// lower half, above over its top half) instead of switching once at the
-// group's middle.
-//
-// This is the only place the decision is made: the motion handler that draws
-// the insertion line and the receive handlers that perform the move all call
-// it, so the line and the drop that follows can never disagree.
-static gboolean _group_drop_above(GtkWidget *w, const gint y)
+// the drop frame list child `c` stands for, or NULL for a child that is no
+// element (a group's opacity slider, the row of a shape being drawn)
+static GtkWidget *_drop_frame_of_item(GtkWidget *c)
 {
-  GtkWidget *f = _group_frame_of(w);
-  gint fx = 0, fy = y;
-  // translate_coordinates needs a common ancestor and realized widgets; when it
-  // cannot answer, measure against the receiving widget rather than guess
-  if(w != f && !gtk_widget_translate_coordinates(w, f, 0, y, &fx, &fy)) f = w, fy = y;
-  const int h = gtk_widget_get_allocated_height(f);
-  return h > 0 && fy < h / 2;
+  GtkWidget *f = g_object_get_data(G_OBJECT(c), "drop-frame");
+  if(f) return f;
+  return g_object_get_data(G_OBJECT(c), "drop-item") ? c : NULL;
+}
+
+// the elements of `list` in `in`'s coordinates: its first (top) and last
+// (bottom) one with their edges, and the topmost one reaching below `y`, the
+// one under a gap at `y`. FALSE when it shows none
+typedef struct dt_masks_drop_list_t
+{
+  GtkWidget *first, *last, *under;
+  int first_top, last_bottom;
+} dt_masks_drop_list_t;
+
+static gboolean _drop_list_items(GtkWidget *list,
+                                 GtkWidget *in,
+                                 const int y,
+                                 dt_masks_drop_list_t *l)
+{
+  *l = (dt_masks_drop_list_t){ 0 };
+  int under_top = 0;
+  GList *kids = list ? gtk_container_get_children(GTK_CONTAINER(list)) : NULL;
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    GtkWidget *c = k->data;
+    GtkWidget *f = _drop_frame_of_item(c);
+    gint cx = 0, cy = 0;
+    // mapped, not visible: a collapsed group's elements stay visible in a
+    // hidden box, at stale positions
+    if(!f || !gtk_widget_get_mapped(c) || !gtk_widget_translate_coordinates(c, in, 0, 0, &cx, &cy))
+      continue;
+    const int bottom = cy + gtk_widget_get_allocated_height(c);
+    if(!l->first || cy < l->first_top) l->first = f, l->first_top = cy;
+    if(!l->last || bottom > l->last_bottom) l->last = f, l->last_bottom = bottom;
+    if(bottom > y && (!l->under || cy < under_top)) l->under = f, under_top = cy;
+  }
+  g_list_free(kids);
+  return l->first != NULL;
+}
+
+// how high the bands along the top and bottom edge of group block `f` are,
+// which land beside it, with its title's offset in *ty; 0 for a group with
+// nothing beside it. A nested group shown as its group sits among its holder's
+// elements
+static int _group_drop_edge(GtkWidget *f, gint *ty)
+{
+  GtkWidget *title = g_object_get_data(G_OBJECT(f), "drop-title");
+  gint tx = 0;
+  if(!g_object_get_data(G_OBJECT(f), "drop-list-item") || !title
+     || !gtk_widget_translate_coordinates(title, f, 0, 0, &tx, ty))
+    return 0;
+  return MIN(gtk_widget_get_allocated_height(title) / 2,
+             gtk_widget_get_allocated_height(f) / 3);
+}
+
+// A group's block. The top edge of its title lands above the group, its bottom
+// edge below it: a band as high as half the title, or a third of the block
+// when the block is no more than its title. Below its last element it lands
+// there, at the bottom of the group. Everything else lands inside it, on top,
+// right where its top element shows.
+//
+// A group with nothing beside it (the mask's own, the group of a nested group
+// shown as an element row) takes the edges inside too, as does any drop with
+// shift held.
+static dt_masks_drop_t _drop_on_group(GtkWidget *f, const int y)
+{
+  const dt_masks_drop_t inside = { f, TRUE, FALSE };
+  if(dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK)) return inside;
+
+  gint ty = 0;
+  const int edge = _group_drop_edge(f, &ty);
+  if(edge)
+  {
+    if(y < ty + edge) return (dt_masks_drop_t){ f, FALSE, TRUE };
+    if(y >= gtk_widget_get_allocated_height(f) - edge) return (dt_masks_drop_t){ f, FALSE, FALSE };
+  }
+  dt_masks_drop_list_t l;
+  if(_drop_list_items(g_object_get_data(G_OBJECT(f), "drop-list"), f, y, &l)
+     && y >= l.last_bottom)
+    return (dt_masks_drop_t){ l.last, FALSE, FALSE };
+  return inside;
+}
+
+static dt_masks_drop_t _drop_at(GtkWidget *w, const int y)
+{
+  if(g_object_get_data(G_OBJECT(w), "drop-item"))
+  {
+    const int h = gtk_widget_get_allocated_height(w);
+    return (dt_masks_drop_t){ w, FALSE, h > 0 && y < h / 2 };
+  }
+  GtkWidget *owner = g_object_get_data(G_OBJECT(w), "drop-list-owner");
+  if(!owner) return _drop_on_group(w, y);
+
+  dt_masks_drop_list_t l;
+  if(_drop_list_items(w, w, y, &l) && y >= l.first_top && y < l.last_bottom && l.under)
+    return (dt_masks_drop_t){ l.under, FALSE, TRUE };
+  // translate_coordinates needs a common ancestor and realized widgets; when
+  // it cannot answer, the pointer is somewhere in the owner, and only that
+  gint ox = 0, oy = 0;
+  if(!gtk_widget_translate_coordinates(w, owner, 0, y, &ox, &oy)) oy = 0;
+  return _drop_at(owner, oy);
+}
+
+// The slot between two elements has two names, "below the upper one" and
+// "above the lower one". Drawing each on its own element's edge put two lines a
+// few pixels apart, so one slot read as two drop targets. Both are drawn as the
+// top edge of the lower element; only the slot below the last element of a list
+// is drawn on that element's bottom edge. Found by on-screen geometry: the list
+// packs from the end, and its children's order says nothing reliable about
+// where they show
+static void _drop_line(const dt_masks_drop_t d, GtkWidget **w, const char **cls)
+{
+  *w = d.frame;
+  *cls = d.above ? "mask-list-row-drop-above" : "mask-list-row-drop-below";
+  if(d.above) return;
+  GtkWidget *item = _drop_item_of(d.frame);
+  GtkWidget *list = gtk_widget_get_parent(item);
+  if(!GTK_IS_CONTAINER(list)) return;
+  gint iy = 0, ix = 0;
+  if(!gtk_widget_translate_coordinates(item, list, 0, 0, &ix, &iy)) return;
+  GtkWidget *next = NULL;
+  int next_y = 0;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(list));
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    GtkWidget *c = k->data;
+    GtkWidget *f = _drop_frame_of_item(c);
+    gint cx = 0, cy = 0;
+    if(c == item || !f || !gtk_widget_get_mapped(c)
+       || !gtk_widget_translate_coordinates(c, list, 0, 0, &cx, &cy) || cy <= iy)
+      continue;
+    if(!next || cy < next_y) next = f, next_y = cy;
+  }
+  g_list_free(kids);
+  if(next)
+  {
+    *w = next;
+    *cls = "mask-list-row-drop-above";
+  }
 }
 
 static void _masks_group_drag_get(GtkWidget *w,
@@ -8436,10 +8541,10 @@ static GList *_cluster_ids_from_selection(GtkSelectionData *sel)
 
 // Select the group a drag just moved, once it has landed.
 //
-// Every element-level drop already does this for the element it moved ("a moved
+// Every element drop already does this for the element it moved ("a moved
 // element should stay selected at the end of the drag -- otherwise it lands in
 // its new spot with no visible indication of what just moved", see
-// _masks_row_drag_received). Group-level drops did not, so a moved group landed
+// _model_drop_point_onto_point). Group drops did not, so a moved group landed
 // unselected and the selection still pointed at whatever was selected before the
 // drag -- which then silently decided where the next "add group" went.
 static void _select_moved_group(dt_iop_module_t *module, const dt_mask_id_t cid)
@@ -8450,49 +8555,39 @@ static void _select_moved_group(dt_iop_module_t *module, const dt_mask_id_t cid)
   bd->panel_selected_group_cid = cid;
 }
 
-static void _masks_group_drag_received(GtkWidget *w,
-                                       GdkDragContext *ctx,
-                                       gint x,
-                                       gint y,
-                                       GtkSelectionData *sel,
-                                       guint info,
-                                       guint time,
-                                       dt_iop_module_t *module)
+// every drop ends here. A move reorders the fold the pipe evaluates, so it is
+// committed like any other edit: without that the canvas kept the pre-drag
+// render until an unrelated event (a zoom) forced a recompute
+static void _finish_drop(dt_iop_module_t *module,
+                         GdkDragContext *ctx,
+                         const gboolean ok,
+                         const guint time)
 {
-  gboolean ok = FALSE;
-  if(gtk_selection_data_get_length(sel) == (gint)sizeof(dt_mask_id_t))
-  {
-    // the dragged group's id, and the id of the group under the pointer
-    const dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
-    const dt_mask_id_t dst = _header_cid(w);
-    if(dt_is_valid_maskid(dst))
-    {
-      const gboolean above = _group_drop_above(w, y);
-      // with shift held, the group goes inside the one under the pointer
-      const gboolean inside = dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK);
-      ok = _model_move_group(module, src, dst, above, inside);
-      if(inside && !ok && src != dst)
-        dt_control_log(_("this group cannot go inside that one: a group never goes"
-                         " inside itself, and a list keeps its last group"));
-      // a moved group stays selected, exactly as a moved element does (see
-      // _masks_row_drag_received's own note): otherwise it lands in its new
-      // spot with nothing indicating what just moved, and -- worse -- the
-      // selection still points at whatever was selected beforehand, so the next
-      // "add group" anchors above *that* group rather than the one just
-      // dragged
-      if(ok) _select_moved_group(module, src);
-      // reordering groups reorders grp->points, i.e. the fold order the pipe
-      // actually evaluates -- so it has to be committed exactly like an element
-      // reorder does (see _masks_row_drag_received). Without this the model
-      // moved but nothing invalidated the pipe, so the canvas kept the pre-drag
-      // render until an unrelated event (a zoom) forced a recompute.
-      if(ok) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-    }
-    dt_print(DT_DEBUG_MASKS, "[masks dnd] group received src=%d dst=%d ok=%d", src, dst,
-             ok);
-  }
+  if(ok) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
   gtk_drag_finish(ctx, ok, FALSE, time);
   if(ok) _queue_masks_list_rebuild(module);
+}
+
+// the dragged group `src` inside group `dst`, on top of it
+static gboolean _drop_group_inside(dt_iop_module_t *module,
+                                   const dt_mask_id_t src,
+                                   const dt_mask_id_t dst)
+{
+  const gboolean ok = _model_move_group(module, src, dst, FALSE, TRUE);
+  // a moved group stays selected, exactly as a moved element does (see
+  // _model_drop_point_onto_point): otherwise it lands in its new spot with
+  // nothing indicating what just moved, and -- worse -- the selection still
+  // points at whatever was selected beforehand, so the next "add group"
+  // anchors above *that* group rather than the one just dragged
+  if(ok)
+    _select_moved_group(module, src);
+  else if(src != dst)
+  {
+    dt_masks_form_t *grp = _module_mask_group(module);
+    const dt_masks_form_t *sub = _model_nested_group_of(grp, src);
+    if(sub) _explain_refused_drop(grp, _group_point(grp, sub->formid), dst);
+  }
+  return ok;
 }
 
 // Model half of the element-onto-group-header drop -- same split as
@@ -8535,126 +8630,85 @@ gboolean _model_drop_point_onto_group(dt_iop_module_t *module,
   return TRUE;
 }
 
-static void _masks_shape_to_group_drop(GtkWidget *w,
-                                       GdkDragContext *ctx,
-                                       GtkSelectionData *sel,
-                                       guint time,
-                                       dt_iop_module_t *module)
+// Drop what `sel` carries beside the reference `dp`, above or below it: an
+// element, a cluster, or a group dragged by its header, which moves as the
+// nested group it is in its holder's list. Every drop that lands beside
+// something, an element or a group, goes through here
+static gboolean _drop_beside(dt_iop_module_t *module,
+                             GdkDragContext *ctx,
+                             GtkSelectionData *sel,
+                             const guint info,
+                             const dt_masks_point_group_t *dp,
+                             const gboolean above)
 {
-  gboolean ok = FALSE;
-  if(gtk_selection_data_get_length(sel) == (gint)sizeof(dt_mask_id_t))
+  if(!dp) return FALSE;
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(info == DND_MASK_CLUSTER)
   {
-    const dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
-    dt_masks_form_t *grp = _module_mask_group(module);
-    ok = _model_drop_point_onto_group(module, grp,
-                                      _row_reference(grp, gtk_drag_get_source_widget(ctx), src),
-                                      _header_cid(w));
-    if(ok)
-    {
-      dt_print(DT_DEBUG_MASKS, "[masks] shape %d moved into group %d", src, _header_cid(w));
-      dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-    }
+    GList *ids = _cluster_ids_from_selection(sel);
+    const gboolean ok = ids && _masks_cluster_move(module, ids, dp->formid, FALSE, above);
+    g_list_free(ids);
+    return ok;
   }
-  gtk_drag_finish(ctx, ok, FALSE, time);
-  if(ok) _queue_masks_list_rebuild(module);
+  if(gtk_selection_data_get_length(sel) != (gint)sizeof(dt_mask_id_t)) return FALSE;
+  const dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
+  // a group's header carries the group's id
+  const dt_masks_form_t *sub = info == DND_MASK_GROUP ? _model_nested_group_of(grp, src) : NULL;
+  const dt_masks_point_group_t *sp =
+    info != DND_MASK_GROUP ? _row_reference(grp, gtk_drag_get_source_widget(ctx), src)
+    : sub                  ? _group_point(grp, sub->formid)
+                           : NULL;
+  const gboolean ok = _model_drop_point_onto_point(module, grp, sp, dp, above);
+  // a moved group stays selected as a group, as on any other drop
+  if(ok && sub) _select_moved_group(module, src);
+  if(!ok) _explain_refused_drop(grp, sp, dp->formid);
+  return ok;
 }
 
-// a whole cluster dropped onto a group header: move every member together,
-// adopting the target group's operator, landing on top of its run (mirrors
-// _masks_shape_to_group_drop, generalized to the cluster's whole member set).
-static void _masks_cluster_to_group_drop(GtkWidget *w,
-                                         GdkDragContext *ctx,
-                                         GtkSelectionData *sel,
-                                         guint time,
-                                         dt_iop_module_t *module)
+// Drop what `sel` carries inside group `cid`, on top of it
+static gboolean _drop_inside(dt_iop_module_t *module,
+                             GdkDragContext *ctx,
+                             GtkSelectionData *sel,
+                             const guint info,
+                             const dt_mask_id_t cid)
 {
-  GList *ids = _cluster_ids_from_selection(sel);
-  const dt_mask_id_t dst = _header_cid(w);
-  const gboolean ok =
-    ids && dt_is_valid_maskid(dst) && _masks_cluster_move(module, ids, dst, TRUE, FALSE);
-  g_list_free(ids);
-  if(ok)
+  if(info == DND_MASK_CLUSTER)
   {
-    dt_print(DT_DEBUG_MASKS, "[masks] cluster moved near %d", dst);
-    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+    GList *ids = _cluster_ids_from_selection(sel);
+    const gboolean ok = ids && _masks_cluster_move(module, ids, cid, TRUE, FALSE);
+    g_list_free(ids);
+    return ok;
   }
-  gtk_drag_finish(ctx, ok, FALSE, time);
-  if(ok) _queue_masks_list_rebuild(module);
+  if(gtk_selection_data_get_length(sel) != (gint)sizeof(dt_mask_id_t)) return FALSE;
+  const dt_mask_id_t src = *(const dt_mask_id_t *)gtk_selection_data_get_data(sel);
+  if(info == DND_MASK_GROUP) return _drop_group_inside(module, src, cid);
+  dt_masks_form_t *grp = _module_mask_group(module);
+  const dt_masks_point_group_t *sp = _row_reference(grp, gtk_drag_get_source_widget(ctx), src);
+  const gboolean ok = _model_drop_point_onto_group(module, grp, sp, cid);
+  if(!ok) _explain_refused_drop(grp, sp, cid);
+  return ok;
 }
 
-// a whole cluster dropped onto an element row: move every member together,
-// landing directly above/below that row and adopting its group's operator
-// (mirrors _masks_row_drag_received, generalized to the cluster's members).
-static void _masks_cluster_row_drop(GtkWidget *w,
-                                    GdkDragContext *ctx,
-                                    gint y,
-                                    GtkSelectionData *sel,
-                                    guint time,
-                                    dt_iop_module_t *module)
+// make the move drop `d` stands for
+static gboolean _drop_apply(dt_iop_module_t *module,
+                            GdkDragContext *ctx,
+                            GtkSelectionData *sel,
+                            const guint info,
+                            const dt_masks_drop_t d)
 {
-  GList *ids = _cluster_ids_from_selection(sel);
-  const dt_mask_id_t dst = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "formid"));
-  gboolean ok = FALSE;
-  if(ids && dt_is_valid_maskid(dst))
+  if(!d.frame) return FALSE;
+  if(d.inside) return _drop_inside(module, ctx, sel, info, _header_cid(d.frame));
+  dt_masks_form_t *grp = _module_mask_group(module);
+  if(g_object_get_data(G_OBJECT(d.frame), "group-key"))
   {
-    const int h = gtk_widget_get_allocated_height(w);
-    const gboolean above = (h > 0 && y < h / 2);
-    ok = _masks_cluster_move(module, ids, dst, FALSE, above);
+    // beside a group is beside the nested group it shows, in its holder's list
+    const dt_masks_form_t *nested = _model_nested_group_of(grp, _header_cid(d.frame));
+    return nested
+           && _drop_beside(module, ctx, sel, info, _group_point(grp, nested->formid), d.above);
   }
-  g_list_free(ids);
-  if(ok)
-  {
-    dt_print(DT_DEBUG_MASKS, "[masks] cluster moved near %d", dst);
-    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  }
-  gtk_drag_finish(ctx, ok, FALSE, time);
-  if(ok) _queue_masks_list_rebuild(module);
-}
-
-// a group header is a drop target for a whole group (reorder), a single shape
-// (move into the group), or a whole cluster (move every member together).
-// Route on the target entry info.
-static void _masks_header_drag_received(GtkWidget *w,
-                                        GdkDragContext *ctx,
-                                        gint x,
-                                        gint y,
-                                        GtkSelectionData *sel,
-                                        guint info,
-                                        guint time,
-                                        dt_iop_module_t *module)
-{
-  dt_print(DT_DEBUG_MASKS, "[masks dnd] header drag-data-received info=%u len=%d", info,
-           gtk_selection_data_get_length(sel));
-  if(info == DND_MASK_ROW)
-    _masks_shape_to_group_drop(w, ctx, sel, time, module);
-  else if(info == DND_MASK_CLUSTER)
-    _masks_cluster_to_group_drop(w, ctx, sel, time, module);
-  else
-    _masks_group_drag_received(w, ctx, x, y, sel, info, time, module);
-}
-
-// an element row (evbox/row_evbox, tagged with its own group's "group-key" --
-// see _make_shape_row) is *also* a drop target for a whole group, not just a
-// shape: otherwise only the thin header row would accept such a drop, and
-// dragging a group over any of a target group's own elements -- easy to do by
-// accident -- would be silently rejected. A shape dropped here still reorders
-// precisely next to this row (_masks_row_drag_received), unlike a shape
-// dropped on the header (which just lands on top of the group).
-static void _element_row_drag_received(GtkWidget *w,
-                                       GdkDragContext *ctx,
-                                       gint x,
-                                       gint y,
-                                       GtkSelectionData *sel,
-                                       guint info,
-                                       guint time,
-                                       dt_iop_module_t *module)
-{
-  if(info == DND_MASK_ROW || (info == DND_MASK_GROUP && _drags_as_element(ctx)))
-    _masks_row_drag_received(w, ctx, x, y, sel, info, time, module);
-  else if(info == DND_MASK_CLUSTER)
-    _masks_cluster_row_drop(w, ctx, y, sel, time, module);
-  else
-    _masks_group_drag_received(w, ctx, x, y, sel, info, time, module);
+  GtkWidget *row = _element_drop_row(d.frame, d.above);
+  const dt_mask_id_t dst = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(row), "formid"));
+  return _drop_beside(module, ctx, sel, info, _row_reference(grp, row, dst), d.above);
 }
 
 // the expand/collapse chevron of the group header for `gcid`, or NULL: group
@@ -10117,11 +10171,12 @@ void dt_iop_gui_blend_forms_reloaded(dt_iop_module_t *module)
 
 // move every member of a dragged cluster together, preserving their relative
 // (bottom-up) order, to the position/group a drop indicates -- the same move
-// _masks_row_drag_received / _masks_shape_to_group_drop do for one shape,
+// _model_drop_point_onto_point / _model_drop_point_onto_group do for one shape,
 // generalized to a same-kind run's whole member set. `dst` is either a group's
 // id (dst_is_group: the cluster lands on top of it) or the target row's own
 // formid (drop lands directly above/below it, per `above`). Returns FALSE
-// (no-op) if `member_ids` is empty or `dst` is itself one of the members.
+// (no-op) if `member_ids` is empty, `dst` is itself one of the members, or
+// the cluster is dropped on the group it is already in.
 gboolean _masks_cluster_move(dt_iop_module_t *module,
                              GList *member_ids,
                              const dt_mask_id_t dst,
@@ -10133,28 +10188,45 @@ gboolean _masks_cluster_move(dt_iop_module_t *module,
 
   for(GList *l = member_ids; l; l = g_list_next(l))
     if(GPOINTER_TO_INT(l->data) == dst) return FALSE;
-  dt_masks_form_t *owner = NULL;
-  GList *d = _point_node_owner(grp, dst, &owner);
+  dt_masks_form_t *downer = NULL, *sowner = NULL;
+  GList *d = _point_node_owner(grp, dst, &downer);
   if(!d || (dst_is_group ? !_group_marker_node(d) : _starts_group(d))) return FALSE;
+  // a cluster is a run of one group, so all its members share one list
+  if(!_point_node_owner(grp, GPOINTER_TO_INT(member_ids->data), &sowner)) return FALSE;
 
-  // recover the cluster's own relative order from the list holding dst (the
+  // recover the cluster's own relative order from the list holding it (the
   // DnD payload itself carries no meaningful order, see
-  // _masks_cluster_drag_get). Members in another list stay where they are,
-  // as a single element dropped across nesting levels does
+  // _masks_cluster_drag_get)
   GList *ordered = NULL;
-  for(GList *l = owner->points; l; l = g_list_next(l))
+  for(GList *l = sowner->points; l; l = g_list_next(l))
     if(!_starts_group(l)
        && g_list_find(member_ids,
                       GINT_TO_POINTER(((dt_masks_point_group_t *)l->data)->formid)))
       ordered = g_list_append(ordered, l->data);
-  if(!ordered) return FALSE;
+
+  // as for one element: never onto its own group, never where a nested
+  // group may not go (see _may_move_into)
+  gboolean ok = ordered != NULL;
+  if(ok && dst_is_group && sowner == downer)
+    ok = _group_marker_node(g_list_find(sowner->points, ordered->data))
+         != _group_marker_node(d);
+  for(GList *l = ordered; l && ok; l = g_list_next(l))
+    ok = _may_move_into(grp, sowner, downer, ((dt_masks_point_group_t *)l->data)->formid);
+  if(!ok)
+  {
+    g_list_free(ordered);
+    return FALSE;
+  }
 
   for(GList *l = ordered; l; l = g_list_next(l))
-    owner->points = g_list_remove(owner->points, l->data);
+  {
+    sowner->points = g_list_remove(sowner->points, l->data);
+    ((dt_masks_point_group_t *)l->data)->parentid = downer->formid;
+  }
   // on top of dst's group, or next to dst: a member, so d->prev is at worst
   // its group's marker
   GList *at = dst_is_group ? _group_last_node(_group_marker_node(d)) : above ? d : d->prev;
-  _insert_points_after(owner, at, ordered);
+  _insert_points_after(downer, at, ordered);
   g_list_free(ordered);
   return TRUE;
 }
@@ -11831,10 +11903,6 @@ static void _toggle_soloedit(dt_iop_module_t *module, const dt_mask_id_t id)
   _refresh_all_shape_rows(module);
 }
 
-// drop-target feedback: while a drag hovers a group header, wash its frame so the
-// user sees which group an element would land in. The "row-frame" data points at
-// the named header box (where the selection/hover CSS lives); the class is removed
-// on leave (and the post-drop rebuild recreates the rows anyway).
 static void _clear_drop_classes(GtkWidget *f)
 {
   dt_gui_remove_class(f, "mask-list-row-drop");
@@ -11842,196 +11910,162 @@ static void _clear_drop_classes(GtkWidget *f)
   dt_gui_remove_class(f, "mask-list-row-drop-below");
 }
 
-// clear the drop feedback from `f` *and its siblings*. The insertion line is
-// drawn on a canonical neighbor rather than always on the hovered group (see
-// _canonical_drop_frame), so the widget wearing the class is not necessarily
-// the one a later motion/leave event arrives on -- clearing only `f` would
-// strand a line on the group next door.
-static void _clear_group_drop_classes(GtkWidget *f)
+// The one drop indicator shown while a drag hovers the list: an insertion line
+// or a group lit up. Its widget may be destroyed by a rebuild under it
+static struct
 {
-  _clear_drop_classes(f);
-  GtkWidget *parent = gtk_widget_get_parent(f);
-  if(!GTK_IS_CONTAINER(parent)) return;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(parent));
-  for(GList *l = kids; l; l = g_list_next(l))
-    if(l->data != f) _clear_drop_classes(GTK_WIDGET(l->data));
-  g_list_free(kids);
+  GtkWidget *widget;
+  const char *cls;
+} _drop_indicator = { NULL, NULL };
+
+static void _drop_indicator_set(GtkWidget *w, const char *cls)
+{
+  if(_drop_indicator.widget == w && !g_strcmp0(_drop_indicator.cls, cls)) return;
+  if(_drop_indicator.widget)
+  {
+    _clear_drop_classes(_drop_indicator.widget);
+    g_object_remove_weak_pointer(G_OBJECT(_drop_indicator.widget),
+                                 (gpointer *)&_drop_indicator.widget);
+  }
+  _drop_indicator.widget = w;
+  _drop_indicator.cls = cls;
+  if(w)
+  {
+    g_object_add_weak_pointer(G_OBJECT(w), (gpointer *)&_drop_indicator.widget);
+    dt_gui_add_class(w, cls);
+  }
 }
 
-// The gap between two adjacent groups is ONE insertion slot, but it has two
-// names: "below the upper group" and "above the lower group". Drawing each on
-// its own block's edge put two different lines a few pixels apart (the blocks
-// carry a 4px margin between them), so a single slot read as two competing drop
-// targets and the indicator appeared to jump as the pointer crossed the
-// boundary.
+// The whole list is ONE drop target, and every decision is made here from the
+// pointer's position. The widgets a drop can be placed against (see _drop_at)
+// are only tagged "drop-target"; this finds the innermost one under the
+// pointer, and the point in its coordinates in *ty.
 //
-// Collapse the two names to one: a slot is always drawn as the *top* edge of
-// the group below it. Crossing between two groups then changes nothing on
-// screen at all, because both sides resolve to the same widget and the same
-// class. Only the bottom-most slot, which has no group below it, stays a
-// "below" on the last group's own bottom edge.
-//
-// Purely presentational -- the drop itself still acts on the group actually
-// under the pointer with its own above/below (the two describe the same gap, so
-// they move the group to the same place). Nothing about the model changes here.
-static GtkWidget *_canonical_drop_frame(GtkWidget *f, gboolean *above)
+// One GTK drop target per widget was how it was before, and it could not be
+// made reliable: GTK hands a drag from one target to the next by sending
+// drag-motion to the new one before drag-leave to the old one
+// (gtk_drag_find_widget, gtkdnd.c), so a leave wiped the feedback the next
+// target had just drawn, and which target got a drop depended on which one
+// GTK found first, not on where the drop would land
+static GtkWidget *_drop_target_at(GtkWidget *w, const int x, const int y, int *ty)
 {
-  if(*above) return f; // already "top edge of the group below the slot"
-
-  GtkWidget *parent = gtk_widget_get_parent(f);
-  if(!GTK_IS_CONTAINER(parent)) return f;
-
-  // Find the neighbor by on-screen geometry, not by position in the child
-  // list. The list packs blocks with gtk_box_pack_end, and reasoning about what
-  // that implies for gtk_container_get_children's order is exactly the kind of
-  // assumption that is easy to get backwards and hard to see in a screenshot --
-  // allocations say where things actually are.
-  GtkAllocation fa;
-  gtk_widget_get_allocation(f, &fa);
-  const int f_mid = fa.y + fa.height / 2;
-
-  GtkWidget *below = NULL;
-  int below_mid = 0;
-  GList *kids = gtk_container_get_children(GTK_CONTAINER(parent));
-  for(GList *l = kids; l; l = g_list_next(l))
+  GtkWidget *found = NULL;
+  if(g_object_get_data(G_OBJECT(w), "drop-target"))
   {
-    GtkWidget *s = GTK_WIDGET(l->data);
-    if(s == f || !gtk_widget_get_visible(s)) continue;
-    GtkAllocation sa;
-    gtk_widget_get_allocation(s, &sa);
-    const int s_mid = sa.y + sa.height / 2;
-    if(s_mid <= f_mid) continue;                                  // not below f on screen
-    if(!below || s_mid < below_mid) below = s, below_mid = s_mid; // nearest one
+    found = w;
+    *ty = y;
+  }
+  if(!GTK_IS_CONTAINER(w)) return found;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    GtkWidget *c = k->data;
+    gint cx = 0, cy = 0;
+    if(!gtk_widget_get_mapped(c) || !gtk_widget_translate_coordinates(w, c, x, y, &cx, &cy)
+       || cx < 0 || cy < 0 || cx >= gtk_widget_get_allocated_width(c)
+       || cy >= gtk_widget_get_allocated_height(c))
+      continue;
+    // siblings do not overlap: the one holding the point is the only one
+    GtkWidget *inner = _drop_target_at(c, cx, cy, ty);
+    if(inner) found = inner;
+    break;
   }
   g_list_free(kids);
-
-  if(!below) return f; // f is the bottom-most group: keep its own bottom edge
-  *above = TRUE;
-  return below;
+  return found;
 }
 
-// What is hovering a drop target: a whole group (real or empty) being
-// reordered, versus a single element (or a same-kind cluster) being moved into
-// a group. The two want opposite feedback -- an insertion line at the edge it
-// would land on, versus a highlight of the whole target group.
-typedef enum
+// where a drop at (x, y) on the list lands; no frame when it lands nowhere.
+//
+// The band along a group's bottom edge (see _drop_on_group) lands below the
+// group even over the group's own last element, which otherwise covers it:
+// without that, the last element of a group could not be moved out below it.
+// The innermost group whose band holds the pointer is the one it lands below
+static dt_masks_drop_t _drop_on_list(GtkWidget *list, const int x, const int y)
 {
-  DND_HOVER_OTHER = 0, // negotiated nothing we know: fall back to a plain highlight
-  DND_HOVER_REORDER,   // DND_TARGET_GROUP
-  DND_HOVER_ELEMENT    // DND_TARGET_ROW / DND_TARGET_CLUSTER
-} dt_masks_dnd_hover_t;
-
-// NB this is not free: gtk_drag_dest_find_target() negotiates against the drag
-// pasteboard, which on quartz means a full type-list round trip per call. It
-// runs on every motion event, so classify ONCE per event and pass the result
-// down (see _group_drop_motion_kind) rather than re-deriving it in a callee.
-static dt_masks_dnd_hover_t _dnd_hover_kind(GtkWidget *w, GdkDragContext *dc)
-{
-  const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
-  if(target == GDK_NONE) return DND_HOVER_OTHER;
-  gchar *name = gdk_atom_name(target);
-  dt_masks_dnd_hover_t kind = DND_HOVER_OTHER;
-  if(name)
-  {
-    if(!strcmp(name, DND_TARGET_GROUP))
-      kind = DND_HOVER_REORDER;
-    else if(!strcmp(name, DND_TARGET_ROW) || !strcmp(name, DND_TARGET_CLUSTER))
-      kind = DND_HOVER_ELEMENT;
-    g_free(name);
-  }
-  return kind;
+  int ty = 0;
+  GtkWidget *t = _drop_target_at(list, x, y, &ty);
+  if(!t) return (dt_masks_drop_t){ NULL, FALSE, FALSE };
+  if(!dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK))
+    for(GtkWidget *g = t; g && g != list; g = gtk_widget_get_parent(g))
+    {
+      gint gx = 0, gy = 0, title_y = 0;
+      const int edge = g_object_get_data(G_OBJECT(g), "drop-target")
+                         ? _group_drop_edge(g, &title_y) : 0;
+      if(edge && gtk_widget_translate_coordinates(list, g, x, y, &gx, &gy)
+         && gy >= gtk_widget_get_allocated_height(g) - edge)
+        return (dt_masks_drop_t){ g, FALSE, FALSE };
+    }
+  return _drop_at(t, ty);
 }
 
-// The body of _group_drop_motion, taking an already-classified hover kind so a
-// caller that has classified the event itself does not pay for it twice.
-static gboolean _group_drop_motion_kind(GtkWidget *w,
-                                        gint y,
-                                        GtkWidget *f,
-                                        const dt_masks_dnd_hover_t kind)
+static gboolean _drop_motion(
+  GtkWidget *w, GdkDragContext *dc, gint x, gint y, guint time, gpointer user_data)
 {
-  // siblings too: a reorder line is drawn on a canonical neighbor, not always
-  // on this frame (see _canonical_drop_frame)
-  _clear_group_drop_classes(f);
-
-  // with shift held a group goes inside the target, which lights up whole, as
-  // for an element dropped into it (see _masks_group_drag_received)
-  if(kind == DND_HOVER_REORDER && !dt_modifier_is(dt_key_modifier_state(), GDK_SHIFT_MASK))
+  const dt_masks_drop_t d = gtk_drag_dest_find_target(w, dc, NULL) == GDK_NONE
+                              ? (dt_masks_drop_t){ NULL, FALSE, FALSE }
+                              : _drop_on_list(w, x, y);
+  gdk_drag_status(dc, d.frame ? GDK_ACTION_MOVE : 0, time);
+  if(!d.frame)
+    _drop_indicator_set(NULL, NULL);
+  else if(d.inside)
   {
-    // rows display bottom-up: the top half means "land above this group". The
-    // decision is _group_drop_above's alone -- the same call the receive
-    // handlers make -- so the line drawn here and the move that follows cannot
-    // disagree.
-    gboolean above = _group_drop_above(w, y);
-    // ...then draw that slot in its canonical place, so the gap between two
-    // groups shows one line rather than one per neighbor
-    GtkWidget *line = _canonical_drop_frame(f, &above);
-    dt_gui_add_class(line,
-                     above ? "mask-list-row-drop-above" : "mask-list-row-drop-below");
+    // a collapsed group opens, to show where it lands
+    GtkWidget *exp_toggle = g_object_get_data(G_OBJECT(d.frame), "group-expand-toggle");
+    if(exp_toggle && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(exp_toggle)))
+      gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(exp_toggle), TRUE);
+    _drop_indicator_set(d.frame, "mask-list-row-drop");
   }
   else
   {
-    if(kind == DND_HOVER_ELEMENT)
-    {
-      // Auto-expand group if hovering a collapsed group
-      GtkWidget *exp_toggle = g_object_get_data(G_OBJECT(w), "group-expand-toggle");
-      if(exp_toggle && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(exp_toggle)))
-      {
-        gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(exp_toggle), TRUE);
-      }
-    }
-    dt_gui_add_class(f, "mask-list-row-drop");
+    GtkWidget *line = NULL;
+    const char *cls = NULL;
+    _drop_line(d, &line, &cls);
+    _drop_indicator_set(line, cls);
   }
-  return FALSE; // let GTK_DEST_DEFAULT_MOTION still answer the drag status
+  return TRUE;
 }
 
-static gboolean _group_drop_motion(
-  GtkWidget *w, GdkDragContext *dc, gint x, gint y, guint time, gpointer frame)
+static void _drop_leave(GtkWidget *w, GdkDragContext *dc, guint time, gpointer user_data)
 {
-  if(!frame) return FALSE;
-  return _group_drop_motion_kind(w, y, GTK_WIDGET(frame), _dnd_hover_kind(w, dc));
+  _drop_indicator_set(NULL, NULL);
 }
 
-static void
-_group_drop_leave(GtkWidget *w, GdkDragContext *dc, guint time, gpointer frame)
-{
-  // siblings too, for the same reason as the motion handler: the line may be
-  // wearing on a neighboring group's block rather than this frame
-  if(frame) _clear_group_drop_classes(GTK_WIDGET(frame));
-}
-
-static gboolean _element_drop_motion(
+// the drop itself: ask for the data, which _drop_received moves. Not
+// GTK_DEST_DEFAULT_DROP, which finishes the drag a second time after the
+// handler has, as a successful move that asks the source to delete its data
+static gboolean _drop_drop(
   GtkWidget *w, GdkDragContext *dc, gint x, gint y, guint time, gpointer user_data)
 {
-  GtkWidget *row_vbox = g_object_get_data(G_OBJECT(w), "row-vbox");
-  if(!row_vbox) return FALSE;
-
-  const dt_masks_dnd_hover_t kind = _dnd_hover_kind(w, dc);
-  if(kind == DND_HOVER_REORDER && !_drags_as_element(dc))
-  {
-    // a whole group hovering an element row still means "reorder next to this
-    // row's group", so hand it straight to the group-level feedback -- passing
-    // the kind we already have, since re-deriving it would negotiate the drag
-    // pasteboard a second time for this one motion event
-    GtkWidget *group_frame = g_object_get_data(G_OBJECT(w), "group-frame");
-    if(group_frame) return _group_drop_motion_kind(w, y, group_frame, kind);
-    return FALSE;
-  }
-
-  _clear_drop_classes(row_vbox);
-  const int h = gtk_widget_get_allocated_height(w);
-  const gboolean above = (h > 0 && y < h / 2);
-  dt_gui_add_class(row_vbox,
-                   above ? "mask-list-row-drop-above" : "mask-list-row-drop-below");
-  return FALSE;
+  const GdkAtom target = gtk_drag_dest_find_target(w, dc, NULL);
+  if(target == GDK_NONE || !_drop_on_list(w, x, y).frame)
+    gtk_drag_finish(dc, FALSE, FALSE, time);
+  else
+    gtk_drag_get_data(w, dc, target, time);
+  return TRUE;
 }
 
-static void
-_element_drop_leave(GtkWidget *w, GdkDragContext *dc, guint time, gpointer user_data)
+// the data of a drop, requested by _drop_drop: where it lands is decided again
+// from the drop's own position, as the motion handler did
+static void _drop_received(GtkWidget *w,
+                           GdkDragContext *ctx,
+                           gint x,
+                           gint y,
+                           GtkSelectionData *sel,
+                           guint info,
+                           guint time,
+                           dt_iop_module_t *module)
 {
-  GtkWidget *row_vbox = g_object_get_data(G_OBJECT(w), "row-vbox");
-  if(row_vbox) _clear_drop_classes(row_vbox);
-  GtkWidget *group_frame = g_object_get_data(G_OBJECT(w), "group-frame");
-  if(group_frame) _clear_drop_classes(group_frame);
+  const dt_masks_drop_t d = _drop_on_list(w, x, y);
+  const gboolean ok = _drop_apply(module, ctx, sel, info, d);
+  dt_print(DT_DEBUG_MASKS, "[masks dnd] info=%u dropped %s %p ok=%d", info,
+           d.inside ? "inside" : d.above ? "above" : "below", (void *)d.frame, ok);
+  _finish_drop(module, ctx, ok, time);
+}
+
+// tag `w` as something a drop can be placed against (see _drop_at)
+static void _set_drop_target(GtkWidget *w)
+{
+  g_object_set_data(G_OBJECT(w), "drop-target", GINT_TO_POINTER(1));
 }
 
 // a group drag has begun: a drag is not a click, so suppress the button-release
@@ -12493,29 +12527,17 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   return pending_evbox;
 }
 
-// The event box wrapping a group header -- real or staged (empty) -- carrying
-// the click and drag-and-drop wiring both kinds share. The drop-target list,
-// the drag action, the drag-begin handler, and the tags a ctrl+click rename and
-// the solo dimming look the header up by are identical for both; only which
-// handlers receive the events, and what payload the header drags, differ.
+// The event box wrapping a group header, carrying its click wiring, its drag
+// source and the tags a ctrl+click rename and the solo dimming look the header
+// up by. It is no drop target: the list is the only one (see _drop_target_at).
 //
-// Built in one place so the two cannot drift apart. This skeleton is precisely
-// the kind of code where a fix made to one header kind and not the other goes
-// unnoticed: nothing about a drop-target list being one entry short is visible
-// until someone drags the right thing onto the wrong header.
-//
-// `source_targets`/`drag_get` NULL means "not a drag source" -- a lone group has
-// nowhere to reorder to. The caller still connects drag-motion/drag-leave
-// itself: the two kinds deliberately highlight different widgets (a real group
-// highlights its whole block so the group-reorder insertion line spans its full
-// body; a staged one has only its header row), and for a real group that widget
-// does not exist yet at this point.
+// `source_targets`/`drag_get` NULL means "not a drag source": the mask's own
+// group has nowhere to move to.
 static GtkWidget *_make_group_header_evbox(dt_iop_module_t *module,
                                            GtkWidget *hdr,
                                            GtkWidget *lbl_box,
                                            GCallback press,
                                            GCallback release,
-                                           GCallback drag_received,
                                            const GtkTargetEntry *source_targets,
                                            GCallback drag_get)
 {
@@ -12537,13 +12559,6 @@ static GtkWidget *_make_group_header_evbox(dt_iop_module_t *module,
   g_signal_connect_data(G_OBJECT(evbox), "button-press-event", press, module, NULL, 0);
   g_signal_connect_data(G_OBJECT(evbox), "button-release-event", release, module, NULL,
                         0);
-
-  // a header accepts a whole group (reorder), a single shape (move it into this
-  // group) and an empty group (reorder) -- one target list covers all three
-  gtk_drag_dest_set(evbox, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP, _mask_hdr_dnd,
-                    G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-  g_signal_connect_data(G_OBJECT(evbox), "drag-data-received", drag_received, module,
-                        NULL, 0);
 
   if(source_targets && drag_get)
   {
@@ -13021,9 +13036,7 @@ static DTGTKCairoPaintIconFunc _kind_icon_paint(const guint kind)
 static void _pack_group_elements(dt_iop_module_t *module,
                                  dt_masks_form_t *grp,
                                  GtkWidget *container,
-                                 GList *fids,
-                                 GList *group_formids,
-                                 GtkWidget *group_frame);
+                                 GList *fids);
 static void _pack_subgroup(dt_iop_module_t *module, dt_masks_form_t *sub, GtkWidget *box);
 static gboolean _nested_as_group(const dt_masks_point_group_t *pt, const dt_masks_form_t *form);
 
@@ -14987,14 +15000,10 @@ static void _sync_element_open(GtkWidget *editor, GParamSpec *pspec, gpointer ro
 
 static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                                   dt_masks_point_group_t *fpt,
-                                  dt_masks_form_t *form,
-                                  GList *group_formids,
-                                  GtkWidget *group_frame)
+                                  dt_masks_form_t *form)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   const dt_mask_id_t fid = fpt->formid;
-  // the group the row's element is in: a group dropped on the row lands by it
-  const dt_mask_id_t gcid = _group_cid_of_form(_module_mask_group(module), fid);
   GtkWidget *row = dt_gui_hbox();
 
   // column 0 -- drag handle (the reliable drag source for moving the shape onto
@@ -15056,8 +15065,8 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                            : _("shift+click to show/hide its expanded controls\n"));
   g_string_append(tip, _("right-click for its actions: disable, solo, invert, compose,"
                          " rename, delete\n"));
-  g_string_append(tip, is_subgroup ? _("drag to rearrange")
-                                   : _("drag to rearrange, or onto a group to move it there"));
+  g_string_append(tip, _("drag to rearrange: drop it onto a group to put it inside, onto"
+                         " the group's top or bottom edge to put it beside"));
   gchar *row_tip = g_string_free(tip, FALSE);
   GtkWidget *handle =
     channel_code ? _make_channel_handle(channel_code, row_tip)
@@ -15118,28 +15127,12 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   g_object_set_data(G_OBJECT(evbox), "name-evbox", evbox);
   g_object_set_data(G_OBJECT(evbox), "handle-widget", handle);
   g_object_set_data(G_OBJECT(evbox), "formid", GINT_TO_POINTER(fid));
-  // also tagged with this row's own group's member ids, so a group/empty-group
-  // drag dropped on this row (not just the group's header) still resolves to
-  // the right group -- see _element_row_drag_received.
-  if(group_formids)
-    g_object_set_data_full(G_OBJECT(evbox), "group-formids", g_list_copy(group_formids),
-                           (GDestroyNotify)g_list_free);
-  g_object_set_data(G_OBJECT(evbox), "group-key", GINT_TO_POINTER(gcid));
-  // the name is a drop target (drop another shape here to reorder, or a whole
-  // group/empty group here to land next to this row), and -- like the grip
-  // handle in column 0 -- also a drag source, so grabbing the name starts the
-  // same reorder/move-to-group drag (a plain press returns FALSE, letting the
-  // drag source arm; selection happens on release, see _row_click_release).
-  gtk_drag_dest_set(evbox, GTK_DEST_DEFAULT_ALL, _mask_hdr_dnd,
-                    G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-  g_signal_connect(G_OBJECT(evbox), "drag-data-received",
-                   G_CALLBACK(_element_row_drag_received), module);
+  // like the grip handle in column 0, the name is a drag source, so grabbing
+  // it starts the same drag (a plain press returns FALSE, letting the drag
+  // source arm; selection happens on release, see _row_click_release). A drop
+  // is placed against the whole row, row_vbox below
   g_signal_connect(G_OBJECT(evbox), "drag-data-get", G_CALLBACK(_masks_row_drag_get),
                    NULL);
-  if(group_frame) g_object_set_data(G_OBJECT(evbox), "group-frame", group_frame);
-  g_signal_connect(G_OBJECT(evbox), "drag-motion", G_CALLBACK(_element_drop_motion),
-                   NULL);
-  g_signal_connect(G_OBJECT(evbox), "drag-leave", G_CALLBACK(_element_drop_leave), NULL);
   gtk_drag_source_set(evbox, GDK_BUTTON1_MASK, _mask_row_dnd, 1, GDK_ACTION_MOVE);
   g_signal_connect(G_OBJECT(evbox), "drag-begin", G_CALLBACK(_row_drag_begin), module);
   g_signal_connect(G_OBJECT(evbox), "button-press-event", G_CALLBACK(_row_click_press),
@@ -15412,21 +15405,6 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
                    module);
   g_signal_connect(G_OBJECT(row_evbox), "leave-notify-event", G_CALLBACK(_row_crossing),
                    module);
-  // also a drop target (same reasoning as evbox above): the gaps must accept a
-  // group/empty-group/shape drop too, not just reject it and block bubbling.
-  if(group_formids)
-    g_object_set_data_full(G_OBJECT(row_evbox), "group-formids",
-                           g_list_copy(group_formids), (GDestroyNotify)g_list_free);
-  g_object_set_data(G_OBJECT(row_evbox), "group-key", GINT_TO_POINTER(gcid));
-  gtk_drag_dest_set(row_evbox, GTK_DEST_DEFAULT_ALL, _mask_hdr_dnd,
-                    G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-  g_signal_connect(G_OBJECT(row_evbox), "drag-data-received",
-                   G_CALLBACK(_element_row_drag_received), module);
-  if(group_frame) g_object_set_data(G_OBJECT(row_evbox), "group-frame", group_frame);
-  g_signal_connect(G_OBJECT(row_evbox), "drag-motion", G_CALLBACK(_element_drop_motion),
-                   NULL);
-  g_signal_connect(G_OBJECT(row_evbox), "drag-leave", G_CALLBACK(_element_drop_leave),
-                   NULL);
 
   // each row gets its own vertical container so the parametric channel editor
   // can be docked directly underneath the row it belongs to (see below). The
@@ -15444,6 +15422,11 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   g_object_set_data(G_OBJECT(row_evbox), "row-vbox", row_vbox);
   g_object_set_data(G_OBJECT(evbox), "row-vbox", row_vbox);
   g_object_set_data(G_OBJECT(handle), "row-vbox", row_vbox);
+  // a drop is placed against the whole element, header line and whatever it
+  // shows under it (editors, a nested group's groups), so its halves are the
+  // element's: a drop on its body lands beside it, never in the group behind
+  g_object_set_data(G_OBJECT(row_vbox), "drop-item", GINT_TO_POINTER(1));
+  _set_drop_target(row_vbox);
 
   g_object_set_data(G_OBJECT(row_vbox), "mask-row", GINT_TO_POINTER(1));
   g_object_set_data(G_OBJECT(row_vbox), "formid", GINT_TO_POINTER(fid));
@@ -15953,8 +15936,8 @@ static void _pack_group(dt_iop_module_t *module,
                                  " whole mask\n"
                                  "ctrl+click to rename\n"));
     if(group_movable || shown_nested)
-      g_string_append(title_tip, _("drag to rearrange, holding shift when dropping to put"
-                                   " it inside the group under the pointer\n"));
+      g_string_append(title_tip, _("drag to rearrange: drop it onto a group to put it inside,"
+                                   " onto the group's top or bottom edge to put it beside\n"));
     g_string_append(title_tip, _("right-click for the group's actions (also on the lead"
                                  " icon): disable, solo, invert, compose, rename, delete"));
   }
@@ -16159,13 +16142,11 @@ static void _pack_group(dt_iop_module_t *module,
   // it selects the group / right-clicking opens its actions menu.
   GtkWidget *hdr_evbox = _make_group_header_evbox(
     module, hdr, lbl_box, G_CALLBACK(_group_header_press),
-    G_CALLBACK(_group_header_release), G_CALLBACK(_masks_header_drag_received),
+    G_CALLBACK(_group_header_release),
     group_movable || shown_nested ? _mask_group_dnd : NULL,
     group_movable || shown_nested ? G_CALLBACK(_masks_group_drag_get) : NULL);
   // the one group of a nested group has nothing to reorder against, but the
-  // nested group itself moves: among its holder's elements when dropped on an
-  // element row (see _drags_as_element), as a group elsewhere
-  if(shown_nested) g_object_set_data(G_OBJECT(hdr_evbox), "drags-as-element", GINT_TO_POINTER(1));
+  // nested group itself moves, as the element it is in its holder's list
   g_object_set_data_full(G_OBJECT(hdr_evbox), "group-formids", g_list_copy(formids),
                          (GDestroyNotify)g_list_free);
   g_object_set_data_full(G_OBJECT(hdr_evbox), "hover-formids", g_list_copy(formids),
@@ -16176,10 +16157,8 @@ static void _pack_group(dt_iop_module_t *module,
   g_signal_connect(G_OBJECT(hdr_evbox), "leave-notify-event", G_CALLBACK(_row_crossing),
                    module);
 
-  // DnD (drop targets, and the drag source when group_movable) is wired by
-  // _make_group_header_evbox above, shared with the staged-group header.
-  // "group-formids", which _masks_group_drag_get reads at drag time, is set
-  // just above.
+  // the drag source, when the group moves, is wired by _make_group_header_evbox
+  // above
 
   // a plain primary press returns FALSE (so the group drag source can arm), the
   // group is selected on release, and right-click opens its actions menu (see
@@ -16209,11 +16188,8 @@ static void _pack_group(dt_iop_module_t *module,
   // visual extent, so that is the area that should select it.
   //
   // The event box IS group_block (rather than a wrapper around it) on purpose:
-  // everything below still refers to group_block for its CSS classes, its drop
-  // target and drop-indicator classes, and its position among masks_list_box's
-  // children -- which _canonical_drop_frame walks to find a group's neighbor.
-  // Wrapping would have inserted a level
-  // between the block and that sibling list and broken the drop indicator.
+  // everything below refers to group_block for its CSS classes, its drop
+  // target and its drop-indicator classes.
   // Children with their own windows (hdr_evbox, each row's own evbox) still
   // consume their clicks first; only what falls through reaches here.
   GtkWidget *group_block = gtk_event_box_new();
@@ -16231,6 +16207,15 @@ static void _pack_group(dt_iop_module_t *module,
     g_object_set_data(G_OBJECT(group_block), "is-root", GINT_TO_POINTER(1));
   }
   g_object_set_data(G_OBJECT(hdr_evbox), "header-widget", group_block);
+  // a drop on the group is placed against its title (see _drop_on_group). A
+  // nested group shown as its group is an element of the list it is packed
+  // in, `container`: a drop can land beside it there
+  g_object_set_data(G_OBJECT(group_block), "drop-title", hdr_evbox);
+  if(shown_nested)
+  {
+    g_object_set_data(G_OBJECT(group_block), "drop-list-item", container);
+    g_object_set_data(G_OBJECT(container), "drop-frame", group_block);
+  }
   // "header-widget" above targets the whole block (selection shades the
   // group's entire body); solo-suppression dimming (_apply_group_header_dimming)
   // must only dim the header row itself -- the member rows already dim
@@ -16255,36 +16240,13 @@ static void _pack_group(dt_iop_module_t *module,
   if(group_bypassed)
     g_object_set_data(G_OBJECT(hdr_evbox), "group-bypassed", GINT_TO_POINTER(1));
 
-  // highlight the whole group block (not just the header) while a drag
-  // (element or group) hovers it -- the group-reorder insertion line, in
-  // particular, needs to span the group's full body so it reads as landing
-  // above/below the group, not just above/below its header row
-  g_signal_connect(G_OBJECT(hdr_evbox), "drag-motion", G_CALLBACK(_group_drop_motion),
-                   group_block);
-  g_signal_connect(G_OBJECT(hdr_evbox), "drag-leave", G_CALLBACK(_group_drop_leave),
-                   group_block);
-  g_object_set_data(G_OBJECT(hdr_evbox), "group-expand-toggle", group_expand_toggle);
-
-  // the group's own block is ALSO a drop target in its own right, covering
-  // every gap (margins/spacing between the header and its rows) that no
-  // individual row or header widget occupies -- without this, moving the
-  // pointer through those gaps flickered between "no drop" and "drop" as it
-  // crossed from one child widget's bounds to the next (a child row/header's
-  // own more specific drag-dest still wins whenever the pointer is directly
-  // over it, since GTK always resolves to the topmost widget under the
-  // pointer -- this only fills the cracks between them). A drop here is
-  // routed exactly like a drop on the header itself.
-  gtk_drag_dest_set(group_block, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP,
-                    _mask_hdr_dnd, G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
+  // a drop is placed against the group's block, title included (see
+  // _drop_on_group), wherever its elements and the gaps between them are not
+  // under the pointer
   g_object_set_data_full(G_OBJECT(group_block), "group-formids", g_list_copy(formids),
                          (GDestroyNotify)g_list_free);
   g_object_set_data(G_OBJECT(group_block), "group-expand-toggle", group_expand_toggle);
-  g_signal_connect(G_OBJECT(group_block), "drag-data-received",
-                   G_CALLBACK(_masks_header_drag_received), module);
-  g_signal_connect(G_OBJECT(group_block), "drag-motion", G_CALLBACK(_group_drop_motion),
-                   group_block);
-  g_signal_connect(G_OBJECT(group_block), "drag-leave", G_CALLBACK(_group_drop_leave),
-                   group_block);
+  _set_drop_target(group_block);
 
   // clicking the group's body selects/deselects it exactly as clicking its
   // header does -- the SAME two handlers, not a second implementation of
@@ -16337,8 +16299,11 @@ static void _pack_group(dt_iop_module_t *module,
     dt_gui_add_class(hdr, "mask-group-has-slider");
   }
 
-  _pack_group_elements(module, grp, elem_box, g_list_reverse(g_list_copy(formids)),
-                       formids, group_block);
+  _pack_group_elements(module, grp, elem_box, g_list_reverse(g_list_copy(formids)));
+  // the gaps between its elements are placed against them (see _drop_at)
+  g_object_set_data(G_OBJECT(elem_box), "drop-list-owner", group_block);
+  g_object_set_data(G_OBJECT(group_block), "drop-list", elem_box);
+  _set_drop_target(elem_box);
 
   // if a shape is currently being drawn and this run is where it would land
   // (see _recompute_insert_hint), show its disposable placeholder row at the
@@ -16868,15 +16833,11 @@ static gboolean _nested_as_group(const dt_masks_point_group_t *pt, const dt_mask
 // or a nested group's. `fids` is the run's member ids bottom-up
 // (consumed/freed here). Same-kind drawn shapes fold into expand/collapse
 // clusters; parametric forms are never folded (each keeps its own inline
-// editor). `group_formids`/`group_frame` let every element row also double as
-// a group/empty-group reorder drop target (see _make_shape_row): otherwise
-// only the thin header row would accept such a drop
+// editor)
 static void _pack_group_elements(dt_iop_module_t *module,
                                  dt_masks_form_t *grp,
                                  GtkWidget *container,
-                                 GList *fids,
-                                 GList *group_formids,
-                                 GtkWidget *group_frame)
+                                 GList *fids)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!grp || !fids)
@@ -16913,7 +16874,7 @@ static void _pack_group_elements(dt_iop_module_t *module,
       _pack_subgroup(module, form, rows[nr]);
     }
     else
-      rows[nr] = _make_shape_row(module, fpt, form, group_formids, group_frame);
+      rows[nr] = _make_shape_row(module, fpt, form);
     kinds[nr] = _form_kind(form);
     fid_of[nr] = fid;
     nr++;
@@ -17056,31 +17017,19 @@ static void _pack_group_elements(dt_iop_module_t *module,
                      G_CALLBACK(_element_cluster_arrow_release), NULL);
 
     GtkWidget *cbox = dt_gui_vbox();
+    dt_gui_add_class(cbox, "mask-cluster");
     dt_gui_box_add(cbox, hdr_evbox, rev);
     gtk_box_pack_end(GTK_BOX(container), cbox, FALSE, FALSE, 0);
 
-    // same "fill the cracks" fix as the group's own block above: the gaps
-    // between this cluster's header and its (expanded) member rows have no
-    // widget of their own, so without this the pointer flickered between "no
-    // drop" and "drop" moving through them. A drop lands wherever a drop on
-    // this cluster's ENCLOSING group would (group_formids/group_frame, not
-    // this cluster's own member subset), same as every plain element row here
-    // already does for hovering (see _make_shape_row).
-    if(group_frame)
-    {
-      gtk_drag_dest_set(cbox, GTK_DEST_DEFAULT_MOTION | GTK_DEST_DEFAULT_DROP,
-                        _mask_hdr_dnd, G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
-      g_object_set_data_full(G_OBJECT(cbox), "group-formids", g_list_copy(group_formids),
-                             (GDestroyNotify)g_list_free);
-      g_object_set_data(G_OBJECT(cbox), "group-key",
-                        GINT_TO_POINTER(_group_cid_of_form(grp, fid_of[i])));
-      g_signal_connect(G_OBJECT(cbox), "drag-data-received",
-                       G_CALLBACK(_masks_header_drag_received), module);
-      g_signal_connect(G_OBJECT(cbox), "drag-motion", G_CALLBACK(_group_drop_motion),
-                       group_frame);
-      g_signal_connect(G_OBJECT(cbox), "drag-leave", G_CALLBACK(_group_drop_leave),
-                       group_frame);
-    }
+    // a drop is placed against the whole cluster, as one element: it lands
+    // above its top member or below its bottom one. Its open member rows, and
+    // the gaps between them, take a drop of their own (see _drop_at)
+    g_object_set_data(G_OBJECT(cbox), "drop-item", GINT_TO_POINTER(1));
+    g_object_set_data(G_OBJECT(cbox), "drop-row-top", rows[i + count - 1]);
+    g_object_set_data(G_OBJECT(cbox), "drop-row-bottom", rows[i]);
+    _set_drop_target(cbox);
+    g_object_set_data(G_OBJECT(inner), "drop-list-owner", cbox);
+    _set_drop_target(inner);
     i += count;
   }
 
@@ -17704,6 +17653,19 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // existing "masks-list" class every nested list box in the panel shares
     gtk_widget_set_name(GTK_WIDGET(bd->masks_list_box), "masks-list-box");
     dt_gui_add_class(GTK_WIDGET(bd->masks_list_box), "masks-list");
+    // the list's one drop target (see _drop_target_at). Its motion handler
+    // answers the drag status itself, so no default motion; and no default
+    // drop, see _drop_drop
+    gtk_drag_dest_set(GTK_WIDGET(bd->masks_list_box), 0, _mask_hdr_dnd,
+                      G_N_ELEMENTS(_mask_hdr_dnd), GDK_ACTION_MOVE);
+    g_signal_connect(G_OBJECT(bd->masks_list_box), "drag-motion", G_CALLBACK(_drop_motion),
+                     NULL);
+    g_signal_connect(G_OBJECT(bd->masks_list_box), "drag-leave", G_CALLBACK(_drop_leave),
+                     NULL);
+    g_signal_connect(G_OBJECT(bd->masks_list_box), "drag-drop", G_CALLBACK(_drop_drop),
+                     NULL);
+    g_signal_connect(G_OBJECT(bd->masks_list_box), "drag-data-received",
+                     G_CALLBACK(_drop_received), module);
 
     // layout: toolbar -> element list. The list opens on the mask's own
     // group, whose header carries the whole-mask actions
