@@ -872,15 +872,30 @@ dialog .sidebar row:selected:hover label,
    retints the whole panel by redefining these. A selected or hovered header is
    a gradient from the _top shade down to the plain one, and its rail and frame
    take the plain one: that is the edge they meet */
-@define-color mask_rest          rgba(255, 255, 255, 0.1);
-@define-color mask_implied       rgba(255, 255, 255, 0.25);
-@define-color mask_selected_top  rgba(255, 255, 255, 0.5);
-@define-color mask_selected      rgba(255, 255, 255, 0.4);
-@define-color mask_hover_top     rgba(255, 255, 255, 0.7);
-@define-color mask_hover         rgba(255, 255, 255, 0.4);
-/* the ground of the controls under an open header, darker than the panel in
-   every state: the header's shade goes on their thin frame instead */
-@define-color mask_card          rgba(0, 0, 0, 0.1);
+@define-color mask_rest          rgba(255, 255, 255, 0.15);
+@define-color mask_implied       rgba(255, 255, 255, 0.4);
+@define-color mask_selected_top  rgba(255, 255, 255, 0.6);
+@define-color mask_selected      rgba(255, 255, 255, 0.6);
+@define-color mask_hover_top     rgba(255, 255, 255, 0.9);
+@define-color mask_hover         rgba(255, 255, 255, 0.6);
+/* the ground of the controls under an open header, in every state: the
+   header's shade goes on their thin frame instead */
+@define-color mask_card          rgba(255, 255, 255, 0.15);
+/* the ground of the whole list, "whole mask" header and rails included:
+   darker than the panel, so the headers and cards stand out against it */
+@define-color mask_list_bg       rgba(0, 0, 0, 0.4);
+/* header names, one per header state as for the shades above. Selected and
+   hovered headers are light enough to need dark text */
+@define-color mask_text_rest     @fg_color;
+@define-color mask_text_implied  @mask_text_rest;
+@define-color mask_text_selected rgba(0, 0, 0, 0.9);
+@define-color mask_text_hover    rgba(0, 0, 0, 0.9);
+/* the compact opacity value a header shows when "use sliders for opacity" is off */
+@define-color mask_text_value       alpha(@text_color, 0.85);
+@define-color mask_text_value_hover @text_color;
+/* labels and values of the sliders in the panel */
+@define-color mask_text_control       @fg_color;
+@define-color mask_text_control_hover shade(@fg_color, 1.2);
 
 /* every row/header kind in the panel (element/parametric/raster row, group
    header, cluster header) has its own unique widget id for CSS --
@@ -895,7 +910,7 @@ dialog .sidebar row:selected:hover label,
 {
   border: 2px solid transparent;
   border-radius: 3px;
-  margin-top: 2px;
+  margin-top: 4px;
   /* a background image starts at the padding box by default and repeats into
      the transparent border above, where the far end of the selection
      gradient showed as a frame around every selected row */
@@ -1178,7 +1193,7 @@ dialog .sidebar row:selected:hover label,
   /* the space between the last element of one group and the head of the
      next: the same as between two rows, since the header and its rail
      already mark the group boundary */
-  margin-top: 2px;
+  margin-top: 4px;
 }
 
 /* an open group's header sits on its rail (.mask-group-elements): no rounding
@@ -1261,6 +1276,69 @@ dialog .sidebar row:selected:hover label,
   background-color: transparent;
 }
 
+/* header names follow their header's state through the same selectors as its
+   shade above, so name and shade cannot disagree. Implied before selected,
+   hover last, as everywhere: each implied selector ties its selected
+   counterpart, and the hover ones outrank both by their id. A group's name
+   class sits on a box around its label, an element's on the label itself */
+.masks-list .mask-row-name,
+.masks-list .mask-row-name label
+{
+  color: @mask_text_rest;
+}
+
+.masks-list .mask-list-row-implied > * > .mask-element-header .mask-row-name,
+.masks-list .mask-group-block.mask-list-row-implied > box > * > .mask-group-header .mask-row-name label,
+.masks-list .mask-panel-row.mask-group-header.mask-list-row-implied .mask-row-name label
+{
+  color: @mask_text_implied;
+}
+
+.masks-list .mask-list-row-selected > * > .mask-element-header .mask-row-name,
+.masks-list .mask-group-block.mask-list-row-selected > box > * > .mask-group-header .mask-row-name label,
+.masks-list .mask-panel-row.mask-group-header.mask-list-row-selected .mask-row-name label
+{
+  color: @mask_text_selected;
+}
+
+.masks-list #mask-shape-row.mask-list-row-hover > * > .mask-element-header .mask-row-name,
+.masks-list #mask-group-header-row.mask-list-row-hover .mask-row-name label
+{
+  color: @mask_text_hover;
+}
+
+/* the list's own container (bd->masks_list_box): one ground under the mask's
+   group, its header and every rail */
+#masks-list-box
+{
+  background-color: @mask_list_bg;
+  border-radius: 6px;
+  padding: 4px;
+}
+
+/* the list's first header: the container's padding is its gap from the top */
+.mask-root-block > box > * > .mask-group-header
+{
+  margin-top: 0;
+}
+
+/* every slider's label and value. The disabled rule restores the gray that
+   "*:disabled" gives them elsewhere, which the plain rule would outrank */
+.masks-list .dt_bauhaus
+{
+  color: @mask_text_control;
+}
+
+.masks-list .dt_bauhaus:hover
+{
+  color: @mask_text_control_hover;
+}
+
+.masks-list .dt_bauhaus:disabled
+{
+  color: @disabled_fg_color;
+}
+
 /* each parametric mask row's own permanently-visible editor, framed as a card */
 .mask-param-row-editor
 {
@@ -1276,8 +1354,10 @@ dialog .sidebar row:selected:hover label,
   border-top-width: 0;
   border-bottom-left-radius: 3px;
   border-bottom-right-radius: 3px;
-  padding-bottom: 0;
-  padding-top: 0;
+  /* room above and below the channel sliders, so their handles do not butt
+     against the header and the frame's bottom edge */
+  padding-top: 3px;
+  padding-bottom: 3px;
   margin-left: 0;
   /* this puts the editor's right edge flush with the row header's above it,
      which is what lets the per-channel bypass eyes line up under the header's
@@ -1604,7 +1684,7 @@ button.mask-enable-toggle:checked
   margin: 0 1px;
   padding: 1px 3px;
   border-radius: 3px;
-  color: alpha(@text_color, 0.85);
+  color: @mask_text_value;
 }
 
 .mask-row-trailing-no-expander
@@ -1642,7 +1722,7 @@ button.mask-row-expander:hover
 
 .mask-inline-opacity-value:hover
 {
-  color: @text_color;
+  color: @mask_text_value_hover;
   background-color: alpha(@grey_50, 0.25);
 }
 
