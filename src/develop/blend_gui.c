@@ -528,16 +528,6 @@ void _reparent_into(GtkWidget *w,
   g_object_unref(w);
 }
 
-// an expanding, zero-content spacer: takes whatever width the row has left
-// over, so the runs of buttons either side of it are pushed apart
-static GtkWidget *_pack_stretch(GtkWidget *box)
-{
-  GtkWidget *stretch = dt_gui_hbox();
-  gtk_widget_show(stretch);
-  dt_gui_box_add(box, dt_gui_expand(stretch));
-  return stretch;
-}
-
 // a fixed spacer that only separates two runs of buttons, without competing
 // for the row's slack: one icon wide, from .mask-row-gap in darktable.css
 static GtkWidget *_pack_gap(GtkWidget *box)
@@ -1598,6 +1588,7 @@ static void _blendop_masks_mode_callback(const dt_develop_mask_mode_t mask_mode,
     if(data->masks_param_channels_box)
       gtk_widget_set_visible(data->masks_param_channels_box,
                              show_flexi_ui && data->blendif_support);
+    gtk_widget_set_visible(data->masks_list_area, show_flexi_ui);
     gtk_widget_set_visible(data->masks_toolbar, show_flexi_ui);
     if(data->soloedit_mode) gtk_widget_set_visible(data->soloedit_mode, show_flexi_ui);
     gtk_widget_set_visible(GTK_WIDGET(data->masks_list_box), show_flexi_ui);
@@ -17476,11 +17467,13 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_toolbar = toolbar;
     GtkWidget *toolbar_row1 = dt_gui_hbox();
     dt_gui_add_class(toolbar_row1, "masks-btn-row");
+    gtk_widget_set_halign(toolbar_row1, GTK_ALIGN_CENTER);
     gtk_widget_show(toolbar_row1);
     bd->masks_toolbar_row1 = toolbar_row1;
     dt_gui_box_add(toolbar, toolbar_row1);
     GtkWidget *toolbar_row2 = dt_gui_hbox();
     dt_gui_add_class(toolbar_row2, "masks-btn-row");
+    gtk_widget_set_halign(toolbar_row2, GTK_ALIGN_CENTER);
     gtk_widget_show(toolbar_row2);
     bd->masks_toolbar_row2 = toolbar_row2;
     dt_gui_box_add(toolbar, toolbar_row2);
@@ -17497,10 +17490,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     _new_shape_op_update(bd->masks_new_op);
     gtk_widget_show(bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
-
-    // row 1's slack sits in front of everything, so its buttons keep together
-    // at the right edge and only the leading gap grows with the panel
-    _pack_stretch(toolbar_row1);
 
     // the runs that add to the mask, each a fixed gap apart: add a group,
     // add a shape, then import one from another module
@@ -17632,15 +17621,13 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_param_channels_inner = dt_gui_hbox();
     dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    // right-aligned on its own row
-    _pack_stretch(toolbar_row2);
     dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
 
     // the shape buttons take the slot reserved for them in row 1:
-    // stretch(0) add-group(1) gap(2) [shapes_box] gap(4) import(5)
+    // add-group(0) gap(1) [shapes_box] gap(3) import(4)
     gtk_widget_show(shapes_box);
     dt_gui_box_add(toolbar_row1, shapes_box);
-    gtk_box_reorder_child(GTK_BOX(toolbar_row1), shapes_box, 3);
+    gtk_box_reorder_child(GTK_BOX(toolbar_row1), shapes_box, 2);
 
     // edit on canvas and solo edit, onto the panel header built before this
     _pack_header_edit_run(bd);
@@ -17667,9 +17654,12 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     g_signal_connect(G_OBJECT(bd->masks_list_box), "drag-data-received",
                      G_CALLBACK(_drop_received), module);
 
-    // layout: toolbar -> element list. The list opens on the mask's own
-    // group, whose header carries the whole-mask actions
-    bd->masks_box = GTK_BOX(dt_gui_vbox(toolbar, GTK_WIDGET(bd->masks_list_box)));
+    // layout: toolbar -> element list, on one ground. The list opens on the
+    // mask's own group, whose header carries the whole-mask actions
+    bd->masks_list_area = dt_gui_vbox(toolbar, GTK_WIDGET(bd->masks_list_box));
+    gtk_widget_set_name(bd->masks_list_area, "masks-list-area");
+    gtk_widget_set_no_show_all(bd->masks_list_area, TRUE);
+    bd->masks_box = GTK_BOX(dt_gui_vbox(bd->masks_list_area));
     _add_wrapped_box(blendw, bd->masks_box, "masks_drawn");
 
     bd->masks_inited = TRUE;
@@ -18012,6 +18002,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     if(bd->masks_param_channels_box)
       gtk_widget_set_visible(bd->masks_param_channels_box,
                              show_flexi_ui && bd->blendif_support);
+    gtk_widget_set_visible(bd->masks_list_area, show_flexi_ui);
     gtk_widget_set_visible(bd->masks_toolbar, show_flexi_ui);
     if(bd->soloedit_mode) gtk_widget_set_visible(bd->soloedit_mode, show_flexi_ui);
     gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), show_flexi_ui);
