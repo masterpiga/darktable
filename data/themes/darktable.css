@@ -1307,9 +1307,9 @@ dialog .sidebar row:selected:hover label,
   color: @mask_text_hover;
 }
 
-/* the list's own container (bd->masks_list_box): one ground under the mask's
-   group, its header and every rail */
-#masks-list-box
+/* the list's area (bd->masks_list_area): one ground under the add buttons,
+   the mask's group, its header and every rail */
+#masks-list-area
 {
   background-color: @mask_list_bg;
   border-radius: 6px;

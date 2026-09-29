@@ -535,7 +535,7 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_new_op_label;
   int masks_new_group_op;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
-  // mask" action, at the top of the panel, above masks_list_box. A plain vertical GtkBox with exactly two fixed,
+  // mask" action, inside masks_list_area, above masks_list_box. A plain vertical GtkBox with exactly two fixed,
   // non-wrapping rows (masks_toolbar_row1/row2) -- no dynamic reflow. Several
   // dynamic wrapping schemes (GtkFlowBox; destroy-and-rebuild rows driven by
   // "size-allocate"; a careful in-place reflow of individually-flowing
@@ -547,7 +547,7 @@ typedef struct dt_iop_gui_blend_data_t
   // more reliable. masks_toolbar_row1: add-group (masks_new_op_box) | shape
   // buttons (masks_shapes_box) | import (masks_import_btn).
   // masks_toolbar_row2: the parametric channel buttons
-  // (masks_param_channels_box), right-aligned. Every one of them is inserted
+  // (masks_param_channels_box). Both rows are centered. Every one of them is inserted
   // here once, at construction (the parametric buttons lazily, once the csp
   // is known), and never moved again.
   GtkWidget *masks_toolbar;
@@ -576,6 +576,9 @@ typedef struct dt_iop_gui_blend_data_t
   // the flexi group list: each group's header followed by that group's element rows,
   // nested (indented) directly under it (built by _pack_group_elements).
   GtkBox *masks_list_box;
+  // masks_toolbar and masks_list_box on one ground, so the add buttons read as
+  // part of the list. Not the list box itself: _build_masks_list wipes that
+  GtkWidget *masks_list_area;
   // formid -> shape-row widget (the "mask-row" row_vbox) index, rebuilt alongside
   // masks_list_box so the per-formid lookups (hover sync, selection, in-place row
   // refresh) are O(1) instead of a recursive walk of the whole (nested) widget
