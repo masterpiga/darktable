@@ -508,8 +508,8 @@ typedef struct dt_iop_gui_blend_data_t
   // operator), reorderable by drag and drop. Each parametric row owns its own
   // blendif editor (see _build_param_row_editor in blend_gui.c).
   // masks_param_channels_box: flexi-only cluster of one flat button per channel
-  // of the module's blend colorspace, one of masks_toolbar_row2's children (see
-  // masks_toolbar below). Clicking a button adds a single-channel parametric
+  // of the module's blend colorspace, leading masks_toolbar's second run
+  // (see masks_toolbar below). Clicking a button adds a single-channel parametric
   // form for that channel; hovering one previews that channel's mask.
   // param_channels_csp: the csp the buttons were last built for, so the
   // cluster is rebuilt only when the csp changes.
@@ -518,7 +518,7 @@ typedef struct dt_iop_gui_blend_data_t
   // buttons (rebuilt per csp); the only child of masks_param_channels_box.
   GtkWidget *masks_param_channels_inner;
   int param_channels_csp;
-  // masks_new_op: the "add group" button (flexi-only), right after the shape
+  // masks_new_op: the "add group" button (flexi-only), right before the shape
   // buttons. Clicking it opens an operator chooser; picking one nests a new,
   // empty group with that operator in the target group (see _stage_new_group),
   // selected, so the next drawn shape joins it.
@@ -535,26 +535,23 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_new_op_label;
   int masks_new_group_op;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
-  // mask" action, inside masks_list_area, above masks_list_box. A plain vertical GtkBox with exactly two fixed,
-  // non-wrapping rows (masks_toolbar_row1/row2) -- no dynamic reflow. Several
-  // dynamic wrapping schemes (GtkFlowBox; destroy-and-rebuild rows driven by
+  // mask" action, inside masks_list_area, above masks_list_box. Two runs:
+  // add-group (masks_new_op_box) | shapes (masks_shapes_box), and parametric
+  // channels (masks_param_channels_box) | import (masks_import_btn), plus the
+  // group layout presets button at the top right. The runs share one line
+  // when the panel is wide enough and take a row each otherwise; the layout
+  // is a height-for-width container (masks_gui_toolbar.c), so it is decided
+  // in GTK's own measure/allocate passes. Several schemes that moved widgets
+  // around instead (GtkFlowBox; destroy-and-rebuild rows driven by
   // "size-allocate"; a careful in-place reflow of individually-flowing
-  // widgets) were each tried and rejected in turn -- see the git history on
-  // this branch -- for looking broken, racing GTK's own layout pass, or
-  // leaving icon-drawn buttons invisible until an unrelated redraw, for
-  // reasons that didn't resolve after substantial debugging. A fixed,
-  // possibly-clipping-if-the-panel-is-extremely-narrow two-row layout is far
-  // more reliable. masks_toolbar_row1: add-group (masks_new_op_box) | shape
-  // buttons (masks_shapes_box) | import (masks_import_btn).
-  // masks_toolbar_row2: the parametric channel buttons
-  // (masks_param_channels_box). Both rows are centered. Every one of them is inserted
-  // here once, at construction (the parametric buttons lazily, once the csp
-  // is known), and never moved again.
+  // widgets) were each tried and rejected -- see the git history on this
+  // branch -- for looking broken, racing GTK's own layout pass, or leaving
+  // icon-drawn buttons invisible until an unrelated redraw. Every button is
+  // inserted once, at construction (the parametric buttons lazily, once the
+  // csp is known), and never moved again.
   GtkWidget *masks_toolbar;
-  GtkWidget *masks_toolbar_row1;
-  GtkWidget *masks_toolbar_row2;
-  // masks_shapes_box: the shape buttons, wrapped as one group so
-  // masks_toolbar_row1 can space them as a unit.
+  // masks_shapes_box: the shape buttons, wrapped as one group so the toolbar
+  // can space them as a unit.
   GtkWidget *masks_shapes_box;
   // the "blend mask" section header -- unrelated to the "mask elements" header
   // above. Reading order:

@@ -1107,7 +1107,7 @@ dialog .sidebar row:selected:hover label,
   min-width: 4px;
 }
 
-/* the rows of buttons in the masks panel: the two toolbar rows and the
+/* the rows of buttons in the masks panel: the two toolbar runs and the
    right-hand side of the panel header. They all space their children the same
    way, so a run of buttons and a .mask-row-gap between two runs measure the
    same on each */
@@ -1116,7 +1116,7 @@ dialog .sidebar row:selected:hover label,
   margin-right: 0px;
 }
 
-/* and the toolbar's two rows sit the same distance apart */
+/* and the toolbar's two rows, when it takes two, sit the same distance apart */
 .masks-toolbar > *
 {
   margin-bottom: 3px;
