@@ -432,6 +432,18 @@ void _prune_stale_solo(dt_iop_module_t *module);
 void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module);
 
 // ---------------------------------------------------------------------------
+// masks_gui_toolbar.c -> blend_gui.c
+// ---------------------------------------------------------------------------
+
+/** the add-buttons toolbar: run_a and run_b centered, on one line when they
+    fit and on two rows otherwise, presets at the top right. gap is an empty
+    widget whose width spaces them */
+GtkWidget *_masks_toolbar_new(GtkWidget *run_a,
+                              GtkWidget *run_b,
+                              GtkWidget *presets,
+                              GtkWidget *gap);
+
+// ---------------------------------------------------------------------------
 // blend_gui.c -> masks_gui_panel_host.c
 // ---------------------------------------------------------------------------
 

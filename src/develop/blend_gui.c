@@ -7878,9 +7878,7 @@ static void _new_shape_op_update(GtkWidget *btn)
   dtgtk_button_set_paint(DTGTK_BUTTON(btn), dtgtk_cairo_paint_plus, 0, NULL);
   // _update_add_target_sensitivity appends where the group goes
   gtk_widget_set_tooltip_text(btn, _("add a new, empty group\n"
-                                     "click to pick its operator\n"
-                                     "right-click for group layout presets, which"
-                                     " build a whole set of groups at once"));
+                                     "click to pick its operator"));
   _stash_base_tooltip(btn);
   gtk_widget_queue_draw(btn);
 }
@@ -10759,23 +10757,6 @@ static void _new_shape_op_action(GSimpleAction *action, GVariant *parameter, gpo
 static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u)
 {
   GtkWidget *btn = u ? GTK_WIDGET(u) : w;
-
-  // right-click: the group layout presets, which build a whole set of groups at
-  // once. They live here rather than in the panel settings because that is what
-  // they are -- a bulk version of this button, not a preference.
-  if(ev->button == GDK_BUTTON_SECONDARY && ev->type == GDK_BUTTON_PRESS)
-  {
-    dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
-    if(!module || !module->blend_data) return FALSE;
-    if(module->blend_params->mask_mode & DEVELOP_MASK_RASTER) return FALSE;
-    GMenu *pmenu = g_menu_new();
-    _add_flexi_presets_menu(pmenu, btn, module);
-    darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, pmenu);
-    gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
-    g_object_unref(pmenu);
-    return TRUE;
-  }
-
   if(ev->button != GDK_BUTTON_PRIMARY) return FALSE;
 
   dt_iop_module_t *module = g_object_get_data(G_OBJECT(btn), "module");
@@ -10799,6 +10780,24 @@ static gboolean _new_shape_op_press(GtkWidget *w, GdkEventButton *ev, gpointer u
     g_menu_append_item(menu, it);
     g_object_unref(it);
   }
+  darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, menu);
+  gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
+  g_object_unref(menu);
+  return TRUE;
+}
+
+// the group layout presets, which build a whole set of groups at once. They
+// live on the toolbar rather than in the panel settings because that is what
+// they are: a bulk "add group", not a preference
+static gboolean _masks_presets_press(GtkWidget *btn,
+                                     GdkEventButton *ev,
+                                     dt_iop_module_t *module)
+{
+  if(ev->button != GDK_BUTTON_PRIMARY || ev->type != GDK_BUTTON_PRESS) return FALSE;
+  if(!module->blend_data) return FALSE;
+  if(module->blend_params->mask_mode & DEVELOP_MASK_RASTER) return FALSE;
+  GMenu *menu = g_menu_new();
+  _add_flexi_presets_menu(menu, btn, module);
   darktable.gui->active_popover_menu = dt_gui_popover_menu_from_model(btn, menu);
   gtk_popover_popup(GTK_POPOVER(darktable.gui->active_popover_menu));
   g_object_unref(menu);
@@ -17456,31 +17455,20 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // default operator for a newly added group
     bd->masks_new_group_op = DT_MASKS_STATE_UNION;
 
-    // ---- masks_toolbar: the fixed two-row flexi toolbar for every "add an
-    // element" action (see its field comment in blend.h for the rationale
-    // and exact row contents). Built first (empty) so the add-group button
-    // below has somewhere to go; the rest of its permanent (flexi-only)
-    // children are appended further down, as each is built.
-    GtkWidget *toolbar = dt_gui_vbox();
-    gtk_widget_set_no_show_all(toolbar, TRUE);
-    dt_gui_add_class(toolbar, "masks-toolbar");
-    bd->masks_toolbar = toolbar;
-    GtkWidget *toolbar_row1 = dt_gui_hbox();
-    dt_gui_add_class(toolbar_row1, "masks-btn-row");
-    gtk_widget_set_halign(toolbar_row1, GTK_ALIGN_CENTER);
-    gtk_widget_show(toolbar_row1);
-    bd->masks_toolbar_row1 = toolbar_row1;
-    dt_gui_box_add(toolbar, toolbar_row1);
-    GtkWidget *toolbar_row2 = dt_gui_hbox();
-    dt_gui_add_class(toolbar_row2, "masks-btn-row");
-    gtk_widget_set_halign(toolbar_row2, GTK_ALIGN_CENTER);
-    gtk_widget_show(toolbar_row2);
-    bd->masks_toolbar_row2 = toolbar_row2;
-    dt_gui_box_add(toolbar, toolbar_row2);
+    // ---- the two runs of masks_toolbar's "add an element" actions (see its
+    // field comment in blend.h). Run A: add group | shapes; run B:
+    // parametric channels | link or copy. The toolbar itself is built once
+    // both are filled, further down
+    GtkWidget *run_a = dt_gui_hbox();
+    dt_gui_add_class(run_a, "masks-btn-row");
+    gtk_widget_show(run_a);
+    GtkWidget *run_b = dt_gui_hbox();
+    dt_gui_add_class(run_b, "masks-btn-row");
+    gtk_widget_show(run_b);
 
     // "add group": a plain "+" that opens the operator chooser (its icon is a
-    // fixed add affordance, it never reflects the selection). Row 1, right
-    // after the shape buttons: it adds to the mask as they do
+    // fixed add affordance, it never reflects the selection). It leads run A:
+    // it adds to the mask as the shape buttons do
     bd->masks_new_op_box = _make_op_combo(&bd->masks_new_op, dtgtk_cairo_paint_plus,
                                           G_CALLBACK(_new_shape_op_press));
     // the add-group button is a plain "+" icon, not a bordered chooser: drop the
@@ -17491,17 +17479,9 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     gtk_widget_show(bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
 
-    // the runs that add to the mask, each a fixed gap apart: add a group,
-    // add a shape, then import one from another module
-    dt_gui_box_add(toolbar_row1, bd->masks_new_op_box);
-    _pack_gap(toolbar_row1);
-
-    // reserves row 1's position for shapes_box, which does not exist as a
-    // toolbar child yet: it is built below and slotted in between these two
-    // gaps (see the reorder there)
-    _pack_gap(toolbar_row1);
-    gtk_widget_show(bd->masks_import_btn);
-    dt_gui_box_add(toolbar_row1, bd->masks_import_btn);
+    // add a group, then a fixed gap before the shapes (appended below)
+    dt_gui_box_add(run_a, bd->masks_new_op_box);
+    _pack_gap(run_a);
 
     // solo edit sits on the panel header, next to "edit on canvas": it is used
     // interactively, and its state has to be visible while editing. The channel
@@ -17606,7 +17586,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->solo_formid = INVALID_MASKID;
     bd->masks_row_click_entered = INVALID_MASKID;
 
-    // ---- "add parametric" cluster (flexi-only, toolbar row 2, leftmost):
+    // ---- "add parametric" cluster (flexi-only, leading run B):
     // one flat button per channel of the module's blend colorspace,
     // populated lazily by _rebuild_param_channel_buttons once the csp is
     // known. Visibility is toggled per mode alongside the rest of the
@@ -17621,13 +17601,33 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_param_channels_inner = dt_gui_hbox();
     dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    dt_gui_box_add(toolbar_row2, bd->masks_param_channels_box);
+    // the gap to "link or copy" belongs to the cluster, so a module without
+    // parametric channels does not start run B with it
+    _pack_gap(bd->masks_param_channels_box);
+    dt_gui_box_add(run_b, bd->masks_param_channels_box);
+    gtk_widget_show(bd->masks_import_btn);
+    dt_gui_box_add(run_b, bd->masks_import_btn);
 
-    // the shape buttons take the slot reserved for them in row 1:
-    // add-group(0) gap(1) [shapes_box] gap(3) import(4)
     gtk_widget_show(shapes_box);
-    dt_gui_box_add(toolbar_row1, shapes_box);
-    gtk_box_reorder_child(GTK_BOX(toolbar_row1), shapes_box, 2);
+    dt_gui_box_add(run_a, shapes_box);
+
+    // the group layout presets build a whole set of groups at once, so they
+    // sit apart from the runs, at the top right
+    GtkWidget *presets_btn = dtgtk_button_new(dtgtk_cairo_paint_presets, 0, NULL);
+    gtk_widget_set_tooltip_text(presets_btn, _("group layout presets, which build a whole"
+                                               " set of groups at once"));
+    g_signal_connect(G_OBJECT(presets_btn), "button-press-event",
+                     G_CALLBACK(_masks_presets_press), module);
+    gtk_widget_show(presets_btn);
+
+    GtkWidget *toolbar_gap = dt_gui_hbox();
+    dt_gui_add_class(toolbar_gap, "mask-row-gap");
+    gtk_widget_show(toolbar_gap);
+
+    GtkWidget *toolbar = _masks_toolbar_new(run_a, run_b, presets_btn, toolbar_gap);
+    gtk_widget_set_no_show_all(toolbar, TRUE);
+    dt_gui_add_class(toolbar, "masks-toolbar");
+    bd->masks_toolbar = toolbar;
 
     // edit on canvas and solo edit, onto the panel header built before this
     _pack_header_edit_run(bd);

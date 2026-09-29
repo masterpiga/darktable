@@ -450,7 +450,7 @@ static void _flexi_preset_save_action(GSimpleAction *action,
 }
 
 // appends a "presets" section (group-layout presets) directly to `menu` --
-// the right-click menu of the "add group" button (see _new_shape_op_press)
+// the menu of the toolbar's presets button (see _masks_presets_press)
 void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
 {
   GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_presets");
