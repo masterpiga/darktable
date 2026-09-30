@@ -374,6 +374,14 @@ typedef struct dt_masks_point_group_t
   // by the version migration instead of relying on zero-fill (see
   // _masks_legacy_params_v6_to_v7 in masks/masks.c).
   float group_opacity;
+  // a group made by a built-in group layout preset: "<preset id>/<group id>",
+  // the key of its notes in masks_group_presets.json, which may have none for
+  // it yet. Only on the group's marker; empty = not from a preset. Not part
+  // of any render hash.
+  // Added within v7 without a version bump (an experimental-branch format):
+  // blobs written before it are recognized by their size instead (see
+  // dt_masks_read_masks_history)
+  char preset_note[64];
 } dt_masks_point_group_t;
 
 // Is `pt` a group's marker rather than a member? A marker's formid resolves to

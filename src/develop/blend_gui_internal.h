@@ -430,6 +430,16 @@ void _prune_stale_solo(dt_iop_module_t *module);
 
 /** append the "group layout presets" section to an existing menu */
 void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module);
+/** a preset group's note pages, untranslated, from its
+    dt_masks_point_group_t.preset_note key; NULL when the key names none. Owned
+    by the preset cache: valid until the presets file is next read */
+GPtrArray *_masks_preset_notes(const char *key);
+/** the "show preset notes" option */
+gboolean _masks_preset_notes_shown(void);
+/** give a mask that has no group form yet the default group layout */
+void _masks_apply_default_preset(dt_iop_module_t *module);
+/** append the "default group layout" section to the panel options popover */
+void _add_masks_default_preset_box(GtkWidget *box);
 
 // ---------------------------------------------------------------------------
 // masks_gui_toolbar.c -> blend_gui.c

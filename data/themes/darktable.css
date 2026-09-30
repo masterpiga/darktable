@@ -1488,7 +1488,8 @@ dialog .sidebar row:selected:hover label,
    .mask-props-row-editor (declared earlier, so this wins the tie). No right
    inset, so the card runs to the right edge: the slider stops short by its
    own margin (see .mask-param-opacity-box) */
-.mask-group-opacity-editor
+.mask-group-opacity-editor,
+.mask-group-note
 {
   background-color: @mask_card;
   background-clip: padding-box;
@@ -1509,18 +1510,23 @@ dialog .sidebar row:selected:hover label,
    reach the sliders of the groups nested in it. Implied before selected,
    hover last, as everywhere */
 .mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-root-implied > box > .mask-group-elements > .mask-group-opacity-editor
+.mask-root-implied > box > .mask-group-elements > .mask-group-opacity-editor,
+.mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-note,
+.mask-root-implied > box > .mask-group-elements > .mask-group-note
 {
   border-color: @mask_implied;
 }
 
 .mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-root-selected > box > .mask-group-elements > .mask-group-opacity-editor
+.mask-root-selected > box > .mask-group-elements > .mask-group-opacity-editor,
+.mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-note,
+.mask-root-selected > box > .mask-group-elements > .mask-group-note
 {
   border-color: @mask_selected;
 }
 
-.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-opacity-editor
+.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-opacity-editor,
+.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-note
 {
   border-color: @mask_hover;
 }
@@ -1537,10 +1543,62 @@ dialog .sidebar row:selected:hover label,
   border-left-width: 0;
 }
 
-.masks-list .mask-group-elements.mask-group-slider-only > .mask-group-opacity-editor
+.masks-list .mask-group-elements.mask-group-slider-only > .mask-group-opacity-editor,
+.masks-list .mask-group-elements.mask-group-slider-only > .mask-group-note
 {
   border-left-width: 1px;
   border-bottom-left-radius: 3px;
+}
+
+/* a preset group's note (see _pack_group): the top part of the same card as
+   the slider above, with the slider, when there is one, as its bottom part.
+   The note then leaves its bottom edge open and square onto it. Its text
+   stays readable in every state, since only the frame follows the header */
+.masks-list .mask-group-elements > .mask-group-note.mask-group-note-joined
+{
+  border-bottom-width: 0;
+  border-radius: 0;
+}
+
+/* the navigation under a note of several pages: a dot per page, small and
+   close together with the current one lit, between a previous and a next
+   arrow set a little apart (see _group_note_show_page) */
+.mask-group-note-dots button
+{
+  min-height: 12px;
+  min-width: 12px;
+  margin: 0 1px 2px 1px;
+  padding: 0;
+}
+
+.mask-group-note-dots button:first-child
+{
+  margin-right: 6px;
+}
+
+.mask-group-note-dots button:last-child
+{
+  margin-left: 6px;
+}
+
+/* the pages are Pango markup. The UI's usual "Roboto Light" and the like
+   (chunk-fonts.css) are families of one weight, so <b> would find no bold in
+   them: use the whole families at the same light weight instead, as
+   chunk-fonts.css does for tooltips and menus */
+.mask-group-note label
+{
+  font-family: "Roboto",
+               "Segoe UI",
+               "SF Pro Text",
+               "Ubuntu", "IPAPGothic",
+               "Cantarell",
+               "Arial Unicode MS",
+                sans-serif;
+  font-weight: 300;
+  color: @mask_text_rest;
+  font-size: 0.9em;
+  font-style: italic;
+  padding: 3px 6px 3px 0;
 }
 
 /* and the header it hangs from squares its whole bottom edge onto it */

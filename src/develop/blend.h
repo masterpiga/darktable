@@ -660,6 +660,10 @@ typedef struct dt_iop_gui_blend_data_t
   // press just set. Comparing event times tells the two cases apart without
   // needing a widget-identity check.
   guint32 masks_skip_group_select_release_time;
+  // stronger than the select-only skip above: the next header release leaves
+  // the selection alone entirely. Set by a group's note info icon, which only
+  // switches the note (see _group_note_toggled). Cleared on a header press
+  gboolean masks_skip_group_release;
   // set around _auto_expand_selected_row's own programmatic
   // gtk_toggle_button_set_active calls (see blend_gui.c): its own
   // "toggling this row's expander also selects it" side effect is meant for
@@ -773,6 +777,16 @@ typedef struct dt_iop_gui_blend_data_t
   GHashTable *masks_refine_bypassed;
 
   GHashTable *masks_props_expanded;
+  // group cid -> the page its preset note shows (see _make_group_note), so a
+  // list rebuild keeps it. Created on first use
+  GHashTable *masks_note_page;
+  // group cid -> its preset note switched on (1) or off (2) with the info
+  // icon by its name; wins over masks_notes_all_open and the selection (see
+  // _group_note_is_open). Created on first use
+  GHashTable *masks_note_open;
+  // a preset was just applied: every note is open until another group is
+  // selected
+  gboolean masks_notes_all_open;
   GHashTable *group_ordinals;
 
   GtkWidget *raster_combo;
