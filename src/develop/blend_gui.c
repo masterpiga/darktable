@@ -569,6 +569,7 @@ static void _flexi_refine_follow_selection(dt_iop_gui_blend_data_t *bd);
 void _refresh_canvas_edit(dt_iop_module_t *module);
 static dt_mask_id_t _mask_group_cid(dt_iop_module_t *module);
 static void _select_mask_group_if_none(dt_iop_gui_blend_data_t *bd);
+static void _sync_group_notes(dt_iop_gui_blend_data_t *bd);
 
 // ---- linking and copying elements between modules' masks -----------------
 // A shape or AI object can sit in several modules' masks at once: each mask's
@@ -2199,7 +2200,12 @@ static void _blendop_mask_enable_toggled(
   // themselves, and both branches below set the button explicitly anyway.
   if(module->blend_params->mask_mode == DEVELOP_MASK_DISABLED)
   {
+    // a mask switched on for the first time starts with the default group
+    // layout. Only here, at the explicit switch: the other way on is an edit
+    // (dt_iop_gui_blend_mask_enable), which already puts something in the mask
+    const gboolean fresh = !_module_mask_group(module);
     _blendop_mask_enable(module);
+    if(fresh) _masks_apply_default_preset(module);
   }
   else
   {
@@ -2615,6 +2621,13 @@ static void _masks_props_subpanel_toggled(GtkToggleButton *mi,
   _masks_rebuild_for_option(module);
 }
 
+static void _masks_preset_notes_toggled(GtkToggleButton *mi, dt_iop_module_t *module)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/show_preset_notes",
+                   gtk_toggle_button_get_active(mi));
+  _masks_rebuild_for_option(module);
+}
+
 static void _masks_show_panel_handle_toggled(GtkToggleButton *mi,
                                              dt_iop_module_t *module)
 {
@@ -2717,6 +2730,21 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
       " resizes the panel by dragging and hides it on a click."),
     dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle"),
     _masks_show_panel_handle_toggled)
+}
+
+// the preset notes switch, closing the "default group layout" section that
+// _add_masks_default_preset_box (masks_gui_presets.c) opens
+static void _add_masks_preset_notes_check(GtkWidget *box, dt_iop_module_t *module)
+{
+  _MASKS_OPT_CHECK(
+    notes, _("show preset notes"),
+    _("when enabled (default), a group made by a built-in group layout preset"
+      " carries a note on how to use it, under its header. all notes are open"
+      " when the preset is applied; after that, only the selected group's."
+      " the info icon next to a group's name switches its note on or off"
+      " without selecting the group.\n"
+      "when disabled, no notes are shown."),
+    _masks_preset_notes_shown(), _masks_preset_notes_toggled)
 }
 #undef _MASKS_OPT_CHECK
 
@@ -2842,6 +2870,8 @@ static void _blendif_options_callback(GtkButton *button,
   {
     _add_masks_panel_position_box(box, module);
     _add_masks_panel_options_box(box, module);
+    _add_masks_default_preset_box(box);
+    _add_masks_preset_notes_check(box, module);
   }
 
   gtk_widget_show_all(box);
@@ -2873,6 +2903,8 @@ void dt_iop_gui_blend_masks_options_popup(GtkButton *button, gpointer user_data)
     _masks_pref_section(box, _("blend mask panel settings"), NULL);
     _add_masks_panel_position_box(box, NULL);
     _add_masks_panel_options_box(box, NULL);
+    _add_masks_default_preset_box(box);
+    _add_masks_preset_notes_check(box, NULL);
     gtk_widget_show_all(box);
     gtk_popover_popup(GTK_POPOVER(pop));
     if(DTGTK_IS_BUTTON(button)) dtgtk_button_set_active(DTGTK_BUTTON(button), FALSE);
@@ -10692,9 +10724,12 @@ static void _set_group_target_ext(dt_iop_module_t *module,
                                   const dt_mask_id_t keep_entered)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const dt_mask_id_t was_target = bd->panel_selected_group_cid;
   bd->panel_selected_formid = INVALID_MASKID;
   bd->panel_selected_group_cid = cid;
   _select_mask_group_if_none(bd);
+  // the notes a just applied preset opened all stay open until work moves on
+  if(bd->panel_selected_group_cid != was_target) bd->masks_notes_all_open = FALSE;
   bd->masks_shown = DT_MASKS_EDIT_FULL;
   dt_masks_set_edit_mode(module, DT_MASKS_EDIT_FULL);
   // dt_masks_set_edit_mode(FULL) just rebuilt form_visible as the *whole*
@@ -10709,6 +10744,7 @@ static void _set_group_target_ext(dt_iop_module_t *module,
     g_list_free(ids);
   }
   _update_row_selection(bd);
+  _sync_group_notes(bd);
   _update_add_target_sensitivity(module);
   // every group selection funnels through here, including the one an element
   // selection makes on its way to _set_form_target -- so this is the single
@@ -11064,6 +11100,7 @@ _group_header_press(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
     return TRUE;
   }
   bd->masks_skip_group_select_release = FALSE;
+  bd->masks_skip_group_release = FALSE;
   return FALSE; // let the drag source arm; selection happens on release
 }
 
@@ -11088,6 +11125,11 @@ _group_header_release(GtkWidget *w, GdkEventButton *e, dt_iop_module_t *module)
   // type anything.
   if(dt_modifier_is(e->state, GDK_CONTROL_MASK)) return FALSE;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
+  if(bd->masks_skip_group_release)
+  {
+    bd->masks_skip_group_release = FALSE;
+    return FALSE;
+  }
   const dt_mask_id_t cid =
     (dt_mask_id_t)GPOINTER_TO_UINT(g_object_get_data(G_OBJECT(w), "group-key"));
   if(bd->masks_skip_group_select_release)
@@ -15628,6 +15670,8 @@ dt_hash_t _masks_list_signature(dt_iop_module_t *module)
       g_free(shown);
     }
     if(pt->name[0]) sig = dt_hash(sig, pt->name, strlen(pt->name));
+    // which preset notes a group shows under its header
+    if(pt->preset_note[0]) sig = dt_hash(sig, pt->preset_note, strlen(pt->preset_note));
     // the chain icon and its tooltip follow which modules share the form,
     // which another module changes without touching this group
     GList *users = _model_form_users(pt->formid);
@@ -15764,6 +15808,262 @@ static void _sync_group_open(GtkWidget *elem_box, GParamSpec *pspec, gpointer hd
   g_list_free(kids);
 }
 
+// a page dot: filled, dimmed by the button's opacity unless its page shows
+static void _paint_note_dot(cairo_t *cr,
+                            const gint x,
+                            const gint y,
+                            const gint w,
+                            const gint h,
+                            const gint flags,
+                            void *data)
+{
+  cairo_arc(cr, x + w / 2.0, y + h / 2.0, MIN(w, h) * 0.2, 0, 2 * M_PI);
+  cairo_fill(cr);
+}
+
+// show page `page` of a note: its stack child, which dot is lit, and whether
+// there is a page before or after it
+static void _group_note_show_page(GtkWidget *note, const int page)
+{
+  GtkWidget *stack = g_object_get_data(G_OBJECT(note), "note-stack");
+  gchar *name = g_strdup_printf("%d", page);
+  gtk_stack_set_visible_child_name(GTK_STACK(stack), name);
+  g_free(name);
+  g_object_set_data(G_OBJECT(note), "page", GINT_TO_POINTER(page));
+  GList *dots = g_object_get_data(G_OBJECT(note), "note-dots");
+  int i = 0;
+  for(GList *d = dots; d; d = g_list_next(d), i++)
+    gtk_widget_set_opacity(GTK_WIDGET(d->data), i == page ? 1.0 : 0.35);
+  GtkWidget *prev = g_object_get_data(G_OBJECT(note), "note-prev");
+  GtkWidget *next = g_object_get_data(G_OBJECT(note), "note-next");
+  if(prev) gtk_widget_set_sensitive(prev, page > 0);
+  if(next) gtk_widget_set_sensitive(next, page < i - 1);
+}
+
+// every way of changing page ends here: the page is remembered per group, so
+// a list rebuild keeps it
+static void _group_note_set_page(dt_iop_module_t *module, GtkWidget *note, const int page)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  const int n = g_list_length(g_object_get_data(G_OBJECT(note), "note-dots"));
+  if(page < 0 || page >= n) return;
+  const dt_mask_id_t cid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(note), "group-key"));
+  if(!bd->masks_note_page) bd->masks_note_page = g_hash_table_new(g_direct_hash, g_direct_equal);
+  g_hash_table_insert(bd->masks_note_page, GINT_TO_POINTER(cid), GINT_TO_POINTER(page));
+  _group_note_show_page(note, page);
+}
+
+// a dot switches the note to its page
+static void _group_note_dot_clicked(GtkButton *dot, dt_iop_module_t *module)
+{
+  _group_note_set_page(module, g_object_get_data(G_OBJECT(dot), "note"),
+                       GPOINTER_TO_INT(g_object_get_data(G_OBJECT(dot), "page")));
+}
+
+// the arrows either side of the dots step one page back or on ("step": -1, 1)
+static void _group_note_step_clicked(GtkButton *arrow, dt_iop_module_t *module)
+{
+  GtkWidget *note = g_object_get_data(G_OBJECT(arrow), "note");
+  const int step = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(arrow), "step"));
+  _group_note_set_page(module, note,
+                       GPOINTER_TO_INT(g_object_get_data(G_OBJECT(note), "page")) + step);
+}
+
+static GtkWidget *_make_group_note_arrow(dt_iop_module_t *module,
+                                         GtkWidget *note,
+                                         const int step)
+{
+  GtkWidget *arrow = dtgtk_button_new(dtgtk_cairo_paint_solid_arrow,
+                                      step < 0 ? CPF_DIRECTION_LEFT : 0, NULL);
+  gtk_widget_set_tooltip_text(arrow, step < 0 ? _("previous page") : _("next page"));
+  g_object_set_data(G_OBJECT(arrow), "note", note);
+  g_object_set_data(G_OBJECT(arrow), "step", GINT_TO_POINTER(step));
+  g_signal_connect(G_OBJECT(arrow), "clicked", G_CALLBACK(_group_note_step_clicked), module);
+  return arrow;
+}
+
+// one page of a note, as Pango markup. A page that does not parse, which a
+// translation can break too, is shown as the plain text it is rather than as
+// nothing, which is what GTK makes of broken markup
+static GtkWidget *_group_note_label(const char *text)
+{
+  GtkWidget *label = gtk_label_new(NULL);
+  if(pango_parse_markup(text, -1, 0, NULL, NULL, NULL, NULL))
+    gtk_label_set_markup(GTK_LABEL(label), text);
+  else
+    gtk_label_set_text(GTK_LABEL(label), text);
+  return label;
+}
+
+// Which preset notes are open. A note switched on or off with the info icon
+// by its group's name stays that way. Otherwise every note is open right
+// after a preset is applied, to show what the layout is for, and from the
+// first selection of another group on only the note of the group new elements
+// go to (the selected one, or the one holding the selected element)
+static gboolean _group_note_is_open(dt_iop_gui_blend_data_t *bd, GtkWidget *note)
+{
+  const dt_mask_id_t cid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(note), "group-key"));
+  const int by_hand = bd->masks_note_open
+    ? GPOINTER_TO_INT(g_hash_table_lookup(bd->masks_note_open, GINT_TO_POINTER(cid)))
+    : 0;
+  if(by_hand) return by_hand == 1;
+  return bd->masks_notes_all_open || cid == bd->panel_selected_group_cid;
+}
+
+// show or fold one note, and restyle what it touches: the header squares its
+// bottom edge onto the note (unless the opacity slider below keeps it
+// squared anyway), and an empty group's card holds nothing else to show
+static void _sync_group_note(dt_iop_gui_blend_data_t *bd, GtkWidget *note)
+{
+  const gboolean open = _group_note_is_open(bd, note);
+  gtk_widget_set_visible(note, open);
+
+  GtkWidget *toggle = g_object_get_data(G_OBJECT(note), "note-toggle");
+  if(toggle)
+  {
+    DT_ENTER_GUI_UPDATE();
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(toggle), open);
+    DT_LEAVE_GUI_UPDATE();
+  }
+
+  const gboolean joined =
+    gtk_style_context_has_class(gtk_widget_get_style_context(note), "mask-group-note-joined");
+  GtkWidget *hdr = g_object_get_data(G_OBJECT(note), "note-hdr");
+  if(hdr && !joined)
+  {
+    if(open)
+      dt_gui_add_class(hdr, "mask-group-has-slider");
+    else
+      dt_gui_remove_class(hdr, "mask-group-has-slider");
+  }
+
+  GtkWidget *card = gtk_widget_get_parent(note);
+  if(card && g_object_get_data(G_OBJECT(note), "note-empty"))
+  {
+    gboolean others = FALSE;
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(card));
+    for(GList *k = kids; k; k = g_list_next(k))
+      if(k->data != note && gtk_widget_get_visible(k->data)) others = TRUE;
+    g_list_free(kids);
+    // no_show_all, or the list's show_all brings a folded card back
+    gtk_widget_set_no_show_all(card, !open && !others);
+    gtk_widget_set_visible(card, open || others);
+  }
+}
+
+static void _sync_group_notes_in(dt_iop_gui_blend_data_t *bd, GtkWidget *w)
+{
+  if(gtk_style_context_has_class(gtk_widget_get_style_context(w), "mask-group-note"))
+  {
+    _sync_group_note(bd, w);
+    return;
+  }
+  if(!GTK_IS_CONTAINER(w)) return;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  for(GList *k = kids; k; k = g_list_next(k)) _sync_group_notes_in(bd, k->data);
+  g_list_free(kids);
+}
+
+// selection moves without a rebuild, so it reopens the notes in place
+static void _sync_group_notes(dt_iop_gui_blend_data_t *bd)
+{
+  if(bd && bd->masks_list_box) _sync_group_notes_in(bd, GTK_WIDGET(bd->masks_list_box));
+}
+
+// the info icon by a group's name switches its note on or off, and only that.
+// Its click bubbles on up to the header, which selects on release; "toggled"
+// is emitted from the button's own release, before the header sees it, so
+// this tells the header to leave that release alone (see
+// _group_header_release)
+static void _group_note_toggled(GtkToggleButton *toggle, dt_iop_module_t *module)
+{
+  if(DT_IN_GUI_UPDATE()) return;
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  bd->masks_skip_group_release = TRUE;
+  GtkWidget *note = g_object_get_data(G_OBJECT(toggle), "note");
+  if(!note) return;
+  const dt_mask_id_t cid = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(note), "group-key"));
+  if(!bd->masks_note_open) bd->masks_note_open = g_hash_table_new(g_direct_hash, g_direct_equal);
+  g_hash_table_insert(bd->masks_note_open, GINT_TO_POINTER(cid),
+                      GINT_TO_POINTER(gtk_toggle_button_get_active(toggle) ? 1 : 2));
+  _sync_group_note(bd, note);
+}
+
+// a preset group's note: its pages (untranslated, from the presets file) in a
+// stack, one at a time, and a row of dots between a previous and a next arrow
+// to move between them when there is more than one. The stack is as tall as
+// the longest page, so the navigation stays put as the pages change
+static GtkWidget *_make_group_note(dt_iop_module_t *module,
+                                   const dt_mask_id_t cid,
+                                   GPtrArray *pages)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  GtkWidget *note = dt_gui_vbox();
+  gtk_widget_set_name(note, "mask-group-note");
+  dt_gui_add_class(note, "mask-group-note");
+  g_object_set_data(G_OBJECT(note), "group-key", GINT_TO_POINTER(cid));
+
+  GtkWidget *stack = gtk_stack_new();
+  gtk_stack_set_transition_type(GTK_STACK(stack), GTK_STACK_TRANSITION_TYPE_NONE);
+  for(guint i = 0; i < pages->len; i++)
+  {
+    GtkWidget *label = _group_note_label(_((const char *)g_ptr_array_index(pages, i)));
+    gtk_label_set_line_wrap(GTK_LABEL(label), TRUE);
+    gtk_label_set_line_wrap_mode(GTK_LABEL(label), PANGO_WRAP_WORD_CHAR);
+    gtk_label_set_xalign(GTK_LABEL(label), 0.0f);
+    gtk_label_set_yalign(GTK_LABEL(label), 0.0f);
+    // wraps to whatever width the panel has instead of asking for its own
+    gtk_label_set_max_width_chars(GTK_LABEL(label), 1);
+    gchar *name = g_strdup_printf("%u", i);
+    gtk_stack_add_named(GTK_STACK(stack), label, name);
+    g_free(name);
+  }
+  g_object_set_data(G_OBJECT(note), "note-stack", stack);
+
+  dt_gui_box_add(note, stack);
+
+  int page = 0;
+  if(pages->len > 1)
+  {
+    GtkWidget *dots = dt_gui_hbox();
+    dt_gui_add_class(dots, "mask-group-note-dots");
+    gtk_widget_set_halign(dots, GTK_ALIGN_CENTER);
+    GtkWidget *prev = _make_group_note_arrow(module, note, -1);
+    g_object_set_data(G_OBJECT(note), "note-prev", prev);
+    dt_gui_box_add(dots, prev);
+    GList *dot_list = NULL;
+    for(guint i = 0; i < pages->len; i++)
+    {
+      GtkWidget *dot = dtgtk_button_new(_paint_note_dot, 0, NULL);
+      gchar *tip = g_strdup_printf(_("page %u of %u"), i + 1, pages->len);
+      gtk_widget_set_tooltip_text(dot, tip);
+      g_free(tip);
+      g_object_set_data(G_OBJECT(dot), "note", note);
+      g_object_set_data(G_OBJECT(dot), "page", GINT_TO_POINTER(i));
+      g_signal_connect(G_OBJECT(dot), "clicked", G_CALLBACK(_group_note_dot_clicked), module);
+      dt_gui_box_add(dots, dot);
+      dot_list = g_list_append(dot_list, dot);
+    }
+    g_object_set_data_full(G_OBJECT(note), "note-dots", dot_list, (GDestroyNotify)g_list_free);
+    GtkWidget *next = _make_group_note_arrow(module, note, 1);
+    g_object_set_data(G_OBJECT(note), "note-next", next);
+    dt_gui_box_add(dots, next);
+    dt_gui_box_add(note, dots);
+    if(bd->masks_note_page)
+      page = GPOINTER_TO_INT(g_hash_table_lookup(bd->masks_note_page, GINT_TO_POINTER(cid)));
+    // the presets file may have lost pages since
+    if(page >= (int)pages->len) page = 0;
+  }
+  // a stack only selects a visible child, and the list's own show_all comes
+  // after this
+  gtk_widget_show_all(stack);
+  _group_note_show_page(note, page);
+  // whether it shows is _sync_group_note's call, not the list's show_all
+  gtk_widget_show_all(note);
+  gtk_widget_set_no_show_all(note, TRUE);
+  return note;
+}
+
 // one group of the panel: its header, and its element rows nested under it.
 // `marker` holds the group's settings, and its members start at `first`
 static void _pack_group(dt_iop_module_t *module,
@@ -15876,6 +16176,20 @@ static void _pack_group(dt_iop_module_t *module,
   GtkWidget *lbl_box = dt_gui_hbox();
   dt_gui_add_class(lbl_box, "mask-row-name");
   dt_gui_box_add(lbl_box, dt_gui_expand(lbl));
+  // a preset group's notes, and the info icon after its title that switches
+  // them on and off (see _group_note_is_open)
+  GPtrArray *note = _masks_preset_notes_shown() ? _masks_preset_notes(marker->preset_note) : NULL;
+  GtkWidget *note_toggle = NULL;
+  if(note)
+  {
+    note_toggle = dtgtk_togglebutton_new(dtgtk_cairo_paint_info, 0, NULL);
+    dt_gui_add_class(note_toggle, "dt_transparent_background");
+    gtk_widget_set_valign(note_toggle, GTK_ALIGN_CENTER);
+    gtk_widget_set_tooltip_text(note_toggle, _("show or hide how to use this group"));
+    g_signal_connect(G_OBJECT(note_toggle), "toggled", G_CALLBACK(_group_note_toggled), module);
+    dt_gui_box_add(lbl_box, note_toggle);
+  }
+
   // tagged so _group_header_press's ctrl+click can find (and later replace)
   // whichever of lbl / the rename entry currently occupies this slot
   g_object_set_data(G_OBJECT(lbl_box), "title-child", lbl);
@@ -16275,19 +16589,33 @@ static void _pack_group(dt_iop_module_t *module,
   if(group_expand_toggle)
     g_object_set_data(G_OBJECT(group_expand_toggle), "elem-box", elem_box);
 
+  // a preset group's note on how to use it, leading the group's card. It is
+  // the card's top part, the opacity slider below (if any) the rest: the
+  // note leaves its bottom edge open onto it (.mask-group-note-joined)
+  const gboolean list_slider = show_group_opacity_slider && !_props_subpanel();
+  if(note)
+  {
+    GtkWidget *note_w = _make_group_note(module, cid, note);
+    if(list_slider) dt_gui_add_class(note_w, "mask-group-note-joined");
+    g_object_set_data(G_OBJECT(note_w), "note-toggle", note_toggle);
+    g_object_set_data(G_OBJECT(note_toggle), "note", note_w);
+    g_object_set_data(G_OBJECT(note_w), "note-hdr", hdr);
+    if(empty) g_object_set_data(G_OBJECT(note_w), "note-empty", GINT_TO_POINTER(1));
+    dt_gui_box_add(elem_box, note_w);
+  }
+
   // "use sliders for opacity": the group's opacity, as a full labeled slider
   // leading its expanded contents instead of the compact value its header
   // would otherwise carry, or in the properties subpanel while the group is
-  // selected. Packed before anything else, so it stays above both the member
-  // rows (packed from the bottom, see _pack_group_elements) and the
-  // pending-shape placeholder below
-  if(show_group_opacity_slider && !_props_subpanel())
-  {
+  // selected. Packed before anything else but the note, so it stays above
+  // both the member rows (packed from the bottom, see _pack_group_elements)
+  // and the pending-shape placeholder below
+  if(list_slider)
     dt_gui_box_add(elem_box, _build_group_opacity_editor(module, cid, TRUE));
-    // the slider hangs straight off the header as one block, so the header
-    // squares its bottom edge onto it (.mask-group-has-slider)
-    dt_gui_add_class(hdr, "mask-group-has-slider");
-  }
+  // the card hangs straight off the header as one block, so the header
+  // squares its bottom edge onto it (.mask-group-has-slider). Onto a note
+  // only while it is open, see _sync_group_note
+  if(list_slider) dt_gui_add_class(hdr, "mask-group-has-slider");
 
   _pack_group_elements(module, grp, elem_box, g_list_reverse(g_list_copy(formids)));
   // the gaps between its elements are placed against them (see _drop_at)
@@ -16503,11 +16831,17 @@ static void _hook_mask_rails(GtkWidget *w)
     // (.mask-group-slider-only). Tagged here rather than where the box is
     // built: an empty nested group is built as an element row (see
     // _nested_as_group), not by _pack_group, and every box passes through here
+    // A preset's note is part of the same card (see _pack_group)
     GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
-    if(kids && !kids->next
-       && gtk_style_context_has_class(gtk_widget_get_style_context(kids->data),
-                                      "mask-group-opacity-editor"))
-      dt_gui_add_class(w, "mask-group-slider-only");
+    gboolean card_only = kids != NULL;
+    for(GList *k = kids; k; k = g_list_next(k))
+    {
+      GtkStyleContext *ctx = gtk_widget_get_style_context(k->data);
+      if(!gtk_style_context_has_class(ctx, "mask-group-opacity-editor")
+         && !gtk_style_context_has_class(ctx, "mask-group-note"))
+        card_only = FALSE;
+    }
+    if(card_only) dt_gui_add_class(w, "mask-group-slider-only");
     g_list_free(kids);
 
     GtkWidget *hdr = _mask_row_header(gtk_widget_get_parent(w));
@@ -16569,6 +16903,7 @@ static void _masks_panel_pack(dt_iop_module_t *module, dt_masks_form_t *grp)
   for(GList *c = children; c; c = g_list_next(c))
     gtk_widget_show_all(GTK_WIDGET(c->data));
   g_list_free(children);
+  _sync_group_notes(bd);
   gtk_widget_set_visible(GTK_WIDGET(bd->masks_list_box), TRUE);
 
   // a scope whose target is gone follows the surviving selection instead
@@ -17707,6 +18042,8 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module)
 
   if(bd->masks_cluster_expanded) g_hash_table_destroy(bd->masks_cluster_expanded);
   if(bd->masks_props_expanded) g_hash_table_destroy(bd->masks_props_expanded);
+  if(bd->masks_note_page) g_hash_table_destroy(bd->masks_note_page);
+  if(bd->masks_note_open) g_hash_table_destroy(bd->masks_note_open);
   if(bd->masks_refine_bypassed) g_hash_table_destroy(bd->masks_refine_bypassed);
   if(bd->masks_row_map) g_hash_table_destroy(bd->masks_row_map);
   if(bd->group_ordinals) g_hash_table_destroy(bd->group_ordinals);

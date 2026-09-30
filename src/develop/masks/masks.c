@@ -2358,7 +2358,13 @@ void dt_masks_read_masks_history(dt_develop_t *dev, const dt_imgid_t imgid)
       const char *const ptbuf = (char *)sqlite3_column_blob(stmt, 5);
       const size_t point_size = form->functions->point_struct_size;
 
-      const size_t read_size = dt_masks_point_stride(type, form->version, point_size);
+      size_t read_size = dt_masks_point_stride(type, form->version, point_size);
+      // a v7 group point written before preset_note existed stops where it
+      // starts; the zero fill below is "no note"
+      const size_t pre_note = offsetof(dt_masks_point_group_t, preset_note);
+      if((type & DT_MASKS_GROUP) && nb_points > 0
+         && sqlite3_column_bytes(stmt, 5) == (int)(nb_points * pre_note))
+        read_size = pre_note;
       for(int i = 0; i < nb_points; i++)
       {
         char *point = calloc(1, point_size);

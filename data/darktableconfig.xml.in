@@ -3728,6 +3728,20 @@
     <longdescription>while enabled, the mask panel's edge carries a visible handle with an arrow showing which way the panel folds away; while disabled the handle is invisible, like the main panels', and still resizes the panel by dragging and hides it on a click</longdescription>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/masks/show_preset_notes</name>
+    <type>bool</type>
+    <default>true</default>
+    <shortdescription>show preset notes</shortdescription>
+    <longdescription>while enabled, a group made by a built-in group layout preset shows a short note under its header on how to use it, until it is dismissed</longdescription>
+  </dtconfig>
+  <dtconfig>
+    <name>plugins/darkroom/masks/default_group_preset</name>
+    <type>string</type>
+    <default>drawn</default>
+    <shortdescription>default group layout</shortdescription>
+    <longdescription>the group layout preset a module's mask starts with when it is switched on for the first time: the id of a built-in preset in masks_group_presets.json, or user: followed by the name of a saved one</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/opacity</name>
     <type>float</type>
     <default>1.0</default>
