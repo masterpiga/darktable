@@ -1602,6 +1602,12 @@ button.mask-consumer-row:hover
   min-width: 18px;
 }
 
+/* the row under a section header naming its target, centered */
+.mask-section-target
+{
+  padding: 2px 0 4px 0;
+}
+
 .mask-refine-header-name
 {
   font-weight: bold;
