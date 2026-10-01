@@ -371,8 +371,6 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
                                 float g,
                                 float b);
 void dt_bauhaus_slider_clear_stops(GtkWidget *widget);
-void dt_bauhaus_slider_set_checker_gradient(GtkWidget *widget,
-                                            gboolean enable);
 void dt_bauhaus_slider_set_default(GtkWidget *widget,
                                    float def);
 float dt_bauhaus_slider_get_default(GtkWidget *widget);
