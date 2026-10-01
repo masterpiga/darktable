@@ -185,14 +185,19 @@ After each check, switch images and back: the setting and the render stay.
 5.10 Turn "element properties in subpanel" on as well. Shape and raster rows
      have no chevron; a parametric row keeps its chevron, which shows only
      its input and output sliders; groups show no opacity slider in the list.
-     Below the list, the "properties" and "refinement" headers read
-     "element", "group" or "mask" after the selection ("element
-     properties", "group refinement"...), and the first row under each
-     shows the selection's icon and name, centered; with only the mask's own
-     group selected it shows the mask's operator icon and "whole mask". Fold it: it stays folded for other
+     Below the list, a panel on its own ground opens with the selection's
+     icon and name, centered (with only the mask's own group selected, the
+     mask's operator icon and "whole mask"), then the "properties" and
+     "refinements" sections. Selecting another element or group never
+     changes the panel's width. A slider at 0% or 100% shows its whole
+     marker, and every opacity slider is a plain one, with no checkerboard
+     track. Fold it: it stays folded for other
      selections, other modules, and after a restart. With it folded, start
      drawing a circle: it opens with the creation controls, and folds again
-     once the circle is placed or the drawing canceled. On the refinement header, the title is
+     once the circle is placed or the drawing canceled. While drawing, with
+     the option on or off, the selection panel's row reads "new circle" and
+     the refinement is greyed out, folding included; both come back once
+     the circle is placed or the drawing canceled. On the refinement header, the title is
      centered, the eye ("disable") is on the left and reset left of the
      arrow; both work
      with the section folded, and both are greyed out while the target has no

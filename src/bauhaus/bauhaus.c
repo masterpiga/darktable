@@ -54,7 +54,6 @@ typedef struct dt_bauhaus_slider_data_t
   float *grad_pos;      // and position of these.
 
   int fill_feedback : 1; // fill the slider with brighter part up to the handle?
-  int checker_gradient : 1; // paint baseline as a checkerboard fading into solid white (opacity/alpha sliders)
 
   const char *format;   // numeric value is printed with this format
   float factor;         // multiplication factor before printing
@@ -1709,7 +1708,6 @@ GtkWidget *dt_bauhaus_slider_from_widget(dt_bauhaus_widget_t* w,
   d->grad_pos = NULL;
 
   d->fill_feedback = feedback;
-  d->checker_gradient = 0;
 
   d->is_dragging = 0;
   d->is_changed = 0;
@@ -2287,18 +2285,6 @@ void dt_bauhaus_slider_set_stop(GtkWidget *widget,
   }
 }
 
-// paint the baseline as a checkerboard fading into solid white left-to-right,
-// the standard alpha/opacity affordance (transparency shown as a checker,
-// solid color as the value approaches 1) -- see _draw_baseline. Mutually
-// exclusive with the grad_col/grad_pos stops set by dt_bauhaus_slider_set_stop.
-void dt_bauhaus_slider_set_checker_gradient(GtkWidget *widget,
-                                            const gboolean enable)
-{
-  dt_bauhaus_widget_t *w = DT_BAUHAUS_WIDGET(widget);
-  if(w->type != DT_BAUHAUS_SLIDER) return;
-  w->slider.checker_gradient = enable;
-}
-
 static void _draw_indicator_shape(cairo_t *cr, float radius)
 {
   dt_bauhaus_t *bh = darktable.bauhaus;
@@ -2363,34 +2349,6 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
     cairo_translate(cr, pos * wd, htm + htM / 2.0f);
   cairo_scale(cr, 1.0f, -1.0f);
   cairo_set_line_cap(cr, CAIRO_LINE_CAP_ROUND);
-
-  if(w->slider.checker_gradient)
-  {
-    // a checker-gradient track runs from a dark checkerboard to a near-white
-    // fade (see _draw_baseline), so the theme's usual fg/border pairing --
-    // two values close to each other, meant for one flat baseline color --
-    // leaves the marker invisible at one end or the other. Give it a light
-    // outline around a dark body instead: the outline holds up over the dark
-    // half, the body over the pale half, in any theme. Moderate grays rather
-    // than pure white/black, so it still reads as the same kind of marker as
-    // every other slider's.
-    //
-    // the outline is drawn inside the silhouette, not around it, so this
-    // marker takes up exactly as much room as a plain one: fill the shape a
-    // regular marker's stroke would reach to, then stroke that same outline
-    // at twice the border width clipped to it, which leaves a band of border
-    // width lying wholly within the edge, for every marker shape alike.
-    const float outer = size + border_width * 0.5f;
-    _draw_indicator_shape(cr, outer);
-    set_color(cr, (GdkRGBA){0.25, 0.25, 0.25, 1.0});
-    cairo_fill_preserve(cr);
-    cairo_clip_preserve(cr);
-    cairo_set_line_width(cr, border_width * 2.0f);
-    set_color(cr, (GdkRGBA){0.8, 0.8, 0.8, 1.0});
-    cairo_stroke(cr);
-    cairo_restore(cr);
-    return;
-  }
 
   // draw the outer marker
   _draw_indicator_shape(cr, size);
@@ -2589,35 +2547,7 @@ static void _draw_baseline(dt_bauhaus_widget_t *w,
   cairo_pattern_t *gradient = NULL;
   cairo_rectangle(cr, 0, htm, slider_width, htM);
 
-  if(d->checker_gradient)
-  {
-    // classic alpha-channel affordance: a checkerboard (standing in for
-    // "nothing here") fading into solid white (standing in for "fully
-    // covers") left to right, instead of a plain flat baseline.
-    cairo_save(cr);
-    cairo_clip(cr);
-    const double cs = DT_PIXEL_APPLY_DPI(4.0);
-    int col = 0;
-    for(double x = 0; x < slider_width; x += cs, col++)
-    {
-      int row = 0;
-      for(double y = htm; y < htm + htM; y += cs, row++)
-      {
-        const double v = ((col + row) % 2 == 0) ? 0.55 : 0.32;
-        cairo_set_source_rgb(cr, v, v, v);
-        cairo_rectangle(cr, x, y, MIN(cs, slider_width - x), MIN(cs, htm + htM - y));
-        cairo_fill(cr);
-      }
-    }
-    cairo_restore(cr);
-
-    cairo_rectangle(cr, 0, htm, slider_width, htM);
-    gradient = cairo_pattern_create_linear(0, 0, slider_width, 0);
-    cairo_pattern_add_color_stop_rgba(gradient, 0.0, 1.0, 1.0, 1.0, 0.0);
-    cairo_pattern_add_color_stop_rgba(gradient, 1.0, 1.0, 1.0, 1.0, 0.92);
-    cairo_set_source(cr, gradient);
-  }
-  else if(d->grad_cnt > 0)
+  if(d->grad_cnt > 0)
   {
     // gradient line as used in some modules
     const double zoom = (d->max - d->min) / (d->hard_max - d->hard_min);

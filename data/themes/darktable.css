@@ -902,6 +902,17 @@ dialog .sidebar row:selected:hover label,
 @define-color mask_text_control       #c8ccd4;
 @define-color mask_text_control_hover #ffffff;
 
+/* the selection panel under the list (#masks-selection-area): the selection's
+   icon and name, then its properties and refinement. Its own shades, which
+   start out as the list's: the ground, the section headers, the ground of
+   their controls, and the text */
+@define-color mask_selection_bg                 rgb(85, 85, 85);
+@define-color mask_selection_header             rgb(110, 110, 110);
+@define-color mask_selection_card               rgb(110, 110, 110);
+@define-color mask_selection_text               #eeeeee;
+@define-color mask_selection_text_control       #e4e4e4;
+@define-color mask_selection_text_control_hover #ffffff;
+
 /* every row/header kind in the panel (element/parametric/raster row, group
    header, cluster header) has its own unique widget id for CSS --
    #mask-shape-row, #mask-group-header-row, #mask-cluster-header-row -- but
@@ -1320,6 +1331,94 @@ dialog .sidebar row:selected:hover label,
   padding: 4px;
 }
 
+/* the selection panel (bd->masks_selection_area), laid out as the list is:
+   a ground, and on it the selection's name and a header and card per
+   section. The id is the panel's own; its parts are classes. The rules
+   outrank the stock section ones (#collapse-block, #collapsible,
+   .dt_section_label:not(#blending-box)) by their id, never by a tie */
+#masks-selection-area
+{
+  background-color: @mask_selection_bg;
+  border-radius: 6px;
+  padding: 4px;
+}
+
+.mask-selection-row
+{
+  padding: 2px 0;
+}
+
+.mask-selection-name
+{
+  color: @mask_selection_text;
+  font-weight: bold;
+  margin-left: 4px;
+  margin-right: 4px;
+}
+
+/* the gap between sections is the header's top margin, as between groups */
+#masks-selection-area #collapse-block
+{
+  margin: 0;
+}
+
+.dt_section_expander.mask-selection-section
+{
+  background-color: @mask_selection_header;
+  border-radius: 3px;
+  margin-top: 4px;
+}
+
+/* an open section's header squares off onto its card */
+.dt_section_expander.mask-selection-section.mask-section-open
+{
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+/* the title takes the header's ground, and no underline: the shade already
+   marks the header */
+#masks-selection-area .mask-selection-section .dt_section_label
+{
+  background-color: transparent;
+  border-bottom: none;
+  margin: 0;
+  color: @mask_selection_text;
+}
+
+#masks-selection-area .mask-selection-card
+{
+  background-color: @mask_selection_card;
+  border: none;
+  border-radius: 0 0 3px 3px;
+  padding: 2px 0;
+}
+
+#masks-selection-area .mask-selection-card #bauhaus-slider
+{
+  background-color: transparent;
+}
+
+/* the side margins are the room a slider's marker draws in at either end
+   (see the indicator clip in bauhaus.c), where the card's padding would only
+   inset the slider and still cut the marker in half */
+#masks-selection-area .dt_bauhaus
+{
+  color: @mask_selection_text_control;
+  margin-left: 6px;
+  margin-right: 6px;
+}
+
+#masks-selection-area .dt_bauhaus:hover
+{
+  color: @mask_selection_text_control_hover;
+}
+
+#masks-selection-area .dt_bauhaus:disabled
+{
+  color: @disabled_fg_color;
+}
+
 /* the list's first header: the container's padding is its gap from the top */
 .mask-root-block > box > * > .mask-group-header
 {
@@ -1602,18 +1701,6 @@ button.mask-consumer-row:hover
   min-width: 18px;
 }
 
-/* the row under a section header naming its target, centered */
-.mask-section-target
-{
-  padding: 2px 0 4px 0;
-}
-
-.mask-refine-header-name
-{
-  font-weight: bold;
-  margin-left: 4px;
-  margin-right: 4px;
-}
 
 button.mask-enable-toggle
 {

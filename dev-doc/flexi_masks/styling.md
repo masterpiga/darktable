@@ -139,3 +139,19 @@ stylesheet, so a redefinition replaces the token everywhere it is used.
 The headers themselves (their shades and rails) have no classes of their own
 to target: restyle them through these tokens. A rail takes its header's
 shade, the bottom one of a gradient.
+
+## The selection panel
+
+Under the list, `#masks-selection-area` holds the selection's icon and name
+(`.mask-selection-row`, `.mask-selection-name`), then its properties and
+refinement, each a header (`.mask-selection-section`, plus
+`.mask-section-open` while open) over a card (`.mask-selection-card`). It
+has tokens of its own, which start out as the list's:
+
+| token | used for |
+|---|---|
+| `mask_selection_bg` | the ground of the panel |
+| `mask_selection_header` | the section headers |
+| `mask_selection_card` | the ground of a section's controls |
+| `mask_selection_text` | the selection's name and the section titles |
+| `mask_selection_text_control`, `mask_selection_text_control_hover` | labels and values of the sliders |
