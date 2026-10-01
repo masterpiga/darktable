@@ -72,10 +72,10 @@ can be edited without rebuilding.
       "name": "drawn + parametric (classic)",
       "description": "menu tooltip",
       "mask": {
-        "operator": "multiply",
+        "operator": "overlap (smooth)",
         "notes": ["page 1, shown under the mask's own header", "page 2"],
         "groups": [
-          { "id": "parametric", "name": "parametric", "operator": "multiply",
+          { "id": "parametric", "name": "parametric", "operator": "overlap (smooth)",
             "opacity": 1.0, "notes": ["..."], "groups": [] }
         ]
       }
@@ -84,7 +84,7 @@ can be edited without rebuilding.
       "id": "subtract",
       "name": "drawn + parametric, minus an area",
       "mask": {
-        "operator": "difference",
+        "operator": "subtraction",
         "groups": [
           { "id": "subtract", "name": "to subtract" },
           { "preset": "drawn_parametric", "name": "drawn + parametric" }
@@ -97,11 +97,11 @@ can be edited without rebuilding.
 
 - `mask` is the mask's own group; `groups` lists nested groups top-first, as
   the panel shows them.
-- `operator` is one of union, screen, sum, intersect, multiply, difference,
-  exclusion; default union. These keys predate the menu names and stay as
-  they are, so existing preset files keep loading: in the menu they are
-  union (strongest), union (smooth), union (added), overlap (weakest),
-  overlap (smooth), subtraction and exclusion. `opacity` defaults to 1.
+- `operator` is named as the menu names it, untranslated: union (strongest),
+  union (smooth), union (added), overlap (weakest), overlap (smooth),
+  subtraction or exclusion; default union (strongest). The older keys union,
+  screen, sum, intersect, multiply and difference still load, so preset
+  files written with them keep working. `opacity` defaults to 1.
 - A group can be another preset, inserted whole: `{ "preset": "<id>" }`.
   Whatever the group sets itself (`name`, `operator`, `opacity`, `notes`,
   `groups`) replaces that member of the preset's `mask`; everything else,

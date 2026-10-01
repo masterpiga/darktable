@@ -341,18 +341,27 @@ static struct
   gint64 mtime;
 } _builtins;
 
+// an operator is named as the menu names it, untranslated (see _within_modes
+// in blend_gui.c). The older keys after them predate those names, and still
+// load so that preset files written with them keep working
 static const struct
 {
   const char *name;
   dt_masks_state_t within;
 } _flexi_operators[] = {
+  { "union (strongest)", 0 },
+  { "union (smooth)", DT_MASKS_STATE_SCREEN },
+  { "union (added)", DT_MASKS_STATE_WITHIN_SUM },
+  { "overlap (weakest)", DT_MASKS_STATE_ISECT },
+  { "overlap (smooth)", DT_MASKS_STATE_WITHIN_MULTIPLY },
+  { "subtraction", DT_MASKS_STATE_WITHIN_DIFFERENCE },
+  { "exclusion", DT_MASKS_STATE_WITHIN_EXCLUSION },
   { "union", 0 },
   { "screen", DT_MASKS_STATE_SCREEN },
+  { "sum", DT_MASKS_STATE_WITHIN_SUM },
   { "intersect", DT_MASKS_STATE_ISECT },
   { "multiply", DT_MASKS_STATE_WITHIN_MULTIPLY },
-  { "sum", DT_MASKS_STATE_WITHIN_SUM },
   { "difference", DT_MASKS_STATE_WITHIN_DIFFERENCE },
-  { "exclusion", DT_MASKS_STATE_WITHIN_EXCLUSION },
 };
 
 static void _flexi_builtin_free(gpointer data)

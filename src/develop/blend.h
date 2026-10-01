@@ -726,10 +726,11 @@ typedef struct dt_iop_gui_blend_data_t
   // live as a burst of GTK_IS_WIDGET/GTK_IS_BOX critical warnings right at
   // quit). 0 when nothing is pending (g_idle_add never returns 0).
   guint masks_rebuild_idle_id;
-  // the refinement section's caption; its tooltip says why the section is
-  // inactive, when it is (see _update_refine_sensitivity). What it refines is
-  // named beside it by masks_refine_name_label, after the target's icon in
-  // masks_refine_icon_box (see _refine_update_header)
+  // the refinement section's title, after the kind of its target; its tooltip
+  // says why the section is inactive, when it is (see
+  // _update_refine_sensitivity). What it refines is named under it by
+  // masks_refine_name_label, after the target's icon in masks_refine_icon_box
+  // (see _refine_update_header)
   GtkWidget *masks_refine_section_label;
   GtkWidget *masks_refine_expander;
   GtkWidget *masks_refine_icon_box;
@@ -743,10 +744,12 @@ typedef struct dt_iop_gui_blend_data_t
   // props_panel_box is the wrapped section, props_panel_content the box the
   // editor goes in, props_panel_formid the element or group
   // (props_panel_is_group) it holds the editor of, and pending_props_box the
-  // creation controls a pending row built for it. Its header names what it
-  // holds with props_panel_icon_box and props_panel_name_label
+  // creation controls a pending row built for it. Its header's title,
+  // props_panel_section_label, says what kind of target it holds, and the row
+  // under it names that with props_panel_icon_box and props_panel_name_label
   GtkBox *props_panel_box;
   GtkWidget *props_panel_expander;
+  GtkWidget *props_panel_section_label;
   GtkWidget *props_panel_icon_box;
   GtkWidget *props_panel_name_label;
   GtkWidget *props_panel_content;
