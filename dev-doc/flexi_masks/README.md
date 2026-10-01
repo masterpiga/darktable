@@ -6,9 +6,9 @@ parametric, raster, drawn + parametric) with one mask model and one panel.
 ## The model
 
 - **A mask is a tree of groups.** Each group folds its members in order
-  with one operator: union, intersection, difference, exclusion, sum,
-  multiply or screen. It then applies its own refinement, invert and
-  opacity. Groups nest.
+  with one operator: union (strongest), union (smooth), union (added),
+  overlap (weakest), overlap (smooth), subtraction or exclusion. It then
+  applies its own refinement, invert and opacity. Groups nest.
 - **Every member is an element.** Drawn shapes, single parametric channels,
   raster masks, AI objects and groups each yield a 0-1 value per pixel and
   combine the same way.
@@ -97,8 +97,11 @@ can be edited without rebuilding.
 
 - `mask` is the mask's own group; `groups` lists nested groups top-first, as
   the panel shows them.
-- `operator` is one of union, screen, intersect, multiply, sum, difference,
-  exclusion; default union. `opacity` defaults to 1.
+- `operator` is one of union, screen, sum, intersect, multiply, difference,
+  exclusion; default union. These keys predate the menu names and stay as
+  they are, so existing preset files keep loading: in the menu they are
+  union (strongest), union (smooth), union (added), overlap (weakest),
+  overlap (smooth), subtraction and exclusion. `opacity` defaults to 1.
 - A group can be another preset, inserted whole: `{ "preset": "<id>" }`.
   Whatever the group sets itself (`name`, `operator`, `opacity`, `notes`,
   `groups`) replaces that member of the preset's `mask`; everything else,
@@ -125,4 +128,6 @@ can be edited without rebuilding.
 ## More
 
 - [User documentation](user_docs.md)
+- [Styling the panel](styling.md): the classes, states and color tokens a
+  theme or the CSS tweaks can target
 - Upstreaming: [masks_revamp_upstream_plan.md](../../masks_revamp_upstream_plan.md)

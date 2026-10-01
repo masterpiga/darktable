@@ -4,7 +4,7 @@
     {
       "id": "drawn",
       "name": "drawn (classic)",
-      "description": "one group combining its shapes by union, as a classic drawn mask did",
+      "description": "one group combining its shapes by union (strongest), as a classic drawn\nmask did",
       "mask": {
         "operator": "union"
       }
@@ -12,7 +12,7 @@
     {
       "id": "parametric",
       "name": "parametric (classic)",
-      "description": "one group multiplying its parametric channels together, as a classic\nparametric mask did",
+      "description": "one group combining its parametric channels by overlap (smooth), as a\nclassic parametric mask did",
       "mask": {
         "operator": "multiply",
         "notes": [
@@ -23,14 +23,16 @@
     {
       "id": "drawn_parametric",
       "name": "drawn + parametric (classic)",
-      "description": "a \"shapes\" group (union) and a \"parametric\" group (multiply),\nmultiplied together, as a classic drawn & parametric mask did",
+      "description": "a \"shapes\" group, union (strongest), and a \"parametric\" group, overlap\n(smooth), combined by overlap (smooth), as a classic drawn & parametric mask did",
       "mask": {
         "operator": "multiply",
         "notes": [
-          "mask an area with parametric elements, and refine the selection with drawn shapes",
-          "with the <b>multiply</b> group operator, the masked area will be a smooth intersection of the area masked by <b>both</b> the <b>parametric</b> and the <b>shapes</b> group",
-          "use the <b>difference</b> group operator if you want to exclude the area masked by the <b>shapes</b> instead, or <b>invert</b> the output of the <b>shapes</b> group",
-          "start by selecting the <b>parametric</b> group and adding parametric channels to it, then move on to the <b>shapes</b> group"
+          "mask an area with <b>parametric</b> elements, and refine the selection with drawn <b>shapes</b>",
+          "start by selecting the <b>parametric</b> group and adding parametric channels to it, then move on to the <b>shapes</b> group",
+          "with <b>overlap</b> operators, only the area where the two groups overlap will masked",
+          "use <b>overlap (smooth)</b> if you want their soft edges fading together",
+          "use the <b>subtraction</b> operator if you want to exclude the area masked by the <b>shapes</b> instead",
+          "alternatively, you can <b>invert</b> the output of the <b>shapes</b> group"
         ],
         "groups": [
           {
@@ -39,9 +41,9 @@
             "operator": "union",
             "notes": [
               "draw shapes here to limit the area affected by the parametric channels.",
-              "with the <b>union</b> operator, the pixels that belong to <b>any</b> of the shapes are masked",
-              "change the group operator to <b>intersect</b> if you want to select only the pixels that are covered by <b>all</b> shapes",
-              "change the group operator to <b>screen</b> if you want a <b>union</b> where feathered regions blend smoothly, or to <b>multiply</b> for a smoother intersection"
+              "with the <b>union (strongest)</b> operator, the pixels that belong to <b>any</b> of the shapes are masked",
+              "change the operator to <b>union (smooth)</b> if you want feathered regions to blend smoothly",
+              "use <b>overlap (weakest)</b> if you want to mask only the pixels that are covered by <b>all</b> shapes"
             ]
           },
           {
@@ -50,8 +52,8 @@
             "operator": "multiply",
             "notes": [
               "add parametric channels here to select the area to mask, e.g., by color and brightness",
-              "with the <b>multiply</b> group operator, only the pixels that are selected by <b>all</b> parametric channels, e.g., pixels that are both red <b>and</b> low saturation, are masked",
-              "change the group operator to <b>screen</b> if you want to mask the pixels that are selected by <b>any</b> channel, e.g., red <b>or</b> low saturation pixels"
+              "with the <b>overlap</b> operators, only the pixels that are selected by <b>all</b> parametric channels are masked",
+              "change the operator to <b>union</b> if you want to mask the pixels that are selected by <b>any</b> channel"
             ]
           }
         ]
@@ -59,7 +61,7 @@
     },
     {
       "id": "mask_intersect_subtract",
-      "name": "mask, intersect and subtract (advanced)",
+      "name": "mask, overlap and subtract (advanced)",
       "description": "a drawn + parametric mask, combined with a subtractive refinement",
       "mask": {
         "operator": "difference",

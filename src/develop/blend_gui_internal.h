@@ -233,12 +233,10 @@ dt_masks_solo_canvas_t _model_toggle_soloedit(dt_iop_module_t *module,
                                               const dt_mask_id_t id);
 
 /** does an element row of this kind carry an expander chevron of its own?
-    `opacity_sliders` is "use sliders for opacity", which is what gives a
-    raster mask -- whose only property is opacity -- something to expand.
-    `props_subpanel` is "element properties in subpanel", which leaves only a
-    parametric row's in/out chevron. */
+    Every element has at least its opacity slider to show. `props_subpanel` is
+    "element properties in subpanel", which leaves only a parametric row's
+    in/out chevron. */
 gboolean _model_row_is_expandable(const dt_masks_type_t type,
-                                  const gboolean opacity_sliders,
                                   const gboolean props_subpanel);
 
 /** which element "auto-expand selected" keeps open: the selection if it can be
@@ -275,8 +273,7 @@ typedef struct dt_masks_param_vis_t
   gboolean output;
   gboolean boost;
   gboolean bypass;
-  /** the full opacity slider leading the expanded controls -- the row header's
-      own compact opacity value is always shown and is not covered here */
+  /** the full opacity slider leading the expanded controls */
   gboolean opacity;
 } dt_masks_param_vis_t;
 
@@ -284,7 +281,6 @@ dt_masks_param_vis_t _model_param_row_visibility(const gboolean expanded,
                                                  const gboolean in_used,
                                                  const gboolean out_used,
                                                  const gboolean boost_enabled,
-                                                 const gboolean opacity_slider_enabled,
                                                  const gboolean props_subpanel);
 
 /** state transition decisions for the mask panel and corner icon */
@@ -322,14 +318,13 @@ typedef struct dt_masks_props_target_t
   gboolean is_group;
   /** a drawn shape's size, feather and the rest */
   gboolean shape;
-  /** a full opacity slider, with "use sliders for opacity" */
+  /** a full opacity slider: always, for anything selected */
   gboolean opacity;
   /** a parametric channel's boost factor, for a channel that has one */
   gboolean boost;
 } dt_masks_props_target_t;
 
-dt_masks_props_target_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd,
-                                                  const gboolean opacity_sliders);
+dt_masks_props_target_t _model_props_panel_target(const dt_iop_gui_blend_data_t *bd);
 
 /** the collapsible sections of the mask panel below the list. Each keeps one
     folded state, the same for every module and target */

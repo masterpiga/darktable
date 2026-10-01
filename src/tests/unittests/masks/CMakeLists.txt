@@ -67,10 +67,18 @@ add_cmocka_test(test_probe_image
                 SOURCES test_probe_image.c
                 LINK_LIBRARIES lib_darktable cmocka)
 
+# The styling contract (dev-doc/flexi_masks/styling.md): the classes a theme
+# or the CSS tweaks can target. Reads the sources as text, no GTK.
+add_cmocka_test(test_flexi_styling
+                SOURCES test_flexi_styling.c
+                LINK_LIBRARIES lib_darktable cmocka)
+target_compile_definitions(test_flexi_styling PRIVATE
+                           DT_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+
 foreach(_t test_flexi_model test_flexi_cache test_flexi_persistence test_flexi_dnd
            test_flexi_groups test_flexi_panel test_flexi_migrate test_flexi_compose
            test_flexi_controls test_flexi_ui_coverage test_flexi_raster_prune
-           test_probe_image)
+           test_flexi_styling test_probe_image)
   target_include_directories(${_t} PRIVATE
                              ${CMAKE_CURRENT_SOURCE_DIR}
                              ${CMAKE_SOURCE_DIR}/src)

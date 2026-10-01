@@ -103,11 +103,18 @@ The group in this example has 5 elements, 3 of which are highlighted:
 
 The main widget on the parametric channel row is the range widget to select the channels' parameters.
 
-On the raster and shape element rows, the main widget is the opacity slider for that element.
+Opacity is never shown on a row itself: it is a slider leading each row's expanded controls (or the properties section, with "element properties in subpanel").
 
 Note that the final opacity of any element is the product of its own opacity and the opacity of the group it belongs to.
 
-Every row (group or element) also reserves a small, fixed-size column at its very right edge for **status badges**: a low-opacity warning (shown when a row's opacity is low enough that it barely contributes to the mask) and a solo/solo-edit indicator (see "Solo" and "Solo edit" below).
+Every row (group or element) keeps the same icons in the same columns, counted from the right:
+
+1. the **expander**, which shows or hides the row's expanded controls (or a group's elements);
+2. the **visibility eye**: click it to disable the row (it adds nothing to the mask) and click again to enable it; `SHIFT+click` it to solo the row (see "Solo" below);
+3. one icon that depends on the row: a group's **notes** toggle, a parametric channel's **color picker**, or the **link** of a linked shape or a raster mask;
+4. the **low-opacity warning**, shown when a row's opacity is low enough that it barely contributes to the mask.
+
+The first three share one frame. A column a row has no icon for stays blank, so the icons of every row line up.
 
 <div style="text-align:center">
 <img src="badges.png" width="100%">
@@ -150,10 +157,10 @@ This is exemplified in the diagram below:
 
 These decide how the elements *inside* one group combine into that group's own sub-mask. There are four, and — unlike a between-group operator — the order elements were added never changes the result:
 
-* **Union** (default): a pixel counts if *any* element covers it. The usual choice for building up a region out of several shapes or channels.
-* **Screen**: like union, but overlapping feathered edges blend smoothly into each other instead of showing a hard seam. Use it when soft-edged elements overlap and a visible line at the boundary would look wrong.
-* **Intersect**: a pixel counts only where *every* element covers it — narrows the group down to the common area.
-* **Multiply**: similar to intersect, but values fade proportionally instead of being clamped to the weakest element, at the cost of getting weaker the more elements are multiplied together. This is how classic's old multi-channel parametric mask combined its channels internally.
+* **Union (strongest)** (default): a pixel counts if *any* element covers it. The usual choice for building up a region out of several shapes or channels.
+* **Union (smooth)**: like union (strongest), but overlapping feathered edges blend smoothly into each other instead of showing a hard seam. Use it when soft-edged elements overlap and a visible line at the boundary would look wrong.
+* **Overlap (weakest)**: a pixel counts only where *every* element covers it — narrows the group down to the common area.
+* **Overlap (smooth)**: similar to overlap (weakest), but values fade proportionally instead of being clamped to the weakest element, at the cost of getting weaker the more elements are combined. This is how classic's old multi-channel parametric mask combined its channels internally.
 
 ### Between-group operators
 
@@ -230,7 +237,7 @@ An element can be:
 
 All elements within a group are combined using the same operator, and the order in which they are added to a group is irrelevant. There is no difference between a shape and a parametric channel or a raster mask - they are all just *elements*.
 
-**NOTE:** Once a group is selected it will stay selected, so adding multiple elements to the mask will result in all the shapes being added to the same group. For example, you can create a `union` group and add multiple brush strokes to it, then clean up the selection by adding a `difference` group above it with one or more refining brush strokes.
+**NOTE:** Once a group is selected it will stay selected, so adding multiple elements to the mask will result in all the shapes being added to the same group. For example, you can create a `union (strongest)` group and add multiple brush strokes to it, then clean up the selection by adding a `subtraction` group above it with one or more refining brush strokes.
 
 
 ### Parametric channels fine control
@@ -261,13 +268,13 @@ You can drag elements from one group to another one to reorder them. Note that e
 
 You can **solo** a group or element to hide all other mask elements and edit it in isolation. This is especially useful with the mask overlay turned on, so that you can isolate its effect and modify its parameters without interference from other mask elements.
 
-To solo a group or element, **right-click** its row (or its lead icon) to open its **actions menu**, then check **solo**.
+To solo a group or element, `SHIFT+click` the eye on its row, or **right-click** its row to open its **actions menu**, then check **solo**. A disabled row, or an empty group, cannot be soloed.
 
-When an element or group is soloed, a small inverted-eye badge appears at the right edge of its row, in the same fixed slot used for the low-opacity warning:
+When an element or group is soloed, its eye is filled in:
 
 ![Soloed mask element](solo.png)
 
-To turn solo off again, either **click the solo badge** itself, or uncheck **solo** from the same actions menu.
+To turn solo off again, either `SHIFT+click` the eye again, or uncheck **solo** from the same actions menu.
 
 NOTE: Solo is exclusive: soloing a different group/element replaces the current solo target. While something is soloed, every other group/element is dimmed **and** its own controls (opacity slider, within-group selector, ...) become non-interactive, since they contribute nothing to the mask while suppressed.
 
@@ -281,7 +288,7 @@ NOTE: **Solo Edit** is different from **Solo**, and the two are mutually exclusi
 
 ![Solo edit shape](solo_edit.png)
 
-To exit solo edit, use the menu entry again or click on the badge.
+To exit solo edit, use the menu entry again.
 
 ## Expanded controls for shapes and parametric channels
 

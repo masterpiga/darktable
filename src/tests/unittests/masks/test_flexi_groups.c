@@ -476,6 +476,27 @@ static void test_ordinal_max_is_per_within_mode(void **state)
   assert_int_equal(_group_ord_max_for_within(&flexi_module, i), 1);
 }
 
+// numbered per operator family, as a group's default name is: a smooth union
+// numbered 1 beside a strongest union 1 would show "union-1" twice
+static void test_ordinal_max_is_per_family(void **state)
+{
+  dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | i:4");
+  _group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_WITHIN_MULTIPLY;
+  _group_point(grp, FLEXI_GID(2))->state |= DT_MASKS_STATE_SCREEN;
+  flexi_set_ordinal(FLEXI_GID(0), 1); // union (strongest) 1
+  flexi_set_ordinal(FLEXI_GID(1), 1); // overlap (smooth) 1
+  flexi_set_ordinal(FLEXI_GID(2), 2); // union (smooth) 2
+
+  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_SCREEN), _within_index_for_state(0));
+  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_WITHIN_SUM),
+                   _within_index_for_state(0));
+  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_WITHIN_MULTIPLY),
+                   _within_index_for_state(DT_MASKS_STATE_ISECT));
+  assert_int_equal(_group_ord_max_for_within(&flexi_module, _within_index_for_state(0)), 2);
+  assert_int_equal(
+    _group_ord_max_for_within(&flexi_module, _within_index_for_state(DT_MASKS_STATE_ISECT)), 1);
+}
+
 // an empty group holds a number too, so a new group must not reuse it
 static void test_ordinal_max_counts_empty_groups(void **state)
 {
@@ -845,6 +866,7 @@ int main(void)
     cmocka_unit_test_teardown(test_disable_is_independent_of_solo, _teardown),
     cmocka_unit_test_teardown(test_group_bypass_is_independent_of_disable, _teardown),
     cmocka_unit_test_teardown(test_ordinal_max_is_per_within_mode, _teardown),
+    cmocka_unit_test_teardown(test_ordinal_max_is_per_family, _teardown),
     cmocka_unit_test_teardown(test_ordinal_max_counts_empty_groups, _teardown),
     cmocka_unit_test_teardown(test_ordinal_of_cid_reads_back, _teardown),
     cmocka_unit_test_teardown(test_pruning_drops_numbers_of_vanished_groups, _teardown),

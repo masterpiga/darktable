@@ -648,11 +648,10 @@ typedef struct dt_iop_gui_blend_data_t
   int masks_refine_scope_kind;
   dt_mask_id_t masks_refine_scope_formid;
   gboolean masks_refine_updating;
-  // one-shot guard: a group header's interactive children (operator chip, expander
-  // arrow) are plain buttons whose press returns TRUE (no grab), so their release
-  // bubbles up to the header event box and would toggle the group selection. Those
-  // handlers set this when they act so the next header release is ignored instead
-  // of (de)selecting the group. Cleared on a genuine header-background press.
+  // one-shot guard: a control in a row or header that lets its press or release
+  // bubble on up to the row/header event box, which would toggle the selection,
+  // sets this when it acts so the next release only selects, never deselects.
+  // Cleared on a genuine row/header press.
   gboolean masks_skip_group_select_release;
   // event time the flag above was last set at: a control that sets the flag
   // on a press lets that same press bubble on (so drag sources can still arm),
@@ -660,10 +659,6 @@ typedef struct dt_iop_gui_blend_data_t
   // press just set. Comparing event times tells the two cases apart without
   // needing a widget-identity check.
   guint32 masks_skip_group_select_release_time;
-  // stronger than the select-only skip above: the next header release leaves
-  // the selection alone entirely. Set by a group's note info icon, which only
-  // switches the note (see _group_note_toggled). Cleared on a header press
-  gboolean masks_skip_group_release;
   // set around _auto_expand_selected_row's own programmatic
   // gtk_toggle_button_set_active calls (see blend_gui.c): its own
   // "toggling this row's expander also selects it" side effect is meant for
@@ -693,9 +688,8 @@ typedef struct dt_iop_gui_blend_data_t
   dt_mask_id_t masks_last_expanded_group;
   // one-shot, set by _group_expand_toggled when the user collapses a group by
   // its own chevron and consumed by the very next _auto_expand_selected_group.
-  // That click bubbles up to the group header, which selects the group (see
-  // _group_header_release) -- and auto-expand would then immediately reopen
-  // what the user just closed. INVALID_MASKID when nothing is pending.
+  // That click also selects the group, and auto-expand would then immediately
+  // reopen what the user just closed. INVALID_MASKID when nothing is pending.
   dt_mask_id_t masks_group_collapse_click;
   // set by _row_drag_begin (element rows' handle/name), consumed by
   // _row_click_release: a plain click that turns into a real drag still gets
