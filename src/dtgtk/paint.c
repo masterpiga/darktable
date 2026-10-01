@@ -941,173 +941,140 @@ void dtgtk_cairo_paint_mask_invert(cairo_t *cr, const gint x, const gint y, cons
   FINISH
 }
 
+// the group operator icons: a square (the bottom element) and a circle (the
+// one above it) overlapping diagonally, combined with the operator's own
+// formula (group.c _combine_masks_*) evaluated per device pixel, so each icon
+// is what the operator does. Smooth variants feather both shapes; opacities
+// are partial only where that is the point, to tell the unions apart
+typedef enum _masks_op_icon_t
+{
+  _MASKS_OP_ICON_UNION,
+  _MASKS_OP_ICON_UNION_SMOOTH,
+  _MASKS_OP_ICON_SUM,
+  _MASKS_OP_ICON_INTERSECTION,
+  _MASKS_OP_ICON_MULTIPLY,
+  _MASKS_OP_ICON_DIFFERENCE,
+  _MASKS_OP_ICON_EXCLUSION
+} _masks_op_icon_t;
+
+static inline float _masks_op_icon_combine(const _masks_op_icon_t op, const float a, const float b)
+{
+  switch(op)
+  {
+    case _MASKS_OP_ICON_UNION: return fmaxf(a, b);
+    case _MASKS_OP_ICON_UNION_SMOOTH: return a + b - a * b;
+    case _MASKS_OP_ICON_SUM: return fminf(1.0f, a + b);
+    case _MASKS_OP_ICON_INTERSECTION: return fminf(a, b);
+    case _MASKS_OP_ICON_MULTIPLY: return a * b;
+    case _MASKS_OP_ICON_DIFFERENCE: return a * (1.0f - b);
+    default: return fmaxf(a * (1.0f - b), b * (1.0f - a));
+  }
+}
+
+static void _masks_op_icon(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
+                           const _masks_op_icon_t op)
+{
+  // strongest: a dim square under a bright circle, the stronger one showing
+  // in the overlap. Added: two half-strength shapes, the overlap at full
+  const float opacity_square = op == _MASKS_OP_ICON_UNION ? 0.5f
+                               : op == _MASKS_OP_ICON_SUM ? 0.55f : 1.0f;
+  const float opacity_circle = op == _MASKS_OP_ICON_SUM ? 0.55f : 1.0f;
+  const gboolean smooth = op == _MASKS_OP_ICON_UNION_SMOOTH || op == _MASKS_OP_ICON_MULTIPLY;
+  // where the result leaves a shape empty, its outline shows what was there
+  const gboolean outlines = op == _MASKS_OP_ICON_INTERSECTION || op == _MASKS_OP_ICON_MULTIPLY
+                            || op == _MASKS_OP_ICON_DIFFERENCE;
+
+  // each shape spans 80% of the side, from opposite corners, overlapping by 60%
+  const double s = MIN(w, h) * 0.94;
+  const double half = 0.4 * s;
+  const double sq_x = x + (w - s) / 2.0 + half, sq_y = y + (h - s) / 2.0 + half;
+  const double ci_x = sq_x + 0.2 * s, ci_y = sq_y + 0.2 * s;
+
+  // render the mask at device resolution: the user-space scale times the
+  // target's own device scale (a HiDPI window's surface)
+  double sx = 1.0, sy = 0.0, dsx = 1.0;
+  cairo_user_to_device_distance(cr, &sx, &sy);
+  cairo_surface_get_device_scale(cairo_get_target(cr), &dsx, NULL);
+  const double scale = hypot(sx, sy) * dsx;
+  const int pw = (int)ceil(w * scale), ph = (int)ceil(h * scale);
+  if(pw <= 0 || ph <= 0) return;
+  cairo_surface_t *mask = cairo_image_surface_create(CAIRO_FORMAT_A8, pw, ph);
+  if(cairo_surface_status(mask) != CAIRO_STATUS_SUCCESS)
+  {
+    cairo_surface_destroy(mask);
+    return;
+  }
+  cairo_surface_flush(mask);
+  unsigned char *const px = cairo_image_surface_get_data(mask);
+  const int stride = cairo_image_surface_get_stride(mask);
+  // a feather is 28% of the side; a hard edge is one device pixel of antialiasing
+  const double edge = smooth ? 0.28 * s : 1.0 / scale;
+  for(int j = 0; j < ph; j++)
+    for(int i = 0; i < pw; i++)
+    {
+      const double ux = x + (i + 0.5) / scale, uy = y + (j + 0.5) / scale;
+      // signed distances to the square and to the circle
+      const double qx = fabs(ux - sq_x) - half, qy = fabs(uy - sq_y) - half;
+      const double d_square = hypot(fmax(qx, 0.0), fmax(qy, 0.0)) + fmin(fmax(qx, qy), 0.0);
+      const double d_circle = hypot(ux - ci_x, uy - ci_y) - half;
+      const float a = opacity_square * CLIP(0.5 - d_square / edge);
+      const float b = opacity_circle * CLIP(0.5 - d_circle / edge);
+      px[j * stride + i] = (unsigned char)(255.0f * CLIP(_masks_op_icon_combine(op, a, b)) + 0.5f);
+    }
+  cairo_surface_mark_dirty(mask);
+
+  cairo_save(cr);
+  cairo_translate(cr, x, y);
+  cairo_scale(cr, 1.0 / scale, 1.0 / scale);
+  cairo_mask_surface(cr, mask, 0, 0);
+  cairo_restore(cr);
+  cairo_surface_destroy(mask);
+
+  if(outlines)
+  {
+    cairo_save(cr);
+    cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
+    cairo_rectangle(cr, sq_x - half, sq_y - half, 2.0 * half, 2.0 * half);
+    cairo_stroke(cr);
+    cairo_arc(cr, ci_x, ci_y, half, 0, 2.0 * M_PI);
+    cairo_stroke(cr);
+    cairo_restore(cr);
+  }
+}
+
 void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
-  // these icons are PREAMBLE-less, so they must honor the content offset (x,y)
-  // themselves -- otherwise they draw from the widget origin and look chopped
-  // on the left once the button has a border/padding.
-  cairo_translate(cr, x, y);
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // we want 2 circles of radius R that intersect in the middle,
-  // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
-  // with a safety belt of 5% to be sure the stroke is drawn inside the area
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_UNION);
 }
 
-void dtgtk_cairo_paint_masks_intersection(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
+void dtgtk_cairo_paint_masks_union_smooth(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
-  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // we want 2 circles of radius R that intersect in the middle,
-  // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
-  // with a safety belt of *0.95 to be sure the stroke is draw inside the area
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-
-  // we draw the outline of the 2 circles
-  cairo_save(cr);
-  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_stroke(cr);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_stroke_preserve(cr);
-
-  // we limit drawing to the area of the 2nd circle
-  cairo_clip(cr);
-
-  // we redraw the 1st circle
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  // and fill - clipping to the area of the 2nd circle means the intersection only
-  cairo_fill(cr);
-  cairo_restore(cr);
-}
-
-void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
-{
-  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // we want 2 round of radius R that intersect in the middle,
-  // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
-  // with a safety belt of *0.95 to be sure the stroke is draw inside the area
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-
-  // we draw and fill the first circle
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-
-  // then erase the second circle
-  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-
-  // last we draw the outline of the second circle
-  cairo_set_operator(cr, CAIRO_OPERATOR_OVER);
-  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_stroke(cr);
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_UNION_SMOOTH);
 }
 
 void dtgtk_cairo_paint_masks_sum(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
-  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // we want 2 round of radius R that intersect in the middle,
-  // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
-  // with a safety belt of *0.95 to be sure the stroke is draw inside the area
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-
-  // we draw the outline of the 2 circles
-  cairo_save(cr);
-  cairo_set_source_rgba(cr, 1.0, 1.0, 1.0, .3);
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // we draw the intersection of the 2 circles we slightly different radius so they are more visible
-  cairo_push_group(cr);
-  cairo_arc(cr, padding_left + r * 1.2, h / 2.0, r * 0.85, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_IN);
-  cairo_arc(cr, padding_left + r * 2.2, h / 2.0, r * 0.85, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_pop_group_to_source(cr);
-  cairo_paint(cr);
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_SUM);
 }
 
-void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
+void dtgtk_cairo_paint_masks_intersection(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
-  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // we want 2 round of radius R that intersect in the middle,
-  // so the width needs R + R*0.7 + R*0.7 + R = R*3.4
-  // with a safety belt of *0.95 to be sure the stroke is draw inside the area
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-
-  // we draw the first circle without the excluded area
-  cairo_save(cr);
-  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
-  cairo_arc(cr, padding_left + r, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-  cairo_arc(cr, padding_left + r * 2.2, h / 2.0, r * 0.85, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // same for the second circle
-  cairo_push_group(cr);
-  cairo_arc(cr, padding_left + r * 2.4, h / 2.0, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-  cairo_arc(cr, padding_left + r * 1.2, h / 2.0, r * 0.85, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_pop_group_to_source(cr);
-  cairo_paint(cr);
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_INTERSECTION);
 }
 
 void dtgtk_cairo_paint_masks_multiply(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
 {
-  cairo_translate(cr, x, y);  // honor content offset (PREAMBLE-less icon)
-  // note : as the icon is not square, we don't want PREAMBLE macro
-  // two circle outlines (like intersection), with the overlap filled and a
-  // small multiplication cross to set it apart from the plain intersection.
-  const double r = fmin(w / 3.4, h / 2.0) * 0.95;
-  const double padding_left = (w - r * 3.4) / 2.0;
-  const double cx = padding_left + r * 1.7;  // center between the two circles
-  const double cy = h / 2.0;
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_MULTIPLY);
+}
 
-  // outlines of the 2 circles
-  cairo_save(cr);
-  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.5);
-  cairo_arc(cr, padding_left + r, cy, r, 0, 2.0 * M_PI);
-  cairo_stroke(cr);
-  cairo_arc(cr, padding_left + r * 2.4, cy, r, 0, 2.0 * M_PI);
-  cairo_stroke_preserve(cr);
+void dtgtk_cairo_paint_masks_difference(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
+{
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_DIFFERENCE);
+}
 
-  // fill the overlap area only (clip to the 2nd circle, redraw the 1st)
-  cairo_clip(cr);
-  cairo_arc(cr, padding_left + r, cy, r, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // multiplication cross in the overlap
-  cairo_save(cr);
-  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
-  cairo_set_line_width(cr, cairo_get_line_width(cr) * 0.9);
-  const double d = r * 0.32;
-  cairo_move_to(cr, cx - d, cy - d);
-  cairo_line_to(cr, cx + d, cy + d);
-  cairo_move_to(cr, cx + d, cy - d);
-  cairo_line_to(cr, cx - d, cy + d);
-  cairo_stroke(cr);
-  cairo_restore(cr);
+void dtgtk_cairo_paint_masks_exclusion(cairo_t *cr, gint x, gint y, const gint w, const gint h, gint flags, void *data)
+{
+  _masks_op_icon(cr, x, y, w, h, _MASKS_OP_ICON_EXCLUSION);
 }
 
 void dtgtk_cairo_paint_masks_used(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
@@ -1244,6 +1211,30 @@ void dtgtk_cairo_paint_eye_toggle(cairo_t *cr, const gint x, const gint y, const
     cairo_line_to(cr, 0.9, 0.1);
     cairo_stroke(cr);
   }
+
+  FINISH
+}
+
+// "soloed": the eye filled solid with the pupil punched out, so it reads as
+// switched on, apart from the open eye (shown) and the crossed one (disabled)
+void dtgtk_cairo_paint_eye_solo(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
+{
+  PREAMBLE(1, 1, 0, 0)
+
+  // in a group, so the pupil clears the eye only, not whatever is under it
+  cairo_push_group(cr);
+  cairo_save(cr);
+  cairo_translate(cr, 0, 0.22);
+  cairo_scale(cr, 1.0, 0.55);
+  cairo_arc(cr, 0.5, 0.5, 0.45, 0, 2 * M_PI);
+  cairo_restore(cr);
+  cairo_fill_preserve(cr);
+  cairo_stroke(cr);
+  cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+  cairo_arc(cr, 0.5, 0.5, 0.14, 0, 2 * M_PI);
+  cairo_fill(cr);
+  cairo_pop_group_to_source(cr);
+  cairo_paint(cr);
 
   FINISH
 }
@@ -2411,6 +2402,30 @@ void dtgtk_cairo_paint_help(cairo_t *cr, const gint x, const gint y, const gint 
 void dtgtk_cairo_paint_info(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
 {
   PREAMBLE(0.95, 1, 0, 0)
+
+  // active (a toggle that is on): a filled disc with the "i" cut out of it,
+  // so on and off tell apart at a glance. In a group, so the cut-out clears
+  // the disc only, not whatever is under the icon
+  if(flags & CPF_ACTIVE)
+  {
+    cairo_push_group(cr);
+    cairo_arc(cr, 0.5, 0.5, 0.5, 0.0, 2.0 * M_PI);
+    cairo_fill(cr);
+    cairo_set_operator(cr, CAIRO_OPERATOR_CLEAR);
+    cairo_arc(cr, 0.5, 0.22, 0.07, 0.0, 2.0 * M_PI);
+    cairo_fill(cr);
+    cairo_move_to(cr, 0.5,  0.40);
+    cairo_line_to(cr, 0.5,  0.72);
+    cairo_move_to(cr, 0.35, 0.40);
+    cairo_line_to(cr, 0.50, 0.40);
+    cairo_move_to(cr, 0.35, 0.72);
+    cairo_line_to(cr, 0.65, 0.72);
+    cairo_stroke(cr);
+    cairo_pop_group_to_source(cr);
+    cairo_paint(cr);
+    FINISH
+    return;
+  }
 
   // dot (filled so it reads as a tittle, not a tiny ring)
   cairo_arc(cr, 0.5, 0.22, 0.05, 0.0, 2.0 * M_PI);

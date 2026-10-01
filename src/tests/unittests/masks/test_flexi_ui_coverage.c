@@ -229,14 +229,19 @@ static void test_every_panel_written_field_is_swept(void **state)
 static void test_the_struct_has_not_grown(void **state)
 {
   // formid + parentid + state + opacity + refinement + name[128]
-  // + group_opacity
+  // + group_opacity + preset_note[64]
+  //
+  // preset_note is render-irrelevant, like name: it keys the panel's preset
+  // notes, and outside the GUI only the history reader's size check
+  // (masks.c:2359) looks at it
   assert_int_equal(sizeof(dt_masks_point_group_t),
                    sizeof(dt_mask_id_t) * 2
                    + sizeof(int)
                    + sizeof(float)
                    + sizeof(dt_masks_refinement_t)
                    + 128
-                   + sizeof(float));
+                   + sizeof(float)
+                   + 64);
 }
 
 int main(void)

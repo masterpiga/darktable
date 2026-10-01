@@ -105,6 +105,8 @@ void dtgtk_cairo_paint_color(cairo_t *cr, gint x, gint y, gint w, gint h, gint f
 void dtgtk_cairo_paint_eye(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an eye icon which is crossed out if toggled */
 void dtgtk_cairo_paint_eye_toggle(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** paint a filled eye with the pupil cut out: soloed */
+void dtgtk_cairo_paint_eye_solo(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an eye whose right half is inverted (invert visibility) */
 void dtgtk_cairo_paint_invert_visibility(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a selection box with corner handles (solo-edit) */
@@ -165,7 +167,8 @@ void dtgtk_cairo_paint_messages(cairo_t *cr, gint x, gint y, gint w, gint h, gin
 void dtgtk_cairo_paint_styles(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint the ? help label */
 void dtgtk_cairo_paint_help(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
-/** paint the i info label */
+/** paint the i info label: outlined, or filled with the i cut out when
+    CPF_ACTIVE (a toggle that is on) */
 void dtgtk_cairo_paint_info(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint the grouping icon. */
 void dtgtk_cairo_paint_grouping(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
@@ -314,6 +317,8 @@ void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, gint x, gint y, gint w, gint h
 void dtgtk_cairo_paint_mask_invert(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op union icon for masks */
 void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
+/** Paint an op smooth union (screen) icon for masks */
+void dtgtk_cairo_paint_masks_union_smooth(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op intersection icon for masks */
 void dtgtk_cairo_paint_masks_intersection(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op difference icon for masks */

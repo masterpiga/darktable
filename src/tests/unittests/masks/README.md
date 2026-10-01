@@ -233,32 +233,31 @@ widget tree and real event delivery:
   Check: with a group holding a drawn shape and a parametric element, "invert
   all elements" must flip the shape's handle icon *and* the parametric row's
   slider markers, exactly as inverting either one on its own does.
-- **the two expander options** (hamburger → options). Only the rules behind
-  them are covered here (`_model_opacity_sliders_in_effect`,
-  `_model_row_is_expandable`, the anchor pair, and the conf defaults); which
-  widget ends up where needs a real tree. Check, with a group holding a drawn
-  shape, a parametric element and a raster mask:
+- **the expander option** (hamburger → options). Only the rules behind it are
+  covered here (`_model_row_is_expandable`, the anchor pair, and the conf
+  default); which widget ends up where needs a real tree. Check, with a group
+  holding a drawn shape, a parametric element and a raster mask:
   - *auto-expand selected* on — clicking each of the three in turn expands it
-    and collapses the previously expanded one, and a click on the raster row
-    while the option below is off leaves whatever is open open, because it has
-    nothing to expand. Expanding a parametric element this way must not add a
-    history item: the undo stack must not grow while merely clicking through
-    the list. With two or more groups, clicking a group header opens that
-    group's members and closes the other's, and selecting an element opens
-    both its group and itself. A group's own chevron still wins over the
-    option: collapsing the open group by its chevron must leave it collapsed,
-    even though that same click also selects the group
+    and collapses the previously expanded one. Expanding a parametric element
+    this way must not add a history item: the undo stack must not grow while
+    merely clicking through the list. With two or more groups, clicking a group
+    header opens that group's members and closes the other's, and selecting an
+    element opens both its group and itself. A group's own chevron still wins
+    over the option: collapsing the open group by its chevron must leave it
+    collapsed, even though that same click also selects the group
     (`masks_group_collapse_click`).
-  - *use sliders for opacity* — the checkbox is indented under auto-expand and
-    goes insensitive the moment auto-expand is switched off, without closing
-    the menu; its tooltip must still appear while it is greyed out (an
-    insensitive widget gets no events, hence the event box around it). With it
-    on, every row and the group headers lose their compact opacity value and
-    each expanded panel leads with a full slider instead — shapes, parametric
-    elements, raster masks and groups alike. The raster row grows a chevron and
-    loses it again as the option flips. Check the row header still lays out
-    correctly with the opacity column gone: name, badges, action icon and
-    chevron.
+  - opacity is never in a header: each expanded panel leads with a full slider
+    — shapes, parametric elements, raster masks and groups alike.
+- **header icons.** Every header keeps the same columns, counted from the
+  right: expander, visibility eye, then a group's notes toggle, a parametric
+  row's picker or the link of a linked shape or raster mask, then the
+  low-opacity badge. The first three share one framed drawer, always three
+  icons wide; a column a row does not use stays blank inside it, so the icons
+  of every row line up. Check: click the eye (disable, and back), shift+click it (solo, and
+  back), on an element and on a group; the eye, its tooltip and the actions
+  menu's "disable"/"solo" entries must agree, and shift+click must do nothing
+  on a disabled element or an empty group, where the menu offers no solo.
+
 - **hover highlight across an interaction.** Hovering a row highlights its shape
   on the canvas; the highlight must survive the interaction, not just the
   pointer being inside the row. Check: drag a row's opacity slider (or a

@@ -867,35 +867,40 @@ dialog .sidebar row:selected:hover label,
    override them.
    ----------------------------------------------------------------------------*/
 
-/* the panel's shades, one per state. Each header, the rail hanging from it and
-   the frame of the controls it owns take the same one, so a theme or user.css
-   retints the whole panel by redefining these. A selected or hovered header is
-   a gradient from the _top shade down to the plain one, and its rail and frame
-   take the plain one: that is the edge they meet */
-@define-color mask_rest          rgba(255, 255, 255, 0.15);
-@define-color mask_implied       rgba(255, 255, 255, 0.4);
-@define-color mask_selected_top  rgba(255, 255, 255, 0.6);
-@define-color mask_selected      rgba(255, 255, 255, 0.6);
-@define-color mask_hover_top     rgba(255, 255, 255, 0.9);
-@define-color mask_hover         rgba(255, 255, 255, 0.6);
-/* the ground of the controls under an open header, in every state: the
-   header's shade goes on their thin frame instead */
-@define-color mask_card          rgba(255, 255, 255, 0.15);
+/* the panel's shades, one per state. Each header and the rail hanging from
+   it take the same one, so a theme or user.css retints the whole panel by
+   redefining these. A selected or hovered header is a gradient from the _top
+   shade down to the plain one, and its rail takes the plain one: that is the
+   edge they meet */
+@define-color mask_rest          rgb(110, 110, 110);
+@define-color mask_implied       rgb(130, 130, 130);
+@define-color mask_selected_top  rgb(150, 150, 150);
+@define-color mask_selected      rgb(150, 150, 150);
+@define-color mask_hover_top     rgb(170, 170, 170);
+@define-color mask_hover         rgb(170, 170, 170);
+/* the ground of the controls under an open header, in every state */
+@define-color mask_card          rgb(110, 110, 110);
+/* the glyph on every row's lead icon, and the inverted icon's plate and
+   glyph. A lead has no plate of its own, so its glyph sits on the header and
+   must read on every header shade; an inverted one carries its plate, with an
+   edge in its glyph's color */
+@define-color mask_handle_fg          @fg_color;
+@define-color mask_handle_inverted_bg @fg_color;
+@define-color mask_handle_inverted_fg @text_color;
 /* the ground of the whole list, "whole mask" header and rails included:
-   darker than the panel, so the headers and cards stand out against it */
-@define-color mask_list_bg       rgba(0, 0, 0, 0.4);
-/* header names, one per header state as for the shades above. Selected and
-   hovered headers are light enough to need dark text */
+   darker than the headers and cards, so they stand out against it */
+@define-color mask_list_bg       rgb(85, 85, 85);
+/* header names, one per header state as for the shades above */
 @define-color mask_text_rest     @fg_color;
-@define-color mask_text_implied  @mask_text_rest;
-@define-color mask_text_selected rgba(0, 0, 0, 0.9);
-@define-color mask_text_hover    rgba(0, 0, 0, 0.9);
-/* the compact opacity value a header shows when "use sliders for opacity" is off */
-@define-color mask_text_value       alpha(@text_color, 0.85);
-@define-color mask_text_value_hover @text_color;
+@define-color mask_text_implied  @fg_color;
+@define-color mask_text_selected @fg_color;
+@define-color mask_text_hover    @fg_color;
+/* the compact value beside the module's own blend opacity slider */
+@define-color mask_text_value       alpha(#c8ccd4, 0.85);
+@define-color mask_text_value_hover #ffffff;
 /* labels and values of the sliders in the panel */
-@define-color mask_text_control       @fg_color;
-@define-color mask_text_control_hover shade(@fg_color, 1.2);
+@define-color mask_text_control       #c8ccd4;
+@define-color mask_text_control_hover #ffffff;
 
 /* every row/header kind in the panel (element/parametric/raster row, group
    header, cluster header) has its own unique widget id for CSS --
@@ -1135,9 +1140,9 @@ dialog .sidebar row:selected:hover label,
      reserves the room. Its color is NOT set here but on the group's header,
      as outline-color (see .mask-panel-row.mask-group-header): the header's
      state rules set it beside its background, so the rail follows the header
-     into selection and hover alike. Every rail in the panel is 3px:
+     into selection and hover alike. Every rail in the panel is 2px:
      thickness is not a signal here, color is. */
-  border-left: 3px solid transparent;
+  border-left: 2px solid transparent;
   /* the outer radius of the rounded elbow where the rail turns into its last
      tick (└). Top-left although the elbow is at the bottom: it is the one
      corner GTK3 lets code read (see _masks_rail_draw). Nothing else uses it,
@@ -1158,7 +1163,7 @@ dialog .sidebar row:selected:hover label,
    header shade every other rail rests at */
 .mask-cluster-elements
 {
-  border-left: 3px solid @mask_rest;
+  border-left: 2px solid @mask_rest;
   margin-left: 0;
   padding-left: 6px;
 }
@@ -1204,9 +1209,8 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* an open element's header: squared off along its whole bottom edge onto its
-   controls' card, whose frame carries the header's shade
-   (.mask-param-row-editor), so header and card meet as one block with no
-   notch at either corner */
+   controls' card (.mask-param-row-editor), so header and card meet as one
+   block with no notch at either corner */
 .mask-row-open > * > .mask-element-header
 {
   border-bottom-left-radius: 0;
@@ -1339,23 +1343,16 @@ dialog .sidebar row:selected:hover label,
   color: @disabled_fg_color;
 }
 
-/* each parametric mask row's own permanently-visible editor, framed as a card */
+/* each parametric mask row's own permanently-visible editor, as a card */
 .mask-param-row-editor
 {
-  /* an element's controls sit on the card ground, framed on three sides in
-     their header's shade, which follows the header into every state (the
-     element state rules below): the header closes the frame's open top, so an
-     expanded element reads as one card. Clipped to the padding box so the
-     ground does not tint the translucent frame, which then matches the
-     header exactly */
+  /* an element's controls sit on the card ground, with no frame: the header
+     squares off onto it, so an expanded element reads as one card */
   background-color: @mask_card;
-  background-clip: padding-box;
-  border: 1px solid @mask_rest;
-  border-top-width: 0;
   border-bottom-left-radius: 3px;
   border-bottom-right-radius: 3px;
   /* room above and below the channel sliders, so their handles do not butt
-     against the header and the frame's bottom edge */
+     against the header and the card's bottom edge */
   padding-top: 3px;
   padding-bottom: 3px;
   margin-left: 0;
@@ -1364,7 +1361,8 @@ dialog .sidebar row:selected:hover label,
      expander button rather than sitting in a column of their own a little to
      its left */
   margin-right: 0;
-  /* with the 1px frame, the same 9px inset the controls had before it */
+  /* the controls' inset from the header's left edge, as on a group's card
+     (.mask-group-opacity-editor) */
   padding-left: 8px;
 }
 
@@ -1377,18 +1375,15 @@ dialog .sidebar row:selected:hover label,
   margin-top: 0.14em;
 }
 
-/* "use sliders for opacity": the slider leading a parametric
-   row's expanded controls. Sits above the channel sliders rather than below
+/* the opacity slider leading a parametric row's expanded controls. Sits above the channel sliders rather than below
    them, so its breathing room goes underneath */
 .mask-param-opacity-box
 {
   margin-bottom: 0.14em;
 }
 
-/* every slider in the list ends its bar where the bypass-eye column starts
-   (17px = .mask-param-bypass-slot), which is also where the header's opacity
-   value ends and where the gradient sliders' bars end (see
-   _param_slider_fit_eye). The inset is the slider's own margin, not its box's:
+/* every slider in the list ends its bar about where the bypass-eye column
+   starts (.mask-param-bypass-slot, see _param_slider_fit_eye). The inset is the slider's own margin, not its box's:
    a bauhaus slider draws into its margin, so the marker at 1.0 overhangs the
    bar's end there. Inset by its box instead, the widget ended at the bar and
    cut the marker in half */
@@ -1415,14 +1410,11 @@ dialog .sidebar row:selected:hover label,
   min-height: 1.2em;
 }
 
-/* every row/group's own inline "properties" expander, framed as a card */
+/* every row/group's own inline "properties" expander, as a card */
 .mask-props-row-editor
 {
-  /* see .mask-param-row-editor: the same element-level card and frame */
+  /* see .mask-param-row-editor: the same element-level card */
   background-color: @mask_card;
-  background-clip: padding-box;
-  border: 1px solid @mask_rest;
-  border-top-width: 0;
   border-bottom-left-radius: 3px;
   border-bottom-right-radius: 3px;
   padding-top: 0;
@@ -1449,95 +1441,37 @@ dialog .sidebar row:selected:hover label,
   background-color: transparent;
 }
 
-/* an element's card frame follows its row's header into each state, at the
-   shade the header's outline-color takes (see .mask-element-header and the
-   header state rules): where a header carries a gradient, the shade it ENDS
-   on, since that is the edge the frame meets. The ground stays @mask_card.
-   Child selectors, so a selected group does not light up the controls of
-   the elements it holds. Implied before selected, as everywhere, and hover
-   last: its id outranks both */
-.mask-list-row-implied > * > .mask-param-row-editor,
-.mask-list-row-implied > * > .mask-props-row-editor
-{
-  border-color: @mask_implied;
-}
-
-.mask-list-row-selected > * > .mask-param-row-editor,
-.mask-list-row-selected > * > .mask-props-row-editor
-{
-  border-color: @mask_selected;
-}
-
-#mask-shape-row.mask-list-row-hover > * > .mask-param-row-editor,
-#mask-shape-row.mask-list-row-hover > * > .mask-props-row-editor
-{
-  border-color: @mask_hover;
-}
-
-/* "use sliders for opacity": the slider leading a group's expanded contents.
+/* the opacity slider leading a group's expanded contents.
    It is the group's own control, not a member, so it hangs off the header as
    one block with it and the rail, the way an element's controls hang off the
    element's header (.mask-param-row-editor): the same card, no gap above,
    and flush left against the group's rail rather than indented like the
    members below -- the negative margin takes back the members' indent
    (.mask-group-elements' 8px padding). The rail is the card's left edge, so
-   the frame has no left side, which would thicken the rail, and only the
-   bottom-right corner is rounded: the rail runs on past the bottom-left one.
-   The frame takes its header's shade in every state (the rules below). This
-   holds on a nested group's row too, where the box also carries
-   .mask-props-row-editor (declared earlier, so this wins the tie). No right
-   inset, so the card runs to the right edge: the slider stops short by its
-   own margin (see .mask-param-opacity-box) */
+   only the bottom-right corner is rounded: the rail runs on past the
+   bottom-left one. This holds on a nested group's row too, where the box
+   also carries .mask-props-row-editor (declared earlier, so this wins the
+   tie). No right inset, so the card runs to the right edge: the slider stops
+   short by its own margin (see .mask-param-opacity-box) */
 .mask-group-opacity-editor,
 .mask-group-note
 {
   background-color: @mask_card;
-  background-clip: padding-box;
-  border: 1px solid @mask_rest;
-  border-top-width: 0;
-  border-left-width: 0;
   border-radius: 0 0 3px 0;
   margin-top: 0;
   margin-left: -8px;
+  /* with the 2px rail, the same 8px inset from the header's left edge as an
+     element's card (.mask-param-row-editor) */
   padding: 0 0 0 6px;
-}
-
-/* and follows its header's state. The state classes sit on the group's
-   block (or, for the mask's own group, .mask-root-*), and hover is mirrored
-   onto the block as .mask-group-header-hovered (see _hover_block_of): the
-   header itself is a sibling of the box holding this slider, out of a CSS
-   rule's reach. Child selectors throughout, so a group's state does not
-   reach the sliders of the groups nested in it. Implied before selected,
-   hover last, as everywhere */
-.mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-root-implied > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-group-block.mask-list-row-implied > box > .mask-group-elements > .mask-group-note,
-.mask-root-implied > box > .mask-group-elements > .mask-group-note
-{
-  border-color: @mask_implied;
-}
-
-.mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-root-selected > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-group-block.mask-list-row-selected > box > .mask-group-elements > .mask-group-note,
-.mask-root-selected > box > .mask-group-elements > .mask-group-note
-{
-  border-color: @mask_selected;
-}
-
-.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-opacity-editor,
-.mask-group-block.mask-group-header-hovered > box > .mask-group-elements > .mask-group-note
-{
-  border-color: @mask_hover;
 }
 
 /* a group with no members holds the slider alone and draws no rail (the rail
    runs to the last member's tick): drop the rail's reserved room, so the
-   slider's card runs flush under the whole header, and close its frame on the
-   left, rounding the corner the rail would otherwise have run past. Scoped
-   under .masks-list so it outranks a user.css rule on .masks-list
-   .mask-group-elements that sets the rail's width: a tie went to user.css,
-   and the notch came back */
+   slider's card runs flush under the whole header, inset by the rail's width
+   more to keep the 8px, and round the corner the rail would otherwise have
+   run past. Scoped under .masks-list so it outranks a user.css rule on
+   .masks-list .mask-group-elements that sets the rail's width: a tie went to
+   user.css, and the notch came back */
 .masks-list .mask-group-elements.mask-group-slider-only
 {
   border-left-width: 0;
@@ -1546,17 +1480,15 @@ dialog .sidebar row:selected:hover label,
 .masks-list .mask-group-elements.mask-group-slider-only > .mask-group-opacity-editor,
 .masks-list .mask-group-elements.mask-group-slider-only > .mask-group-note
 {
-  border-left-width: 1px;
+  padding-left: 8px;
   border-bottom-left-radius: 3px;
 }
 
 /* a preset group's note (see _pack_group): the top part of the same card as
    the slider above, with the slider, when there is one, as its bottom part.
-   The note then leaves its bottom edge open and square onto it. Its text
-   stays readable in every state, since only the frame follows the header */
+   The note then squares off its bottom corners onto it */
 .masks-list .mask-group-elements > .mask-group-note.mask-group-note-joined
 {
-  border-bottom-width: 0;
   border-radius: 0;
 }
 
@@ -1661,24 +1593,13 @@ button.mask-consumer-row:hover
   background-color: alpha(@button_hover_bg, 0.5);
 }
 
-/* the same eye on a parametric row's input/output slider, where it stands
-   directly below the row header's expander button: same size and same side
-   margins as .mask-row-expander, so the two form one column instead of two
-   near-misses. Must stay after the rule above, which it overrides. */
-button.mask-param-bypass-btn
-{
-  min-width: 14px;
-  min-height: 14px;
-  margin: 0 1px 0 2px;
-}
-
 /* the box that eye sits in, over the right end of its slider. It keeps its
-   width whether or not the eye is currently shown, and the slider's bar ends
-   where it starts (see _param_slider_fit_eye in blend_gui.c). 17px = the
-   expander's 14px plus its 2px/1px side margins. */
+   width whether or not the eye is currently shown, and the slider, markers
+   included, ends where it starts (see _param_slider_fit_eye in blend_gui.c):
+   the expander's 18px */
 .mask-param-bypass-slot
 {
-  min-width: 17px;
+  min-width: 18px;
 }
 
 .mask-refine-header-name
@@ -1745,37 +1666,186 @@ button.mask-enable-toggle:checked
   color: @mask_text_value;
 }
 
-.mask-row-trailing-no-expander
+/* header icons: the styling contract (dev-doc/flexi_masks/styling.md).
+
+   One class per part, on the widget that paints it, and one class per state
+   on that same widget:
+     .mask-lead       a row's or a group's lead icon
+                      states: .mask-inverted; a parametric row's: .mask-channel
+     .mask-drawer     the box holding the three icons on the right
+     .mask-expander   :checked when open, :disabled on an empty group
+     .mask-eye        .mask-soloed, .mask-disabled
+     .mask-notes      a group's notes toggle, :checked when shown
+     .mask-picker     a parametric row's picker
+     .mask-link       a linked shape's or a raster mask's chain
+     .mask-badge      the low-opacity warning; .mask-no-effect when the
+                      element does nothing at all
+     .mask-channel-eye  a parametric channel's bypass, :checked when bypassed
+   Whose icon it is comes from the header: .mask-element-header or
+   .mask-group-header.
+
+   Every icon is 18px by request in code, so padding insets its glyph and
+   never resizes it. These rules use no ids, so a user.css rule that starts
+   with #masks-list-box always wins over them. */
+
+/* the drawer has no plate: its icons sit on the header. Padding here grows
+   it, unlike an icon's */
+.mask-drawer
 {
-  margin-right: 18px;
+  padding: 0;
+  border-radius: 4px;
 }
 
-/* expander button on row headers */
-button.mask-row-expander
+/* a lead has no plate either, pressed or not. An element's is drawn in code
+   (_drag_handle_draw), inset by this padding. A group's is a button, kept
+   off the generic hover rule by .dt_no_hover (set in code), which would
+   otherwise outrank these */
+.mask-lead,
+button.mask-lead,
+button.mask-lead:active
 {
-  min-width: 14px;
-  min-height: 14px;
-  padding: 0;
-  margin: 0 1px 0 2px;
   background-color: transparent;
+  color: @mask_handle_fg;
+}
+
+.mask-lead,
+button.mask-lead
+{
+  padding: 2px;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
+  border: none;
+  border-radius: 4px;
+}
+
+/* the box around a group's lead button adds nothing of its own */
+.mask-lead-box
+{
+  padding: 0;
+  margin: 0;
+}
+
+/* a parametric row's lead is its channel code, not a glyph: a smaller font
+   fits two letters in a square sized for one */
+.mask-lead.mask-channel
+{
+  font-size: 85%;
+  padding: 0;
+}
+
+.mask-lead.mask-channel label
+{
+  color: inherit;
+}
+
+/* inverted: the one lead with a plate, edged in its glyph's color */
+.mask-lead.mask-inverted,
+button.mask-lead.mask-inverted,
+button.mask-lead.mask-inverted:active
+{
+  background-color: @mask_handle_inverted_bg;
+  color: @mask_handle_inverted_fg;
+  box-shadow: inset 0 0 0 1px @mask_handle_inverted_fg;
+}
+
+/* the drawer's icons have no box of their own: the drawer frames them. In
+   every state, hover included: the glyph's color is the feedback */
+button.mask-expander,
+button.mask-eye,
+button.mask-notes,
+button.mask-picker,
+button.mask-link,
+button.mask-expander:hover,
+button.mask-eye:hover,
+button.mask-notes:hover,
+button.mask-picker:hover,
+button.mask-link:hover
+{
+  background-color: transparent;
+}
+
+button.mask-expander,
+button.mask-eye,
+button.mask-notes,
+button.mask-picker,
+button.mask-link
+{
+  padding: 0;
+  margin: 0;
+  min-width: 0;
+  min-height: 0;
   border: none;
 }
 
-button.mask-row-expander:not(:checked)
+/* dimmed through the glyph's color, not opacity, which would also fade
+   any plate a theme gives the drawer */
+button.mask-expander,
+button.mask-eye,
+button.mask-link
 {
-  color: @button_fg;
-  opacity: 0.6;
+  color: alpha(@button_fg, 0.6);
 }
 
-button.mask-row-expander:checked
+button.mask-picker
+{
+  color: @mask_handle_fg;
+}
+
+button.mask-link
+{
+  padding: 1px;
+}
+
+button.mask-expander:checked
 {
   color: @field_active_fg;
-  opacity: 1.0;
 }
 
-button.mask-row-expander:hover
+button.mask-expander:hover,
+button.mask-eye:hover,
+button.mask-link:hover
 {
-  opacity: 1.0;
+  color: @button_fg;
+}
+
+/* lit while on, hovered or not, like a bypassed channel's eye */
+button.mask-eye.mask-soloed,
+button.mask-eye.mask-disabled
+{
+  color: @field_active_fg;
+}
+
+/* an empty group's: there is nothing to expand */
+button.mask-expander:disabled
+{
+  color: alpha(@button_fg, 0.25);
+}
+
+/* the low-opacity warning: a solid triangle, so a foreground color is all it
+   needs; amber reads as caution without the alarm of red. In gray when the
+   element does nothing at all, which makes its opacity moot */
+.mask-badge
+{
+  background-color: transparent;
+  color: #e0a030;
+  padding: 0;
+}
+
+.mask-badge.mask-no-effect
+{
+  color: #909090;
+}
+
+/* a parametric channel's bypass, directly below the header's expander:
+   the same 18px (by request), flush with the right edge. Must stay after
+   button.mask-refine-bypass-btn, whose look it shares and whose size it
+   overrides */
+button.mask-channel-eye
+{
+  min-width: 0;
+  min-height: 0;
+  margin: 0;
 }
 
 .mask-inline-opacity-value:hover
@@ -1795,24 +1865,8 @@ button.mask-row-expander:hover
   background-color: transparent;
 }
 
-/* parametric row's own lead handle (see _make_channel_handle): the channel
-   code (e.g. "Cz") stands in for the generic icon every other row kind's
-   handle shows. The plate itself is fixed to the same square size as every
-   other row's icon handle (see the gtk_widget_set_size_request call there),
-   so only the font needs shrinking here, enough for a two-letter code to fit
-   without crowding a plate sized for a single glyph. */
-.mask-channel-handle
-{
-  font-size: 85%;
-  padding: 0;
-}
-.mask-channel-handle label
-{
-  color: inherit;
-}
-
 /* a shape/element/group row's own name label (see _make_shape_row): a little
-   horizontal breathing room after the lead handle's rounded plate, so the
+   horizontal breathing room after the lead icon, so the
    text doesn't sit flush against it. */
 .mask-row-name
 {
@@ -1851,60 +1905,6 @@ button.mask-row-expander:hover
   border-radius: 3px;
 }
 
-/* every row/group drag handle (element kind icon, group operator chip): a
-   subtle rounded plate behind the icon, always -- without this a blocky
-   glyph (the raster mask checkerboard, the generic grip dots) reads as a
-   bare rectangle instead of matching the rounded chips used elsewhere in the
-   panel (the within-group combo, the solo button, ...). No longer styled as
-   a distinct clickable button (border/hover) -- it is now just one of three
-   equivalent click surfaces for the row (icon, name, background gaps, see
-   _row_click_press/_row_click_release in blend_gui.c), not a special one. */
-.mask-list-handle
-{
-  background-color: alpha(@fg_color, 0.09);
-  border-radius: 3px;
-}
-
-/* inverted components (shape drag handle, soloed badge) swap to light
-   background / dark foreground for clear feedback at a glance. No padding
-   here: this rule is only a color swap, and must not resize the box it
-   colors */
-.mask-list-handle-inverted,
-.mask-power-solo
-{
-  background-color: #e8e8e8;
-  color: #202020;
-  border-radius: 3px;
-}
-
-/* the solo badge is a chip rather than a plate: tighter than .mask-list-handle's
-   3px, and padding-free so the glyph fills it */
-.mask-power-solo
-{
-  border-radius: 2px;
-  padding: 0px;
-}
-
-/* the chain leading to a mask elsewhere (see _make_link_button): one look
-   wherever it shows, a plain glyph that is always a button, brightening on
-   hover like the refinement bypass eye */
-button.mask-link-btn
-{
-  background-color: transparent;
-  border: none;
-  padding: 1px;
-  margin: 0;
-  min-width: 0;
-  min-height: 0;
-  color: @button_fg;
-  opacity: 0.6;
-}
-
-button.mask-link-btn:hover
-{
-  opacity: 1.0;
-}
-
 /* the same chain inside a row that is itself the button (a "mask consumers"
    row): it brightens with the row, whichever part of it is hovered */
 .mask-link-glyph
@@ -1918,44 +1918,12 @@ button.mask-consumer-row:hover .mask-link-glyph
   opacity: 1.0;
 }
 
-/* low-opacity warning badge (see _make_lowop_badge): an element or group whose
-   opacity is under 10% is nearly (or entirely) invisible, which used to be
-   prevented by a hard 5% floor rather than reported. Unlike the solo badge this
-   is not a chip -- dtgtk_cairo_paint_warning is already a solid triangle, so it
-   only needs a foreground color, and an amber one reads as a caution without
-   the alarm of a full red. Transparent background so it sits in the row rather
-   than on top of it. */
-.mask-lowop-warn
-{
-  background-color: transparent;
-  color: #e0a030;
-  padding: 0px;
-}
-
-/* no-op badge (see _make_lowop_badge / _lowop_badge_draw's "badge-noop" data
-   flag): a parametric channel still at its full/base range contributes
-   nothing to the mask at all, which is a stronger, different fact than "low
-   opacity" -- a neutral gray (not the amber warning color) in the same
-   slot, taking precedence over the opacity badge, since a no-op element's
-   opacity is moot. */
-.mask-noop-warn
-{
-  background-color: transparent;
-  color: #909090;
-  padding: 0px;
-}
-
-/* fixed-size stack the low-opacity and solo/solo-edit badges pack into (see
-   _make_badge_stack). Two 8px squares and this gap make the 18px of the lead
-   handle, so the stack does not set the header's height */
+/* the fixed-size column the low-opacity badge sits in (see
+   _make_badge_stack): an 8px square, well inside the 18px of the lead handle,
+   so it does not set the header's height */
 .mask-badge-stack
 {
   padding: 0px;
-}
-
-.mask-badge-stack > :first-child
-{
-  margin-bottom: 2px;
 }
 
 /* inline rename entry (mask list): replaces a plain label in place, so it must
@@ -1966,30 +1934,6 @@ button.mask-consumer-row:hover .mask-link-glyph
   padding: 0;
   border: none;
   min-height: 0;
-}
-
-/* the within-group operator chip and a base group/element's lead handle: the
-   same square plate as every other row's icon handle. Both the wrapper and the
-   button inside it, so the button does not add a box of its own around the
-   plate the wrapper already sizes. */
-.mask-within-combo,
-.mask-group-lead-handle,
-.mask-within-combo button,
-.mask-group-lead-handle button
-{
-  min-width: 18px;
-  min-height: 18px;
-  padding: 0;
-  margin: 0;
-}
-
-.mask-lead-static,
-.mask-lead-static button,
-button.mask-lead-static
-{
-  background: transparent;
-  border-color: transparent;
-  box-shadow: none;
 }
 
 /* Collapsible sections on lib & iop modules */
