@@ -1393,7 +1393,12 @@ void dt_iop_gui_update_header(dt_iop_module_t *module)
   // set panel name to display correct multi-instance
   _iop_panel_name(module);
   dt_iop_gui_set_enable_button(module);
-  dt_iop_gui_blend_masks_panel_relocate(module);
+  // only the focused module's panel is placed anywhere, and its title carries
+  // the instance name. Every module's header is updated, several times each
+  // on loading an image or the history, so relocating all of them was
+  // hundreds of calls for one that matters
+  if(module == darktable.develop->gui_module)
+    dt_iop_gui_blend_masks_panel_relocate(module);
 
   DT_LEAVE_GUI_UPDATE();
 }

@@ -499,6 +499,23 @@ static void _box_set_visible(GtkBox *box, gboolean visible)
 
 
 
+// a move can flip a container between constant size and height-for-width:
+// exposure's body without the panel is all fixed-size sliders, with it it
+// holds wrapping labels. gtk3 caches that mode per widget and a parent reads
+// its children's cached modes *before* re-measuring them, so on the way back
+// every ancestor kept "constant size", measured the panel at its minimum
+// width (much taller) and never recovered: blank gaps in the module. Measuring
+// the chain bottom-up refreshes each mode before the next parent reads it
+static void _refresh_request_modes(GtkWidget *from)
+{
+  for(GtkWidget *a = from; a; a = gtk_widget_get_parent(a))
+  {
+    gtk_widget_queue_resize(a);
+    int unused = 0; // gtk refuses the query with both outputs NULL
+    gtk_widget_get_preferred_width(a, &unused, NULL);
+  }
+}
+
 // re-home a widget into a new parent (no-op if already there), preserving its
 // shown state. Used by the panel host to move the whole flexi panel between
 // its possible homes (see masks_gui_panel_host.c)
@@ -526,6 +543,9 @@ void _reparent_into(GtkWidget *w,
 
   if(was_visible) gtk_widget_show(w);
   g_object_unref(w);
+
+  _refresh_request_modes(parent);
+  _refresh_request_modes(cur);
 }
 
 // a fixed spacer that only separates two runs of buttons, without competing
@@ -18990,6 +19010,15 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     // opts out of later ones.
     gtk_widget_show_all(GTK_WIDGET(bd->masks_panel_body));
     gtk_widget_set_no_show_all(GTK_WIDGET(bd->masks_panel_body), TRUE);
+
+    // the same for relocatable_box, whose visibility is focus: only the
+    // focused module shows its panel, and _masks_flexi_relocate/-release are
+    // what show it. Left to the expander's show_all, every module's panel came
+    // up visible and had to be hidden again by a relocate on each header
+    // update. It starts hidden; the children are shown once, as above
+    gtk_widget_show_all(GTK_WIDGET(bd->relocatable_box));
+    gtk_widget_hide(GTK_WIDGET(bd->relocatable_box));
+    gtk_widget_set_no_show_all(GTK_WIDGET(bd->relocatable_box), TRUE);
 
     bd->blend_inited = TRUE;
 
