@@ -440,11 +440,14 @@ void _add_masks_default_preset_box(GtkWidget *box);
 // masks_gui_toolbar.c -> blend_gui.c
 // ---------------------------------------------------------------------------
 
-/** the add-buttons toolbar: run_a and run_b centered, on one line when they
-    fit and on two rows otherwise, presets at the top right. gap is an empty
-    widget whose width spaces them */
-GtkWidget *_masks_toolbar_new(GtkWidget *run_a,
-                              GtkWidget *run_b,
+/** the add-buttons toolbar: add group, shapes, parametric channels and
+    import, centered on one line when they fit and on two or three rows
+    otherwise, presets at the top right. gap is an empty widget whose width
+    spaces them */
+GtkWidget *_masks_toolbar_new(GtkWidget *group,
+                              GtkWidget *shapes,
+                              GtkWidget *channels,
+                              GtkWidget *import,
                               GtkWidget *presets,
                               GtkWidget *gap);
 

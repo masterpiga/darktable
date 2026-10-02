@@ -6295,11 +6295,15 @@ static GtkWidget *_make_inline_opacity_value_widget(GtkWidget *slider,
 
 // a header column left empty: the size of one icon, so every row keeps its
 // icons in the same columns whichever ones it has
+// an icon button without an icon: a column the row has nothing for, exactly
+// as big as the icons beside it whatever the theme makes of them
 static GtkWidget *_header_blank_cell(void)
 {
-  GtkWidget *blank = dt_gui_hbox();
+  GtkWidget *blank = dtgtk_button_new(NULL, 0, NULL);
   dt_gui_add_class(blank, "mask-drawer-blank");
-  gtk_widget_set_size_request(blank, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
+  gtk_widget_set_can_focus(blank, FALSE);
+  gtk_widget_set_valign(blank, GTK_ALIGN_CENTER);
+  gtk_widget_show(blank);
   return blank;
 }
 
@@ -6311,15 +6315,49 @@ static gboolean _header_drawer_button(GtkWidget *w, GdkEventButton *e, gpointer 
   return e->button == GDK_BUTTON_PRIMARY;
 }
 
+// one drawer column holding two half-size icons, one above the other: laid
+// over a blank cell, which alone gives the column its size, so it is exactly
+// one icon wide and tall. Each half keeps its place when the other is
+// missing, so a badge always sits at the top of its column
+static GtkWidget *_header_stacked_cell(GtkWidget *top, GtkWidget *bottom)
+{
+  GtkWidget *halves = dt_gui_vbox();
+  gtk_box_set_homogeneous(GTK_BOX(halves), TRUE);
+  GtkWidget *half[2] = { top, bottom };
+  for(int i = 0; i < 2; i++)
+  {
+    GtkWidget *w = half[i] ? half[i] : dt_gui_hbox();
+    // filling it: an icon button centered in its half would take its own
+    // height, which is nothing once its padding and minimum size are gone
+    gtk_widget_set_halign(w, GTK_ALIGN_FILL);
+    gtk_widget_set_valign(w, GTK_ALIGN_FILL);
+    gtk_widget_show(w);
+    dt_gui_box_add(halves, w);
+  }
+  gtk_widget_show(halves);
+
+  GtkWidget *cell = gtk_overlay_new();
+  gtk_container_add(GTK_CONTAINER(cell), _header_blank_cell());
+  gtk_overlay_add_overlay(GTK_OVERLAY(cell), halves);
+  gtk_widget_set_valign(cell, GTK_ALIGN_CENTER);
+  gtk_widget_show(cell);
+  return cell;
+}
+
 // pack a row header, shared by element rows, the pending row and group
-// headers: <handle> <name, expanding> <badge> <kind icon> <visibility>
-// <expander>. The last four are fixed columns counted from the right, framed
-// together in one drawer that shares a single background; a column whose icon
-// the row does not have stays blank, inside the drawer, so every drawer is the
-// same size and the icons keep their places.
+// headers: <handle> <name, expanding> then, in one drawer that shares a single
+// background, fixed columns counted from the right: <expander> <visibility>
+// and the kind icon with the warning badge. The badge is half size, at the top
+// of the first free column: over a group's half-size notes toggle
+// (`stack_kind`), in the kind column of an element that has no kind icon, or
+// in a column of its own beside a parametric row's picker or a link. Half
+// size and stacked, the two cost one column, where they took two and kept the
+// panel from fitting the narrowest side panel. A column whose icon the row
+// does not have stays blank, so the icons keep their places.
 // - badge: the warning badge (see _make_lowop_badge); NULL on the pending row
 // - kind_icon: a group's notes toggle, a parametric row's picker, or the link
 //   of a linked shape or a raster mask; NULL for none
+// - stack_kind: kind_icon goes half size under the badge (a group's notes)
 // - visibility: see _make_visibility_button; NULL on the pending row
 // - expander: expand/collapse toggle; NULL for a row with nothing to expand
 static void _pack_row_header(GtkWidget *row,
@@ -6327,6 +6365,7 @@ static void _pack_row_header(GtkWidget *row,
                              GtkWidget *name,
                              GtkWidget *badge,
                              GtkWidget *kind_icon,
+                             const gboolean stack_kind,
                              GtkWidget *visibility,
                              GtkWidget *expander)
 {
@@ -6351,16 +6390,22 @@ static void _pack_row_header(GtkWidget *row,
                    G_CALLBACK(_header_drawer_button), NULL);
   gtk_box_pack_end(GTK_BOX(hbox), drawer, FALSE, FALSE, 0);
 
-  // the columns, right to left. Each icon is 18px by request, not by CSS, so
-  // that a theme's padding insets the glyph rather than growing the drawer
-  GtkWidget *cells[4] = { expander, visibility, kind_icon, badge };
-  for(int i = 0; i < 4; i++)
+  // the columns, right to left. Each is an icon button sized by the theme,
+  // like the icons of the module's sub-panel headers, so the glyphs match
+  // theirs; an empty column is a blank button of the same size
+  GtkWidget *cells[4] = { expander, visibility, NULL, NULL };
+  int n_cells = 3;
+  if(stack_kind || !kind_icon)
+    cells[2] = _header_stacked_cell(badge, kind_icon);
+  else
   {
-    if(cells[i])
-      gtk_widget_set_size_request(cells[i], DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
+    cells[2] = kind_icon;
+    cells[3] = _header_stacked_cell(badge, NULL);
+    n_cells = 4;
+  }
+  for(int i = 0; i < n_cells; i++)
     gtk_box_pack_end(GTK_BOX(drawer), cells[i] ? cells[i] : _header_blank_cell(),
                      FALSE, FALSE, 0);
-  }
 
 
   dt_gui_box_add(row, dt_gui_expand(hbox));
@@ -9316,8 +9361,6 @@ static gchar *_linked_tooltip(const dt_iop_module_t *module,
 static GtkWidget *_make_link_button(const char *tooltip, GCallback on_click, gpointer data)
 {
   GtkWidget *link = dtgtk_button_new(dtgtk_cairo_paint_link, 0, NULL);
-  // the 18px of every header icon, filling its slot (_link_action_slot)
-  gtk_widget_set_size_request(link, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_halign(link, GTK_ALIGN_CENTER);
   gtk_widget_set_valign(link, GTK_ALIGN_CENTER);
   dt_gui_add_class(link, "mask-link");
@@ -9326,11 +9369,10 @@ static GtkWidget *_make_link_button(const char *tooltip, GCallback on_click, gpo
   return link;
 }
 
-// the same 18px slot as a parametric row's picker, so the opacity columns line up
+// a slot like a parametric row's picker box, so the drawer columns line up
 static GtkWidget *_link_action_slot(GtkWidget *link)
 {
   GtkWidget *slot = dt_gui_hbox(link);
-  gtk_widget_set_size_request(slot, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_valign(slot, GTK_ALIGN_CENTER);
   return slot;
 }
@@ -12322,7 +12364,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
   // drawer: no element yet to warn about, hide or expand. Its columns stay
   // blank so the name lines up
   _pack_row_header(row, handle, name, NULL,
-                   NULL, NULL, NULL);
+                   NULL, FALSE, NULL, NULL);
 
   GtkWidget *row_vbox = dt_gui_vbox(row);
   gtk_widget_set_name(row_vbox, "mask-shape-row");
@@ -14691,7 +14733,6 @@ static GtkWidget *_make_param_bypass_btn(const char *tooltip,
   // be near each other
   dt_gui_add_class(btn, "mask-refine-bypass-btn");
   dt_gui_add_class(btn, "mask-channel-eye");
-  gtk_widget_set_size_request(btn, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_valign(btn, GTK_ALIGN_CENTER);
   gtk_widget_set_tooltip_text(btn, tooltip);
   g_signal_connect(G_OBJECT(btn), "toggled",
@@ -14771,7 +14812,6 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   // arms them programmatically), just never shown -- see master_picker,
   // built after them, which is the row's one visible button.
   GtkWidget *picker_box = dt_gui_hbox();
-  gtk_widget_set_size_request(picker_box, DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_valign(picker_box, GTK_ALIGN_CENTER);
   ed->colorpicker = dt_color_picker_new(module,
                                         DT_COLOR_PICKER_POINT_AREA | DT_COLOR_PICKER_IO
@@ -14808,11 +14848,6 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   dt_gui_add_class(ed->master_picker, "dt_transparent_background");
   dt_gui_add_class(ed->master_picker, "mask-picker");
   gtk_widget_set_valign(ed->master_picker, GTK_ALIGN_CENTER);
-  // the drawer sizes picker_box, the cell, but the button inside it would
-  // shrink to its natural size, nothing once the theme zeroes its padding and
-  // minimum size: it is the icon, so it takes the 18px every drawer icon has
-  gtk_widget_set_size_request(ed->master_picker, DT_PIXEL_APPLY_DPI(18),
-                              DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_name(ed->master_picker, "keep-active");
   gtk_widget_set_tooltip_text(ed->master_picker,
                               _("click: set the input range from an area picked on the image\n"
@@ -15400,7 +15435,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   GtkWidget *action_icon = (form->type & DT_MASKS_PARAMETRIC) ? param_picker_box
                            : (form->type & DT_MASKS_RASTER)   ? _make_raster_source_link(form)
                                                               : linked_slot;
-  _pack_row_header(row, handle, evbox, lowop_badge, action_icon,
+  _pack_row_header(row, handle, evbox, lowop_badge, action_icon, FALSE,
                    visibility, expand_toggle);
 
   // disabled elements dim their controls, but not the visibility button that
@@ -16180,9 +16215,11 @@ static void _pack_group(dt_iop_module_t *module,
   gtk_container_add(GTK_CONTAINER(labevt), lbl_box);
   // expands to absorb whatever width the opacity/within-group slot below
   // doesn't need (see _control_column_size_allocate), same as an element
-  // row's own name column -- the 50dpi request is just a floor so it never
-  // gets squeezed to nothing on an unusually narrow/crowded row.
-  gtk_widget_set_size_request(labevt, DT_PIXEL_APPLY_DPI(50), -1);
+  // row's own name column. The request is just a floor so it never gets
+  // squeezed to nothing: one icon wide, room for the ellipsis and a letter.
+  // Any wider and this row alone kept the panel from fitting the narrowest
+  // side panel
+  gtk_widget_set_size_request(labevt, DT_PIXEL_APPLY_DPI(18), -1);
   gtk_widget_set_hexpand(labevt, TRUE);
 
   // column 0 is the group's operator (ghandle below). With only one group in
@@ -16332,7 +16369,7 @@ static void _pack_group(dt_iop_module_t *module,
     gtk_widget_set_tooltip_text(group_expander, _("this group has no elements to show"));
   }
 
-  _pack_row_header(hdr, ghandle, labevt, group_lowop_badge, note_toggle,
+  _pack_row_header(hdr, ghandle, labevt, group_lowop_badge, note_toggle, TRUE,
                    group_visibility, group_expander);
   // dimmed when the group contributes nothing: every element hidden, or the
   // whole group bypassed (in which case the visibility button that brings it
@@ -17692,20 +17729,13 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     // default operator for a newly added group
     bd->masks_new_group_op = DT_MASKS_STATE_UNION;
 
-    // ---- the two runs of masks_toolbar's "add an element" actions (see its
-    // field comment in blend.h). Run A: add group | shapes; run B:
-    // parametric channels | link or copy. The toolbar itself is built once
-    // both are filled, further down
-    GtkWidget *run_a = dt_gui_hbox();
-    dt_gui_add_class(run_a, "masks-btn-row");
-    gtk_widget_show(run_a);
-    GtkWidget *run_b = dt_gui_hbox();
-    dt_gui_add_class(run_b, "masks-btn-row");
-    gtk_widget_show(run_b);
+    // ---- masks_toolbar's "add an element" actions (see its field comment in
+    // blend.h): add group, shapes, parametric channels and link or copy. The
+    // toolbar itself is built once they are all filled, further down
 
     // "add group": a plain "+" that opens the operator chooser (its icon is a
-    // fixed add affordance, it never reflects the selection). It leads run A:
-    // it adds to the mask as the shape buttons do
+    // fixed add affordance, it never reflects the selection). It leads the
+    // shapes: it adds to the mask as the shape buttons do
     bd->masks_new_op_box = _make_op_combo(&bd->masks_new_op, dtgtk_cairo_paint_plus,
                                           G_CALLBACK(_new_shape_op_press));
     // the add-group button is a plain "+" icon, not a bordered chooser: drop the
@@ -17715,10 +17745,6 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     _new_shape_op_update(bd->masks_new_op);
     gtk_widget_show(bd->masks_new_op_box);
     bd->masks_new_op_label = NULL; // retired (the button is icon-only now)
-
-    // add a group, then a fixed gap before the shapes (appended below)
-    dt_gui_box_add(run_a, bd->masks_new_op_box);
-    _pack_gap(run_a);
 
     // solo edit sits on the panel header, next to "edit on canvas": it is used
     // interactively, and its state has to be visible while editing. The channel
@@ -17823,7 +17849,7 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->solo_formid = INVALID_MASKID;
     bd->masks_row_click_entered = INVALID_MASKID;
 
-    // ---- "add parametric" cluster (flexi-only, leading run B):
+    // ---- "add parametric" cluster (flexi-only, ahead of link or copy):
     // one flat button per channel of the module's blend colorspace,
     // populated lazily by _rebuild_param_channel_buttons once the csp is
     // known. Visibility is toggled per mode alongside the rest of the
@@ -17838,15 +17864,8 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     bd->masks_param_channels_inner = dt_gui_hbox();
     dt_gui_box_add(bd->masks_param_channels_box, bd->masks_param_channels_inner);
     gtk_widget_show(bd->masks_param_channels_inner);
-    // the gap to "link or copy" belongs to the cluster, so a module without
-    // parametric channels does not start run B with it
-    _pack_gap(bd->masks_param_channels_box);
-    dt_gui_box_add(run_b, bd->masks_param_channels_box);
     gtk_widget_show(bd->masks_import_btn);
-    dt_gui_box_add(run_b, bd->masks_import_btn);
-
     gtk_widget_show(shapes_box);
-    dt_gui_box_add(run_a, shapes_box);
 
     // the group layout presets build a whole set of groups at once, so they
     // sit apart from the runs, at the top right
@@ -17861,7 +17880,10 @@ void dt_iop_gui_init_masks(GtkWidget *blendw, dt_iop_module_t *module)
     dt_gui_add_class(toolbar_gap, "mask-row-gap");
     gtk_widget_show(toolbar_gap);
 
-    GtkWidget *toolbar = _masks_toolbar_new(run_a, run_b, presets_btn, toolbar_gap);
+    GtkWidget *toolbar = _masks_toolbar_new(bd->masks_new_op_box, shapes_box,
+                                            bd->masks_param_channels_box,
+                                            bd->masks_import_btn, presets_btn,
+                                            toolbar_gap);
     gtk_widget_set_no_show_all(toolbar, TRUE);
     dt_gui_add_class(toolbar, "masks-toolbar");
     bd->masks_toolbar = toolbar;
