@@ -354,22 +354,6 @@ typedef struct dt_develop_t
                                        const gboolean doit);
     } modulegroups;
 
-    // masks plugin hooks
-    struct
-    {
-      struct dt_lib_module_t *module;
-      /* treview list refresh */
-      void (*list_change)(struct dt_lib_module_t *self);
-      void (*list_remove)(struct dt_lib_module_t *self,
-                          const dt_mask_id_t formid,
-                          const dt_mask_id_t parentid);
-      void (*list_update)(struct dt_lib_module_t *self);
-      /* selected forms change */
-      void (*selection_change)(struct dt_lib_module_t *self,
-                               struct dt_iop_module_t *module,
-                               const dt_mask_id_t selectid);
-    } masks;
-
     // flexi masks panel relocation host for the "utility module" position
     // ONLY (masks_panel_position == MASKS_PANEL_POS_UTILITY, see
     // masks_flexi_host.c and develop/blend_gui.c). The "separate panel,
@@ -669,16 +653,10 @@ int dt_dev_modulegroups_basics_module_toggle(dt_develop_t *dev,
                                              const gboolean doit);
 
 /*
- * masks plugin hooks
+ * the focused module's shapes, or the defaults of the shape being drawn,
+ * changed on canvas: its blend mask panel shows the new values
  */
 void dt_dev_masks_list_change(dt_develop_t *dev);
-void dt_dev_masks_list_update(dt_develop_t *dev);
-void dt_dev_masks_list_remove(dt_develop_t *dev,
-                              const dt_mask_id_t formid,
-                              const dt_mask_id_t parentid);
-void dt_dev_masks_selection_change(dt_develop_t *dev,
-                                   struct dt_iop_module_t *module,
-                                   const dt_mask_id_t selectid);
 
 /*
  * multi instances

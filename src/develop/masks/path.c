@@ -3176,7 +3176,6 @@ static int _path_events_button_pressed(dt_iop_module_t *module,
         dt_masks_iop_update(crea_module);
       }
 
-      dt_dev_masks_selection_change(darktable.develop, crea_module, form->formid);
       gui->creation_module = NULL;
 
       if(gui->creation_continuous)
@@ -3597,7 +3596,6 @@ static int _path_events_button_pressed(dt_iop_module_t *module,
     }
 
     // we remove the shape
-    dt_dev_masks_list_remove(darktable.develop, form->formid, parentid);
     dt_masks_remove_shape(module, form, parentid, TRUE);
     return 1;
   }

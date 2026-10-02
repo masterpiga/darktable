@@ -716,7 +716,6 @@ static int _ellipse_events_button_pressed(dt_iop_module_t *module,
       dt_masks_iop_update(crea_module);
     }
 
-    dt_dev_masks_selection_change(darktable.develop, crea_module, form->formid);
     gui->creation_module = NULL;
 
     // if we draw a clone ellipse, we start now the source dragging
@@ -870,6 +869,14 @@ static int _ellipse_events_button_released(dt_iop_module_t *module,
 
       ellipse->flags |= DT_MASKS_ELLIPSE_PROPORTIONAL;
     }
+    // the border keeps its width on the short axis, but its number changes
+    // unit with the mode: say which one it is now
+    if(ellipse->flags & DT_MASKS_ELLIPSE_PROPORTIONAL)
+      dt_toast_log(_("fade-out border: proportional, %3.2f%% of the radius"),
+                   ellipse->border * 100.0f);
+    else
+      dt_toast_log(_("fade-out border: fixed width, %3.2f%% of the image"),
+                   ellipse->border * 100.0f);
 
     dt_conf_set_int(DT_MASKS_CONF(form->type, ellipse, flags), ellipse->flags);
     dt_conf_set_float(DT_MASKS_CONF(form->type, ellipse, border), ellipse->border);

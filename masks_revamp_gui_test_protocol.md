@@ -256,6 +256,24 @@ After each check, switch images and back: the setting and the render stay.
 8.4 Dock and undock the panel. The toggle switches sit in place from the
     start, not only after hovering. (Fixed 2026-09-12.)
 
+8.5 With a shape's properties showing (in the properties section, and again
+    with "element properties in subpanel" off, in its row): scroll on the
+    shape, shift+scroll, ctrl+scroll. Size, fade-out border and opacity
+    follow at each step. While drawing a new circle, scroll and shift+scroll:
+    the creation sliders follow too. Dragging a slider in the panel still
+    moves smoothly. (Fixed 2026-10-02.)
+
+8.6 Alt+click an ellipse to switch its fade-out border mode: the border keeps
+    its width on screen, a toast names the new mode and its unit, and the
+    panel's fade-out border shows the new number without reselecting.
+
+8.7 Turn solo edit on, with two or more shapes and nothing selected. Click a
+    shape that is not the bottom one: its own outline is highlighted, not
+    the bottom shape's. (Fixed 2026-10-02.)
+
+8.8 AI object: click one object, then a separate one. Both stay selected;
+    shift+click still removes a part. (Fixed 2026-10-02.)
+
 ## 9. Showing the panel, and switching the mask on
 
 The rule: the mask's on/off state is the image, the panel's fold is the view.

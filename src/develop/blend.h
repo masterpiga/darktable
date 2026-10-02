@@ -1123,6 +1123,10 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void);
 // stays in sync without a full masks-list rebuild (which would interrupt an
 // in-progress slider drag).
 void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module);
+// the module's shapes, or the defaults of the shape being drawn, changed
+// outside the panel (on canvas): show the new values in the panel's controls
+// without rebuilding it. Called from dt_dev_masks_list_change
+void dt_iop_gui_blend_masks_changed(dt_iop_module_t *module);
 
 // remove one element from this module's mask, exactly as the panel's delete
 // does: only this module's use of it goes, and an emptied group stays in

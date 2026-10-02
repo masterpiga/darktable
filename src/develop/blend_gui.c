@@ -1998,16 +1998,14 @@ static void _mask_lock_sync(dt_iop_module_t *module)
   DT_ENTER_GUI_UPDATE();
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_lock_btn), locked);
   DT_LEAVE_GUI_UPDATE();
-  gtk_widget_set_tooltip_text(bd->mask_lock_btn,
-                              locked
-                              ? _("mask locked\n"
-                                  "reset, presets, styles and paste leave it alone,\n"
-                                  "and it cannot be edited\n"
-                                  "click to unlock")
-                              : _("mask unlocked\n"
-                                  "click to lock: reset, presets, styles and paste\n"
-                                  "then leave it alone, and it cannot be edited.\n"
-                                  "discarding the history still removes it"));
+  gchar *lock_tip = g_strdup_printf(
+    "%s\n\n%s",
+    locked ? _("mask locked: click to unlock") : _("mask unlocked: click to lock"),
+    _("a locked mask cannot be edited, and is not affected by\n"
+      "module reset, presets, styles or pasted module parameters.\n"
+      "discarding the history still removes it"));
+  gtk_widget_set_tooltip_text(bd->mask_lock_btn, lock_tip);
+  g_free(lock_tip);
   // shown with an off mask too while locked: an off mask keeps its lock, and
   // this is the panel's only way to lift it
   gtk_widget_set_visible(bd->mask_lock_btn,
@@ -3328,7 +3326,7 @@ const char *slider_tooltip[] =
        "- upper markers: full opacity (100% mask)\n"
        "- lower markers: zero opacity (0% mask)\n"
        "- between upper/lower markers: opacity transition\n\n"
-       "drag marker to adjust (shift+drag to move range)\n"
+       "drag marker to adjust\n"
        "right-click marker for precise numeric entry\n"
        "double-click to reset\n"
        "press 'm' to toggle mask view\n"
@@ -3337,7 +3335,7 @@ const char *slider_tooltip[] =
        "- upper markers: full opacity (100% mask)\n"
        "- lower markers: zero opacity (0% mask)\n"
        "- between upper/lower markers: opacity transition\n\n"
-       "drag marker to adjust (shift+drag to move range)\n"
+       "drag marker to adjust\n"
        "right-click marker for precise numeric entry\n"
        "double-click to reset\n"
        "press 'm' to toggle mask view\n"
@@ -4945,6 +4943,11 @@ static void _refresh_sibling_prop_rows(dt_iop_module_t *module,
                                        GList *formids,
                                        GtkWidget *src);
 
+// TRUE while a properties control commits its own edit: the commit reaches
+// dt_iop_gui_blend_masks_changed, whose re-read must leave alone the slider
+// the user is dragging
+static gboolean _props_committing = FALSE;
+
 // apply a single property's new value to every form in `target_formids`,
 // following the removed mask manager's delta protocol: modify_property takes
 // (old_val -> new_val) and derives its own ratio/delta internally, so
@@ -5120,7 +5123,12 @@ static void _props_row_apply(dt_iop_module_t *module,
   // commit exactly one history item for the whole gesture across every targeted
   // form, whatever the property -- opacity included (the OPACITY branch above no
   // longer self-commits per form, so a multi-form drag is now a single commit).
-  if(value != old_value) dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+  if(value != old_value)
+  {
+    _props_committing = TRUE;
+    dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
+    _props_committing = FALSE;
+  }
 }
 
 // Quad for the shrink/grow slider's unit toggle: always shows "%" inside a
@@ -5188,7 +5196,9 @@ static void _props_resize_commit(dt_masks_props_row_editor_t *ed)
   g_array_free(pts, TRUE);
 
   dt_masks_gui_form_create(form, gui, pos, dev->gui_module);
+  _props_committing = TRUE;
   dt_dev_add_masks_history_item(dev, dev->gui_module, TRUE);
+  _props_committing = FALSE;
   dt_control_queue_redraw_center();
 }
 
@@ -7194,6 +7204,43 @@ static void _refresh_lowop_badges(dt_iop_module_t *module)
 void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
 {
   _refresh_lowop_badges(module);
+}
+
+// re-read every value control under w, at any depth: a shape's properties
+// editor (a row's expanded controls, or the properties section's), and the
+// creation sliders of a shape being drawn, which show conf defaults
+static void _reread_value_controls(GtkWidget *w)
+{
+  dt_masks_props_row_editor_t *ed = g_object_get_data(G_OBJECT(w), "props-editor");
+  const char *key = g_object_get_data(G_OBJECT(w), "dt-conf-key");
+  if(ed)
+  {
+    _props_row_populate(ed);
+    _props_resize_update(ed);
+  }
+  else if(key)
+  {
+    DT_ENTER_GUI_UPDATE();
+    dt_bauhaus_slider_set(w, dt_conf_get_float(key));
+    DT_LEAVE_GUI_UPDATE();
+  }
+  else if(GTK_IS_CONTAINER(w))
+  {
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+    for(GList *k = kids; k; k = g_list_next(k)) _reread_value_controls(k->data);
+    g_list_free(kids);
+  }
+}
+
+void dt_iop_gui_blend_masks_changed(dt_iop_module_t *module)
+{
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  // a shape edited on canvas (scrolled, ctrl+scrolled, alt+clicked) and a
+  // creation default scrolled while drawing change values the panel shows,
+  // without rebuilding it
+  if(!bd || !bd->masks_inited || _props_committing) return;
+  if(bd->masks_list_box) _reread_value_controls(GTK_WIDGET(bd->masks_list_box));
+  if(bd->props_panel_content) _reread_value_controls(bd->props_panel_content);
 }
 
 // what solo edit leaves on the canvas: the isolated shape, or every member of

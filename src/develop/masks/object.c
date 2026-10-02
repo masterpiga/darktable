@@ -423,16 +423,17 @@ static gpointer _encode_thread_func(gpointer data)
   return NULL;
 }
 
-// keep only the connected component containing the seed pixel
-// (seed_x, seed_y), if the seed is outside any foreground region,
-// keep the largest component instead, operates in-place: non-selected
-// foreground pixels are zeroed
-static void _keep_seed_component(float *mask,
-                                 const int w,
-                                 const int h,
-                                 const float threshold,
-                                 const int seed_x,
-                                 const int seed_y)
+// keep only the connected components holding a seed pixel, the user's
+// positive clicks, given as n_seeds (x, y) pairs: a click on a separate region
+// adds it to the selection instead of replacing it. With no seed inside any
+// foreground region, keep the largest component instead. Operates in-place:
+// non-selected foreground pixels are zeroed
+static void _keep_seed_components(float *mask,
+                                  const int w,
+                                  const int h,
+                                  const float threshold,
+                                  const int *seeds,
+                                  const int n_seeds)
 {
   const int npix = w * h;
   int16_t *labels = g_try_malloc0((size_t)npix * sizeof(int16_t));
@@ -448,7 +449,6 @@ static void _keep_seed_component(float *mask,
   int16_t n_labels = 0;
   int16_t best_label = 0;
   int best_area = 0;
-  int16_t seed_label = 0;
 
   for(int i = 0; i < npix; i++)
   {
@@ -470,9 +470,6 @@ static void _keep_seed_component(float *mask,
       area++;
       const int px = p % w;
       const int py = p / w;
-
-      if(px == seed_x && py == seed_y)
-        seed_label = label;
 
       // 4-connected neighbors
       if(py > 0 && labels[p - w] == 0 && mask[p - w] > threshold)
@@ -504,16 +501,33 @@ static void _keep_seed_component(float *mask,
     }
   }
 
-  // prefer component containing the seed point; fall back to largest
-  const int16_t keep = (seed_label > 0) ? seed_label : best_label;
-
-  if(keep > 0)
+  // prefer the components holding a seed; fall back to the largest
+  gboolean *keep = g_try_malloc0((size_t)(n_labels + 1) * sizeof(gboolean));
+  if(keep)
   {
-    for(int i = 0; i < npix; i++)
+    gboolean any = FALSE;
+    for(int k = 0; k < n_seeds; k++)
     {
-      if(mask[i] > threshold && labels[i] != keep)
-        mask[i] = 0.0f;
+      const int sx = CLAMP(seeds[2 * k], 0, w - 1);
+      const int sy = CLAMP(seeds[2 * k + 1], 0, h - 1);
+      const int16_t label = labels[(size_t)sy * w + sx];
+      if(label > 0)
+      {
+        keep[label] = TRUE;
+        any = TRUE;
+      }
     }
+    if(!any) keep[best_label] = TRUE;
+
+    if(best_label > 0)
+    {
+      for(int i = 0; i < npix; i++)
+      {
+        if(mask[i] > threshold && !keep[labels[i]])
+          mask[i] = 0.0f;
+      }
+    }
+    g_free(keep);
   }
 
   g_free(stack);
@@ -682,18 +696,16 @@ static void _run_decoder(dt_masks_form_gui_t *gui)
   }
   int n_points = n_prompt_points;
 
-  // find seed point for connected component filter:
-  // always search ALL accumulated points (not just prompt points)
-  int seed_x = -1, seed_y = -1;
-  for(int i = gui->guipoints_count - 1; i >= 0; i--)
+  // seeds for the connected component filter: every positive click, so
+  // each region the user clicked stays selected
+  int *seeds = g_new(int, 2 * n_prompt_points);
+  int n_seeds = 0;
+  for(int i = 0; i < n_prompt_points; i++)
   {
-    const int label = (int)gpp[i];
-    if(label == 1)
-    {
-      seed_x = (int)(gp[i * 2 + 0] * sx);
-      seed_y = (int)(gp[i * 2 + 1] * sy);
-      break;
-    }
+    if((int)gpp[i] != 1) continue;
+    seeds[2 * n_seeds] = (int)(gp[i * 2 + 0] * sx);
+    seeds[2 * n_seeds + 1] = (int)(gp[i * 2 + 1] * sy);
+    n_seeds++;
   }
 
   const float threshold
@@ -746,10 +758,8 @@ static void _run_decoder(dt_masks_form_gui_t *gui)
 
   if(mask)
   {
-    // remove disconnected blobs: keep only the component at the seed point
-    seed_x = CLAMP(seed_x, 0, mw - 1);
-    seed_y = CLAMP(seed_y, 0, mh - 1);
-    _keep_seed_component(mask, mw, mh, threshold, seed_x, seed_y);
+    // remove disconnected blobs: keep only the components clicked on
+    _keep_seed_components(mask, mw, mh, threshold, seeds, n_seeds);
 
     // optional DenseCRF edge refinement using the encoded RGB as guide
     if(d->preview_refine)
@@ -782,6 +792,7 @@ static void _run_decoder(dt_masks_form_gui_t *gui)
     d->mask_w = mw;
     d->mask_h = mh;
   }
+  g_free(seeds);
   dt_gui_cursor_clear_busy();
 }
 
@@ -1265,9 +1276,7 @@ static int _object_events_button_pressed(dt_iop_module_t *module,
     if(d && d->has_selection && d->encode_state == ENCODE_READY)
     {
       _clear_selection(gui);
-      if(darktable.develop->proxy.masks.module)
-        darktable.develop->proxy.masks.list_change(
-          darktable.develop->proxy.masks.module);
+      dt_dev_masks_list_change(darktable.develop);
     }
     return 1;
   }
@@ -1415,8 +1424,7 @@ static int _object_events_button_released(dt_iop_module_t *module,
 
   // refresh mask properties panel so sliders update for
   // the current creation step (size vs cleanup/smoothing)
-  if(darktable.develop->proxy.masks.module)
-    darktable.develop->proxy.masks.list_change(darktable.develop->proxy.masks.module);
+  dt_dev_masks_list_change(darktable.develop);
 
   dt_control_queue_redraw_center();
   return 1;
