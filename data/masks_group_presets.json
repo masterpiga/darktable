@@ -6,7 +6,7 @@
       "name": "drawn (classic)",
       "description": "one group combining its shapes by union (strongest), as a classic drawn\nmask did",
       "mask": {
-        "operator": "union (strongest)",
+        "operator": "union (smooth)",
         "notes": [
           "draw shapes or add AI objects here to mask an area",
           "with the <b>union</b> operators, the pixels covered by <b>any</b> of the shapes are masked",

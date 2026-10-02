@@ -27,13 +27,13 @@ Each part has one class, on the widget that paints it.
 | class | part |
 |---|---|
 | `.mask-lead` | the lead icon, at the left of a header |
-| `.mask-drawer` | the box holding the three icons on the right |
+| `.mask-drawer` | the box holding the four icons on the right |
 | `.mask-expander` | rightmost: shows or hides the row's controls or the group's elements |
 | `.mask-eye` | second from the right: click to disable, shift+click to solo |
 | `.mask-notes` | third from the right on a group made by a preset: its notes |
 | `.mask-picker` | third from the right on a parametric row: its color picker |
 | `.mask-link` | third from the right on a linked shape or a raster mask: the chain to the other end |
-| `.mask-badge` | left of the drawer: an element or group that is nearly invisible |
+| `.mask-badge` | fourth from the right: an element or group that does nothing or next to nothing (opacity under 10%), or a group holding one at any depth; its tooltip says which |
 | `.mask-channel-eye` | in a parametric row's controls: bypasses one channel range |
 
 ## States
@@ -50,7 +50,7 @@ the part's class plus one more.
 | `.mask-expander` | `:checked` | open |
 | `.mask-expander` | `:disabled` | an empty group's, with nothing to open |
 | `.mask-notes` | `:checked` | the notes are shown |
-| `.mask-badge` | `.mask-no-effect` | the element does nothing at all (a channel still covering its whole range), rather than little |
+| `.mask-badge` | `.mask-no-effect` | its first reason is that something does nothing at all (a channel still covering its whole range, a raster mask with nothing to read), rather than little |
 | `.mask-channel-eye` | `:checked` | the range is bypassed |
 | any button | `:hover` | under the pointer |
 
@@ -74,7 +74,7 @@ groups alike), `.mask-group-header` for a group's.
 Every icon is 18px square, fixed in code. `padding` insets the glyph inside
 it and never resizes the icon, so the headers keep their height and the icons
 of every row stay lined up. Padding on `.mask-drawer` is the one exception:
-it adds room around all three icons, and grows the drawer by as much.
+it adds room around all four icons, and grows the drawer by as much.
 
 ## Backgrounds
 
@@ -129,6 +129,8 @@ stylesheet, so a redefinition replaces the token everywhere it is used.
 | `mask_list_bg` | the ground of the whole list |
 | `mask_handle_fg` | the glyph of a lead icon |
 | `mask_handle_inverted_bg`, `mask_handle_inverted_fg` | an inverted lead's plate, and its glyph and edge |
+| `mask_badge`, `mask_badge_no_effect` | the warning badge (amber), and the same with `.mask-no-effect` (red) |
+| `mask_badge_outline` | the warning badge's edge, as its `outline-color` |
 | `mask_text_rest`, `mask_text_implied`, `mask_text_selected`, `mask_text_hover` | header names, per header state |
 
 ```css

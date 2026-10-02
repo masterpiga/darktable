@@ -931,7 +931,7 @@ static void _release_stray_hosted(dt_iop_module_t *keep)
 // on the module being focused and masking-capable -- NOT on the current mask
 // mode, so the panel's controls stay reachable with the mask off, and whether
 // it shows follows the shared fold preference (see _model_masks_panel_state)
-void _masks_flexi_relocate(dt_iop_module_t *module)
+static void _masks_flexi_relocate_real(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -1346,6 +1346,54 @@ void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
   for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
     g_signal_connect(G_OBJECT(radios[i]), "toggled",
                      G_CALLBACK(_masks_panel_position_activate), module);
+}
+
+// TEMPORARY layout probe (DT_MASKS_LAYOUT_DUMP=1): where does spare height
+// land in the focused module's expander after a relocation? Not for commit
+static void _layout_dump(GtkWidget *w, const int depth)
+{
+  if(!w || !gtk_widget_get_visible(w) || depth > 40) return;
+  GtkAllocation a;
+  gtk_widget_get_allocation(w, &a);
+  int min_h = 0, nat_h = 0;
+  gtk_widget_get_preferred_height_for_width(w, a.width, &min_h, &nat_h);
+  const char *name = gtk_widget_get_name(w);
+  // the inside of a bauhaus slider or a label says nothing about this
+  const gboolean leaf = !GTK_IS_CONTAINER(w);
+  if(!leaf || a.height > nat_h + 2)
+    dt_print(DT_DEBUG_ALWAYS, "[layout] %*s%s #%s h=%d min=%d nat=%d vexp=%d%s",
+             depth * 2, "", G_OBJECT_TYPE_NAME(w), name ? name : "-", a.height, min_h,
+             nat_h, gtk_widget_compute_expand(w, GTK_ORIENTATION_VERTICAL),
+             a.height > nat_h + 2 ? "  <<< EXCESS" : "");
+  if(GTK_IS_CONTAINER(w))
+  {
+    GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+    for(GList *k = kids; k; k = g_list_next(k)) _layout_dump(k->data, depth + 1);
+    g_list_free(kids);
+  }
+}
+
+static gboolean _layout_dump_timeout(gpointer user_data)
+{
+  dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
+  if(!module || !module->expander) return G_SOURCE_REMOVE;
+  GtkWidget *box = gtk_widget_get_parent(module->expander);
+  GtkWidget *sw = gtk_widget_get_ancestor(module->expander, GTK_TYPE_SCROLLED_WINDOW);
+  GtkAllocation sa = { 0 }, ba = { 0 };
+  if(sw) gtk_widget_get_allocation(sw, &sa);
+  if(box) gtk_widget_get_allocation(box, &ba);
+  int bmin = 0, bnat = 0;
+  if(box) gtk_widget_get_preferred_height_for_width(box, ba.width, &bmin, &bnat);
+  dt_print(DT_DEBUG_ALWAYS, "[layout] ==== %s: panel view h=%d, module box h=%d min=%d nat=%d ====",
+           module->op, sa.height, ba.height, bmin, bnat);
+  _layout_dump(module->expander, 0);
+  return G_SOURCE_REMOVE;
+}
+
+void _masks_flexi_relocate(dt_iop_module_t *module)
+{
+  if(g_getenv("DT_MASKS_LAYOUT_DUMP")) g_timeout_add(1500, _layout_dump_timeout, NULL);
+  _masks_flexi_relocate_real(module);
 }
 
 // clang-format off
