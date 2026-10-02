@@ -3672,6 +3672,13 @@
     <longdescription>while enabled, resting the pointer on one of the add-parametric-element buttons displays that channel in the center view; the preview only starts after a short pause, so passing over the buttons costs nothing</longdescription>
   </dtconfig>
   <dtconfig>
+    <name>plugins/darkroom/masks/parametric_picker_reuse_area</name>
+    <type>bool</type>
+    <default>true</default>
+    <shortdescription>reuse the last picked area</shortdescription>
+    <longdescription>while enabled, a parametric mask element's color picker starts from the area the module's last pick used and sets the range from it at once, so one area can set the range of several channels in turn; the first pick still waits for an area dragged on the image</longdescription>
+  </dtconfig>
+  <dtconfig>
     <name>plugins/darkroom/masks/solo_edit_mode</name>
     <type>bool</type>
     <default>false</default>

@@ -32,7 +32,7 @@
     {
       "id": "drawn_parametric",
       "name": "drawn + parametric (classic)",
-      "description": "a \"drawn\" group, union (strongest), and a \"parametric\" group, overlap\n(smooth), combined by overlap (smooth), as a classic drawn + parametric mask did",
+      "description": "a \"drawn\" group, union (strongest), and a \"parametric\" group,\noverlap (smooth), combined by overlap (smooth), as a classic\ndrawn + parametric mask did",
       "mask": {
         "operator": "overlap (smooth)",
         "notes": [

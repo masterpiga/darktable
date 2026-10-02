@@ -73,6 +73,9 @@ typedef struct dt_iop_color_picker_t
   dt_pickerbox_t pick_box;
   gboolean initialized;
   gboolean changed;
+  // the next arm samples pick_box at once, deferred or not (see
+  // dt_iop_color_picker_reuse_area)
+  gboolean sample_on_arm;
 } dt_iop_color_picker_t;
 
 
@@ -81,6 +84,10 @@ gboolean dt_iop_color_picker_is_visible(const dt_develop_t *dev);
 /* forget a picker's remembered box/point, so its next arm starts blank
    instead of resuming from its last position (see color_picker_proxy.c) */
 void dt_iop_color_picker_forget(GtkWidget *picker_widget);
+
+/* make a picker's next arm sample `box` straight away, even when it is
+   DT_COLOR_PICKER_DEFERRED_AREA (see color_picker_proxy.c) */
+void dt_iop_color_picker_reuse_area(GtkWidget *picker_widget, const dt_pickerbox_t box);
 
 /* g_object data key on the picker widget: the owning dt_iop_color_picker_t */
 #define DT_COLOR_PICKER_INSTANCE_KEY "dt-color-picker-instance"

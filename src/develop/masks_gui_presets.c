@@ -938,8 +938,8 @@ void _add_masks_default_preset_box(GtkWidget *box)
   GtkWidget *header = gtk_label_new(_("default group layout"));
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(header, _("the group layout preset a module's mask starts with"
-                                        " when it is switched on for the first time"));
+  gtk_widget_set_tooltip_text(header, _("the group layout preset a module's mask starts with\n"
+                                        "when it is switched on for the first time"));
   dt_gui_box_add(box, header);
 
   gchar *current = dt_conf_get_string(FLEXI_DEFAULT_PRESET_CONF);

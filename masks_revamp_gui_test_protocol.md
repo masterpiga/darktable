@@ -212,6 +212,15 @@ After each check, switch images and back: the setting and the render stay.
      only a shape and a parametric channel with a boost factor still fill the
      section; anything else hides it.
 
+5.11 Add Jz, Cz and Hz parametric elements to a fresh module. Click Jz's
+     picker: nothing changes until an area is dragged on the image, which
+     sets Jz's range. Click Cz's picker: the same box shows and Cz's range is
+     set at once, without dragging; Hz the same, and shift+click sets the
+     output range from it. Drag a new area: the next picker reuses that one.
+     Turn "reuse the last picked area" off (blending options, "parametric
+     element options"): every picker waits for a drag again. Another
+     module's first pick still waits.
+
 ## 6. Presets and reset
 
 6.1 Apply each built-in group layout preset ("add + subtract + intersect",

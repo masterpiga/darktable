@@ -323,6 +323,8 @@ Each parametric channel row has a single, consolidated color-picker button (inst
 
 The picker button sits at the left end of the row's own slider - the compact input slider when collapsed, or the opacity slider once the row is expanded - immediately to its left, the same way a group's within-group selector sits immediately to the left of its own opacity slider.
 
+The first range pick in a module waits for an area dragged on the image. After that, with **reuse the last picked area** (blending options, "parametric element options" section; on by default), clicking a channel's picker sets its range from the same area straight away: to select by lightness, chroma and hue together, pick the area once on Jz, then click the pickers of Cz and Hz. Drag on the image to pick another area. With the option off, every pick waits for a new area.
+
 
 ## Inverting groups and elements
 
