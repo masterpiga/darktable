@@ -901,8 +901,9 @@ dialog .sidebar row:selected:hover label,
 /* the compact value beside the module's own blend opacity slider */
 @define-color mask_text_value       alpha(#c8ccd4, 0.85);
 @define-color mask_text_value_hover #ffffff;
-/* labels and values of the sliders in the panel */
-@define-color mask_text_control       #c8ccd4;
+/* labels and values of the sliders in the panel: as bright as the same
+   properties in the selection panel below (mask_selection_text_control) */
+@define-color mask_text_control       #e4e4e4;
 @define-color mask_text_control_hover #ffffff;
 
 /* the selection panel under the list (#masks-selection-area): the selection's
@@ -1751,10 +1752,12 @@ button.mask-enable-toggle:checked
   margin-bottom: 2px;
 }
 
+/* the side margins are the room its marker draws in at either end (see the
+   indicator clip in bauhaus.c): without them the marker was cut in half at
+   0% and 100%. The same 6px the mask panel's sliders keep */
 .dt_bauhaus.blend-main-opacity-slider
 {
-  margin-top: 0;
-  margin-bottom: 0;
+  margin: 0 6px;
   padding: 0;
 }
 

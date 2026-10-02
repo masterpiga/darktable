@@ -723,10 +723,13 @@ gboolean dt_masks_object_available(void);
 void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
                                               const float old_val,
                                               const float new_val);
-/** read the active AI-object creation session's current smoothing/cleanup,
-    for initial slider population and re-sync after a canvas scroll-wheel
-    change. Returns FALSE (leaving outputs untouched) if no session is active. */
-gboolean dt_masks_object_creation_get_preview_params(float *smoothing, int *cleanup);
+/** read the active AI-object creation session's current smoothing/cleanup and
+    edge refinement, for initial population of the pending-row controls and
+    re-sync after a canvas scroll-wheel change. Any output may be NULL. Returns
+    FALSE (leaving outputs untouched) if no session is active. */
+gboolean dt_masks_object_creation_get_preview_params(float *smoothing,
+                                                     int *cleanup,
+                                                     gboolean *refine);
 #endif
 
 /** init dt_masks_form_gui_t struct with default values */
