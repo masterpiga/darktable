@@ -528,7 +528,7 @@ static gboolean _flexi_builtin_parse_group(_flexi_builtin_t *b,
              " of strings", key_src->preset, key_src->path);
     goto done;
   }
-  if(strlen(key) >= G_SIZEOF_MEMBER(dt_masks_point_group_t, preset_note))
+  if(strlen(key) >= sizeof(((dt_masks_point_group_t *)0)->preset_note))
   {
     dt_print(DT_DEBUG_ALWAYS, "[masks presets] note key '%s' is too long", key);
     goto done;
