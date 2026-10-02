@@ -2159,7 +2159,7 @@ void dt_iop_gui_blend_sync_pending_ai_sliders(dt_iop_module_t *module)
 
   float smoothing = 0.0f;
   int cleanup = 0;
-  if(!dt_masks_object_creation_get_preview_params(&smoothing, &cleanup)) return;
+  if(!dt_masks_object_creation_get_preview_params(&smoothing, &cleanup, NULL)) return;
 
   DT_ENTER_GUI_UPDATE();
   dt_bauhaus_slider_set(bd->pending_ai_smoothing_slider, smoothing);
@@ -12231,6 +12231,13 @@ static void _pending_ai_slider_changed(GtkWidget *widget, dt_iop_module_t *modul
   *last = new_val;
   dt_masks_object_creation_apply_property(prop, old_val, new_val);
 }
+
+static void _pending_ai_refine_toggled(GtkToggleButton *button, gpointer user_data)
+{
+  if(DT_IN_GUI_UPDATE()) return;
+  const gboolean on = gtk_toggle_button_get_active(button);
+  dt_masks_object_creation_apply_property(DT_MASKS_PROPERTY_REFINE, !on, on);
+}
 #endif
 
 // "value-changed" handler shared by every pending-row slider that edits a
@@ -12526,7 +12533,7 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
     dt_iop_gui_blend_data_t *bd = module->blend_data;
     float smoothing = 0.0f;
     int cleanup = 0;
-    dt_masks_object_creation_get_preview_params(&smoothing, &cleanup);
+    dt_masks_object_creation_get_preview_params(&smoothing, &cleanup, NULL);
 
     bd->pending_ai_smoothing_last = smoothing;
     GtkWidget *sm = dt_bauhaus_slider_new_with_range(
@@ -12546,6 +12553,9 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_SMOOTHING));
     g_signal_connect(G_OBJECT(sm), "value-changed",
                      G_CALLBACK(_pending_ai_slider_changed), module);
+    // the other pending sliders' look and full width (see _pending_conf_slider_new)
+    dt_gui_add_class(sm, "mask-props-slider");
+    dt_bauhaus_widget_set_quad_visibility(sm, FALSE);
     dt_gui_box_add(props_box, sm);
     bd->pending_ai_smoothing_slider = sm;
 
@@ -12567,8 +12577,22 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
                       GINT_TO_POINTER(DT_MASKS_PROPERTY_CLEANUP));
     g_signal_connect(G_OBJECT(cl), "value-changed",
                      G_CALLBACK(_pending_ai_slider_changed), module);
+    dt_gui_add_class(cl, "mask-props-slider");
+    dt_bauhaus_widget_set_quad_visibility(cl, FALSE);
     dt_gui_box_add(props_box, cl);
     bd->pending_ai_cleanup_slider = cl;
+
+    // snapping the selection's edge to the image's, as master's masks manager
+    // offers while an object is being made. It applies from the next click
+    // on the object (see _object_modify_property in object.c)
+    gboolean refine = FALSE;
+    dt_masks_object_creation_get_preview_params(NULL, NULL, &refine);
+    GtkWidget *rf = gtk_check_button_new_with_label(
+      _(_blend_masks_properties[DT_MASKS_PROPERTY_REFINE].name));
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(rf), refine);
+    gtk_widget_set_tooltip_text(rf, _(_blend_masks_properties[DT_MASKS_PROPERTY_REFINE].tooltip));
+    g_signal_connect(G_OBJECT(rf), "toggled", G_CALLBACK(_pending_ai_refine_toggled), NULL);
+    dt_gui_box_add(props_box, rf);
   }
 #endif
 
@@ -18665,6 +18689,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_action_t * ac = dt_bauhaus_widget_set_label(bd->blend_modes_combo,
                                                    N_("blend"),
                                                    N_("mode"));
+    // shown as "blend mode", against the mask elements' own modes and
+    // operators; the action keeps its name (blend > mode), shortcuts with it
+    dt_bauhaus_widget_set_label_text(bd->blend_modes_combo, _("blend mode"));
     dt_bauhaus_combobox_add_introspection(bd->blend_modes_combo, ac,
                                           dt_develop_blend_mode_names, -1, -1);
     gtk_widget_set_tooltip_text(bd->blend_modes_combo, _("choose blending mode"));
@@ -18712,7 +18739,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     module->fusion_slider = bd->opacity_slider;
 
     GtkWidget *opacity_header = dt_gui_hbox();
-    GtkWidget *opacity_lbl = gtk_label_new(_("opacity"));
+    // "blend opacity", against the mask elements' own opacity below; the
+    // slider's action keeps its name (blend > opacity), shortcuts with it
+    GtkWidget *opacity_lbl = gtk_label_new(_("blend opacity"));
     gtk_label_set_xalign(GTK_LABEL(opacity_lbl), 0.0f);
     dt_gui_box_add(opacity_header, dt_gui_expand(opacity_lbl));
 

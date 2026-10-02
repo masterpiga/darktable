@@ -2268,10 +2268,13 @@ void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
   dt_control_queue_redraw_center();
 }
 
-// reads the active creation session's current smoothing/cleanup -- used to
-// populate the pending-row sliders on (re)build, and to re-sync them after a
-// canvas scroll-wheel adjustment (_object_events_mouse_scrolled).
-gboolean dt_masks_object_creation_get_preview_params(float *smoothing, int *cleanup)
+// reads the active creation session's current smoothing/cleanup and edge
+// refinement -- used to populate the pending-row controls on (re)build, and to
+// re-sync them after a canvas scroll-wheel adjustment
+// (_object_events_mouse_scrolled). Any output may be NULL.
+gboolean dt_masks_object_creation_get_preview_params(float *smoothing,
+                                                     int *cleanup,
+                                                     gboolean *refine)
 {
   dt_masks_form_gui_t *gui = darktable.develop->form_gui;
   _object_data_t *d = gui ? _get_data(gui) : NULL;
@@ -2279,6 +2282,7 @@ gboolean dt_masks_object_creation_get_preview_params(float *smoothing, int *clea
 
   if(smoothing) *smoothing = d->preview_smoothing;
   if(cleanup) *cleanup = d->preview_cleanup;
+  if(refine) *refine = d->preview_refine;
   return TRUE;
 }
 
