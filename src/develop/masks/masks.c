@@ -2660,7 +2660,10 @@ gboolean dt_masks_events_mouse_moved(dt_iop_module_t *module,
   // this must be serialized against that read (see history_mutex there).
   _events_lock(darktable.develop);
 
-  dt_masks_form_gui_t before;
+  // initialized although only read when gui is set: gcc 12 cannot tell the
+  // two conditions agree once _gui_hover_state_equal is inlined, and fails the
+  // -Werror build with -Wmaybe-uninitialized
+  dt_masks_form_gui_t before = { 0 };
   if(gui) before = *gui;
 
   int rep = 0;
