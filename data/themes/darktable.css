@@ -642,18 +642,17 @@ dialog .sidebar row:selected:hover label,
   border-bottom: none;
 }
 
-/* Embedded, this header sits directly below the module's own header, so the
-   two rows' icons have to read as one column: the same container inset as
-   #module-header (0.5em) and the same button box as the buttons in it (the
-   .dt_module_btn base metrics plus the global 1px button padding), rather than
-   the wider, taller box the dedicated panel uses. Both headers span the same
-   width -- #blending-wrapper, between this and the expander, adds no inset of
-   its own -- so matching these two is all the alignment takes. The section
-   rule and the vertical margin .dt_section_label brings belong to a section
-   title inside a module, not to a header row, so both go. */
+/* Embedded, the module's own controls sit between this header and the
+   module's header, so the column its icons have to share is the panel's
+   below it: the side inset of #blending-box (0.65em) and the button box of
+   the buttons in there (the .dt_module_btn base metrics plus the global 1px
+   button padding, and the default #button-canvas inset), rather than the
+   wider, taller box the dedicated panel uses. The section rule and the
+   vertical margin .dt_section_label brings belong to a section title inside a
+   module, not to a header row, so both go. */
 #blending-tabs.dt_section_label.blending-tabs-embedded
 {
-  padding: 0.5em;
+  padding: 0.5em 0.65em;
   margin: 0;
   border-bottom: none;
 }
@@ -664,16 +663,6 @@ dialog .sidebar row:selected:hover label,
   min-height: 1.15em;
   margin: 0.07em;
   padding: 1px;
-}
-
-/* #button-canvas is the icon's own inset inside the button, and it is what
-   actually decides where a glyph lands: the module header widens it from the
-   5px default to 12px, so without this the whole row's glyphs sit a few pixels
-   left of the module header's and the caption a few pixels right of the module
-   name -- matching button boxes alone is not enough */
-#blending-tabs.blending-tabs-embedded #button-canvas
-{
-  margin: 12px;
 }
 
 /* the collapse arrow keeps its pill background only in the dedicated panel,
@@ -700,8 +689,8 @@ dialog .sidebar row:selected:hover label,
   margin-left: 0.3em;
 }
 
-/* embedded, it sits one row under the module's own name and has to read as
-   the same kind of title, so it takes the box and size of #iop-panel-label
+/* embedded, it heads a part of the module and has to read as the same kind
+   of title as the module's name, so it takes the box and size of #iop-panel-label
    (color is left alone: this header dims with the mask's on/off state) */
 #blending-tabs.blending-tabs-embedded #blending-tabs-caption
 {
