@@ -603,6 +603,12 @@ typedef struct dt_iop_gui_blend_data_t
   // parametric editor lives in. Flexi never reparents it anymore -- each
   // parametric row owns its own editor instead (see _build_param_row_editor).
   GtkWidget *blendif_home;
+  // the area the module's parametric pickers last set a range from: with
+  // "reuse the last picked area" on, arming any of them samples it again
+  // (see _param_row_master_picker_pressed). param_pick_box_set is FALSE until
+  // the first pick
+  dt_pickerbox_t param_pick_box;
+  gboolean param_pick_box_set;
   // panel_selected_formid: the mask-list row currently selected (highlighted
   // with a border). Drawn shape or parametric form being edited; INVALID = none.
   dt_mask_id_t panel_selected_formid;

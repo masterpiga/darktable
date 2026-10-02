@@ -1309,8 +1309,8 @@ void _add_masks_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
   GtkWidget *header = gtk_label_new(_("blend mask panel position"));
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements,"
-                                        " refinements) is shown. a change applies at once"));
+  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements,\n"
+                                        "refinements) is shown. a change applies at once"));
   dt_gui_box_add(box, header);
 
   static const struct

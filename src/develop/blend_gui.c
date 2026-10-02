@@ -2568,6 +2568,21 @@ static gboolean _props_subpanel(void)
   return dt_conf_get_bool("plugins/darkroom/masks/properties_subpanel");
 }
 
+// "reuse the last picked area" (same menu): a parametric element's range
+// picker starts from the area the module's last pick used, and samples it at
+// once, as classic blending's single picker did. Its first pick still waits
+// for a drag on canvas
+static gboolean _param_picker_reuses_area(void)
+{
+  return dt_conf_get_bool("plugins/darkroom/masks/parametric_picker_reuse_area");
+}
+
+static void _masks_picker_reuse_area_toggled(GtkToggleButton *mi, dt_iop_module_t *module)
+{
+  dt_conf_set_bool("plugins/darkroom/masks/parametric_picker_reuse_area",
+                   gtk_toggle_button_get_active(mi));
+}
+
 // the expander options below are all read at row-build time from a conf key,
 // not from anything _masks_list_signature hashes (see _make_props_row_toggle,
 // _make_shape_row, the group header build) -- without invalidating the cached
@@ -2627,10 +2642,11 @@ static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
   _preview_on_hover_set(gtk_toggle_button_get_active(mi));
 }
 
-// appends the "options" section to `box`: toggles for how the blend mask panel
-// behaves that don't fit the position or colorspace sections. Check buttons
-// under a dt_section_label, the way the other toolbar preference popovers are
-// laid out (see global_toolbox.c's overlay settings).
+// appends the "interface options" and "parametric element options" sections
+// to `box`: toggles for how the blend mask panel behaves that don't fit the
+// position or colorspace sections. Check buttons under a dt_section_label,
+// the way the other toolbar preference popovers are laid out (see
+// global_toolbox.c's overlay settings).
 #define _MASKS_OPT_CHECK(var, label, tip, active, cb)                             \
   GtkWidget *var = gtk_check_button_new_with_label(label);                        \
   gtk_widget_set_tooltip_text(var, tip);                                          \
@@ -2638,69 +2654,93 @@ static void _masks_preview_on_hover_toggled(GtkToggleButton *mi,
   g_signal_connect(G_OBJECT(var), "toggled", G_CALLBACK(cb), module);             \
   dt_gui_box_add(box, var);
 
-static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module)
+static void _add_masks_options_header(GtkWidget *box, const gchar *title, const gchar *tip)
 {
-  GtkWidget *header = gtk_label_new(_("options"));
+  GtkWidget *header = gtk_label_new(title);
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
   dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(header,
-                              _("how the blend mask panel behaves"));
+  gtk_widget_set_tooltip_text(header, tip);
   dt_gui_box_add(box, header);
+}
+
+static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module)
+{
+  _add_masks_options_header(box, _("interface options"),
+                            _("how the blend mask panel behaves"));
 
   _MASKS_OPT_CHECK(
     sticky, _("sticky opacity"),
-    _("when enabled (default), a new shape starts at the opacity last used by"
-      " any shape, so adjusting opacity once carries over to every shape you"
-      " add afterwards.\n"
+    _("when enabled (default), a new shape starts at the opacity\n"
+      "last used by any shape, so adjusting opacity once carries\n"
+      "over to every shape you add afterwards.\n"
       "when disabled, a new shape always starts at 100% opacity."),
     !dt_conf_get_bool("plugins/darkroom/masks/opacity_not_sticky"),
     _masks_opacity_sticky_toggled)
 
   _MASKS_OPT_CHECK(
     autoexpand, _("auto-expand selected"),
-    _("when enabled (default), whatever you select is the one thing expanded,"
-      " and whatever was expanded before collapses: selecting a group shows its"
-      " elements, selecting an element shows its controls and its group.\n"
-      "selecting something with nothing to expand leaves what is open as it is.\n"
+    _("when enabled (default), whatever you select is the one thing\n"
+      "expanded, and whatever was expanded before collapses:\n"
+      "selecting a group shows its elements, selecting an element\n"
+      "shows its controls and its group.\n"
+      "selecting something with nothing to expand leaves what is\n"
+      "open as it is.\n"
       "when disabled, everything is expanded and collapsed by hand."),
     _auto_expand_selected(), _masks_auto_expand_selected_toggled)
 
   _MASKS_OPT_CHECK(
     props_subpanel, _("element properties in subpanel"),
-    _("when enabled, the properties of the selected element or group are"
-      " shown in a collapsible section of their own, between the mask list and"
-      " the refinements, instead of expanding in the list: a shape's size,"
-      " feather, hardness, rotation and the like, a parametric element's boost"
-      " factor, and the opacity of any element or group. a parametric element"
-      " keeps its input and output sliders in"
-      " the list.\n"
-      "while a shape is being drawn, the section holds its creation controls"
-      " and opens by itself; its placeholder row still shows the group it"
-      " lands in.\n"
-      "the section is hidden while the selection has nothing to show there.\n"
+    _("when enabled, the properties of the selected element or group\n"
+      "are shown in a collapsible section of their own, between the\n"
+      "mask list and the refinements, instead of expanding in the\n"
+      "list: a shape's size, feather, hardness, rotation and the like,\n"
+      "a parametric element's boost factor, and the opacity of any\n"
+      "element or group. a parametric element keeps its input and\n"
+      "output sliders in the list.\n"
+      "while a shape is being drawn, the section holds its creation\n"
+      "controls and opens by itself; its placeholder row still shows\n"
+      "the group it lands in.\n"
+      "the section is hidden while the selection has nothing to show\n"
+      "there.\n"
       "disabled by default."),
     _props_subpanel(), _masks_props_subpanel_toggled)
 
   _MASKS_OPT_CHECK(
+    showhandle, _("show the mask panel's resize handle"),
+    _("when enabled (default), the edge of the mask panel floating\n"
+      "over the canvas carries a visible handle with an arrow showing\n"
+      "which way the panel folds away.\n"
+      "when disabled, the handle is invisible, like the main panels',\n"
+      "and still resizes the panel by dragging and hides it on a click."),
+    dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle"),
+    _masks_show_panel_handle_toggled)
+
+  _add_masks_options_header(box, _("parametric element options"),
+                            _("how parametric elements are picked and previewed"));
+
+  _MASKS_OPT_CHECK(
+    pickarea, _("reuse the last picked area"),
+    _("when enabled (default), a parametric element's color picker\n"
+      "starts from the area the module's last pick used, and sets the\n"
+      "range from it at once: pick an area for one channel, then click\n"
+      "the picker of the next one to set its range from the same area.\n"
+      "drag on the image to pick another area.\n"
+      "the first pick in a module still waits for an area dragged on\n"
+      "the image.\n"
+      "when disabled, every pick waits for an area dragged on the image."),
+    _param_picker_reuses_area(), _masks_picker_reuse_area_toggled)
+
+  _MASKS_OPT_CHECK(
     hover, _("preview channel under cursor"),
-    _("when enabled, resting the pointer on one of the add-parametric-element"
-      " buttons displays that channel in the center view, so you can see what"
-      " a channel looks like before adding an element for it.\n"
-      "the preview only starts after a short pause, so passing over the"
-      " buttons on the way elsewhere costs nothing.\n"
+    _("when enabled, resting the pointer on one of the\n"
+      "add-parametric-element buttons displays that channel in the\n"
+      "center view, so you can see what a channel looks like before\n"
+      "adding an element for it.\n"
+      "the preview only starts after a short pause, so passing over\n"
+      "the buttons on the way elsewhere costs nothing.\n"
       "disabled by default."),
     _preview_on_hover_is_on(),
     _masks_preview_on_hover_toggled)
-
-  _MASKS_OPT_CHECK(
-    showhandle, _("show the mask panel's resize handle"),
-    _("when enabled (default), the edge of the mask panel floating over the"
-      " canvas carries a visible handle with an arrow showing which way the"
-      " panel folds away.\n"
-      "when disabled, the handle is invisible, like the main panels', and still"
-      " resizes the panel by dragging and hides it on a click."),
-    dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle"),
-    _masks_show_panel_handle_toggled)
 }
 
 // the preset notes switch, closing the "default group layout" section that
@@ -2709,11 +2749,11 @@ static void _add_masks_preset_notes_check(GtkWidget *box, dt_iop_module_t *modul
 {
   _MASKS_OPT_CHECK(
     notes, _("show preset notes"),
-    _("when enabled (default), a group made by a built-in group layout preset"
-      " carries a note on how to use it, under its header. all notes are open"
-      " when the preset is applied; after that, only the selected group's."
-      " the info icon next to a group's name switches its note on or off"
-      " without selecting the group.\n"
+    _("when enabled (default), a group made by a built-in group layout\n"
+      "preset carries a note on how to use it, under its header. all\n"
+      "notes are open when the preset is applied; after that, only the\n"
+      "selected group's. the info icon next to a group's name switches\n"
+      "its note on or off without selecting the group.\n"
       "when disabled, no notes are shown."),
     _masks_preset_notes_shown(), _masks_preset_notes_toggled)
 }
@@ -14279,6 +14319,12 @@ static void _param_row_master_picker_pressed(GtkGesture *gesture,
   {
     g_object_set_data(G_OBJECT(ed->colorpicker_set_values), "pick-output",
                       GINT_TO_POINTER(shift));
+    // arming, rather than disarming: start from the area the module's last
+    // pick used, so one area sets the range of channel after channel
+    dt_iop_gui_blend_data_t *bd = ed->module->blend_data;
+    if(_param_picker_reuses_area() && bd && bd->param_pick_box_set
+       && !gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(ed->colorpicker_set_values)))
+      dt_iop_color_picker_reuse_area(ed->colorpicker_set_values, bd->param_pick_box);
     dt_color_picker_click(ed->colorpicker_set_values, FALSE);
   }
 }
@@ -14363,6 +14409,19 @@ static gboolean _param_row_picker_apply(dt_iop_module_t *module,
   if(picker == ed->colorpicker_set_values)
   {
     DT_TRY_GUI_UPDATE(TRUE);
+
+    // the area this range comes from, for the next parametric pick to reuse
+    // (see _param_row_master_picker_pressed). A deferred picker's blank box,
+    // before any drag, is no area
+    const dt_iop_color_picker_t *inst =
+      g_object_get_data(G_OBJECT(picker), DT_COLOR_PICKER_INSTANCE_KEY);
+    static const dt_pickerbox_t blank = { 0 };
+    dt_iop_gui_blend_data_t *bd = module->blend_data;
+    if(inst && bd && memcmp(inst->pick_box, blank, sizeof(blank)))
+    {
+      memcpy(bd->param_pick_box, inst->pick_box, sizeof(bd->param_pick_box));
+      bd->param_pick_box_set = TRUE;
+    }
 
     const int tab = (int)p->channel;
     dt_aligned_pixel_t raw_min, raw_max;
@@ -14678,6 +14737,11 @@ static GtkWidget *_build_param_row_editor(dt_iop_module_t *module,
   dt_gui_add_class(ed->master_picker, "dt_transparent_background");
   dt_gui_add_class(ed->master_picker, "mask-picker");
   gtk_widget_set_valign(ed->master_picker, GTK_ALIGN_CENTER);
+  // the drawer sizes picker_box, the cell, but the button inside it would
+  // shrink to its natural size, nothing once the theme zeroes its padding and
+  // minimum size: it is the icon, so it takes the 18px every drawer icon has
+  gtk_widget_set_size_request(ed->master_picker, DT_PIXEL_APPLY_DPI(18),
+                              DT_PIXEL_APPLY_DPI(18));
   gtk_widget_set_name(ed->master_picker, "keep-active");
   gtk_widget_set_tooltip_text(ed->master_picker,
                               _("click: set the input range from an area picked on the image\n"

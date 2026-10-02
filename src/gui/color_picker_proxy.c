@@ -122,6 +122,20 @@ void dt_iop_color_picker_forget(GtkWidget *picker_widget)
   memset(picker->pick_pos, 0, sizeof(picker->pick_pos));
 }
 
+// start this picker's next arm from `box` and sample it at once: a deferred
+// picker otherwise waits for a drag on canvas even with a box to resume from.
+// The flexi mask panel uses it to carry one area across a module's parametric
+// elements, as classic blending's single picker did
+void dt_iop_color_picker_reuse_area(GtkWidget *picker_widget, const dt_pickerbox_t box)
+{
+  dt_iop_color_picker_t *picker =
+    picker_widget ? g_object_get_data(G_OBJECT(picker_widget), DT_COLOR_PICKER_INSTANCE_KEY) : NULL;
+  if(!picker) return;
+  memcpy(picker->pick_box, box, sizeof(picker->pick_box));
+  picker->initialized = TRUE;
+  picker->sample_on_arm = TRUE;
+}
+
 static void _color_picker_reset(dt_iop_color_picker_t *picker)
 {
   if(picker)
@@ -169,6 +183,7 @@ static void _init_picker(dt_iop_color_picker_t *picker,
   picker->changed     = FALSE;
   picker->fixed_cst   = FALSE;
   picker->initialized = FALSE;
+  picker->sample_on_arm = FALSE;
 
   _color_picker_reset(picker);
 }
@@ -214,7 +229,9 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
     // wait for the user's own drag on canvas to define a box instead. Point
     // mode has no default-box/immediate-sample to defer, so it is unaffected.
     const gboolean deferred_area =
-      (kind & DT_COLOR_PICKER_AREA) && (flags & DT_COLOR_PICKER_DEFERRED_AREA);
+      (kind & DT_COLOR_PICKER_AREA) && (flags & DT_COLOR_PICKER_DEFERRED_AREA)
+      && !self->sample_on_arm;
+    self->sample_on_arm = FALSE;
     // pull picker's last recorded positions
     if(kind & DT_COLOR_PICKER_AREA)
     {
