@@ -2692,11 +2692,6 @@ gboolean dt_masks_events_button_released(dt_iop_module_t *module,
   dt_masks_form_t *form = dev->form_visible;
   dt_masks_form_gui_t *gui = dev->form_gui;
 
-  DT_ENTER_GUI_UPDATE();
-  if(dev->mask_form_selected_id)
-    dt_dev_masks_selection_change(dev, module, dev->mask_form_selected_id);
-  DT_LEAVE_GUI_UPDATE();
-
   gboolean ret = FALSE;
   if(form->functions)
   {
@@ -2745,6 +2740,13 @@ gboolean dt_masks_events_button_pressed(dt_iop_module_t *module,
     }
 
     dt_masks_select_form(module, sel);
+    // the panel follows the selection, and solo edit then narrows the canvas
+    // to the selected shape, replacing form_visible. The old group would
+    // rebuild gui->points from its own shapes, and the new one would draw
+    // the selected shape with the outline of the old group's first one
+    form = darktable.develop->form_visible;
+    gui = darktable.develop->form_gui;
+    if(!form) return FALSE;
   }
 
   if(form->functions)
@@ -2930,10 +2932,6 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
   if(newform && newform->type != DT_MASKS_GROUP)
     darktable.develop->form_gui->creation = TRUE;
 
-  DT_ENTER_GUI_UPDATE();
-  dt_dev_masks_selection_change(darktable.develop, NULL, 0);
-  DT_LEAVE_GUI_UPDATE();
-
   // creation just ended, or moved to another module: drop the pending row the
   // old owner is still showing. The shape modules' right-click-cancel handlers
   // refresh the panel themselves, but abandoning creation any other way (a
@@ -3064,11 +3062,6 @@ void dt_masks_set_edit_mode(dt_iop_module_t *module,
   dt_masks_change_form_gui(grp);
   darktable.develop->form_gui->edit_mode = value;
 
-  DT_ENTER_GUI_UPDATE();
-  dt_dev_masks_selection_change(darktable.develop, NULL,
-                                value && form ? form->formid : NO_MASKID);
-  DT_LEAVE_GUI_UPDATE();
-
   if(bd->masks_support)
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->masks_edit),
                                  value == DT_MASKS_EDIT_OFF ? FALSE : TRUE);
@@ -3133,10 +3126,6 @@ void dt_masks_set_edit_mode_single_form(dt_iop_module_t *module,
   dt_masks_change_form_gui(grp2);
   darktable.develop->form_gui->edit_mode = value;
 
-  DT_ENTER_GUI_UPDATE();
-  dt_dev_masks_selection_change(darktable.develop, NULL, value && form ? formid : NO_MASKID);
-  DT_LEAVE_GUI_UPDATE();
-
   dt_control_queue_redraw_center();
 }
 
@@ -3179,11 +3168,6 @@ void dt_masks_set_edit_mode_forms(dt_iop_module_t *module,
   dt_masks_group_ungroup(grp2, grp);
   dt_masks_change_form_gui(grp2);
   darktable.develop->form_gui->edit_mode = value;
-
-  DT_ENTER_GUI_UPDATE();
-  dt_dev_masks_selection_change(darktable.develop, NULL,
-                                value && dt_is_valid_maskid(first) ? first : NO_MASKID);
-  DT_LEAVE_GUI_UPDATE();
 
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(bd)

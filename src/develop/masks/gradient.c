@@ -462,7 +462,6 @@ static int _gradient_events_button_released(dt_iop_module_t *module,
       dt_masks_iop_update(crea_module);
     }
 
-    dt_dev_masks_selection_change(darktable.develop, crea_module, form->formid);
     gui->creation_module = NULL;
 
     if(gui->creation_continuous)
