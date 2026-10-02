@@ -82,7 +82,7 @@ On the first row, there are three main controls:
 2. The **invert mask** button, which inverts all mask elements at once.
 3. The **reset mask** button, which clears all mask elements and starts a new mask from scratch.
 
-The next two rows allow you to **add elements to the mask**:
+The toolbar below allows you to **add elements to the mask**. It takes one to three rows, depending on the panel's width; in the narrowest, the add-group and import buttons share the last row:
 
 4. Add a new group.
 5. Add a new shape.
@@ -107,14 +107,14 @@ Opacity is never shown on a row itself: it is a slider leading each row's expand
 
 Note that the final opacity of any element is the product of its own opacity and the opacity of the group it belongs to.
 
-Every row (group or element) keeps the same icons in the same columns, counted from the right:
+Every row (group or element) keeps its icons in the same columns, counted from the right:
 
 1. the **expander**, which shows or hides the row's expanded controls (or a group's elements);
 2. the **visibility eye**: click it to disable the row (it adds nothing to the mask) and click again to enable it; `SHIFT+click` it to solo the row (see "Solo" below);
-3. one icon that depends on the row: a group's **notes** toggle, a parametric channel's **color picker**, or the **link** of a linked shape or a raster mask;
-4. the **warning badge**, a triangle: red on an element that does nothing (a parametric channel whose range still covers its whole span, a raster mask with no mask to read) or amber on one whose opacity is under 10%, and on a group whose own opacity is under 10% or that holds such an element or group at any depth, so a folded group still shows it. Its tooltip says which. A disabled element or group gets none: its eye already says it adds nothing.
+3. one icon that depends on the row: a group's **notes** toggle (half size, under the warning badge), a parametric channel's **color picker**, or the **link** of a linked shape or a raster mask;
+4. the **warning badge**, a small triangle at the top of the first free column (over a group's notes, in the third column of an element without a picker or link, else the fourth): red on an element that does nothing (a parametric channel whose range still covers its whole span, a raster mask with no mask to read) or amber on one whose opacity is under 10%, and on a group whose own opacity is under 10% or that holds such an element or group at any depth, so a folded group still shows it. Its tooltip says which. A disabled element or group gets none: its eye already says it adds nothing.
 
-All four share one frame. A column a row has no icon for stays blank, so the icons of every row line up.
+They share one frame. A column a row has no icon for stays blank, so the icons of every row line up.
 
 <div style="text-align:center">
 <img src="badges.png" width="100%">

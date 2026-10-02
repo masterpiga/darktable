@@ -649,12 +649,19 @@ dialog .sidebar row:selected:hover label,
    button padding, and the default #button-canvas inset), rather than the
    wider, taller box the dedicated panel uses. The section rule and the
    vertical margin .dt_section_label brings belong to a section title inside a
-   module, not to a header row, so both go. */
+   module, not to a header row, so both go.
+
+   It is also easy to lose among the module's own controls, so it reads as a
+   header instead: some room and a rule after the controls above it, and a band
+   in the color module headers show (the panel background, which #module-header
+   leaves showing through) */
 #blending-tabs.dt_section_label.blending-tabs-embedded
 {
   padding: 0.5em 0.65em;
-  margin: 0;
+  margin: 0.5em 0 0 0;
   border-bottom: none;
+  border-top: 1px solid shade(@plugin_bg_color, 1.05);
+  background-color: @bg_color;
 }
 
 .dt_plugin_ui #blending-tabs.blending-tabs-embedded .dt_module_btn
@@ -1119,7 +1126,7 @@ dialog .sidebar row:selected:hover label,
   min-width: 4px;
 }
 
-/* the rows of buttons in the masks panel: the two toolbar runs and the
+/* the rows of buttons in the masks panel: the toolbar (below) and the
    right-hand side of the panel header. They all space their children the same
    way, so a run of buttons and a .mask-row-gap between two runs measure the
    same on each */
@@ -1128,9 +1135,11 @@ dialog .sidebar row:selected:hover label,
   margin-right: 0px;
 }
 
-/* and the toolbar's two rows, when it takes two, sit the same distance apart */
+/* the toolbar's slots, spaced as the rows above; its rows, when it takes
+   more than one, sit the same distance apart */
 .masks-toolbar > *
 {
+  margin-right: 0px;
   margin-bottom: 3px;
 }
 
@@ -1363,6 +1372,9 @@ dialog .sidebar row:selected:hover label,
   background-color: @mask_selection_header;
   border-radius: 3px;
   margin-top: 4px;
+  /* the rows above end in a 2px border: this ends their icons at the same
+     edge as the rows' */
+  padding-right: 2px;
 }
 
 /* an open section's header squares off onto its card */
@@ -1761,7 +1773,7 @@ button.mask-enable-toggle:checked
    on that same widget:
      .mask-lead       a row's or a group's lead icon
                       states: .mask-inverted; a parametric row's: .mask-channel
-     .mask-drawer     the box holding the four icons on the right
+     .mask-drawer     the box holding the icons on the right
      .mask-expander   :checked when open, :disabled on an empty group
      .mask-eye        .mask-soloed, .mask-disabled
      .mask-notes      a group's notes toggle, :checked when shown
@@ -1774,15 +1786,19 @@ button.mask-enable-toggle:checked
    Whose icon it is comes from the header: .mask-element-header or
    .mask-group-header.
 
-   Every icon is 18px by request in code, so padding insets its glyph and
-   never resizes it. These rules use no ids, so a user.css rule that starts
-   with #masks-list-box always wins over them. */
+   Every icon is an icon button sized by the theme like any other
+   (.dt_module_btn), the badge and a group's notes taking half a column each.
+   These rules use no ids, so a user.css rule that starts with
+   #masks-list-box always wins over them. */
 
 /* the drawer has no plate: its icons sit on the header. Padding here grows
    it, unlike an icon's */
+/* the right padding is the side inset a sub-panel's expander keeps (12% of
+   its 1.15em button) and the drawer's dropped, so the expander's arrow ends
+   where theirs does */
 .mask-drawer
 {
-  padding: 0;
+  padding: 0 0.138em 0 0;
   border-radius: 4px;
 }
 
@@ -1855,11 +1871,11 @@ button.mask-link:hover
   background-color: transparent;
 }
 
-button.mask-expander,
-button.mask-eye,
-button.mask-notes,
-button.mask-picker,
-button.mask-link
+/* the drawer's icons keep the metrics of every icon button (.dt_module_btn),
+   as the module's sub-panel headers' do, so their glyphs come out the same
+   size. Only a group's notes, half of a column under the badge (see
+   _pack_row_header), gives them up to fit there */
+button.mask-notes
 {
   padding: 0;
   margin: 0;
@@ -1877,7 +1893,18 @@ button.mask-link
   color: alpha(@button_fg, 0.6);
 }
 
+/* dimmed like the eye until hovered, and lit while armed */
 button.mask-picker
+{
+  color: alpha(@button_fg, 0.6);
+}
+
+button.mask-picker:hover
+{
+  color: @button_fg;
+}
+
+button.mask-picker:checked
 {
   color: @mask_handle_fg;
 }
@@ -1890,6 +1917,39 @@ button.mask-link
 button.mask-expander:checked
 {
   color: @field_active_fg;
+}
+
+/* the icon inset of the module's sub-panel headers (.dt_section_expander),
+   so the glyphs match theirs; the channel eyes sit in the expander's column
+   below a parametric row's header */
+.mask-drawer #button-canvas,
+button.mask-channel-eye #button-canvas
+{
+  margin: 12px;
+}
+
+/* every column only as wide as its glyph, so they sit evenly spaced: the
+   inset is kept top and bottom, where it sizes the glyph, and dropped at the
+   sides, where in a row of icons it only spreads them apart. 0.874em is the
+   glyph, the 1.15em button height less the two 12% insets */
+button.mask-expander,
+button.mask-eye,
+button.mask-picker,
+button.mask-link,
+button.mask-drawer-blank,
+button.mask-channel-eye
+{
+  min-width: 0.874em;
+}
+
+button.mask-expander #button-canvas,
+button.mask-eye #button-canvas,
+button.mask-picker #button-canvas,
+button.mask-link #button-canvas,
+button.mask-drawer-blank #button-canvas,
+button.mask-channel-eye #button-canvas
+{
+  margin: 12px 0;
 }
 
 button.mask-expander:hover,
@@ -1924,9 +1984,10 @@ button.mask-expander:disabled
 
 /* inset in its 18px drawer column, where a full-size triangle would look far
    bigger than the icons beside it */
+/* half size in the drawer (see _pack_row_header): just room for the outline */
 .mask-drawer .mask-badge
 {
-  padding: 4px;
+  padding: 1px;
 }
 
 .mask-badge.mask-no-effect
@@ -1934,15 +1995,16 @@ button.mask-expander:disabled
   color: @mask_badge_no_effect;
 }
 
-/* a parametric channel's bypass, directly below the header's expander:
-   the same 18px (by request), flush with the right edge. Must stay after
+/* a parametric channel's bypass, directly below the header's expander: the
+   same button, the same distance from the right edge. Must stay after
    button.mask-refine-bypass-btn, whose look it shares and whose size it
    overrides */
 button.mask-channel-eye
 {
-  min-width: 0;
-  min-height: 0;
-  margin: 0;
+  min-height: 1.15em;
+  /* on the right, the drawer's padding as well (see .mask-drawer) */
+  margin: 0.07em 0.208em 0.07em 0.07em;
+  padding: 1px;
 }
 
 .mask-inline-opacity-value:hover

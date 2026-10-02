@@ -508,7 +508,7 @@ typedef struct dt_iop_gui_blend_data_t
   // operator), reorderable by drag and drop. Each parametric row owns its own
   // blendif editor (see _build_param_row_editor in blend_gui.c).
   // masks_param_channels_box: flexi-only cluster of one flat button per channel
-  // of the module's blend colorspace, leading masks_toolbar's second run
+  // of the module's blend colorspace, one of masks_toolbar's slots
   // (see masks_toolbar below). Clicking a button adds a single-channel parametric
   // form for that channel; hovering one previews that channel's mask.
   // param_channels_csp: the csp the buttons were last built for, so the
@@ -535,11 +535,11 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *masks_new_op_label;
   int masks_new_group_op;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
-  // mask" action, inside masks_list_area, above masks_list_box. Two runs:
-  // add-group (masks_new_op_box) | shapes (masks_shapes_box), and parametric
-  // channels (masks_param_channels_box) | import (masks_import_btn), plus the
-  // group layout presets button at the top right. The runs share one line
-  // when the panel is wide enough and take a row each otherwise; the layout
+  // mask" action, inside masks_list_area, above masks_list_box: add-group
+  // (masks_new_op_box), shapes (masks_shapes_box), parametric channels
+  // (masks_param_channels_box) and import (masks_import_btn), plus the group
+  // layout presets button at the top right. They share one line when the
+  // panel is wide enough and take two or three rows otherwise; the layout
   // is a height-for-width container (masks_gui_toolbar.c), so it is decided
   // in GTK's own measure/allocate passes. Several schemes that moved widgets
   // around instead (GtkFlowBox; destroy-and-rebuild rows driven by

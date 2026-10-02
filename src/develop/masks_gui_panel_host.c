@@ -931,8 +931,70 @@ static void _release_stray_hosted(dt_iop_module_t *keep)
 // on the module being focused and masking-capable -- NOT on the current mask
 // mode, so the panel's controls stay reachable with the mask off, and whether
 // it shows follows the shared fold preference (see _model_masks_panel_state)
+
+// TEMPORARY width probe (DT_MASKS_WIDTH_DUMP=1): follow the widest child down
+// from the side panel and print each one's minimum width. Not for commit
+static void _width_chain(GtkWidget *w, const int depth)
+{
+  if(!w || depth > 60) return;
+  int min_w = 0, nat_w = 0;
+  gtk_widget_get_preferred_width(w, &min_w, &nat_w);
+  dt_print(DT_DEBUG_ALWAYS, "[width] %*s%s #%s min=%d nat=%d alloc=%d", depth, "",
+           G_OBJECT_TYPE_NAME(w), gtk_widget_get_name(w), min_w, nat_w,
+           gtk_widget_get_allocated_width(w));
+  if(!GTK_IS_CONTAINER(w)) return;
+  GList *kids = gtk_container_get_children(GTK_CONTAINER(w));
+  GtkWidget *widest = NULL;
+  int widest_w = -1, n_tied = 0;
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    if(!gtk_widget_get_visible(k->data)) continue;
+    int m = 0;
+    gtk_widget_get_preferred_width(k->data, &m, NULL);
+    if(m > widest_w) { widest_w = m; widest = k->data; n_tied = 1; }
+    else if(m == widest_w) n_tied++;
+  }
+  // a horizontal box adds its children up: list them all instead
+  if(GTK_IS_BOX(w) && gtk_orientable_get_orientation(GTK_ORIENTABLE(w)) == GTK_ORIENTATION_HORIZONTAL)
+  {
+    for(GList *k = kids; k; k = g_list_next(k))
+    {
+      if(!gtk_widget_get_visible(k->data)) continue;
+      int m = 0;
+      gtk_widget_get_preferred_width(k->data, &m, NULL);
+      dt_print(DT_DEBUG_ALWAYS, "[width] %*s  - %s #%s min=%d", depth, "",
+               G_OBJECT_TYPE_NAME(k->data), gtk_widget_get_name(k->data), m);
+    }
+  }
+  if(n_tied > 1) dt_print(DT_DEBUG_ALWAYS, "[width] %*s  (%d children tie)", depth, "", n_tied);
+  // follow every child that ties for widest: any of them sets the width
+  for(GList *k = kids; k; k = g_list_next(k))
+  {
+    if(!gtk_widget_get_visible(k->data)) continue;
+    int m = 0;
+    gtk_widget_get_preferred_width(k->data, &m, NULL);
+    if(m == widest_w && widest_w > 0) _width_chain(k->data, depth + 1);
+  }
+  g_list_free(kids);
+  (void)widest;
+}
+
+static gboolean _width_dump_timeout(gpointer user_data)
+{
+  dt_iop_module_t *module = darktable.develop ? darktable.develop->gui_module : NULL;
+  dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
+  if(!bd || !bd->relocatable_box) return G_SOURCE_REMOVE;
+  GtkWidget *top = GTK_WIDGET(bd->relocatable_box);
+  for(GtkWidget *a = top; a; a = gtk_widget_get_parent(a))
+    if(GTK_IS_SCROLLED_WINDOW(a)) { top = a; break; }
+  dt_print(DT_DEBUG_ALWAYS, "[width] ==== %s ====", module->op);
+  _width_chain(top, 0);
+  return G_SOURCE_REMOVE;
+}
+
 void _masks_flexi_relocate(dt_iop_module_t *module)
 {
+  if(g_getenv("DT_MASKS_WIDTH_DUMP")) g_timeout_add(1500, _width_dump_timeout, NULL);
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   if(!bd->relocatable_box) return;

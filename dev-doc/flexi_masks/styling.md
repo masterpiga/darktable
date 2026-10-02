@@ -27,13 +27,13 @@ Each part has one class, on the widget that paints it.
 | class | part |
 |---|---|
 | `.mask-lead` | the lead icon, at the left of a header |
-| `.mask-drawer` | the box holding the four icons on the right |
+| `.mask-drawer` | the box holding the icons on the right |
 | `.mask-expander` | rightmost: shows or hides the row's controls or the group's elements |
 | `.mask-eye` | second from the right: click to disable, shift+click to solo |
-| `.mask-notes` | third from the right on a group made by a preset: its notes |
+| `.mask-notes` | third from the right on a group made by a preset, half size under the badge: its notes |
 | `.mask-picker` | third from the right on a parametric row: its color picker |
 | `.mask-link` | third from the right on a linked shape or a raster mask: the chain to the other end |
-| `.mask-badge` | fourth from the right: an element or group that does nothing or next to nothing (opacity under 10%), or a group holding one at any depth; its tooltip says which |
+| `.mask-badge` | half size, at the top of the first free column from the right (over a group's notes, in the third column of an element with no picker or link, else the fourth): an element or group that does nothing or next to nothing (opacity under 10%), or a group holding one at any depth; its tooltip says which |
 | `.mask-channel-eye` | in a parametric row's controls: bypasses one channel range |
 
 ## States
@@ -71,10 +71,15 @@ groups alike), `.mask-group-header` for a group's.
 
 ## Sizes
 
-Every icon is 18px square, fixed in code. `padding` insets the glyph inside
-it and never resizes the icon, so the headers keep their height and the icons
-of every row stay lined up. Padding on `.mask-drawer` is the one exception:
-it adds room around all four icons, and grows the drawer by as much.
+Every icon is an icon button sized by the theme like any other
+(`.dt_module_btn`), with the icon inset of a module's sub-panel headers, so
+the glyphs match theirs, but only as wide as its glyph, so the icons sit evenly
+spaced. The badge and a group's notes are half that and share a column; a
+column a row has no icon for is a blank button of the same size, so the icons
+of every row stay lined up. Padding on `.mask-drawer` adds room around all its
+icons, and grows the drawer by as much: the theme's right padding is the side
+inset the sub-panels' expanders keep, so the rows' expanders end where theirs
+do.
 
 ## Backgrounds
 

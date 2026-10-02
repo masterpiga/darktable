@@ -16,15 +16,21 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// The flexi masks panel's toolbar: two runs of add buttons and a presets
-// button, on one line when the panel is wide enough and on two otherwise.
+// The flexi masks panel's toolbar: the add buttons and a presets button, on
+// one line when the panel is wide enough, and on two or three rows otherwise.
 //
-//   one line:  [    run A | gap | run B    ] gap [presets]
-//   two rows:  [    run A    ] gap [presets]
-//              [    run B    ]
+//   one line:   [ group | shapes | channels | import ] gap [presets]
+//   two rows:   [ group | shapes ] gap [presets]
+//               [ channels | import ]
+//   three rows: [ shapes ] gap [presets]
+//               [ channels ]
+//               [ group | import ]
 //
-// The runs are centered on the full width, pushed left only as far as they
-// must be to clear the presets button, which keeps to the right edge.
+// Each row is centered on the full width, the first pushed left only as far
+// as it must be to clear the presets button, which keeps to the right edge.
+// The third arrangement is what lets the panel fit the narrowest side panel:
+// the shape and channel runs are the widest things in it, so the two buttons
+// that would otherwise lengthen them go to a row of their own.
 //
 // This is a height-for-width container rather than a box whose children are
 // moved around from "size-allocate": the row count is decided inside GTK's
@@ -36,8 +42,10 @@
 
 typedef enum
 {
-  _TB_RUN_A = 0,
-  _TB_RUN_B,
+  _TB_GROUP = 0,
+  _TB_SHAPES,
+  _TB_CHANNELS,
+  _TB_IMPORT,
   _TB_PRESETS,
   _TB_GAP, // never drawn, only measured: its CSS width is the spacing
   _TB_N
@@ -58,6 +66,17 @@ G_DEFINE_TYPE(DtMasksToolbar, _masks_toolbar, GTK_TYPE_CONTAINER)
 
 #define _TB(w) ((DtMasksToolbar *)(w))
 
+// the arrangements, widest first. Each row lists its slots left to right, -1
+// terminated; the presets button closes the first row
+#define _TB_ROWS 3
+#define _TB_LAYOUTS 3
+static const int _tb_layouts[_TB_LAYOUTS][_TB_ROWS][_TB_N] =
+{
+  { { _TB_GROUP, _TB_SHAPES, _TB_CHANNELS, _TB_IMPORT, -1 }, { -1 }, { -1 } },
+  { { _TB_GROUP, _TB_SHAPES, -1 }, { _TB_CHANNELS, _TB_IMPORT, -1 }, { -1 } },
+  { { _TB_SHAPES, -1 }, { _TB_CHANNELS, -1 }, { _TB_GROUP, _TB_IMPORT, -1 } },
+};
+
 // natural size of a slot, zero when it is empty or hidden
 typedef struct
 {
@@ -76,35 +95,51 @@ static void _tb_measure(DtMasksToolbar *tb, _tb_sizes_t *s)
   }
 }
 
-static inline int _tb_gap_after(const _tb_sizes_t *s, const int a, const int b)
+// the width of a row's run of slots, with a gap between each two shown ones
+static int _tb_run_width(const _tb_sizes_t *s, const int *row)
 {
-  return s->w[a] && s->w[b] ? s->w[_TB_GAP] : 0;
+  int w = 0;
+  for(int k = 0; row[k] >= 0; k++)
+    if(s->w[row[k]]) w += (w ? s->w[_TB_GAP] : 0) + s->w[row[k]];
+  return w;
 }
 
-// the width of the whole toolbar on one line
-static int _tb_one_line_width(const _tb_sizes_t *s)
+// the width a row needs, the presets button included on the first
+static int _tb_row_width(const _tb_sizes_t *s, const int layout, const int r)
 {
-  const int runs = s->w[_TB_RUN_A] + _tb_gap_after(s, _TB_RUN_A, _TB_RUN_B) + s->w[_TB_RUN_B];
-  return runs + (runs && s->w[_TB_PRESETS] ? s->w[_TB_GAP] : 0) + s->w[_TB_PRESETS];
+  const int run = _tb_run_width(s, _tb_layouts[layout][r]);
+  if(r) return run;
+  return run + (run && s->w[_TB_PRESETS] ? s->w[_TB_GAP] : 0) + s->w[_TB_PRESETS];
 }
 
-// the narrowest the two-row layout gets
-static int _tb_two_row_width(const _tb_sizes_t *s)
+static int _tb_row_height(const _tb_sizes_t *s, const int layout, const int r)
 {
-  const int row1 = s->w[_TB_RUN_A] + _tb_gap_after(s, _TB_RUN_A, _TB_PRESETS)
-                   + s->w[_TB_PRESETS];
-  return MAX(row1, s->w[_TB_RUN_B]);
+  const int *row = _tb_layouts[layout][r];
+  int h = r ? 0 : s->h[_TB_PRESETS];
+  for(int k = 0; row[k] >= 0; k++) h = MAX(h, s->h[row[k]]);
+  return h;
 }
 
-static gboolean _tb_fits_one_line(const _tb_sizes_t *s, const int width)
+static int _tb_layout_width(const _tb_sizes_t *s, const int layout)
 {
-  return !s->w[_TB_RUN_B] || width >= _tb_one_line_width(s);
+  int w = 0;
+  for(int r = 0; r < _TB_ROWS; r++) w = MAX(w, _tb_row_width(s, layout, r));
+  return w;
 }
 
-static int _tb_height(const _tb_sizes_t *s, const gboolean one_line)
+static int _tb_layout_height(const _tb_sizes_t *s, const int layout)
 {
-  const int row1 = MAX(s->h[_TB_RUN_A], s->h[_TB_PRESETS]);
-  return one_line ? MAX(row1, s->h[_TB_RUN_B]) : row1 + s->h[_TB_RUN_B];
+  int h = 0;
+  for(int r = 0; r < _TB_ROWS; r++) h += _tb_row_height(s, layout, r);
+  return h;
+}
+
+// the widest arrangement that fits, or the narrowest when none does
+static int _tb_pick_layout(const _tb_sizes_t *s, const int width)
+{
+  for(int l = 0; l < _TB_LAYOUTS - 1; l++)
+    if(width >= _tb_layout_width(s, l)) return l;
+  return _TB_LAYOUTS - 1;
 }
 
 static GtkSizeRequestMode _tb_get_request_mode(GtkWidget *widget)
@@ -116,8 +151,8 @@ static void _tb_get_preferred_width(GtkWidget *widget, int *minimum, int *natura
 {
   _tb_sizes_t s;
   _tb_measure(_TB(widget), &s);
-  *minimum = _tb_two_row_width(&s);
-  *natural = MAX(*minimum, _tb_one_line_width(&s));
+  *minimum = _tb_layout_width(&s, _TB_LAYOUTS - 1);
+  *natural = MAX(*minimum, _tb_layout_width(&s, 0));
 }
 
 static void _tb_get_preferred_height_for_width(GtkWidget *widget,
@@ -127,7 +162,7 @@ static void _tb_get_preferred_height_for_width(GtkWidget *widget,
 {
   _tb_sizes_t s;
   _tb_measure(_TB(widget), &s);
-  *minimum = *natural = _tb_height(&s, _tb_fits_one_line(&s, width));
+  *minimum = *natural = _tb_layout_height(&s, _tb_pick_layout(&s, width));
 }
 
 // without a width, the height at the minimum width, as GTK expects of a
@@ -136,7 +171,7 @@ static void _tb_get_preferred_height(GtkWidget *widget, int *minimum, int *natur
 {
   _tb_sizes_t s;
   _tb_measure(_TB(widget), &s);
-  *minimum = *natural = _tb_height(&s, !s.w[_TB_RUN_B]);
+  *minimum = *natural = _tb_layout_height(&s, _TB_LAYOUTS - 1);
 }
 
 static void _tb_get_preferred_width_for_height(GtkWidget *widget,
@@ -177,33 +212,30 @@ static void _tb_size_allocate(GtkWidget *widget, GtkAllocation *a)
   const gboolean rtl = gtk_widget_get_direction(widget) == GTK_TEXT_DIR_RTL;
   const int W = a->width;
   const int gap = s.w[_TB_GAP];
-  const int wa = s.w[_TB_RUN_A], wb = s.w[_TB_RUN_B], wp = s.w[_TB_PRESETS];
-  const int wp_x = W - wp;
-  const int limit = wp ? wp_x - gap : W;
+  const int wp = s.w[_TB_PRESETS];
+  const int layout = _tb_pick_layout(&s, W);
 
-  const int row1_h = MAX(s.h[_TB_RUN_A], s.h[_TB_PRESETS]);
-  int gap_x;
-  if(_tb_fits_one_line(&s, W))
+  int y = 0, gap_x = 0;
+  for(int r = 0; r < _TB_ROWS; r++)
   {
-    const int h = _tb_height(&s, TRUE);
-    const int ab_gap = _tb_gap_after(&s, _TB_RUN_A, _TB_RUN_B);
-    const int x = _tb_center(W, wa + ab_gap + wb, limit);
-    _tb_place(tb->child[_TB_RUN_A], a, rtl, x, 0, wa, h);
-    _tb_place(tb->child[_TB_RUN_B], a, rtl, x + wa + ab_gap, 0, wb, h);
-    _tb_place(tb->child[_TB_PRESETS], a, rtl, wp_x, 0, wp, h);
-    gap_x = x + wa;
-  }
-  else
-  {
-    const int xa = _tb_center(W, wa, limit);
-    _tb_place(tb->child[_TB_RUN_A], a, rtl, xa, 0, wa, row1_h);
-    _tb_place(tb->child[_TB_PRESETS], a, rtl, wp_x, 0, wp, row1_h);
-    _tb_place(tb->child[_TB_RUN_B], a, rtl, _tb_center(W, wb, W), row1_h, wb,
-              s.h[_TB_RUN_B]);
-    gap_x = xa + wa;
+    const int *row = _tb_layouts[layout][r];
+    const int h = _tb_row_height(&s, layout, r);
+    const int run = _tb_run_width(&s, row);
+    const int limit = !r && wp ? W - wp - gap : W;
+    int x = _tb_center(W, run, limit);
+    for(int k = 0; row[k] >= 0; k++)
+    {
+      if(!s.w[row[k]]) continue;
+      _tb_place(tb->child[row[k]], a, rtl, x, y, s.w[row[k]], h);
+      x += s.w[row[k]] + gap;
+      if(!r) gap_x = x - gap;
+    }
+    if(!r) _tb_place(tb->child[_TB_PRESETS], a, rtl, W - wp, y, wp, h);
+    y += h;
   }
   // every visible child gets an allocation; the gap's is just empty space
-  _tb_place(tb->child[_TB_GAP], a, rtl, MIN(gap_x, MAX(0, W - gap)), 0, gap, row1_h);
+  _tb_place(tb->child[_TB_GAP], a, rtl, MIN(gap_x, MAX(0, W - gap)), 0, gap,
+            _tb_row_height(&s, layout, 0));
 }
 
 static void _tb_forall(GtkContainer *container,
@@ -261,13 +293,15 @@ static void _masks_toolbar_init(DtMasksToolbar *tb)
   gtk_widget_set_has_window(GTK_WIDGET(tb), FALSE);
 }
 
-GtkWidget *_masks_toolbar_new(GtkWidget *run_a,
-                              GtkWidget *run_b,
+GtkWidget *_masks_toolbar_new(GtkWidget *group,
+                              GtkWidget *shapes,
+                              GtkWidget *channels,
+                              GtkWidget *import,
                               GtkWidget *presets,
                               GtkWidget *gap)
 {
   DtMasksToolbar *tb = g_object_new(_masks_toolbar_get_type(), NULL);
-  GtkWidget *children[_TB_N] = { run_a, run_b, presets, gap };
+  GtkWidget *children[_TB_N] = { group, shapes, channels, import, presets, gap };
   for(int i = 0; i < _TB_N; i++)
   {
     tb->child[i] = children[i];
