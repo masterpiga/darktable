@@ -2692,16 +2692,7 @@ static void _add_masks_panel_options_box(GtkWidget *box, dt_iop_module_t *module
     props_subpanel, _("element properties in subpanel"),
     _("when enabled, the properties of the selected element or group\n"
       "are shown in a collapsible section of their own, between the\n"
-      "mask list and the refinements, instead of expanding in the\n"
-      "list: a shape's size, feather, hardness, rotation and the like,\n"
-      "a parametric element's boost factor, and the opacity of any\n"
-      "element or group. a parametric element keeps its input and\n"
-      "output sliders in the list.\n"
-      "while a shape is being drawn, the section holds its creation\n"
-      "controls and opens by itself; its placeholder row still shows\n"
-      "the group it lands in.\n"
-      "the section is hidden while the selection has nothing to show\n"
-      "there.\n"
+      "mask list and the refinements, instead of expanding in the list.\n"
       "disabled by default."),
     _props_subpanel(), _masks_props_subpanel_toggled)
 
@@ -3733,28 +3724,6 @@ static GArray *_canvas_points(dt_masks_form_t *grp)
   int pos = 0;
   _canvas_points_into(grp, out, &pos, 0);
   return out;
-}
-
-// the gain the groups around member `fid` apply to it: the opacity of its
-// group, and at each enclosing level the nested group's own member opacity and
-// the opacity of the group holding it (see _group_get_mask_roi_flexi)
-static float _enclosing_gain(dt_masks_form_t *grp, const dt_mask_id_t fid)
-{
-  float gain = 1.0f;
-  dt_mask_id_t id = fid;
-  for(int depth = 0; depth <= DT_MASKS_NESTING_MAX; depth++)
-  {
-    dt_masks_form_t *owner = NULL;
-    GList *node = _point_node_owner(grp, id, &owner);
-    if(!node) break;
-    if(id != fid) gain *= ((dt_masks_point_group_t *)node->data)->opacity;
-    GList *marker = node;
-    while(marker && !dt_masks_point_is_marker(marker->data)) marker = marker->prev;
-    if(marker) gain *= ((dt_masks_point_group_t *)marker->data)->group_opacity;
-    if(owner == grp) break;
-    id = owner->formid;
-  }
-  return gain;
 }
 
 // is `id` one of the member ids `formids`, or a point of a nested group among
@@ -4880,11 +4849,7 @@ static void _refine_scope_combo_rebuild(dt_iop_module_t *module)
 // defined with the other badge helpers (it needs the row/run lookups), but
 // called from _props_row_apply below on every opacity change
 static void _refresh_lowop_badges(dt_iop_module_t *module);
-static void _update_lowop_badge(GtkWidget *badge,
-                                const float opacity,
-                                const gboolean is_group,
-                                const gboolean is_noop,
-                                const char *noop_reason);
+static void _update_blend_opacity_badge(GtkWidget *badge, const float opacity);
 static void
 _set_badge_active(GtkWidget *badge, gboolean active, const char *tooltip_when_active);
 // what a row's visibility button shows (see _make_visibility_button): solo
@@ -6035,7 +6000,7 @@ static void _blend_opacity_slider_changed_cb(GtkWidget *slider, gpointer user_da
   dt_iop_gui_blend_data_t *bd = user_data;
   if(!bd || !bd->blend_opacity_lowop_badge) return;
   const float val = dt_bauhaus_slider_get(slider);
-  _update_lowop_badge(bd->blend_opacity_lowop_badge, val / 100.0f, FALSE, FALSE, NULL);
+  _update_blend_opacity_badge(bd->blend_opacity_lowop_badge, val / 100.0f);
   // opacity is a blending parameter and blending is skipped while the mask is
   // off, so setting it switches the mask on. Safe here: bauhaus writes the
   // field and commits before it emits "value-changed" (bauhaus.c:3970), so the
@@ -6327,12 +6292,12 @@ static gboolean _header_drawer_button(GtkWidget *w, GdkEventButton *e, gpointer 
 }
 
 // pack a row header, shared by element rows, the pending row and group
-// headers: <handle> <name, expanding> <badges> <kind icon> <visibility>
-// <expander>. The last three are fixed columns counted from the right, framed
+// headers: <handle> <name, expanding> <badge> <kind icon> <visibility>
+// <expander>. The last four are fixed columns counted from the right, framed
 // together in one drawer that shares a single background; a column whose icon
 // the row does not have stays blank, inside the drawer, so every drawer is the
-// same size and the icons keep their places. The badges sit outside it.
-// - badges: the low-opacity warning (see _make_badge_stack)
+// same size and the icons keep their places.
+// - badge: the warning badge (see _make_lowop_badge); NULL on the pending row
 // - kind_icon: a group's notes toggle, a parametric row's picker, or the link
 //   of a linked shape or a raster mask; NULL for none
 // - visibility: see _make_visibility_button; NULL on the pending row
@@ -6340,7 +6305,7 @@ static gboolean _header_drawer_button(GtkWidget *w, GdkEventButton *e, gpointer 
 static void _pack_row_header(GtkWidget *row,
                              GtkWidget *handle,
                              GtkWidget *name,
-                             GtkWidget *badges,
+                             GtkWidget *badge,
                              GtkWidget *kind_icon,
                              GtkWidget *visibility,
                              GtkWidget *expander)
@@ -6368,8 +6333,8 @@ static void _pack_row_header(GtkWidget *row,
 
   // the columns, right to left. Each icon is 18px by request, not by CSS, so
   // that a theme's padding insets the glyph rather than growing the drawer
-  GtkWidget *cells[3] = { expander, visibility, kind_icon };
-  for(int i = 0; i < 3; i++)
+  GtkWidget *cells[4] = { expander, visibility, kind_icon, badge };
+  for(int i = 0; i < 4; i++)
   {
     if(cells[i])
       gtk_widget_set_size_request(cells[i], DT_PIXEL_APPLY_DPI(18), DT_PIXEL_APPLY_DPI(18));
@@ -6377,7 +6342,6 @@ static void _pack_row_header(GtkWidget *row,
                      FALSE, FALSE, 0);
   }
 
-  if(badges) gtk_box_pack_end(GTK_BOX(hbox), badges, FALSE, FALSE, DT_PIXEL_APPLY_DPI(2));
 
   dt_gui_box_add(row, dt_gui_expand(hbox));
 }
@@ -6815,10 +6779,9 @@ static GtkWidget *_masks_row_for_point(dt_iop_gui_blend_data_t *bd,
 static const GtkTargetEntry _mask_row_dnd[] = { { (gchar *)DND_TARGET_ROW,
                                                   GTK_TARGET_SAME_APP, 0 } };
 
-// a badge (the low-opacity warning) is always mapped, in a fixed-size column
-// of a row/header's own box (see _make_badge_stack):
-// showing and hiding a badge would change the row's packed-child count and
-// shift every other header control sideways. An "active" flag (read by the
+// a badge (the warning) is always mapped, in its column of the drawer (see
+// _pack_row_header): showing and hiding a badge would change the drawer's
+// packed-child count and shift every other header control sideways. An "active" flag (read by the
 // badge's own draw handler below) stands in for show/hide: inactive means
 // painted as nothing, but the badge's cell -- and everything to its left in
 // the row -- never moves. Clearing the tooltip alongside keeps an inactive
@@ -6897,19 +6860,20 @@ static GtkWidget *_make_visibility_button(const gboolean can_solo)
   return btn;
 }
 
-// --- low-opacity warning badge ----------------------------------------------
+// --- warning badge -----------------------------------------------------------
 // Opacity goes all the way to 0 (see the CLAMP in _props_row_apply): the
 // classic manager's 0.05 floor was there only because a near-invisible shape
 // used to be indistinguishable from a live one in the flat list. This badge is
-// what replaces that floor -- an element or group under the threshold below
-// says so on its own row, so "why is this shape doing nothing?" is answerable
-// at a glance instead of by opening the properties expander.
+// what replaces that floor: an element or group that does nothing, or next to
+// nothing, says so on its own row, and every group holding one says so on its
+// header, so "why is this mask doing nothing?" is answerable at a glance with
+// the groups folded (see _refresh_lowop_badges)
 #define MASK_LOW_OPACITY_WARN 0.10f
 
 // painted by hand: GtkDarktableIcon never calls gtk_render_background, so a
-// plain icon child would leave the CSS-styled badge background unpainted. dtgtk_cairo_paint_warning fills even-odd (a solid
-// triangle with the exclamation mark knocked out of it), so it needs only the
-// foreground color -- .mask-badge supplies an amber one.
+// plain icon child would leave the CSS-styled badge background unpainted. A
+// plain triangle in the theme's color, outlined in its outline-color so it
+// reads on every header shade, from the darkest to a selected one
 static gboolean _lowop_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
 {
   if(!_badge_is_active(w)) return FALSE;
@@ -6919,107 +6883,80 @@ static gboolean _lowop_badge_draw(GtkWidget *w, cairo_t *cr, gpointer user_data)
   const GtkStateFlags state = gtk_widget_get_state_flags(w);
 
   gtk_render_background(ctx, cr, 0, 0, a.width, a.height);
-  const gint pad = DT_PIXEL_APPLY_DPI(1);
-  // two different reasons share this one slot (see _update_lowop_badge): a
-  // no-op element (still at its full/base range, contributes nothing at all)
-  // takes precedence over a merely-low-opacity one. Drawn as a plain solid
-  // red dot for now -- the switch-off glyph read too close to an open
-  // slider handle at this size to be told apart at a glance; a filled disc
-  // in a color nothing else in the row uses is the placeholder until this
-  // gets a considered icon.
-  if(GPOINTER_TO_INT(g_object_get_data(G_OBJECT(w), "badge-noop")))
-  {
-    cairo_set_source_rgba(cr, 0.9, 0.15, 0.15, 1.0);
-    const double cx = a.width / 2.0, cy = a.height / 2.0;
-    const double r = (MIN(a.width, a.height) - 2 * pad) / 2.0;
-    cairo_arc(cr, cx, cy, r, 0, 2 * G_PI);
-    cairo_fill(cr);
-  }
-  else
-  {
-    GdkRGBA c;
-    gtk_style_context_get_color(ctx, state, &c);
-    cairo_set_source_rgba(cr, c.red, c.green, c.blue, c.alpha);
-    dtgtk_cairo_paint_warning(cr, pad, pad, a.width - 2 * pad, a.height - 2 * pad, 0,
-                              NULL);
-  }
+  // padding insets the glyph, as on the drawer's other icons
+  GtkBorder pad;
+  gtk_style_context_get_padding(ctx, state, &pad);
+  GdkRGBA fill, edge;
+  gtk_style_context_get_color(ctx, state, &fill);
+  GdkRGBA *outline = NULL;
+  gtk_style_context_get(ctx, state, "outline-color", &outline, NULL);
+  edge = outline ? *outline : (GdkRGBA){ 0.0, 0.0, 0.0, 0.6 };
+  if(outline) gdk_rgba_free(outline);
+
+  // the outline is stroked inside the box, half its width in from each edge
+  const double lw = DT_PIXEL_APPLY_DPI(1.0);
+  const double bw = a.width - pad.left - pad.right - lw;
+  const double bh = a.height - pad.top - pad.bottom - lw;
+  if(bw <= 0.0 || bh <= 0.0) return FALSE;
+  // as wide as it is tall, centered in what the padding leaves
+  const double side = MIN(bw, bh);
+  const double x0 = pad.left + lw / 2.0 + (bw - side) / 2.0;
+  const double y0 = pad.top + lw / 2.0 + (bh - side) / 2.0;
+  cairo_move_to(cr, x0 + side / 2.0, y0);
+  cairo_line_to(cr, x0 + side, y0 + side);
+  cairo_line_to(cr, x0, y0 + side);
+  cairo_close_path(cr);
+  cairo_set_source_rgba(cr, fill.red, fill.green, fill.blue, fill.alpha);
+  cairo_fill_preserve(cr);
+  cairo_set_line_join(cr, CAIRO_LINE_JOIN_ROUND);
+  cairo_set_line_width(cr, lw);
+  cairo_set_source_rgba(cr, edge.red, edge.green, edge.blue, edge.alpha);
+  cairo_stroke(cr);
   return FALSE;
 }
 
 // starts inactive (blank); _refresh_lowop_badges reveals it in place, no
-// list rebuild needed. Not clickable: it reports a value the row's own
-// opacity slider owns, so there is nothing for a click to do.
+// list rebuild needed. Not clickable: it reports state the row's own controls
+// own, so there is nothing for a click to do. Sized where it is packed: the
+// drawer's 18px column (see _pack_row_header), or beside the blend opacity
 static GtkWidget *_make_lowop_badge(void)
 {
   GtkWidget *badge = gtk_event_box_new();
   gtk_event_box_set_visible_window(GTK_EVENT_BOX(badge), TRUE);
   gtk_widget_set_app_paintable(badge, TRUE);
-  gtk_widget_set_size_request(badge, DT_PIXEL_APPLY_DPI(8), DT_PIXEL_APPLY_DPI(8));
   dt_gui_add_class(badge, "mask-badge");
   g_signal_connect(G_OBJECT(badge), "draw", G_CALLBACK(_lowop_badge_draw), NULL);
   return badge;
 }
 
-// the fourth column from the right of a row/header (see _pack_row_header):
-// the low-opacity warning, always mapped and merely blank while inactive (see
-// _set_badge_active), so the column's size never changes as it turns on and
-// off and nothing else in the row shifts
-static GtkWidget *_make_badge_stack(GtkWidget *lowop_badge)
-{
-  GtkWidget *stack = dt_gui_vbox();
-  gtk_widget_set_valign(stack, GTK_ALIGN_CENTER);
-  dt_gui_add_class(stack, "mask-badge-stack");
-  if(lowop_badge) dt_gui_box_add(stack, lowop_badge);
-  return stack;
-}
-
-// activate/deactivate one badge from the opacity it watches, and say the
-// actual value in its tooltip -- "low" alone doesn't tell the user whether
-// they are looking at 9% or 0%, and those read very differently on canvas.
-// `noop_reason`, when non-NULL, replaces the default parametric wording with a
-// reason of the caller's own. The badge itself is deliberately the same one:
-// both cases are "this element is in the list but contributes nothing", which
-// is what the badge means, and giving a broken raster its own glyph would add a
-// second thing to learn for a state the user resolves the same way -- by fixing
-// the row or removing it.
-static void _update_lowop_badge(GtkWidget *badge,
-                                const float opacity,
-                                const gboolean is_group,
-                                const gboolean is_noop,
-                                const char *noop_reason)
+// show a badge with `tooltip`, or blank it for NULL. `no_effect`, when the
+// first reason given is that something does nothing at all rather than
+// little, only adds .mask-no-effect, for a theme that wants to tell the two
+// apart: the glyph is the same
+static void _set_badge(GtkWidget *badge, const gchar *tooltip, const gboolean no_effect)
 {
   if(!badge) return;
-  if(is_noop)
-  {
-    g_object_set_data(G_OBJECT(badge), "badge-noop", GINT_TO_POINTER(1));
+  if(no_effect && tooltip)
     dt_gui_add_class(badge, "mask-no-effect");
-    _set_badge_active(badge, TRUE,
-                      noop_reason
-                      ? noop_reason
-                      : _("this channel's range still covers its whole span, so it"
-                          " does not restrict the mask yet: narrow the range to have"
-                          " an effect"));
-    return;
-  }
-  g_object_set_data(G_OBJECT(badge), "badge-noop", GINT_TO_POINTER(0));
-  dt_gui_remove_class(badge, "mask-no-effect");
-  const gboolean low = opacity < MASK_LOW_OPACITY_WARN;
-  if(!low)
+  else
+    dt_gui_remove_class(badge, "mask-no-effect");
+  _set_badge_active(badge, tooltip != NULL, tooltip);
+}
+
+// the module's own blend opacity, next to its value. Says the actual value:
+// "low" alone doesn't tell 9% from 0%, which read very differently
+static void _update_blend_opacity_badge(GtkWidget *badge, const float opacity)
+{
+  if(opacity >= MASK_LOW_OPACITY_WARN)
   {
-    _set_badge_active(badge, FALSE, NULL);
+    _set_badge(badge, NULL, FALSE);
     return;
   }
-  gchar *tip =
-    opacity <= 0.0f
-      ? g_strdup(is_group ? _("opacity 0%: this group is fully transparent and\n"
-                              "contributes nothing to the mask")
-                          : _("opacity 0%: this element is fully transparent and\n"
-                              "contributes nothing to the mask"))
-      : g_strdup_printf(
-          is_group ? _("opacity %.0f%%: this group has very little effect on the mask")
-                   : _("opacity %.0f%%: this element has very little effect on the mask"),
-          opacity * 100.0f);
-  _set_badge_active(badge, TRUE, tip);
+  gchar *tip = opacity <= 0.0f
+    ? g_strdup(_("opacity 0%: this module has no effect on the image"))
+    : g_strdup_printf(_("opacity %.0f%%: this module has very little effect on the image"),
+                      opacity * 100.0f);
+  _set_badge(badge, tip, FALSE);
   g_free(tip);
 }
 
@@ -7150,6 +7087,7 @@ static void _refresh_all_shape_rows(dt_iop_module_t *module)
     dt_gui_remove_class(GTK_WIDGET(bd->masks_list_box), "mask-solo-active");
   _apply_group_header_dimming(GTK_WIDGET(bd->masks_list_box), solo_active,
                               bd->solo_group_key);
+  _refresh_lowop_badges(module);
   // callers reach here after _sync_hidden_to_form_visible, which drops the
   // panel selection when the selected element is the one that just became
   // hidden (see its own "a hidden shape must not remain the selected one").
@@ -7159,86 +7097,196 @@ static void _refresh_all_shape_rows(dt_iop_module_t *module)
   _update_row_selection(bd);
 }
 
-// the group's own persistent, multiplicative opacity (see
-// dt_masks_point_group_t.group_opacity and the header's own inline slider),
-// held by its marker. This is the group's own gain, independent of its
-// members' own opacities -- each element's own low-opacity badge already
-// accounts for the group it sits in (see _refresh_lowop_badges' effective-
-// opacity walk below), so this deliberately does not re-derive anything from
-// the members here.
-static float _group_own_opacity(dt_masks_form_t *grp, const dt_mask_id_t cid)
+// what a group holds, at any depth, as its header's badge reports it
+typedef struct _badge_held_t
 {
-  const dt_masks_point_group_t *pt = _group_point(grp, cid);
-  return pt ? pt->group_opacity : 1.0f; // not found: nothing to warn about
+  gboolean noop; // an element that does nothing at all
+  gboolean low;  // an element or a group under MASK_LOW_OPACITY_WARN
+} _badge_held_t;
+
+// a group header's badge, or a nested group row's, by the group's marker id
+typedef struct _badge_header_t
+{
+  gchar *tip;
+  gboolean noop;
+} _badge_header_t;
+
+static void _badge_header_free(gpointer data)
+{
+  _badge_header_t *h = data;
+  g_free(h->tip);
+  g_free(h);
 }
 
-// refresh every group header's low-opacity badge, in place. Headers are not in
-// bd->masks_row_map (that indexes element rows only), so they are found by the
-// same recursive walk _apply_group_visibility uses.
-static void _paint_group_lowop_badge(GtkWidget *header, gpointer grp)
+// one line per reason, no-effect first: a group that does nothing whatever
+// its opacity says so before anything else. NULL with nothing to report
+static gchar *_group_badge_tip(const float opacity, const _badge_held_t *held)
 {
-  GtkWidget *badge = g_object_get_data(G_OBJECT(header), "lowop-badge");
-  if(badge)
-    _update_lowop_badge(badge, _group_own_opacity(grp, _header_cid(header)), TRUE,
-                        FALSE, NULL);
+  GString *tip = g_string_new(NULL);
+  if(held->noop)
+    g_string_append(tip, _("this group contains at least one element that has no effect"));
+  if(opacity < MASK_LOW_OPACITY_WARN)
+  {
+    if(tip->len) g_string_append_c(tip, '\n');
+    if(opacity <= 0.0f)
+      g_string_append(tip, _("opacity 0%: this group is fully transparent and\n"
+                             "contributes nothing to the mask"));
+    else
+      g_string_append_printf(tip, _("opacity %.0f%%: this group has very little effect"
+                                    " on the mask"),
+                             opacity * 100.0f);
+  }
+  if(held->low)
+  {
+    if(tip->len) g_string_append_c(tip, '\n');
+    g_string_append_printf(tip, _("this group contains at least one element or group\n"
+                                  "with opacity below %.0f%%"),
+                           MASK_LOW_OPACITY_WARN * 100.0f);
+  }
+  return g_string_free(tip, tip->len == 0);
 }
 
-static void _apply_group_lowop_badges(GtkWidget *w, dt_masks_form_t *grp)
+// an element's own badge: doing nothing at all trumps doing little, which is
+// then moot
+static gchar *_element_badge_tip(dt_iop_module_t *module,
+                                 const dt_masks_form_t *f,
+                                 const float opacity,
+                                 gboolean *noop)
 {
-  _foreach_tagged(w, "mask-header", _paint_group_lowop_badge, grp);
+  // a raster element that cannot reach a mask can never contribute: the
+  // renderer draws it as zero and skips its inversion (see
+  // dt_masks_raster_is_unresolved). The wording covers both ways it gets
+  // there: a module that is gone (the row is only removable) and one that is
+  // merely switched off or no longer masking (fixable at the source)
+  *noop = TRUE;
+  if(dt_masks_raster_is_unresolved(module, NULL, f))
+    return g_strdup(_("this raster mask has no mask to read: the module it came from\n"
+                      "is switched off, no longer carries a mask, or is gone, so this\n"
+                      "element selects nothing.\n"
+                      "restore the source module, or remove this element"));
+  if(dt_masks_parametric_is_noop(f))
+    return g_strdup(_("this channel's range still covers its whole span, so it does\n"
+                      "not restrict the mask yet: narrow the range to have an effect"));
+  *noop = FALSE;
+  if(opacity >= MASK_LOW_OPACITY_WARN) return NULL;
+  return opacity <= 0.0f
+    ? g_strdup(_("opacity 0%: this element is fully transparent and\n"
+                 "contributes nothing to the mask"))
+    : g_strdup_printf(_("opacity %.0f%%: this element has very little effect on the mask"),
+                      opacity * 100.0f);
 }
 
-// refresh every low-opacity badge in the panel (element rows and group headers)
-// from the current opacities. Cheap and in-place -- no widget is created or
-// destroyed -- so it can run on every tick of an opacity drag as well as at the
-// end of a list rebuild.
+// a group closed by the walk below: its header's badge, and what it passes up
+static void _badge_close_group(const dt_masks_point_group_t *marker,
+                               const _badge_held_t *held,
+                               GHashTable *headers,
+                               _badge_held_t *total)
+{
+  if(!marker)
+  {
+    // members ahead of any marker: no header of their own to report them
+    total->noop |= held->noop;
+    total->low |= held->low;
+    return;
+  }
+  _badge_header_t *h = g_malloc0(sizeof(_badge_header_t));
+  g_hash_table_insert(headers, GINT_TO_POINTER(marker->formid), h);
+  // a bypassed group adds nothing to the mask, which its eye already says
+  if(_op_is_bypassed(marker->state)) return;
+  h->tip = _group_badge_tip(marker->group_opacity, held);
+  h->noop = held->noop;
+  total->noop |= held->noop;
+  total->low |= held->low || marker->group_opacity < MASK_LOW_OPACITY_WARN;
+}
+
+// badge every element row of group form `grp` (the mask, or a group nested in
+// it) bottom-up, collect its headers' badges in `headers` by marker id, and
+// return what it holds, for the headers around it. What adds nothing to the
+// mask anyway (a disabled element, the contents of a bypassed group) gets no
+// badge and passes nothing up: its eye already says so
+static _badge_held_t _badge_walk(dt_iop_module_t *module,
+                                 dt_masks_form_t *grp,
+                                 GHashTable *headers,
+                                 const int depth)
+{
+  dt_iop_gui_blend_data_t *bd = module->blend_data;
+  _badge_held_t total = { FALSE, FALSE };
+  if(!grp || depth > DT_MASKS_NESTING_MAX) return total;
+
+  const dt_masks_point_group_t *marker = NULL;
+  _badge_held_t held = { FALSE, FALSE };
+  for(GList *l = grp->points; l; l = g_list_next(l))
+  {
+    const dt_masks_point_group_t *pt = l->data;
+    if(dt_masks_point_is_marker(pt))
+    {
+      _badge_close_group(marker, &held, headers, &total);
+      marker = pt;
+      held = (_badge_held_t){ FALSE, FALSE };
+      continue;
+    }
+    GtkWidget *row = _masks_row_for_point(bd, pt);
+    GtkWidget *badge = row ? g_object_get_data(G_OBJECT(row), "lowop-badge") : NULL;
+    const gboolean off = (pt->state & DT_MASKS_STATE_DISABLE)
+                         || (marker && _op_is_bypassed(marker->state));
+    dt_masks_form_t *f = dt_masks_get_from_id(darktable.develop, pt->formid);
+    if(f && f != grp && (f->type & DT_MASKS_GROUP))
+    {
+      // walked even when off, so the headers inside it are settled too
+      const _badge_held_t sub = _badge_walk(module, f, headers, depth + 1);
+      if(off)
+      {
+        _set_badge(badge, NULL, FALSE);
+        continue;
+      }
+      gchar *tip = _group_badge_tip(pt->opacity, &sub);
+      _set_badge(badge, tip, sub.noop);
+      g_free(tip);
+      held.noop |= sub.noop;
+      held.low |= sub.low || pt->opacity < MASK_LOW_OPACITY_WARN;
+      continue;
+    }
+    if(off || !f)
+    {
+      _set_badge(badge, NULL, FALSE);
+      continue;
+    }
+    gboolean noop = FALSE;
+    gchar *tip = _element_badge_tip(module, f, pt->opacity, &noop);
+    _set_badge(badge, tip, noop);
+    held.noop |= noop;
+    held.low |= !noop && tip != NULL;
+    g_free(tip);
+  }
+  _badge_close_group(marker, &held, headers, &total);
+  return total;
+}
+
+static void _paint_header_badge(GtkWidget *header, gpointer headers)
+{
+  const _badge_header_t *h = g_hash_table_lookup(headers, GINT_TO_POINTER(_header_cid(header)));
+  _set_badge(g_object_get_data(G_OBJECT(header), "lowop-badge"), h ? h->tip : NULL,
+             h && h->noop);
+}
+
+// refresh every badge of the module (element rows, group headers, its blend
+// opacity) from the current mask, in place: no widget is created or destroyed,
+// so it can run on every tick of a drag as well as at the end of a rebuild. A
+// group's badge depends on everything it holds, so any change refreshes all
 static void _refresh_lowop_badges(dt_iop_module_t *module)
 {
   dt_iop_gui_blend_data_t *bd = module ? module->blend_data : NULL;
   if(!bd) return;
   if(bd->blend_opacity_lowop_badge && module->blend_params)
-  {
-    _update_lowop_badge(bd->blend_opacity_lowop_badge,
-                        module->blend_params->opacity / 100.0f,
-                        FALSE, FALSE, NULL);
-  }
+    _update_blend_opacity_badge(bd->blend_opacity_lowop_badge,
+                                module->blend_params->opacity / 100.0f);
   dt_masks_form_t *grp = _module_mask_group(module);
   if(!bd->masks_list_box || !grp) return;
-  // an element's overall (effective) opacity is its own value multiplied by
-  // the gain of every group around it, nested ones included (see
-  // _enclosing_gain)
-  GList *pts = _mask_points(grp);
-  for(GList *l = pts; l; l = g_list_next(l))
-  {
-    const dt_masks_point_group_t *pt = l->data;
-    if(dt_masks_point_is_marker(pt)) continue;
-    const float run_group_opacity = _enclosing_gain(grp, pt->formid);
-    GtkWidget *row_vbox = _masks_row_for_point(bd, pt);
-    if(row_vbox)
-    {
-      const dt_masks_form_t *const sel =
-        dt_masks_get_from_id(darktable.develop, pt->formid);
-      // a raster element that cannot reach a mask can never contribute -- the
-      // renderer draws it as zero and skips its inversion (see
-      // dt_masks_raster_is_unresolved) -- so it earns the same badge as a
-      // parametric channel that restricts nothing, with its own reason. The
-      // wording covers both ways it gets there: a module that is gone (the row
-      // is only removable) and one that is merely switched off or no longer
-      // masking (fixable at the source, so do not tell the user to delete it).
-      const gboolean raster_broken = dt_masks_raster_is_unresolved(module, NULL, sel);
-      _update_lowop_badge(g_object_get_data(G_OBJECT(row_vbox), "lowop-badge"),
-                          pt->opacity * run_group_opacity, FALSE,
-                          raster_broken || dt_masks_parametric_is_noop(sel),
-                          raster_broken
-                          ? _("this raster mask has no mask to read: the module it"
-                              " came from is switched off, no longer carries a mask,"
-                              " or is gone, so this element selects nothing.\n"
-                              "restore the source module, or remove this element")
-                          : NULL);
-    }
-  }
-  g_list_free(pts);
-  _apply_group_lowop_badges(GTK_WIDGET(bd->masks_list_box), grp);
+  GHashTable *headers =
+    g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, _badge_header_free);
+  _badge_walk(module, grp, headers, 0);
+  _foreach_tagged(GTK_WIDGET(bd->masks_list_box), "mask-header", _paint_header_badge, headers);
+  g_hash_table_destroy(headers);
 }
 
 void dt_iop_gui_blend_refresh_mask_badges(dt_iop_module_t *module)
@@ -7281,6 +7329,8 @@ void dt_iop_gui_blend_masks_changed(dt_iop_module_t *module)
   if(!bd || !bd->masks_inited || _props_committing) return;
   if(bd->masks_list_box) _reread_value_controls(GTK_WIDGET(bd->masks_list_box));
   if(bd->props_panel_content) _reread_value_controls(bd->props_panel_content);
+  // ctrl+scroll on canvas changes an opacity the badges read
+  _refresh_lowop_badges(module);
 }
 
 // what solo edit leaves on the canvas: the isolated shape, or every member of
@@ -8003,9 +8053,8 @@ dt_masks_solo_canvas_t _model_toggle_solo_form(dt_iop_module_t *module,
     // only one thing is ever soloed: an element solo cancels any group solo
     bd->solo_group_key = 0;
     dt_print(DT_DEBUG_MASKS, "[masks] solo form %d", id);
-    // solo and solo-edit are mutually exclusive (they now share one status
-    // badge slot, see _make_badge_stack) -- soloing unconditionally drops
-    // any active solo-edit, not just one whose element the new solo happens
+    // solo and solo-edit are mutually exclusive: soloing unconditionally
+    // drops any active solo-edit, not just one whose element the new solo happens
     // to hide (see _model_clear_soloedit_if_hidden for that narrower case).
     if(dt_is_valid_maskid(bd->soloedit_formid))
     {
@@ -8103,6 +8152,8 @@ static void _toggle_element_disable(dt_iop_module_t *module, const dt_mask_id_t 
   // would add nothing here beyond a visible flash. Same as _invert_element
   dt_iop_gui_blend_data_t *bd = module->blend_data;
   _update_shape_row_state(bd, _masks_row_widget(bd, id), pt);
+  // a disabled element gets no badge, and its groups' badges stop counting it
+  _refresh_lowop_badges(module);
   _refresh_canvas_edit(module);
 }
 
@@ -12247,10 +12298,10 @@ static GtkWidget *_make_pending_shape_row(dt_iop_module_t *module, dt_masks_form
     name,
     _("this shape has not been added yet -- finish drawing it on canvas to add it"));
 
-  // the same header as a committed row (see _pack_row_header): only the
-  // low-opacity badge, no visibility or expander, since there is no element
-  // yet to hide or expand; their columns stay blank so the name lines up
-  _pack_row_header(row, handle, name, _make_badge_stack(_make_lowop_badge()),
+  // the same header as a committed row (see _pack_row_header), with an empty
+  // drawer: no element yet to warn about, hide or expand. Its columns stay
+  // blank so the name lines up
+  _pack_row_header(row, handle, name, NULL,
                    NULL, NULL, NULL);
 
   GtkWidget *row_vbox = dt_gui_vbox(row);
@@ -15329,7 +15380,7 @@ static GtkWidget *_make_shape_row(dt_iop_module_t *module,
   GtkWidget *action_icon = (form->type & DT_MASKS_PARAMETRIC) ? param_picker_box
                            : (form->type & DT_MASKS_RASTER)   ? _make_raster_source_link(form)
                                                               : linked_slot;
-  _pack_row_header(row, handle, evbox, _make_badge_stack(lowop_badge), action_icon,
+  _pack_row_header(row, handle, evbox, lowop_badge, action_icon,
                    visibility, expand_toggle);
 
   // disabled elements dim their controls, but not the visibility button that
@@ -16261,7 +16312,7 @@ static void _pack_group(dt_iop_module_t *module,
     gtk_widget_set_tooltip_text(group_expander, _("this group has no elements to show"));
   }
 
-  _pack_row_header(hdr, ghandle, labevt, _make_badge_stack(group_lowop_badge), note_toggle,
+  _pack_row_header(hdr, ghandle, labevt, group_lowop_badge, note_toggle,
                    group_visibility, group_expander);
   // dimmed when the group contributes nothing: every element hidden, or the
   // whole group bypassed (in which case the visibility button that brings it
@@ -16311,7 +16362,7 @@ static void _pack_group(dt_iop_module_t *module,
   // tagged so _apply_group_visibility can find and set this header's own
   // visibility button in place too
   g_object_set_data(G_OBJECT(hdr_evbox), "visibility-btn", group_visibility);
-  // same, for the group's low-opacity warning (see _apply_group_lowop_badges)
+  // same, for the group's warning badge (see _refresh_lowop_badges)
   g_object_set_data(G_OBJECT(hdr_evbox), "lowop-badge", group_lowop_badge);
   // press/release are connected by _make_group_header_evbox above
 
@@ -18086,7 +18137,7 @@ void dt_iop_gui_update_blending(dt_iop_module_t *module)
     bp->mask_combine & (DEVELOP_COMBINE_INV | DEVELOP_COMBINE_INCL));
   dt_bauhaus_slider_set(bd->opacity_slider, bp->opacity);
   if(bd->blend_opacity_lowop_badge)
-    _update_lowop_badge(bd->blend_opacity_lowop_badge, bp->opacity / 100.0f, FALSE, FALSE, NULL);
+    _update_blend_opacity_badge(bd->blend_opacity_lowop_badge, bp->opacity / 100.0f);
   dt_bauhaus_combobox_set_from_value(bd->masks_feathering_guide_combo, bp->feathering_guide);
   dt_bauhaus_slider_set(bd->feathering_radius_slider, bp->feathering_radius);
   dt_bauhaus_slider_set(bd->blur_radius_slider, bp->blur_radius);
@@ -18624,6 +18675,9 @@ void dt_iop_gui_init_blending(GtkWidget *iopw,
     dt_gui_box_add(opacity_header, dt_gui_expand(opacity_lbl));
 
     bd->blend_opacity_lowop_badge = _make_lowop_badge();
+    // a text line, not a drawer: small enough not to make the line taller
+    gtk_widget_set_size_request(bd->blend_opacity_lowop_badge, DT_PIXEL_APPLY_DPI(10),
+                                DT_PIXEL_APPLY_DPI(10));
     GtkWidget *val_widget = _make_inline_opacity_value_widget(bd->opacity_slider, module);
 
     GtkWidget *val_box = dt_gui_hbox();

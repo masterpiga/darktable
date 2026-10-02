@@ -166,6 +166,10 @@ void gui_init(dt_lib_module_t *self)
   d->toggle_box = GTK_BOX(g_object_ref_sink(dt_gui_hbox()));
   gtk_widget_set_valign(GTK_WIDGET(d->actions_box), GTK_ALIGN_CENTER);
   gtk_widget_set_valign(GTK_WIDGET(d->toggle_box), GTK_ALIGN_CENTER);
+  // the theme sizes the module's controls these boxes take in, and only them:
+  // the lib's own header buttons (its arrow above all) keep every lib's size
+  dt_gui_add_class(GTK_WIDGET(d->actions_box), "masks-flexi-host-controls");
+  dt_gui_add_class(GTK_WIDGET(d->toggle_box), "masks-flexi-host-controls");
   gtk_widget_show(GTK_WIDGET(d->actions_box));
   gtk_widget_show(GTK_WIDGET(d->toggle_box));
   self->widget = GTK_WIDGET(d->content_box);

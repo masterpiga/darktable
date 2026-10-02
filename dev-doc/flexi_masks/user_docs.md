@@ -112,9 +112,9 @@ Every row (group or element) keeps the same icons in the same columns, counted f
 1. the **expander**, which shows or hides the row's expanded controls (or a group's elements);
 2. the **visibility eye**: click it to disable the row (it adds nothing to the mask) and click again to enable it; `SHIFT+click` it to solo the row (see "Solo" below);
 3. one icon that depends on the row: a group's **notes** toggle, a parametric channel's **color picker**, or the **link** of a linked shape or a raster mask;
-4. the **low-opacity warning**, shown when a row's opacity is low enough that it barely contributes to the mask.
+4. the **warning badge**, a triangle: red on an element that does nothing (a parametric channel whose range still covers its whole span, a raster mask with no mask to read) or amber on one whose opacity is under 10%, and on a group whose own opacity is under 10% or that holds such an element or group at any depth, so a folded group still shows it. Its tooltip says which. A disabled element or group gets none: its eye already says it adds nothing.
 
-The first three share one frame. A column a row has no icon for stays blank, so the icons of every row line up.
+All four share one frame. A column a row has no icon for stays blank, so the icons of every row line up.
 
 <div style="text-align:center">
 <img src="badges.png" width="100%">

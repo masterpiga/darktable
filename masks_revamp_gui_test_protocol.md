@@ -221,6 +221,19 @@ After each check, switch images and back: the setting and the render stay.
      element options"): every picker waits for a drag again. Another
      module's first pick still waits.
 
+5.12 Badges. Inside a nested group, add a fresh parametric channel: its row,
+     the nested group's row and every header above it show the amber
+     triangle at once; the channel's tooltip says its range covers its whole
+     span, each group's says it contains an element that has no effect.
+     Narrow the range: all of them clear while dragging. Drag a shape's
+     opacity under 10%: the same chain lights, the tooltips now say
+     "opacity below 10%". Set a group's own opacity under 10%: its header
+     says "opacity N%". Disable the shape (eye), then bypass its group: the
+     badge goes from the row, and from the headers once nothing else in them
+     warns. Ctrl+scroll the shape's opacity on canvas: the badges follow
+     without reselecting. Module opacity under 10%: the triangle by the
+     blend opacity value says the module has very little effect.
+
 ## 6. Presets and reset
 
 6.1 Apply each built-in group layout preset ("add + subtract + intersect",

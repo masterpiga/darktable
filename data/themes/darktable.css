@@ -887,6 +887,13 @@ dialog .sidebar row:selected:hover label,
 @define-color mask_handle_fg          @fg_color;
 @define-color mask_handle_inverted_bg @fg_color;
 @define-color mask_handle_inverted_fg @text_color;
+/* the warning badge's glyph: an element or group that does next to nothing,
+   or a group holding one, and (mask_badge_no_effect) one that does nothing
+   at all, or holds such a one; its edge (mask_badge_outline) keeps it
+   readable on every header shade */
+@define-color mask_badge           #e0a030;
+@define-color mask_badge_no_effect #ff3030;
+@define-color mask_badge_outline   alpha(black, 0.6);
 /* the ground of the whole list, "whole mask" header and rails included:
    darker than the headers and cards, so they stand out against it */
 @define-color mask_list_bg       rgb(85, 85, 85);
@@ -1765,14 +1772,15 @@ button.mask-enable-toggle:checked
    on that same widget:
      .mask-lead       a row's or a group's lead icon
                       states: .mask-inverted; a parametric row's: .mask-channel
-     .mask-drawer     the box holding the three icons on the right
+     .mask-drawer     the box holding the four icons on the right
      .mask-expander   :checked when open, :disabled on an empty group
      .mask-eye        .mask-soloed, .mask-disabled
      .mask-notes      a group's notes toggle, :checked when shown
      .mask-picker     a parametric row's picker
      .mask-link       a linked shape's or a raster mask's chain
-     .mask-badge      the low-opacity warning; .mask-no-effect when the
-                      element does nothing at all
+     .mask-badge      the warning: an element or group doing nothing or
+                      next to nothing, or a group holding one;
+                      .mask-no-effect when the first reason is nothing
      .mask-channel-eye  a parametric channel's bypass, :checked when bypassed
    Whose icon it is comes from the header: .mask-element-header or
    .mask-group-header.
@@ -1915,19 +1923,26 @@ button.mask-expander:disabled
   color: alpha(@button_fg, 0.25);
 }
 
-/* the low-opacity warning: a solid triangle, so a foreground color is all it
-   needs; amber reads as caution without the alarm of red. In gray when the
-   element does nothing at all, which makes its opacity moot */
+/* the warning badge: a plain triangle in its color, edged in outline-color;
+   amber for little effect, red (.mask-no-effect) for none */
 .mask-badge
 {
   background-color: transparent;
-  color: #e0a030;
+  color: @mask_badge;
+  outline-color: @mask_badge_outline;
   padding: 0;
+}
+
+/* inset in its 18px drawer column, where a full-size triangle would look far
+   bigger than the icons beside it */
+.mask-drawer .mask-badge
+{
+  padding: 4px;
 }
 
 .mask-badge.mask-no-effect
 {
-  color: #909090;
+  color: @mask_badge_no_effect;
 }
 
 /* a parametric channel's bypass, directly below the header's expander:
@@ -2009,14 +2024,6 @@ button.mask-channel-eye
 button.mask-consumer-row:hover .mask-link-glyph
 {
   opacity: 1.0;
-}
-
-/* the fixed-size column the low-opacity badge sits in (see
-   _make_badge_stack): an 8px square, well inside the 18px of the lead handle,
-   so it does not set the header's height */
-.mask-badge-stack
-{
-  padding: 0px;
 }
 
 /* inline rename entry (mask list): replaces a plain label in place, so it must
@@ -2436,9 +2443,12 @@ notebook tabs,
   min-height: 2em;
 }
 
+/* .masks-flexi-host-controls: the mask panel's controls moved onto the
+   utility lib's header, sized as in #blending-tabs. Not the whole header:
+   its arrow would grow past every other lib's */
 .dt_plugin_ui #blending-tabs .dt_module_btn,
-.masks-flexi-host-header .dt_module_btn,
-.masks-flexi-host-header button,
+.masks-flexi-host-controls .dt_module_btn,
+.masks-flexi-host-controls button,
 #guides-line .toggle
 {
   min-height: 1.35em;
@@ -2446,8 +2456,8 @@ notebook tabs,
 }
 
 .dt_plugin_ui #blending-tabs .dt_module_btn,
-.masks-flexi-host-header .dt_module_btn,
-.masks-flexi-host-header button,
+.masks-flexi-host-controls .dt_module_btn,
+.masks-flexi-host-controls button,
 #guides-line .dt_module_btn
 {
   border-radius: 0;
