@@ -341,7 +341,7 @@ static gboolean _read_poke_write(const step_t *st, const int group_index)
     if(!grp) break;
 
     {
-      _apply_step(&dev, grp, st);
+      dt_masks_postedit_apply_step(&dev, grp, st);
       // dt_dev_add_masks_history_item_ext, NOT the plain variant: only the
       // masks one passes include_masks = TRUE down to
       // _dev_add_history_item_ext, and only that snapshots dev->forms into the
@@ -423,7 +423,7 @@ static gboolean _reset_to_migrated(const char *op, const int mp, const int bv,
 // ---------------------------------------------------------------------------
 
 /** Point an already-initialized replay at a different mask, taking ownership
-    of `forms`. _render_mask() re-reads r->dev.forms into the pipe every time,
+    of `forms`. dt_masks_verify_render_mask() re-reads r->dev.forms into the pipe every time,
     so nothing else needs updating. */
 static void _install_state(replay_t *r,
                            const dt_develop_blend_params_t *bp,
@@ -533,9 +533,9 @@ static void _persist_edit(JsonObject *edit,
   // those, so the source stays right for every render.
   replay_t r;
   const char *init_err =
-    _replay_init(&r, op, &classic_bp,
-                 dt_masks_dup_forms_deep(classic_forms, NULL),
-                 full_w, full_h, w, h);
+    dt_masks_verify_replay_init(&r, op, &classic_bp,
+                                dt_masks_dup_forms_deep(classic_forms, NULL),
+                                full_w, full_h, w, h);
   if(init_err)
   {
     g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
@@ -569,7 +569,7 @@ static void _persist_edit(JsonObject *edit,
     goto out;
   }
 
-  float *base = _render_mask(&r, NULL);
+  float *base = dt_masks_verify_render_mask(&r, NULL);
   if(!base)
   {
     rep->result = PERSIST_ERROR;
@@ -604,8 +604,8 @@ static void _persist_edit(JsonObject *edit,
     if(!grp) continue;
 
     for(int s = 0; s < seq->n; s++)
-      _apply_step(&r.dev, grp, &seq->step[s]);
-    float *a = _render_mask(&r, NULL);
+      dt_masks_postedit_apply_step(&r.dev, grp, &seq->step[s]);
+    float *a = dt_masks_verify_render_mask(&r, NULL);
 
     /* ---- arm B is the same edits with the image closed and reopened between
        every one of them. Back to the same starting point first. */
@@ -618,7 +618,7 @@ static void _persist_edit(JsonObject *edit,
     if(b_ok && _read_state(&bp, &forms, opbuf, sizeof(opbuf)))
     {
       _install_state(&r, &bp, forms);
-      b = _render_mask(&r, NULL);
+      b = dt_masks_verify_render_mask(&r, NULL);
     }
 
     if(a && b)
@@ -626,10 +626,10 @@ static void _persist_edit(JsonObject *edit,
       rep->compared++;
       tally[q].compared++;
 
-      const gboolean live = _max_abs_diff(a, base, npix) > PERSIST_EPS;
+      const gboolean live = dt_masks_verify_max_abs_diff(a, base, npix) > PERSIST_EPS;
       if(live) { rep->live++; tally[q].live++; }
 
-      const double d = _max_abs_diff(a, b, npix);
+      const double d = dt_masks_verify_max_abs_diff(a, b, npix);
       if(d > PERSIST_EPS)
       {
         rep->disagreed++;
@@ -653,7 +653,7 @@ static void _persist_edit(JsonObject *edit,
   dt_free_align(base);
 
 out:
-  _replay_cleanup(&r);
+  dt_masks_verify_replay_cleanup(&r);
   g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
 }
 

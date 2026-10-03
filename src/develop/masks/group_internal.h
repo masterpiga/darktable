@@ -45,41 +45,41 @@ G_BEGIN_DECLS
    `opacity` scales the incoming mask; `inverted` complements it first (i.e.
    uses 1 - newmask). dest is both input and output. */
 
-void _combine_masks_union(float *const restrict dest,
+void dt_masks_combine_union(float *const restrict dest,
+                            float *const restrict newmask,
+                            const size_t npixels,
+                            const float opacity,
+                            const int inverted);
+void dt_masks_combine_intersect(float *const restrict dest,
+                                float *const restrict newmask,
+                                const size_t npixels,
+                                const float opacity,
+                                const int inverted);
+void dt_masks_combine_difference(float *const restrict dest,
+                                 float *const restrict newmask,
+                                 const size_t npixels,
+                                 const float opacity,
+                                 const int inverted);
+void dt_masks_combine_sum(float *const restrict dest,
                           float *const restrict newmask,
                           const size_t npixels,
                           const float opacity,
                           const int inverted);
-void _combine_masks_intersect(float *const restrict dest,
-                              float *const restrict newmask,
-                              const size_t npixels,
-                              const float opacity,
-                              const int inverted);
-void _combine_masks_difference(float *const restrict dest,
+void dt_masks_combine_exclusion(float *const restrict dest,
+                                float *const restrict newmask,
+                                const size_t npixels,
+                                const float opacity,
+                                const int inverted);
+void dt_masks_combine_multiply(float *const restrict dest,
                                float *const restrict newmask,
                                const size_t npixels,
                                const float opacity,
                                const int inverted);
-void _combine_masks_sum(float *const restrict dest,
-                        float *const restrict newmask,
-                        const size_t npixels,
-                        const float opacity,
-                        const int inverted);
-void _combine_masks_exclusion(float *const restrict dest,
-                              float *const restrict newmask,
-                              const size_t npixels,
-                              const float opacity,
-                              const int inverted);
-void _combine_masks_multiply(float *const restrict dest,
+void dt_masks_combine_screen(float *const restrict dest,
                              float *const restrict newmask,
                              const size_t npixels,
                              const float opacity,
                              const int inverted);
-void _combine_masks_screen(float *const restrict dest,
-                           float *const restrict newmask,
-                           const size_t npixels,
-                           const float opacity,
-                           const int inverted);
 
 G_END_DECLS
 

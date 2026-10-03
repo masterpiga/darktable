@@ -39,7 +39,7 @@ static const char *const _poke_name[POKE_N] =
   "elem:refine",
 };
 
-const char *_poke_label(const poke_t k)
+const char *dt_masks_postedit_poke_label(const poke_t k)
 {
   return (k < POKE_N) ? _poke_name[k] : "?";
 }
@@ -65,8 +65,8 @@ static const dt_masks_refinement_t _refine_probe =
    A run-level poke is broadcast across the whole range, which starts at the
    group's marker, the record the fold reads. An element-level poke is passed
    first == last. */
-void _apply_poke(GList *points, const poke_t k,
-                 const int first, const int last)
+void dt_masks_postedit_apply_poke(GList *points, const poke_t k,
+                                  const int first, const int last)
 {
   int i = 0;
   for(GList *l = points; l; l = g_list_next(l), i++)
@@ -128,7 +128,7 @@ static const char *const _geom_name[GEOM_N] =
   "geom:hardness",  "geom:rotation", "geom:curvature",  "geom:compression",
 };
 
-const char *_geom_label(const geom_t g)
+const char *dt_masks_postedit_geom_label(const geom_t g)
 {
   return (g < GEOM_N) ? _geom_name[g] : "?";
 }
@@ -144,7 +144,7 @@ static size_t _point_size(const dt_masks_form_t *form)
   return (size_t)form->functions->point_struct_size;
 }
 
-GList *_geom_snapshot(const dt_masks_form_t *form)
+GList *dt_masks_postedit_geom_snapshot(const dt_masks_form_t *form)
 {
   const size_t sz = _point_size(form);
   if(!sz) return NULL;
@@ -160,7 +160,7 @@ GList *_geom_snapshot(const dt_masks_form_t *form)
   return out;
 }
 
-void _geom_restore(dt_masks_form_t *form, GList *snapshot)
+void dt_masks_postedit_geom_restore(dt_masks_form_t *form, GList *snapshot)
 {
   if(!snapshot) return;
   // wholesale rather than element-wise: the list is put back exactly as it was
@@ -233,12 +233,12 @@ static gboolean _drag_node(dt_masks_form_t *form, const float dx, const float dy
   return FALSE;
 }
 
-gboolean _apply_geom(dt_masks_form_t *form, const geom_t g)
+gboolean dt_masks_postedit_apply_geom(dt_masks_form_t *form, const geom_t g)
 {
   const size_t sz = _point_size(form);
   if(!sz || !form->points) return FALSE;
 
-  GList *before = _geom_snapshot(form);
+  GList *before = dt_masks_postedit_geom_snapshot(form);
   if(!before) return FALSE;
 
   switch(g)
@@ -313,8 +313,8 @@ static int _member_index(dt_masks_form_t *grp, const gboolean top)
   return found;
 }
 
-gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
-                        int *first, int *last)
+gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
+                                         int *first, int *last)
 {
   const int n = (int)g_list_length(grp->points);
   if(n == 0) return FALSE;
@@ -335,21 +335,21 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
         int i = 0;
         for(GList *l = grp->points; l; l = g_list_next(l), i++)
         {
-          if(i > 0 && _starts_group(l)) { *last = i - 1; break; }
+          if(i > 0 && dt_masks_gui_starts_group(l)) { *last = i - 1; break; }
         }
       }
       return TRUE;
   }
 }
 
-void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
+void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 {
   int first = 0, last = 0;
-  if(!_resolve_scope(grp, st->s, &first, &last)) return;
+  if(!dt_masks_postedit_resolve_scope(grp, st->s, &first, &last)) return;
 
   if(st->kind == STEP_POKE)
   {
-    _apply_poke(grp->points, st->k, first, last);
+    dt_masks_postedit_apply_poke(grp->points, st->k, first, last);
     return;
   }
 
@@ -364,7 +364,7 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
     const dt_masks_point_group_t *pt = g_list_nth_data(grp->points, first);
     dt_masks_form_t *shape =
       (pt && dev) ? dt_masks_get_from_id(dev, pt->formid) : NULL;
-    if(shape) _apply_geom(shape, (geom_t)st->k);
+    if(shape) dt_masks_postedit_apply_geom(shape, (geom_t)st->k);
     return;
   }
 
@@ -391,14 +391,14 @@ void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
   }
 }
 
-const char *_step_label(const step_t *st)
+const char *dt_masks_postedit_step_label(const step_t *st)
 {
   switch(st->kind)
   {
     case STEP_REMOVE:  return "remove";
     case STEP_MOVE_UP: return "reorder";
-    case STEP_GEOM:    return _geom_label((geom_t)st->k);
-    default:           return _poke_label(st->k);
+    case STEP_GEOM:    return dt_masks_postedit_geom_label((geom_t)st->k);
+    default:           return dt_masks_postedit_poke_label(st->k);
   }
 }
 

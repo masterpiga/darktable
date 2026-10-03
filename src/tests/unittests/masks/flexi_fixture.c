@@ -89,6 +89,8 @@ dt_masks_form_t *flexi_build(const char *layout)
   memset(&flexi_dev, 0, sizeof(flexi_dev));
   memset(&flexi_module, 0, sizeof(flexi_module));
   memset(&flexi_bd, 0, sizeof(flexi_bd));
+  // as dt_iop_gui_init_blending does: the refine-bypass snapshot takes it
+  dt_pthread_mutex_init(&flexi_bd.lock);
   memset(&flexi_bp, 0, sizeof(flexi_bp));
 
   _grp = calloc(1, sizeof(dt_masks_form_t));
@@ -207,7 +209,7 @@ char *flexi_layout_of(const dt_masks_form_t *g)
   {
     const dt_masks_point_group_t *pt = l->data;
     // partition through the same predicate the panel uses -- see the header
-    if(_starts_group(l))
+    if(dt_masks_gui_starts_group(l))
     {
       if(pending) g_string_append_printf(s, "%s[%c]", s->len ? " | " : "", pending);
       pending = _letter_from_op(dt_masks_eff_group_op(pt->state) & DT_MASKS_STATE_OP_COMBINE);
@@ -303,7 +305,7 @@ void flexi_assert_tree_(const dt_masks_form_t *g,
 
 dt_masks_state_t flexi_group_op_of(const dt_mask_id_t fid)
 {
-  const dt_masks_point_group_t *marker = _group_point(_grp, _group_cid_of_form(_grp, fid));
+  const dt_masks_point_group_t *marker = dt_masks_gui_group_point(_grp, dt_masks_gui_group_cid_of_form(_grp, fid));
   return marker ? dt_masks_eff_group_op(marker->state) & DT_MASKS_STATE_OP_COMBINE : 0;
 }
 

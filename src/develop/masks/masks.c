@@ -1257,7 +1257,7 @@ static int _within_of_op(const int op)
 static void _plain_element(dt_masks_point_group_t *pt)
 {
   pt->state = (pt->state & ~(DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) | DT_MASKS_STATE_UNION;
-  pt->name[0] = '\0';
+  memset(pt->name, 0, sizeof(pt->name));
   pt->group_opacity = 1.0f;
   if(pt->refinement.enabled == DT_MASKS_REFINE_GROUP)
     memset(&pt->refinement, 0, sizeof(pt->refinement));
@@ -2445,6 +2445,13 @@ void dt_masks_read_masks_history(dt_develop_t *dev, const dt_imgid_t imgid)
         if(!safe_border1)  ref->border[1] = 0.1f;
       }
     }
+    else if(form->type & DT_MASKS_PARAMETRIC)
+    {
+      if(dt_masks_parametric_sanitize(form))
+        dt_print(DT_DEBUG_ALWAYS,
+                 "Image ID=%d has a parametric mask with an invalid channel, reset",
+                 imgid);
+    }
 
     if(form->version != dt_masks_version())
     {
@@ -2915,7 +2922,7 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
   const dt_masks_form_t *old = darktable.develop->form_visible;
 
   // the module whose flexi-panel pending-row placeholder (see
-  // _build_masks_list's pending-row synthesis in blend_gui.c) is on screen
+  // dt_masks_gui_build_list's pending-row synthesis in blend_gui.c) is on screen
   // right now. Captured before dt_masks_clear_form_gui() below wipes both
   // creation and creation_module.
   dt_iop_module_t *const was_creating =

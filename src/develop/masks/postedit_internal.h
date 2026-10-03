@@ -99,7 +99,7 @@ typedef enum
 } geom_t;
 
 /** the shape control's label, for reports */
-const char *_geom_label(const geom_t g);
+const char *dt_masks_postedit_geom_label(const geom_t g);
 
 /** Apply one shape control to `form`, which must be a leaf shape.
 
@@ -110,15 +110,15 @@ const char *_geom_label(const geom_t g);
     The return value is compared over the real point data rather than taken from
     modify_property's `count`, because a property can be accepted and then
     clamped back to where it already was. */
-gboolean _apply_geom(dt_masks_form_t *form, const geom_t g);
+gboolean dt_masks_postedit_apply_geom(dt_masks_form_t *form, const geom_t g);
 
 /** A copy of `form`'s point list, for restoring it after a geometry sweep.
     Returns NULL for a form with no point_struct_size (a group, a raster or a
-    parametric element), which is also what _apply_geom refuses to touch. */
-GList *_geom_snapshot(const dt_masks_form_t *form);
+    parametric element), which is also what dt_masks_postedit_apply_geom refuses to touch. */
+GList *dt_masks_postedit_geom_snapshot(const dt_masks_form_t *form);
 
-/** Put a _geom_snapshot() back and free it. */
-void _geom_restore(dt_masks_form_t *form, GList *snapshot);
+/** Put a dt_masks_postedit_geom_snapshot() back and free it. */
+void dt_masks_postedit_geom_restore(dt_masks_form_t *form, GList *snapshot);
 
 // ---------------------------------------------------------------------------
 // one panel action, addressed to part of a group
@@ -159,8 +159,8 @@ typedef struct { poke_t k; scope_t s; step_kind_t kind; } step_t;
 
 /** Resolve a step's scope against `grp` as it stands, into [first, last].
     Returns FALSE if the group has no members to address. */
-gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
-                        int *first, int *last);
+gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
+                                         int *first, int *last);
 
 /** Apply one step to `grp` as it currently stands.
 
@@ -169,20 +169,20 @@ gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
     A structural step is a no-op on a group with a single member: removing it
     would leave an empty group and reordering it has nothing to swap with, and
     neither is a state the panel can produce either. */
-void _apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st);
+void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st);
 
 /** the step's label, for reports */
-const char *_step_label(const step_t *st);
+const char *dt_masks_postedit_step_label(const step_t *st);
 
 /** the control's label, for reports */
-const char *_poke_label(const poke_t k);
+const char *dt_masks_postedit_poke_label(const poke_t k);
 
 /** Apply one poke to the member index range [first, last] of `points`.
 
     A run-level poke is broadcast across the whole range, which starts at the
     group's marker: the fold reads the group's settings from there. An
     element-level poke is passed first == last. */
-void _apply_poke(GList *points, const poke_t k, const int first, const int last);
+void dt_masks_postedit_apply_poke(GList *points, const poke_t k, const int first, const int last);
 
 G_END_DECLS
 

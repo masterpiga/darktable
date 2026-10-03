@@ -620,11 +620,51 @@ gboolean dt_history_merge_module_into_history(dt_develop_t *dev_dest,
   return module_added;
 }
 
+// can any module of the image end up with a locked mask? Read straight from
+// the stored blend params of the history items up to history_end, which is
+// where a lock can come from: only the current blend version carries one
+// (dt_develop_blend_legacy_params_ext clears it on every conversion). A
+// superset of the locked modules, as an item can be overridden by a later
+// unlocked one, so it only decides whether the full load below is needed
+static gboolean _history_may_hold_locked_mask(const dt_imgid_t imgid)
+{
+  sqlite3_stmt *stmt;
+  // clang-format off
+  DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
+                              "SELECT blendop_params"
+                              " FROM main.history"
+                              " WHERE imgid = ?1"
+                              "   AND blendop_version = ?2"
+                              "   AND num < (SELECT history_end FROM main.images WHERE id = ?1)",
+                              -1, &stmt, NULL);
+  // clang-format on
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 1, imgid);
+  DT_DEBUG_SQLITE3_BIND_INT(stmt, 2, dt_develop_blend_version());
+
+  gboolean locked = FALSE;
+  while(!locked && sqlite3_step(stmt) == SQLITE_ROW)
+  {
+    const char *blob = sqlite3_column_blob(stmt, 0);
+    if(!blob || sqlite3_column_bytes(stmt, 0) != sizeof(dt_develop_blend_params_t))
+      continue;
+    uint32_t mask_lock = 0;
+    memcpy(&mask_lock, blob + offsetof(dt_develop_blend_params_t, mask_lock),
+           sizeof(mask_lock));
+    locked = mask_lock != 0;
+  }
+  sqlite3_finalize(stmt);
+  return locked;
+}
+
 // overwrite paste deletes the destination's whole history before pasting, so
 // the lock is gone before dt_history_merge_module_into_history could honor it.
 // Loaded here beforehand, NULL when nothing on the image is locked
 static dt_develop_t *_locked_masks_load(const dt_imgid_t imgid)
 {
+  // loading every module and replaying the history is what a paste of many
+  // images cannot afford per image, and almost none of them has a lock
+  if(!_history_may_hold_locked_mask(imgid)) return NULL;
+
   dt_develop_t *dev = g_malloc0(sizeof(dt_develop_t));
   dt_dev_init(dev, FALSE);
   dev->iop = dt_iop_load_modules_ext(dev, TRUE);

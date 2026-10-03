@@ -77,7 +77,7 @@ static void _assert_close(const float *got, const float *want, const char *what)
 static void test_union_is_max(void **state)
 {
   float out[N];
-  _apply(_combine_masks_union, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, B, out, 1.0f, 0);
   const float want[N] = { 1.0f, 0.75f, 0.5f, 0.75f, 1.0f };
   _assert_close(out, want, "union");
 }
@@ -85,7 +85,7 @@ static void test_union_is_max(void **state)
 static void test_intersection_is_min(void **state)
 {
   float out[N];
-  _apply(_combine_masks_intersect, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_intersect, A, B, out, 1.0f, 0);
   const float want[N] = { 0.0f, 0.25f, 0.5f, 0.25f, 0.0f };
   _assert_close(out, want, "intersection");
 }
@@ -94,7 +94,7 @@ static void test_intersection_is_min(void **state)
 static void test_difference_subtracts(void **state)
 {
   float out[N];
-  _apply(_combine_masks_difference, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_difference, A, B, out, 1.0f, 0);
   // a * (1 - b): b == 0 keeps a, b == 1 removes it
   const float want[N] = { 0.0f, 0.0625f, 0.25f, 0.5625f, 1.0f };
   _assert_close(out, want, "difference");
@@ -103,7 +103,7 @@ static void test_difference_subtracts(void **state)
 static void test_screen_is_the_probabilistic_or(void **state)
 {
   float out[N];
-  _apply(_combine_masks_screen, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_screen, A, B, out, 1.0f, 0);
   float want[N];
   for(int i = 0; i < N; i++) want[i] = A[i] + B[i] - A[i] * B[i];
   _assert_close(out, want, "screen");
@@ -112,7 +112,7 @@ static void test_screen_is_the_probabilistic_or(void **state)
 static void test_multiply_is_the_product(void **state)
 {
   float out[N];
-  _apply(_combine_masks_multiply, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_multiply, A, B, out, 1.0f, 0);
   float want[N];
   for(int i = 0; i < N; i++) want[i] = A[i] * B[i];
   _assert_close(out, want, "multiply");
@@ -123,12 +123,12 @@ static void test_multiply_is_the_product(void **state)
 static void test_sum_and_exclusion_stay_in_range(void **state)
 {
   float out[N];
-  _apply(_combine_masks_sum, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_sum, A, B, out, 1.0f, 0);
   for(int i = 0; i < N; i++)
     if(out[i] < -1e-5f || out[i] > 1.0f + 1e-5f)
       fail_msg("sum left element %d out of range: %.6f", i, out[i]);
 
-  _apply(_combine_masks_exclusion, A, B, out, 1.0f, 0);
+  _apply(dt_masks_combine_exclusion, A, B, out, 1.0f, 0);
   for(int i = 0; i < N; i++)
     if(out[i] < -1e-5f || out[i] > 1.0f + 1e-5f)
       fail_msg("exclusion left element %d out of range: %.6f", i, out[i]);
@@ -139,13 +139,13 @@ static void test_sum_and_exclusion_stay_in_range(void **state)
 static void test_every_operator_keeps_the_mask_in_range(void **state)
 {
   const struct { const char *name; combine_fn fn; } ops[] = {
-    { "union", _combine_masks_union },
-    { "intersection", _combine_masks_intersect },
-    { "difference", _combine_masks_difference },
-    { "sum", _combine_masks_sum },
-    { "exclusion", _combine_masks_exclusion },
-    { "multiply", _combine_masks_multiply },
-    { "screen", _combine_masks_screen },
+    { "union", dt_masks_combine_union },
+    { "intersection", dt_masks_combine_intersect },
+    { "difference", dt_masks_combine_difference },
+    { "sum", dt_masks_combine_sum },
+    { "exclusion", dt_masks_combine_exclusion },
+    { "multiply", dt_masks_combine_multiply },
+    { "screen", dt_masks_combine_screen },
   };
   const float opacities[] = { 0.0f, 0.35f, 1.0f };
 
@@ -173,12 +173,12 @@ static void test_group_fold_operators_are_commutative(void **state)
 {
   float ab[N], ba[N];
 
-  _apply(_combine_masks_union, A, B, ab, 1.0f, 0);
-  _apply(_combine_masks_union, B, A, ba, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, B, ab, 1.0f, 0);
+  _apply(dt_masks_combine_union, B, A, ba, 1.0f, 0);
   _assert_close(ab, ba, "union is not commutative");
 
-  _apply(_combine_masks_screen, A, B, ab, 1.0f, 0);
-  _apply(_combine_masks_screen, B, A, ba, 1.0f, 0);
+  _apply(dt_masks_combine_screen, A, B, ab, 1.0f, 0);
+  _apply(dt_masks_combine_screen, B, A, ba, 1.0f, 0);
   _assert_close(ab, ba, "screen is not commutative");
 }
 
@@ -189,16 +189,16 @@ static void test_group_fold_operators_are_associative(void **state)
   const float C[N] = { 0.6f, 0.1f, 0.9f, 0.4f, 0.2f };
   float ab[N], abc[N], bc[N], a_bc[N];
 
-  _apply(_combine_masks_union, A, B, ab, 1.0f, 0);
-  _apply(_combine_masks_union, ab, C, abc, 1.0f, 0);
-  _apply(_combine_masks_union, B, C, bc, 1.0f, 0);
-  _apply(_combine_masks_union, A, bc, a_bc, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, B, ab, 1.0f, 0);
+  _apply(dt_masks_combine_union, ab, C, abc, 1.0f, 0);
+  _apply(dt_masks_combine_union, B, C, bc, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, bc, a_bc, 1.0f, 0);
   _assert_close(abc, a_bc, "union is not associative");
 
-  _apply(_combine_masks_screen, A, B, ab, 1.0f, 0);
-  _apply(_combine_masks_screen, ab, C, abc, 1.0f, 0);
-  _apply(_combine_masks_screen, B, C, bc, 1.0f, 0);
-  _apply(_combine_masks_screen, A, bc, a_bc, 1.0f, 0);
+  _apply(dt_masks_combine_screen, A, B, ab, 1.0f, 0);
+  _apply(dt_masks_combine_screen, ab, C, abc, 1.0f, 0);
+  _apply(dt_masks_combine_screen, B, C, bc, 1.0f, 0);
+  _apply(dt_masks_combine_screen, A, bc, a_bc, 1.0f, 0);
   _assert_close(abc, a_bc, "screen is not associative");
 }
 
@@ -207,8 +207,8 @@ static void test_group_fold_operators_are_associative(void **state)
 static void test_difference_is_order_dependent(void **state)
 {
   float ab[N], ba[N];
-  _apply(_combine_masks_difference, A, B, ab, 1.0f, 0);
-  _apply(_combine_masks_difference, B, A, ba, 1.0f, 0);
+  _apply(dt_masks_combine_difference, A, B, ab, 1.0f, 0);
+  _apply(dt_masks_combine_difference, B, A, ba, 1.0f, 0);
 
   gboolean same = TRUE;
   for(int i = 0; i < N; i++) if(fabsf(ab[i] - ba[i]) > 1e-5f) same = FALSE;
@@ -225,7 +225,7 @@ static void test_difference_is_order_dependent(void **state)
 static void _inverted_screen_group(const float *src, const float opacity, float *out)
 {
   const float empty[N] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
-  _apply(_combine_masks_screen, empty, src, out, opacity, 0);
+  _apply(dt_masks_combine_screen, empty, src, out, opacity, 0);
   for(int i = 0; i < N; i++) out[i] = 1.0f - out[i];
 }
 
@@ -242,9 +242,9 @@ static void test_a_faded_hole_is_a_multiply_of_an_inverted_screen_group(void **s
   for(size_t k = 0; k < sizeof(opacities) / sizeof(*opacities); k++)
   {
     float classic[N], sub[N], got[N];
-    _apply(_combine_masks_difference, A, B, classic, opacities[k], 0);
+    _apply(dt_masks_combine_difference, A, B, classic, opacities[k], 0);
     _inverted_screen_group(B, opacities[k], sub);
-    _apply(_combine_masks_multiply, A, sub, got, 1.0f, 0);
+    _apply(dt_masks_combine_multiply, A, sub, got, 1.0f, 0);
     _assert_close(got, classic, "faded hole is not the inverted screen group");
   }
 }
@@ -257,15 +257,15 @@ static void test_a_run_of_faded_holes_folds_into_one_screen_group(void **state)
   const float o1 = 0.36f, o2 = 0.75f;
 
   float classic[N], step[N];
-  _apply(_combine_masks_difference, A, B, step, o1, 0);
-  _apply(_combine_masks_difference, step, C, classic, o2, 0);
+  _apply(dt_masks_combine_difference, A, B, step, o1, 0);
+  _apply(dt_masks_combine_difference, step, C, classic, o2, 0);
 
   const float empty[N] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
   float sub[N], sub2[N], inv[N], got[N];
-  _apply(_combine_masks_screen, empty, B, sub, o1, 0);
-  _apply(_combine_masks_screen, sub, C, sub2, o2, 0);
+  _apply(dt_masks_combine_screen, empty, B, sub, o1, 0);
+  _apply(dt_masks_combine_screen, sub, C, sub2, o2, 0);
   for(int i = 0; i < N; i++) inv[i] = 1.0f - sub2[i];
-  _apply(_combine_masks_multiply, A, inv, got, 1.0f, 0);
+  _apply(dt_masks_combine_multiply, A, inv, got, 1.0f, 0);
 
   _assert_close(got, classic, "a run of holes is not one screen group");
 }
@@ -279,10 +279,10 @@ static void test_inverting_the_element_is_not_the_faded_hole_form(void **state)
 {
   const float o = 0.36f;
   float classic[N], elem[N], got[N];
-  _apply(_combine_masks_difference, A, B, classic, o, 0);
+  _apply(dt_masks_combine_difference, A, B, classic, o, 0);
   // an element inverted in place: opacity applied to the complement
   for(int i = 0; i < N; i++) elem[i] = o * (1.0f - B[i]);
-  _apply(_combine_masks_multiply, A, elem, got, 1.0f, 0);
+  _apply(dt_masks_combine_multiply, A, elem, got, 1.0f, 0);
 
   gboolean same = TRUE;
   for(int i = 0; i < N; i++) if(fabsf(got[i] - classic[i]) > 1e-5f) same = FALSE;
@@ -302,7 +302,7 @@ static void test_exclusion_is_the_union_of_two_multiplies(void **state)
   {
     const float o = opacities[k];
     float classic[N], got[N];
-    _apply(_combine_masks_exclusion, A, B, classic, o, 0);
+    _apply(dt_masks_combine_exclusion, A, B, classic, o, 0);
     for(int i = 0; i < N; i++)
     {
       const float p = o * B[i];
@@ -327,9 +327,9 @@ static void _group_output(const float *x, const float go, const int inverted, fl
    flips and the opacity moves across. */
 static void test_a_nested_reference_folds_onto_its_group(void **state)
 {
-  const combine_fn fns[] = { _combine_masks_union, _combine_masks_intersect,
-                             _combine_masks_screen, _combine_masks_multiply,
-                             _combine_masks_sum };
+  const combine_fn fns[] = { dt_masks_combine_union, dt_masks_combine_intersect,
+                             dt_masks_combine_screen, dt_masks_combine_multiply,
+                             dt_masks_combine_sum };
   const float opacities[] = { 0.36f, 0.75f, 1.0f };
   for(size_t f = 0; f < sizeof(fns) / sizeof(*fns); f++)
     for(size_t a = 0; a < sizeof(opacities) / sizeof(*opacities); a++)
@@ -355,9 +355,9 @@ static void test_an_inverted_reference_over_a_faded_group_does_not_fold(void **s
   const float o = 0.75f, go = 0.36f;
   float g[N], want[N], folded[N], got[N];
   _group_output(B, go, 0, g);
-  _apply(_combine_masks_union, A, g, want, o, 1);
+  _apply(dt_masks_combine_union, A, g, want, o, 1);
   _group_output(B, go * o, 1, folded);
-  _apply(_combine_masks_union, A, folded, got, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, folded, got, 1.0f, 0);
   gboolean differs = FALSE;
   for(int i = 0; i < N; i++) differs |= fabsf(got[i] - want[i]) > 1e-5f;
   assert_true(differs);
@@ -376,7 +376,7 @@ static void test_union_with_zero_is_identity(void **state)
 {
   const float zero[N] = { 0 };
   float out[N];
-  _apply(_combine_masks_union, A, zero, out, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, zero, out, 1.0f, 0);
   _assert_close(out, A, "union with an empty mask changed the accumulator");
 }
 
@@ -384,7 +384,7 @@ static void test_intersection_with_one_is_identity(void **state)
 {
   const float one[N] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   float out[N];
-  _apply(_combine_masks_intersect, A, one, out, 1.0f, 0);
+  _apply(dt_masks_combine_intersect, A, one, out, 1.0f, 0);
   _assert_close(out, A, "intersection with a full mask changed the accumulator");
 }
 
@@ -392,7 +392,7 @@ static void test_multiply_with_one_is_identity(void **state)
 {
   const float one[N] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   float out[N];
-  _apply(_combine_masks_multiply, A, one, out, 1.0f, 0);
+  _apply(dt_masks_combine_multiply, A, one, out, 1.0f, 0);
   _assert_close(out, A, "multiply by a full mask changed the accumulator");
 }
 
@@ -400,7 +400,7 @@ static void test_screen_with_zero_is_identity(void **state)
 {
   const float zero[N] = { 0 };
   float out[N];
-  _apply(_combine_masks_screen, A, zero, out, 1.0f, 0);
+  _apply(dt_masks_combine_screen, A, zero, out, 1.0f, 0);
   _assert_close(out, A, "screen with an empty mask changed the accumulator");
 }
 
@@ -408,7 +408,7 @@ static void test_difference_with_zero_is_identity(void **state)
 {
   const float zero[N] = { 0 };
   float out[N];
-  _apply(_combine_masks_difference, A, zero, out, 1.0f, 0);
+  _apply(dt_masks_combine_difference, A, zero, out, 1.0f, 0);
   _assert_close(out, A, "difference by an empty mask changed the accumulator");
 }
 
@@ -421,7 +421,7 @@ static void test_difference_with_zero_is_identity(void **state)
 static void test_zero_opacity_neutralizes_a_union_member(void **state)
 {
   float out[N];
-  _apply(_combine_masks_union, A, B, out, 0.0f, 0);
+  _apply(dt_masks_combine_union, A, B, out, 0.0f, 0);
   _assert_close(out, A, "a zero-opacity union member still changed the mask");
 }
 
@@ -433,8 +433,8 @@ static void test_invert_complements_the_incoming_mask(void **state)
   const float one[N] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f };
   float inverted_zero[N], plain_one[N];
 
-  _apply(_combine_masks_union, A, zero, inverted_zero, 1.0f, 1);
-  _apply(_combine_masks_union, A, one, plain_one, 1.0f, 0);
+  _apply(dt_masks_combine_union, A, zero, inverted_zero, 1.0f, 1);
+  _apply(dt_masks_combine_union, A, one, plain_one, 1.0f, 0);
   _assert_close(inverted_zero, plain_one,
                 "inverting an empty mask did not behave like a full one");
 }
@@ -443,13 +443,13 @@ static void test_invert_complements_the_incoming_mask(void **state)
 static void test_double_invert_is_identity(void **state)
 {
   const struct { const char *name; combine_fn fn; } ops[] = {
-    { "union", _combine_masks_union },
-    { "intersection", _combine_masks_intersect },
-    { "difference", _combine_masks_difference },
-    { "sum", _combine_masks_sum },
-    { "exclusion", _combine_masks_exclusion },
-    { "multiply", _combine_masks_multiply },
-    { "screen", _combine_masks_screen },
+    { "union", dt_masks_combine_union },
+    { "intersection", dt_masks_combine_intersect },
+    { "difference", dt_masks_combine_difference },
+    { "sum", dt_masks_combine_sum },
+    { "exclusion", dt_masks_combine_exclusion },
+    { "multiply", dt_masks_combine_multiply },
+    { "screen", dt_masks_combine_screen },
   };
   float b_inv[N];
   for(int i = 0; i < N; i++) b_inv[i] = 1.0f - B[i];

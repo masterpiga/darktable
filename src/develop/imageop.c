@@ -2512,8 +2512,8 @@ void dt_iop_commit_params(dt_iop_module_t *module,
 {
   memcpy(piece->blendop_data, blendop_params, sizeof(dt_develop_blend_params_t));
 
-  // copy the GUI-owned refinement bypass preview state into the piece while we
-  // are still on the thread that owns it; the renderer reads only this copy
+  // copy the GUI-owned refinement bypass preview state into the piece, under
+  // the blend data's lock; the renderer reads only this copy
   dt_masks_refine_bypass_commit(module, piece);
 
   /* We have to take blending parameters into account for the hash if
@@ -3385,9 +3385,8 @@ static void _collect_mask_counts(const dt_develop_t *dev,
           else if(child->type & DT_MASKS_PATH) (*paths)++;
           else if(child->type & DT_MASKS_GRADIENT) (*gradients)++;
           else if(child->type & DT_MASKS_BRUSH) (*brushes)++;
-#ifdef HAVE_AI
+          // an edit made with AI support still holds its objects without it
           else if(child->type & DT_MASKS_OBJECT) (*objects)++;
-#endif
           else if(child->type & DT_MASKS_RASTER) (*rasters)++;
           else if(child->type & DT_MASKS_PARAMETRIC)
           {
@@ -3403,6 +3402,15 @@ static void _collect_mask_counts(const dt_develop_t *dev,
       }
     }
   }
+}
+
+// appends "<n> <kind>" to a comma-separated list, `fmt` being the plural
+// form for `n` (ngettext at the caller, so each pair is extracted)
+static void _append_count(GString *list, const int n, const char *fmt)
+{
+  if(n <= 0) return;
+  if(list->len) g_string_append(list, ", ");
+  g_string_append_printf(list, fmt, n);
 }
 
 static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
@@ -3440,29 +3448,14 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
   else
   {
     GString *breakdown = g_string_new(NULL);
-    if(circles > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             circles, (circles == 1 ? _("circle") : _("circles")));
-    if(ellipses > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             ellipses, (ellipses == 1 ? _("ellipse") : _("ellipses")));
-    if(paths > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             paths, (paths == 1 ? _("path") : _("paths")));
-    if(gradients > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             gradients, (gradients == 1 ? _("gradient") : _("gradients")));
-    if(brushes > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             brushes, (brushes == 1 ? _("brush") : _("brushes")));
-#ifdef HAVE_AI
-    if(objects > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             objects, (objects == 1 ? _("AI object") : _("AI objects")));
-#endif
-    if(rasters > 0)
-      g_string_append_printf(breakdown, "%s%d %s", (breakdown->len ? ", " : ""),
-                             rasters, (rasters == 1 ? _("raster mask") : _("raster masks")));
+    _append_count(breakdown, circles, ngettext("%d circle", "%d circles", circles));
+    _append_count(breakdown, ellipses, ngettext("%d ellipse", "%d ellipses", ellipses));
+    _append_count(breakdown, paths, ngettext("%d path", "%d paths", paths));
+    _append_count(breakdown, gradients, ngettext("%d gradient", "%d gradients", gradients));
+    _append_count(breakdown, brushes, ngettext("%d brush", "%d brushes", brushes));
+    _append_count(breakdown, objects, ngettext("%d AI object", "%d AI objects", objects));
+    _append_count(breakdown, rasters,
+                  ngettext("%d raster mask", "%d raster masks", rasters));
 
     GHashTableIter iter;
     gpointer key, value;
@@ -3475,10 +3468,9 @@ static gboolean _mask_indicator_tooltip(GtkWidget *treeview,
                              cnt, label);
     }
 
-    if(total == 1)
-      part1 = g_strdup_printf(_("this module has a mask with 1 element (%s)"), breakdown->str);
-    else
-      part1 = g_strdup_printf(_("this module has a mask with %d elements (%s)"), total, breakdown->str);
+    part1 = g_strdup_printf(ngettext("this module has a mask with %d element (%s)",
+                                     "this module has a mask with %d elements (%s)", total),
+                            total, breakdown->str);
 
     g_string_free(breakdown, TRUE);
   }

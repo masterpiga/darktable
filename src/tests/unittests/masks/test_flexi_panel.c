@@ -133,7 +133,7 @@ static void test_a_shape_is_never_a_noop(void **state)
 // an expanded row always shows both sub-ranges, whatever the user has touched
 static void test_expanded_row_shows_both_ranges(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_true(v.output);
 }
@@ -141,38 +141,38 @@ static void test_expanded_row_shows_both_ranges(void **state)
 // the boost-factor slider only exists for channels that have one
 static void test_boost_slider_follows_the_channel(void **state)
 {
-  assert_true(_model_param_row_visibility(TRUE, TRUE, TRUE, TRUE, FALSE).boost);
-  assert_false(_model_param_row_visibility(TRUE, TRUE, TRUE, FALSE, FALSE).boost);
+  assert_true(dt_masks_model_param_row_visibility(TRUE, TRUE, TRUE, TRUE, FALSE).boost);
+  assert_false(dt_masks_model_param_row_visibility(TRUE, TRUE, TRUE, FALSE, FALSE).boost);
   // never on a collapsed row, whatever the channel supports
-  assert_false(_model_param_row_visibility(FALSE, TRUE, TRUE, TRUE, FALSE).boost);
+  assert_false(dt_masks_model_param_row_visibility(FALSE, TRUE, TRUE, TRUE, FALSE).boost);
 }
 
 // a collapsed row adapts: an untouched channel shows only the input slider,
 // rather than a second slider that says nothing
 static void test_collapsed_untouched_row_shows_input_only(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_false(v.output);
 }
 
 static void test_collapsed_row_with_only_output_used(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE);
   assert_false(v.input);
   assert_true(v.output);
 }
 
 static void test_collapsed_row_with_both_used_shows_both(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE);
   assert_true(v.input);
   assert_true(v.output);
 }
 
 static void test_collapsed_row_with_only_input_used(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE);
   assert_true(v.input);
   assert_false(v.output);
 }
@@ -180,10 +180,10 @@ static void test_collapsed_row_with_only_input_used(void **state)
 // the per-sub-range bypass toggles only mean something when both are in play
 static void test_bypass_shown_only_when_both_ranges_used(void **state)
 {
-  assert_true(_model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE).bypass);
-  assert_false(_model_param_row_visibility(TRUE, TRUE, FALSE, FALSE, FALSE).bypass);
+  assert_true(dt_masks_model_param_row_visibility(FALSE, TRUE, TRUE, FALSE, FALSE).bypass);
+  assert_false(dt_masks_model_param_row_visibility(FALSE, TRUE, FALSE, FALSE, FALSE).bypass);
+  assert_false(dt_masks_model_param_row_visibility(FALSE, FALSE, TRUE, FALSE, FALSE).bypass);
+  assert_false(dt_masks_model_param_row_visibility(TRUE, TRUE, FALSE, FALSE, FALSE).bypass);
 }
 
 // a parametric row is an element row like any other: its expanded controls
@@ -191,8 +191,8 @@ static void test_bypass_shown_only_when_both_ranges_used(void **state)
 // slider appears exactly when that row is expanded -- never on a collapsed row.
 static void test_parametric_opacity_slider_needs_expanded(void **state)
 {
-  assert_true(_model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE).opacity);
-  assert_false(_model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE).opacity);
+  assert_true(dt_masks_model_param_row_visibility(TRUE, FALSE, FALSE, FALSE, FALSE).opacity);
+  assert_false(dt_masks_model_param_row_visibility(FALSE, FALSE, FALSE, FALSE, FALSE).opacity);
 }
 
 // and it does not depend on anything about the channel itself -- which
@@ -203,7 +203,7 @@ static void test_parametric_opacity_slider_ignores_the_channel_state(void **stat
   for(int in_used = 0; in_used < 2; in_used++)
     for(int out_used = 0; out_used < 2; out_used++)
       for(int boost = 0; boost < 2; boost++)
-        assert_true(_model_param_row_visibility(TRUE, in_used, out_used, boost, FALSE).opacity);
+        assert_true(dt_masks_model_param_row_visibility(TRUE, in_used, out_used, boost, FALSE).opacity);
 }
 
 // "element properties in subpanel" moves the boost factor and that opacity
@@ -211,13 +211,13 @@ static void test_parametric_opacity_slider_ignores_the_channel_state(void **stat
 // output sliders stay in the row
 static void test_subpanel_takes_boost_and_opacity_out_of_the_row(void **state)
 {
-  const dt_masks_param_vis_t v = _model_param_row_visibility(TRUE, TRUE, TRUE, TRUE, TRUE);
+  const dt_masks_param_vis_t v = dt_masks_model_param_row_visibility(TRUE, TRUE, TRUE, TRUE, TRUE);
   assert_true(v.input);
   assert_true(v.output);
   assert_false(v.boost);
   assert_false(v.opacity);
   // collapsed, the row shows what it always does
-  const dt_masks_param_vis_t c = _model_param_row_visibility(FALSE, TRUE, TRUE, TRUE, TRUE);
+  const dt_masks_param_vis_t c = dt_masks_model_param_row_visibility(FALSE, TRUE, TRUE, TRUE, TRUE);
   assert_true(c.input);
   assert_true(c.output);
   assert_true(c.bypass);
@@ -238,8 +238,8 @@ static void test_auto_expand_anchors_on_the_selection(void **state)
   flexi_bd.masks_last_expanded_elem = 3;
   flexi_bd.masks_last_expanded_group = 3;
 
-  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
-  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+  assert_int_equal(dt_masks_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_auto_expand_group_anchor(&flexi_bd), 1);
 }
 
 // with nothing selected it falls back to whatever was open last, rather than
@@ -252,8 +252,8 @@ static void test_auto_expand_falls_back_to_the_last_expanded(void **state)
   flexi_bd.masks_last_expanded_elem = 2;
   flexi_bd.masks_last_expanded_group = 1;
 
-  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
-  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+  assert_int_equal(dt_masks_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_auto_expand_group_anchor(&flexi_bd), 1);
 }
 
 // a raster mask expands to its opacity slider, so selecting one makes it the
@@ -272,10 +272,10 @@ static void test_auto_expand_anchors_on_a_raster_mask(void **state)
   flexi_bd.masks_last_expanded_group = INVALID_MASKID;
 
   dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", TRUE);
-  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_auto_expand_anchor(&flexi_bd), 2);
 
   // the group half never consults the element's kind
-  assert_int_equal(_model_auto_expand_group_anchor(&flexi_bd), 1);
+  assert_int_equal(dt_masks_model_auto_expand_group_anchor(&flexi_bd), 1);
 
   f->type = saved;
 }
@@ -291,9 +291,9 @@ static void test_auto_expand_ignores_a_shape_with_the_subpanel(void **state)
 
   dt_conf_set_bool("plugins/darkroom/masks/auto_expand_selected", TRUE);
   dt_conf_set_bool("plugins/darkroom/masks/properties_subpanel", FALSE);
-  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_auto_expand_anchor(&flexi_bd), 2);
   dt_conf_set_bool("plugins/darkroom/masks/properties_subpanel", TRUE);
-  assert_int_equal(_model_auto_expand_anchor(&flexi_bd), 1);
+  assert_int_equal(dt_masks_model_auto_expand_anchor(&flexi_bd), 1);
 }
 
 // nothing selected and nothing remembered: no anchor, which is what tells the
@@ -307,8 +307,8 @@ static void test_auto_expand_has_no_anchor_when_nothing_is_known(void **state)
   flexi_bd.masks_last_expanded_elem = INVALID_MASKID;
   flexi_bd.masks_last_expanded_group = INVALID_MASKID;
 
-  assert_false(dt_is_valid_maskid(_model_auto_expand_anchor(&flexi_bd)));
-  assert_false(dt_is_valid_maskid(_model_auto_expand_group_anchor(&flexi_bd)));
+  assert_false(dt_is_valid_maskid(dt_masks_model_auto_expand_anchor(&flexi_bd)));
+  assert_false(dt_is_valid_maskid(dt_masks_model_auto_expand_group_anchor(&flexi_bd)));
 }
 
 // the "is this sub-range used" predicate the rule above consumes
@@ -319,9 +319,9 @@ static void test_channel_used_detects_a_touched_range(void **state)
   const dt_iop_gui_blendif_channel_t *ch =
     dt_develop_blendif_channels_for_csp(DEVELOP_BLEND_CS_RGB_SCENE);
 
-  assert_false(_param_channel_is_used(p, &ch[0], 0));
+  assert_false(dt_masks_gui_param_channel_is_used(p, &ch[0], 0));
   p->blendif_parameters[4 * ch[0].param_channels[0] + 2] = 0.5f;
-  assert_true(_param_channel_is_used(p, &ch[0], 0));
+  assert_true(dt_masks_gui_param_channel_is_used(p, &ch[0], 0));
   _free_parametric(f);
 }
 
@@ -334,9 +334,9 @@ static void test_channel_used_honours_the_active_bit(void **state)
   const dt_iop_gui_blendif_channel_t *ch =
     dt_develop_blendif_channels_for_csp(DEVELOP_BLEND_CS_RGB_SCENE);
 
-  assert_false(_param_channel_is_used(p, &ch[0], 0));
+  assert_false(dt_masks_gui_param_channel_is_used(p, &ch[0], 0));
   p->blendif |= (1u << ch[0].param_channels[0]);
-  assert_true(_param_channel_is_used(p, &ch[0], 0));
+  assert_true(dt_masks_gui_param_channel_is_used(p, &ch[0], 0));
   _free_parametric(f);
 }
 
@@ -407,15 +407,15 @@ static void test_every_element_row_is_expandable(void **state)
                                     DT_MASKS_BRUSH,   DT_MASKS_PARAMETRIC,
                                     DT_MASKS_OBJECT,  DT_MASKS_RASTER };
   for(size_t i = 0; i < G_N_ELEMENTS(kinds); i++)
-    assert_true(_model_row_is_expandable(kinds[i], FALSE));
+    assert_true(dt_masks_model_row_is_expandable(kinds[i], FALSE));
 }
 
 // forms carry their kind alongside DT_MASKS_CLONE/NON_CLONE and friends, so the
 // rule must key off the kind bit rather than the whole type word
 static void test_expandability_ignores_the_non_kind_type_bits(void **state)
 {
-  assert_true(_model_row_is_expandable(DT_MASKS_PARAMETRIC | DT_MASKS_NON_CLONE, TRUE));
-  assert_false(_model_row_is_expandable(DT_MASKS_CIRCLE | DT_MASKS_CLONE, TRUE));
+  assert_true(dt_masks_model_row_is_expandable(DT_MASKS_PARAMETRIC | DT_MASKS_NON_CLONE, TRUE));
+  assert_false(dt_masks_model_row_is_expandable(DT_MASKS_CIRCLE | DT_MASKS_CLONE, TRUE));
 }
 
 // "element properties in subpanel" moves every element's properties to their
@@ -427,8 +427,8 @@ static void test_subpanel_leaves_only_parametric_chevrons(void **state)
                                     DT_MASKS_GRADIENT, DT_MASKS_BRUSH,  DT_MASKS_OBJECT,
                                     DT_MASKS_RASTER };
   for(size_t i = 0; i < G_N_ELEMENTS(kinds); i++)
-    assert_false(_model_row_is_expandable(kinds[i], TRUE));
-  assert_true(_model_row_is_expandable(DT_MASKS_PARAMETRIC, TRUE));
+    assert_false(dt_masks_model_row_is_expandable(kinds[i], TRUE));
+  assert_true(dt_masks_model_row_is_expandable(DT_MASKS_PARAMETRIC, TRUE));
 }
 
 // ---------------------------------------------------------------------------
@@ -441,8 +441,8 @@ static void test_sections_start_expanded(void **state)
 {
   for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
   {
-    assert_true(_model_section_expanded(s, FALSE));
-    assert_true(_model_section_expanded(s, TRUE));
+    assert_true(dt_masks_model_section_expanded(s, FALSE));
+    assert_true(dt_masks_model_section_expanded(s, TRUE));
   }
 }
 
@@ -451,12 +451,12 @@ static void test_sections_fold_independently(void **state)
 {
   for(dt_masks_section_t folded = 0; folded < DT_MASKS_SECTION_COUNT; folded++)
   {
-    _model_section_save(folded, FALSE);
+    dt_masks_model_section_save(folded, FALSE);
     for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
-      assert_int_equal(_model_section_expanded(s, FALSE), s != folded);
-    _model_section_save(folded, TRUE);
+      assert_int_equal(dt_masks_model_section_expanded(s, FALSE), s != folded);
+    dt_masks_model_section_save(folded, TRUE);
     for(dt_masks_section_t s = 0; s < DT_MASKS_SECTION_COUNT; s++)
-      assert_true(_model_section_expanded(s, FALSE));
+      assert_true(dt_masks_model_section_expanded(s, FALSE));
   }
 }
 
@@ -464,15 +464,15 @@ static void test_sections_fold_independently(void **state)
 // for every module and survives a restart
 static void test_section_state_is_one_config_key_each(void **state)
 {
-  _model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
-  _model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
-  _model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
+  dt_masks_model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
+  dt_masks_model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
+  dt_masks_model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/refinements_collapsed"));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/properties_collapsed"));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/consumers_collapsed"));
 
   dt_conf_set_bool("plugins/darkroom/masks/consumers_collapsed", FALSE);
-  assert_true(_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, FALSE));
+  assert_true(dt_masks_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, FALSE));
 }
 
 // drawing a shape opens its creation controls in a folded properties
@@ -480,19 +480,19 @@ static void test_section_state_is_one_config_key_each(void **state)
 // back
 static void test_drawing_opens_the_properties_without_saving(void **state)
 {
-  _model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
-  assert_true(_model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
-  assert_false(_model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE));
+  dt_masks_model_section_save(DT_MASKS_SECTION_PROPS, FALSE);
+  assert_true(dt_masks_model_section_expanded(DT_MASKS_SECTION_PROPS, TRUE));
+  assert_false(dt_masks_model_section_expanded(DT_MASKS_SECTION_PROPS, FALSE));
   assert_true(dt_conf_get_bool("plugins/darkroom/masks/properties_collapsed"));
 }
 
 // drawing concerns the properties section only
 static void test_drawing_leaves_the_other_sections_folded(void **state)
 {
-  _model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
-  _model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
-  assert_false(_model_section_expanded(DT_MASKS_SECTION_REFINE, TRUE));
-  assert_false(_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, TRUE));
+  dt_masks_model_section_save(DT_MASKS_SECTION_REFINE, FALSE);
+  dt_masks_model_section_save(DT_MASKS_SECTION_CONSUMERS, FALSE);
+  assert_false(dt_masks_model_section_expanded(DT_MASKS_SECTION_REFINE, TRUE));
+  assert_false(dt_masks_model_section_expanded(DT_MASKS_SECTION_CONSUMERS, TRUE));
 }
 
 // the removed "collapse refinements by default" option must not linger in an
@@ -500,7 +500,7 @@ static void test_drawing_leaves_the_other_sections_folded(void **state)
 static void test_old_collapse_refinements_option_is_ignored(void **state)
 {
   dt_conf_set_bool("plugins/darkroom/masks/collapse_refinements_default", TRUE);
-  assert_true(_model_section_expanded(DT_MASKS_SECTION_REFINE, FALSE));
+  assert_true(dt_masks_model_section_expanded(DT_MASKS_SECTION_REFINE, FALSE));
 }
 
 // the mask panel position drives where the panel is hosted; the values the
@@ -526,11 +526,11 @@ static void test_panel_side_defaults_to_the_processing_modules_side(void **state
 
   // processing modules live on the right by default
   dt_conf_set_bool("plugins/darkroom/panel_swap", FALSE);
-  assert_true(_masks_panel_side_right());
+  assert_true(dt_masks_gui_panel_side_right());
 
   // ... and on the left once the two side panels are swapped
   dt_conf_set_bool("plugins/darkroom/panel_swap", TRUE);
-  assert_false(_masks_panel_side_right());
+  assert_false(dt_masks_gui_panel_side_right());
 }
 
 // once the user has pinned the panel somewhere, that choice outranks the
@@ -540,11 +540,11 @@ static void test_pinned_panel_side_outranks_the_default(void **state)
 {
   dt_conf_set_bool("plugins/darkroom/panel_swap", FALSE);
   dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", FALSE);
-  assert_false(_masks_panel_side_right());
+  assert_false(dt_masks_gui_panel_side_right());
 
   dt_conf_set_bool("plugins/darkroom/panel_swap", TRUE);
   dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", TRUE);
-  assert_true(_masks_panel_side_right());
+  assert_true(dt_masks_gui_panel_side_right());
 }
 
 // ---------------------------------------------------------------------------
@@ -558,14 +558,14 @@ static void test_pinned_panel_side_outranks_the_default(void **state)
 static void test_panel_state_collapsed_module_shows_corner_icon(void **state)
 {
   const dt_masks_panel_state_t s_on =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, TRUE, FALSE);
   assert_true(s_on.want_hosted);
   assert_true(s_on.panel_collapsed);
   assert_true(s_on.corner_icon_visible);
   assert_true(s_on.corner_icon_active);
 
   const dt_masks_panel_state_t s_off =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, FALSE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, FALSE, FALSE, FALSE);
   assert_true(s_off.want_hosted);
   assert_true(s_off.panel_collapsed);
   assert_true(s_off.corner_icon_visible);
@@ -578,13 +578,13 @@ static void test_panel_state_collapsed_module_shows_corner_icon(void **state)
 static void test_panel_state_expanded_module_respects_pref(void **state)
 {
   const dt_masks_panel_state_t s_exp =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, FALSE);
   assert_true(s_exp.want_hosted);
   assert_false(s_exp.panel_collapsed);
   assert_false(s_exp.corner_icon_visible);
 
   const dt_masks_panel_state_t s_col =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, TRUE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, TRUE, TRUE);
   assert_true(s_col.want_hosted);
   assert_true(s_col.panel_collapsed);
   assert_true(s_col.corner_icon_visible);
@@ -597,7 +597,7 @@ static void test_panel_state_expanded_module_respects_pref(void **state)
 static void test_panel_state_mask_disabled_does_not_collapse(void **state)
 {
   const dt_masks_panel_state_t s =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, FALSE);
   assert_true(s.want_hosted);
   assert_false(s.panel_collapsed);
   assert_false(s.corner_icon_visible);
@@ -605,7 +605,7 @@ static void test_panel_state_mask_disabled_does_not_collapse(void **state)
 
   // and with the panel folded by preference, the icon is back, still inactive
   const dt_masks_panel_state_t s_folded =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, TRUE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, TRUE, TRUE, FALSE, TRUE);
   assert_true(s_folded.panel_collapsed);
   assert_true(s_folded.corner_icon_visible);
   assert_false(s_folded.corner_icon_active);
@@ -617,13 +617,13 @@ static void test_panel_state_mask_disabled_does_not_collapse(void **state)
 static void test_panel_state_unsupported_or_unfocused_hides_all(void **state)
 {
   const dt_masks_panel_state_t s_no_mask =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, FALSE, TRUE, FALSE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, TRUE, FALSE, TRUE, FALSE, FALSE);
   assert_false(s_no_mask.want_hosted);
   assert_true(s_no_mask.panel_collapsed);
   assert_false(s_no_mask.corner_icon_visible);
 
   const dt_masks_panel_state_t s_unfocused =
-    _model_masks_panel_state(MASKS_PANEL_POS_CANVAS, FALSE, TRUE, TRUE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_CANVAS, FALSE, TRUE, TRUE, TRUE, FALSE);
   assert_false(s_unfocused.want_hosted);
   assert_true(s_unfocused.panel_collapsed);
   assert_false(s_unfocused.corner_icon_visible);
@@ -632,9 +632,9 @@ static void test_panel_state_unsupported_or_unfocused_hides_all(void **state)
 // pinning the mask panel when the module is collapsed must expand the module
 static void test_pinning_collapsed_module_expands_iop(void **state)
 {
-  assert_true(_model_masks_pin_should_expand_iop(FALSE, TRUE));
-  assert_false(_model_masks_pin_should_expand_iop(TRUE, TRUE));
-  assert_false(_model_masks_pin_should_expand_iop(FALSE, FALSE));
+  assert_true(dt_masks_model_pin_should_expand_iop(FALSE, TRUE));
+  assert_false(dt_masks_model_pin_should_expand_iop(TRUE, TRUE));
+  assert_false(dt_masks_model_pin_should_expand_iop(FALSE, FALSE));
 }
 
 // in utility position, panel state follows user preference and does not collapse when IOP is collapsed
@@ -642,21 +642,21 @@ static void test_panel_state_utility_position_follows_pref(void **state)
 {
   // focused & expanded module in utility position: open when pref is open
   const dt_masks_panel_state_t s_open =
-    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
   assert_true(s_open.want_hosted);
   assert_false(s_open.panel_collapsed);
   assert_false(s_open.corner_icon_visible);
 
   // focused & collapsed IOP module in utility position: stays open when pref is open
   const dt_masks_panel_state_t s_iop_col =
-    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, FALSE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, FALSE, TRUE, FALSE);
   assert_true(s_iop_col.want_hosted);
   assert_false(s_iop_col.panel_collapsed);
   assert_false(s_iop_col.corner_icon_visible);
 
   // user collapsed the utility expander: collapsed
   const dt_masks_panel_state_t s_user_col =
-    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, TRUE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, TRUE);
   assert_true(s_user_col.want_hosted);
   assert_true(s_user_col.panel_collapsed);
   assert_false(s_user_col.corner_icon_visible);
@@ -666,11 +666,11 @@ static void test_panel_state_utility_position_follows_pref(void **state)
 static void test_panel_state_no_separate_panel_for_utility_or_embedded(void **state)
 {
   const dt_masks_panel_state_t s_util =
-    _model_masks_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_UTILITY, TRUE, TRUE, TRUE, TRUE, FALSE);
   assert_false(s_util.corner_icon_visible);
 
   const dt_masks_panel_state_t s_emb =
-    _model_masks_panel_state(MASKS_PANEL_POS_EMBEDDED, TRUE, TRUE, TRUE, TRUE, FALSE);
+    dt_masks_model_panel_state(MASKS_PANEL_POS_EMBEDDED, TRUE, TRUE, TRUE, TRUE, FALSE);
   assert_false(s_emb.want_hosted);
   assert_false(s_emb.corner_icon_visible);
 }
@@ -678,27 +678,27 @@ static void test_panel_state_no_separate_panel_for_utility_or_embedded(void **st
 // dedicated panel caption reflects module name and instance name with 2-line markup
 static void test_masks_panel_header_markup(void **state)
 {
-  char *m_hosted_no_inst = _model_masks_panel_header_markup("exposure", "", TRUE);
+  char *m_hosted_no_inst = dt_masks_model_panel_header_markup("exposure", "", TRUE);
   assert_non_null(strstr(m_hosted_no_inst, "blend mask"));
   assert_non_null(strstr(m_hosted_no_inst, "exposure"));
   assert_non_null(strstr(m_hosted_no_inst, "\n"));
   assert_null(strstr(m_hosted_no_inst, "•"));
   free(m_hosted_no_inst);
 
-  char *m_hosted_inst = _model_masks_panel_header_markup("exposure", "foreground", TRUE);
+  char *m_hosted_inst = dt_masks_model_panel_header_markup("exposure", "foreground", TRUE);
   assert_non_null(strstr(m_hosted_inst, "blend mask"));
   assert_non_null(strstr(m_hosted_inst, "exposure"));
   assert_non_null(strstr(m_hosted_inst, "• foreground"));
   assert_non_null(strstr(m_hosted_inst, "\n"));
   free(m_hosted_inst);
 
-  char *m_hosted_no_mod = _model_masks_panel_header_markup(NULL, NULL, TRUE);
+  char *m_hosted_no_mod = dt_masks_model_panel_header_markup(NULL, NULL, TRUE);
   assert_non_null(strstr(m_hosted_no_mod, "blend mask"));
   assert_non_null(strstr(m_hosted_no_mod, "no focused module"));
   assert_non_null(strstr(m_hosted_no_mod, "\n"));
   free(m_hosted_no_mod);
 
-  char *m_embedded = _model_masks_panel_header_markup("exposure", "foreground", FALSE);
+  char *m_embedded = dt_masks_model_panel_header_markup("exposure", "foreground", FALSE);
   assert_string_equal(m_embedded, "blend mask");
   free(m_embedded);
 }

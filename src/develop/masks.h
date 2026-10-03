@@ -111,7 +111,7 @@ typedef enum dt_masks_state_t
   // dt_masks_point_is_marker below
   DT_MASKS_STATE_GROUP_MARKER = 1 << 18,
   //   sum: min(1, a + b). Classic applies its per-shape sum with the same
-  //   clamp after every shape (_combine_masks_sum in group.c), and a clamp at
+  //   clamp after every shape (dt_masks_combine_sum in group.c), and a clamp at
   //   1 is absorbing for non-negative terms, so folding the whole group in any
   //   order renders exactly what classic's chain does
   DT_MASKS_STATE_WITHIN_SUM = 1 << 19,
@@ -324,19 +324,15 @@ typedef struct dt_masks_point_gradient_t
  * shape's mask buffer (inside the group renderer) before it is composited,
  * while the global refinements still run once on the final group mask. */
 
-/** what 'enabled' below selects: which mask the refinement is applied to.
- *
- * A per-group refinement is broadcast onto every member of the run (there is no
- * per-group storage of its own), so the value alone cannot say whether a member
- * carries its own element refinement or a copy of the group's. Without that
- * distinction the flexi renderer could only guess -- it read the run head's copy
- * and applied it to the whole group, which silently dropped every non-head
- * element's own refinement and made the head's look group-wide. */
+/** what 'enabled' below selects: which mask the refinement is applied to. A
+ * flexi group keeps its own refinement on its marker; before markers, it was
+ * broadcast onto every member of a classic run, and migration moves such a copy
+ * onto the marker of the group it becomes (_fold_classic_list in masks.c). */
 typedef enum dt_masks_refine_scope_t
 {
   DT_MASKS_REFINE_OFF = 0,      // no refinement (default; what pre-v7 edits migrate to)
   DT_MASKS_REFINE_ELEMENT = 1,  // applies to this member's own mask, before compositing
-  DT_MASKS_REFINE_GROUP = 2,    // broadcast copy; applied once to the composited group mask
+  DT_MASKS_REFINE_GROUP = 2,    // on a group's marker; applied once to the composited group mask
 } dt_masks_refine_scope_t;
 
 typedef struct dt_masks_refinement_t
@@ -358,14 +354,11 @@ typedef struct dt_masks_point_group_t
   int state;
   float opacity;
   dt_masks_refinement_t refinement;  // since masks v7; zero-filled = disabled
-  // since masks v7: a user-given group name (flexi first-class groups only),
-  // broadcast to every member of the run so any one of them reflects the
-  // whole group -- same convention as refinement above. Empty = no custom
-  // name, the group shows its auto "<operator>-<ordinal>" label alone.
+  // since masks v7: a user-given group name, on the group's marker (flexi
+  // only). Empty = no custom name, the group shows its auto label alone.
   char name[128];
-  // since masks v7: a persistent, multiplicative group-level opacity
-  // (flexi first-class groups only), broadcast to every member of the run
-  // the same way refinement/name above are. Applied to the group's own
+  // since masks v7: a persistent, multiplicative group-level opacity, on the
+  // group's marker (flexi only). Applied to the group's own
   // finished sub-mask at render time (see _group_get_mask_roi_flexi in
   // group.c), on top of -- not instead of -- each member's own independent
   // opacity; the two multiply together. Unlike refinement/name, 0.0 is NOT

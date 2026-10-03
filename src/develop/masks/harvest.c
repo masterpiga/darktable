@@ -333,7 +333,6 @@ static void _emit_version_histogram(json_t *j, const char *key, const int *bucke
   _j_close(j, '}');
 }
 
-/** Read the forms attached to one history entry and emit them. */
 /** Emit one form. Shared by both harvest drivers -- the library one reads its
     columns from masks_history, the XMP one from a parsed sidecar, and the JSON
     they produce has to be identical field for field or a corpus's provenance
@@ -396,7 +395,7 @@ static void _emit_one_form(json_t *j,
       {
         // Zero-fill the tail exactly as the loader does, so a point from an
         // older masks version is reported with the same neutral defaults the
-        // reader would give it rather than with uninitialised memory.
+        // reader would give it rather than with uninitialized memory.
         char point[sizeof(dt_masks_point_group_t)];
         memset(point, 0, sizeof(point));
         memcpy(point, (const char *)pts + stride * (size_t)i, stride);
@@ -423,6 +422,7 @@ static void _emit_one_form(json_t *j,
     _j_close(j, '}');
 }
 
+/** Read the forms attached to one history entry and emit them. */
 static int _emit_forms(json_t *j,
                        sqlite3 *db,
                        const int imgid,

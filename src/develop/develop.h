@@ -377,7 +377,7 @@ typedef struct dt_develop_t
       GtkWidget *label_evb;
       // which iop module's relocatable_box currently occupies content_box,
       // NULL if empty. Tracked here (rather than inspecting content_box's
-      // children) so _masks_flexi_relocate can cheaply tell whether it needs
+      // children) so dt_masks_gui_flexi_relocate can cheaply tell whether it needs
       // to move a previous occupant out first.
       struct dt_iop_module_t *hosted_module;
       // called right after the blending options write a new
@@ -602,9 +602,10 @@ void dt_dev_get_viewport_params(dt_dev_viewport_t *port,
 
 void dt_dev_configure(dt_dev_viewport_t *port);
 
-/** record how much of the canvas is hidden behind an overlay on each side, and
-    re-lay the viewport out for it. No-op when nothing changed, so it is cheap
-    to call on every relevant GUI event. */
+/** record how much of the canvas is hidden behind an overlay on each side.
+    Only the pan clamp reads it: the viewport keeps its layout (see
+    dt_dev_viewport_t::occlusion_left), so it is cheap to call on every
+    relevant GUI event. */
 void dt_dev_set_occlusion(dt_dev_viewport_t *port,
                           const int32_t left,
                           const int32_t right);

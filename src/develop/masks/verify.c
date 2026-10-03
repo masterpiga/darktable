@@ -457,7 +457,7 @@ static const float *_published_mask(replay_t *r)
 
 /** Render the mask for the current blend_params/forms, into a caller-owned
     copy. Returns NULL if the blend published nothing. */
-float *_render_mask(replay_t *r, float **image)
+float *dt_masks_verify_render_mask(replay_t *r, float **image)
 {
   const size_t npix = (size_t)r->roi.width * r->roi.height;
   if(image) *image = NULL;
@@ -645,7 +645,7 @@ static _diff_stats_t _diff_stats_rgb(const float *a, const float *b, const size_
 }
 
 /** worst absolute deviation between two masks */
-double _max_abs_diff(const float *a, const float *b, const size_t n)
+double dt_masks_verify_max_abs_diff(const float *a, const float *b, const size_t n)
 {
   return _diff_stats(a, b, n).max;
 }
@@ -653,7 +653,7 @@ double _max_abs_diff(const float *a, const float *b, const size_t n)
 /** is this mask the same value everywhere? A uniform mask makes the comparison
     vacuous -- it would match another uniform mask regardless of what migration
     did to the configuration that produced it. */
-gboolean _is_uniform(const float *m, const size_t n)
+gboolean dt_masks_verify_is_uniform(const float *m, const size_t n)
 {
   if(n == 0) return TRUE;
   for(size_t i = 1; i < n; i++)
@@ -673,7 +673,7 @@ static dt_iop_module_so_t *_find_so(const char *op)
   return NULL;
 }
 
-void _replay_cleanup(replay_t *r)
+void dt_masks_verify_replay_cleanup(replay_t *r)
 {
   darktable.develop = r->saved_develop;
   if(r->module_loaded) dt_iop_cleanup_module(&r->module);
@@ -811,7 +811,7 @@ static const char *_attach_raster_source(replay_t *r,
     the edit actually names is also what makes the replay faithful: an edit on
     a Lab module and one on a scene-referred RGB module take different paths
     through the blendif code. */
-const char *_replay_init(replay_t *r,
+const char *dt_masks_verify_replay_init(replay_t *r,
                              const char *operation,
                              const dt_develop_blend_params_t *bp,
                              GList *forms,
@@ -874,7 +874,7 @@ const char *_replay_init(replay_t *r,
 
   // The mask dispatchers in masks.c take dev->history_mutex when they mutate
   // dev->forms (they race the pixelpipe's deep-copy read otherwise), and
-  // migration goes through them. A zeroed dt_develop_t has an uninitialised
+  // migration goes through them. A zeroed dt_develop_t has an uninitialized
   // mutex, which aborts on first lock rather than failing quietly.
   //
   // It has to be RECURSIVE, exactly as dt_dev_init() creates it (develop.c):
@@ -994,7 +994,7 @@ const char *_replay_init(replay_t *r,
     const char *raster_err = _attach_raster_source(r, bp);
     if(raster_err)
     {
-      _replay_cleanup(r);
+      dt_masks_verify_replay_cleanup(r);
       return raster_err;
     }
   }
@@ -1004,7 +1004,7 @@ const char *_replay_init(replay_t *r,
   r->out = dt_alloc_align_float((size_t)width * height * 4);
   if(!r->probe || !r->out)
   {
-    _replay_cleanup(r);
+    dt_masks_verify_replay_cleanup(r);
     return "buffer allocation failure";
   }
   return NULL;
@@ -1134,8 +1134,8 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 
   replay_t r;
   const char *init_err =
-    _replay_init(&r, _obj_str(edit, "operation", NULL), &bp, forms,
-                 full_w, full_h, w, h);
+    dt_masks_verify_replay_init(&r, _obj_str(edit, "operation", NULL), &bp, forms,
+                                full_w, full_h, w, h);
   if(init_err)
   {
     rep->result = VERIFY_ERROR;
@@ -1148,16 +1148,16 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   // --- before migration -------------------------------------------------
   float *before_img = NULL, *after_img = NULL;
   float *before_cl_img = NULL, *after_cl_img = NULL;
-  float *before = _render_mask(&r, &before_img);
+  float *before = dt_masks_verify_render_mask(&r, &before_img);
   if(!before)
   {
     rep->result = VERIFY_ERROR;
     rep->skip_reason = "classic render produced no mask";
-    _replay_cleanup(&r);
+    dt_masks_verify_replay_cleanup(&r);
     return;
   }
 
-  rep->inert = _is_uniform(before, npix);
+  rep->inert = dt_masks_verify_is_uniform(before, npix);
 
   // the same classic edit on the GPU, before anything is migrated: this is the
   // baseline the post-migration CPU/GPU gap gets judged against
@@ -1170,7 +1170,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
              dt_masks_get_from_id_ext(r.dev.forms, r.module.blend_params->mask_id), 0);
 
   // --- after migration --------------------------------------------------
-  float *after = _render_mask(&r, &after_img);
+  float *after = dt_masks_verify_render_mask(&r, &after_img);
   if(!after)
   {
     rep->result = VERIFY_ERROR;
@@ -1179,7 +1179,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
     dt_free_align(before_cl);
     dt_free_align(before_img);
     dt_free_align(before_cl_img);
-    _replay_cleanup(&r);
+    dt_masks_verify_replay_cleanup(&r);
     return;
   }
 
@@ -1223,15 +1223,15 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
       rep->gpu_image_mean_diff = gi.mean;
       rep->gpu_image_differing_pixels = gi.differing;
     }
-    rep->dev_diff_before = _max_abs_diff(before, before_cl, npix);
-    rep->dev_diff_after = _max_abs_diff(after, after_cl, npix);
+    rep->dev_diff_before = dt_masks_verify_max_abs_diff(before, before_cl, npix);
+    rep->dev_diff_after = dt_masks_verify_max_abs_diff(after, after_cl, npix);
 
     // Only when the gap actually widened: re-render the migrated pair with the
     // mask post-processing off, to find out whether migration or a shared
     // downstream stage owns the widening (see dev_diff_after_nopost). Migration
     // leaves these fields alone -- feathering and friends stay in blend_params
     // for a migrated edit exactly as they were -- so zeroing them here disables
-    // the same stages on both sides, and _render_mask commits the params afresh
+    // the same stages on both sides, and dt_masks_verify_render_mask commits the params afresh
     // on every call.
     if(rep->dev_diff_after - rep->dev_diff_before > VERIFY_EPS_EQUIVALENT)
     {
@@ -1248,12 +1248,12 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
       p->brightness = 0.0f;
       p->details = 0.0f;
 
-      float *np = _render_mask(&r, NULL);
+      float *np = dt_masks_verify_render_mask(&r, NULL);
       float *np_cl = _render_mask_cl(&r, NULL);
       if(np && np_cl)
       {
         rep->nopost_ran = TRUE;
-        rep->dev_diff_after_nopost = _max_abs_diff(np, np_cl, npix);
+        rep->dev_diff_after_nopost = dt_masks_verify_max_abs_diff(np, np_cl, npix);
       }
       dt_free_align(np);
       dt_free_align(np_cl);
@@ -1356,7 +1356,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   dt_free_align(after_img);
   dt_free_align(before_cl_img);
   dt_free_align(after_cl_img);
-  _replay_cleanup(&r);
+  dt_masks_verify_replay_cleanup(&r);
 }
 
 // ---------------------------------------------------------------------------

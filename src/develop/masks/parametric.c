@@ -97,6 +97,20 @@ gboolean dt_masks_parametric_is_noop(const dt_masks_form_t *const sel)
   return TRUE;
 }
 
+gboolean dt_masks_parametric_sanitize(dt_masks_form_t *const form)
+{
+  if(!form || !(form->type & DT_MASKS_PARAMETRIC) || !form->points) return FALSE;
+  dt_masks_point_parametric_t *const p = form->points->data;
+  const dt_iop_gui_blendif_channel_t *const channels =
+    dt_develop_blendif_channels_for_csp((int)p->colorspace);
+  if(!channels) return FALSE;
+  uint32_t nch = 0;
+  while(channels[nch].label) nch++;
+  if(p->channel < nch) return FALSE;
+  p->channel = 0;
+  return TRUE;
+}
+
 static void _parametric_set_form_name(dt_masks_form_t *const form, const size_t nb)
 {
   // a single-channel form's name leads with its channel -- "parametric" in

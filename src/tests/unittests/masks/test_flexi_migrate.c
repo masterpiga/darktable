@@ -332,8 +332,8 @@ static void test_classic_head_without_an_operator_keeps_its_group(void **state)
   _migrate();
 
   // the group the migration marks keeps the member above in the head's group
-  assert_int_equal(_group_cid_of_form(grp, head->formid),
-                   _group_cid_of_form(grp, above->formid));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, head->formid),
+                   dt_masks_gui_group_cid_of_form(grp, above->formid));
 }
 
 // ... and it still has to read as union once the group is bypassed or its
@@ -372,8 +372,8 @@ static void test_a_modifier_is_not_an_operator(void **state)
       p = next;
     }
     dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
-    assert_int_equal(_group_cid_of_form(grp, head->formid),
-                     _group_cid_of_form(grp, above->formid));
+    assert_int_equal(dt_masks_gui_group_cid_of_form(grp, head->formid),
+                     dt_masks_gui_group_cid_of_form(grp, above->formid));
     head->state &= ~modifiers[m];
     above->state &= ~modifiers[m];
   }
@@ -395,17 +395,17 @@ static void test_a_run_keeps_its_group_refinement(void **state)
 
   dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
 
-  const dt_mask_id_t first = _group_cid_of_form(grp, 1);
-  const dt_mask_id_t second = _group_cid_of_form(grp, 3);
-  assert_int_equal(_group_cid_of_form(grp, 2), first);
+  const dt_mask_id_t first = dt_masks_gui_group_cid_of_form(grp, 1);
+  const dt_mask_id_t second = dt_masks_gui_group_cid_of_form(grp, 3);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2), first);
   assert_int_not_equal(first, second);
 
-  const dt_masks_point_group_t *mk = _group_point(grp, first);
+  const dt_masks_point_group_t *mk = dt_masks_gui_group_point(grp, first);
   assert_non_null(mk);
   assert_int_equal(mk->refinement.enabled, DT_MASKS_REFINE_GROUP);
   assert_float_equal(mk->refinement.blur_radius, 9.0f, 1e-6);
-  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_OFF);
-  assert_int_equal(_group_point(grp, second)->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(dt_masks_gui_group_point(grp, second)->refinement.enabled, DT_MASKS_REFINE_OFF);
 }
 
 // one module renders a classic group as its mask, another nests it at 35%

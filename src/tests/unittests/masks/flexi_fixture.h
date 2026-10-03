@@ -50,10 +50,10 @@
 // one. A test is then a round trip through the model:
 //
 //     flexi_build("u:1,2 | i:3");
-//     _model_drop_element_onto_element(mod, grp, 1, 3, TRUE);
+//     dt_masks_model_drop_element_onto_element(mod, grp, 1, 3, TRUE);
 //     assert_layout("u:2 | i:3,1");
 //
-// Serialising through _starts_group (rather than reading the marker bit
+// Serialising through dt_masks_gui_starts_group (rather than reading the marker bit
 // directly) is deliberate: it is the same partition function the panel uses,
 // so a layout assertion tests what the user will actually see.
 

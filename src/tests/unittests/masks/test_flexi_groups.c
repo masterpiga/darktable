@@ -47,7 +47,7 @@ static int _teardown(void **state)
 
 static gboolean _hidden(const dt_mask_id_t fid)
 {
-  return (_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
+  return (dt_masks_gui_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
 }
 
 static gboolean _any_hidden(void)
@@ -65,7 +65,7 @@ static gboolean _any_hidden(void)
 static void test_solo_element_hides_the_others(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
 
   assert_int_equal(flexi_bd.solo_formid, 2);
   assert_true(_hidden(1));
@@ -76,8 +76,8 @@ static void test_solo_element_hides_the_others(void **state)
 static void test_solo_same_element_again_turns_it_off(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_solo_form(&flexi_module, grp, 2);
-  _model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
 
   assert_int_equal(flexi_bd.solo_formid, INVALID_MASKID);
   assert_false(_any_hidden());
@@ -87,8 +87,8 @@ static void test_solo_same_element_again_turns_it_off(void **state)
 static void test_soloing_another_element_moves_the_solo(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_solo_form(&flexi_module, grp, 2);
-  _model_toggle_solo_form(&flexi_module, grp, 3);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 3);
 
   assert_int_equal(flexi_bd.solo_formid, 3);
   assert_true(_hidden(1));
@@ -101,7 +101,7 @@ static void test_solo_group_hides_other_groups(void **state)
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(g_list_append(NULL, GINT_TO_POINTER(3)),
                                  GINT_TO_POINTER(4));
-  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+  dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
@@ -115,11 +115,11 @@ static void test_solo_group_hides_other_groups(void **state)
 static void test_group_solo_cancels_element_solo(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-  _model_toggle_solo_form(&flexi_module, grp, 1);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 1);
   assert_int_equal(flexi_bd.solo_formid, 1);
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+  dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   assert_int_equal(flexi_bd.solo_formid, INVALID_MASKID);
@@ -130,11 +130,11 @@ static void test_element_solo_cancels_group_solo(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+  dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
   assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
 
-  _model_toggle_solo_form(&flexi_module, grp, 1);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 1);
   assert_int_equal(flexi_bd.solo_group_key, 0);
   assert_int_equal(flexi_bd.solo_formid, 1);
 }
@@ -147,7 +147,7 @@ static void test_element_solo_cancels_group_solo(void **state)
 static void test_solo_edit_hides_nothing(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  const dt_masks_solo_canvas_t c = _model_toggle_soloedit(&flexi_module, grp, 2);
+  const dt_masks_solo_canvas_t c = dt_masks_model_toggle_soloedit(&flexi_module, grp, 2);
 
   assert_int_equal(c, DT_MASKS_SOLO_CANVAS_ONE);
   assert_int_equal(flexi_bd.soloedit_formid, 2);
@@ -159,10 +159,10 @@ static void test_solo_edit_hides_nothing(void **state)
 static void test_solo_edit_cancels_solo_and_unhides(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
   assert_true(_any_hidden());
 
-  _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
 
   assert_int_equal(flexi_bd.solo_formid, INVALID_MASKID);
   assert_int_equal(flexi_bd.solo_group_key, 0);
@@ -174,11 +174,11 @@ static void test_solo_edit_cancels_group_solo_and_unhides(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+  dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
   assert_true(_any_hidden());
 
-  _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
 
   assert_int_equal(flexi_bd.solo_group_key, 0);
   assert_false(_any_hidden());
@@ -188,10 +188,10 @@ static void test_solo_edit_cancels_group_solo_and_unhides(void **state)
 static void test_solo_cancels_solo_edit(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
   assert_int_equal(flexi_bd.soloedit_formid, 1);
 
-  const dt_masks_solo_canvas_t c = _model_toggle_solo_form(&flexi_module, grp, 3);
+  const dt_masks_solo_canvas_t c = dt_masks_model_toggle_solo_form(&flexi_module, grp, 3);
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
   // the caller is told to restore whole-group canvas editing
   assert_int_equal(c, DT_MASKS_SOLO_CANVAS_FULL);
@@ -200,11 +200,11 @@ static void test_solo_cancels_solo_edit(void **state)
 static void test_group_solo_cancels_solo_edit(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-  _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
   const dt_masks_solo_canvas_t c =
-    _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+    dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
@@ -215,8 +215,8 @@ static void test_group_solo_cancels_solo_edit(void **state)
 static void test_solo_edit_toggles_off(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  _model_toggle_soloedit(&flexi_module, grp, 1);
-  const dt_masks_solo_canvas_t c = _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
+  const dt_masks_solo_canvas_t c = dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
 
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
   assert_int_equal(c, DT_MASKS_SOLO_CANVAS_FULL);
@@ -229,7 +229,7 @@ static void test_solo_edit_toggles_off(void **state)
 // Solo-edit is no longer a per-element action but a mode that follows the
 // panel selection, so the question "which shape should be isolated right now"
 // is answered from the selection instead of from a click. That answer is
-// _model_soloedit_target, and it is the one place that can decide to stand
+// dt_masks_model_soloedit_target, and it is the one place that can decide to stand
 // down -- everything below is a case where it must.
 
 #define SOLOEDIT_MODE_CONF "plugins/darkroom/masks/solo_edit_mode"
@@ -255,10 +255,10 @@ static void test_soloedit_mode_follows_the_selection(void **state)
   _soloedit_mode(TRUE);
 
   flexi_bd.panel_selected_formid = 2;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 2);
 
   flexi_bd.panel_selected_formid = 3;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 3);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 3);
 }
 
 // with the mode off the selection means nothing: selecting a shape must not
@@ -269,7 +269,7 @@ static void test_soloedit_mode_off_isolates_nothing(void **state)
   _soloedit_mode(FALSE);
 
   flexi_bd.panel_selected_formid = 1;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
 // clicking a group header, or clicking empty space, selects no element -- there
@@ -281,7 +281,7 @@ static void test_soloedit_mode_needs_an_element_selection(void **state)
   _soloedit_mode(TRUE);
 
   flexi_bd.panel_selected_formid = INVALID_MASKID;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
 // solo and solo-edit are mutually exclusive (see the toggles above), so a mode
@@ -292,14 +292,14 @@ static void test_soloedit_mode_stands_down_while_an_element_is_soloed(void **sta
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
   _soloedit_mode(TRUE);
-  _model_toggle_solo_form(&flexi_module, grp, 2);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
 
   flexi_bd.panel_selected_formid = 1;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 
   // ...and resumes once the solo is cleared, without needing a new click
-  _model_toggle_solo_form(&flexi_module, grp, 2);
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 1);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 2);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 1);
 }
 
 // same for a soloed group
@@ -309,11 +309,11 @@ static void test_soloedit_mode_stands_down_while_a_group_is_soloed(void **state)
   _soloedit_mode(TRUE);
 
   GList *members = g_list_append(NULL, GINT_TO_POINTER(3));
-  _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+  dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
   g_list_free(members);
 
   flexi_bd.panel_selected_formid = 1;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
 // parametric and raster elements have nothing to edit on canvas, but they are
@@ -330,13 +330,13 @@ static void test_soloedit_mode_isolates_elements_with_no_canvas_geometry(void **
 
   f->type = DT_MASKS_PARAMETRIC;
   flexi_bd.panel_selected_formid = 2;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 2);
 
   f->type = DT_MASKS_RASTER;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 2);
 
   f->type = was;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 2);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 2);
 }
 
 // a selection pointing at a shape that no longer exists (deleted while
@@ -347,7 +347,7 @@ static void test_soloedit_mode_ignores_a_stale_selection(void **state)
   _soloedit_mode(TRUE);
 
   flexi_bd.panel_selected_formid = 99;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
 }
 
 static void _assert_one_isolation_mode(const char *after)
@@ -383,15 +383,15 @@ static void test_at_most_one_isolation_mode_is_ever_active(void **state)
       switch(orders[o][step])
       {
         case 0:
-          _model_toggle_solo_form(&flexi_module, grp, 1);
+          dt_masks_model_toggle_solo_form(&flexi_module, grp, 1);
           _assert_one_isolation_mode("solo element");
           break;
         case 1:
-          _model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
+          dt_masks_model_toggle_solo_group(&flexi_module, grp, FLEXI_GID(1), members);
           _assert_one_isolation_mode("solo group");
           break;
         default:
-          _model_toggle_soloedit(&flexi_module, grp, 2);
+          dt_masks_model_toggle_soloedit(&flexi_module, grp, 2);
           _assert_one_isolation_mode("solo-edit");
           break;
       }
@@ -406,9 +406,9 @@ static void test_at_most_one_isolation_mode_is_ever_active(void **state)
 static void test_solo_edit_cleared_when_its_element_gets_hidden(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _model_toggle_soloedit(&flexi_module, grp, 1);
+  dt_masks_model_toggle_soloedit(&flexi_module, grp, 1);
   // solo a different element -- 1 becomes hidden, so its solo-edit is stale
-  const dt_masks_solo_canvas_t c = _model_toggle_solo_form(&flexi_module, grp, 3);
+  const dt_masks_solo_canvas_t c = dt_masks_model_toggle_solo_form(&flexi_module, grp, 3);
 
   assert_true(_hidden(1));
   assert_int_equal(flexi_bd.soloedit_formid, INVALID_MASKID);
@@ -418,7 +418,7 @@ static void test_solo_edit_cleared_when_its_element_gets_hidden(void **state)
 static void test_solo_of_unknown_element_is_rejected(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  _model_toggle_solo_form(&flexi_module, grp, 77);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 77);
   assert_int_equal(flexi_bd.solo_formid, INVALID_MASKID);
   assert_false(_any_hidden());
 }
@@ -432,21 +432,21 @@ static void test_solo_of_unknown_element_is_rejected(void **state)
 static void test_disable_is_independent_of_solo(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _group_point(grp, 2)->state |= DT_MASKS_STATE_DISABLE;
+  dt_masks_gui_group_point(grp, 2)->state |= DT_MASKS_STATE_DISABLE;
 
-  _model_toggle_solo_form(&flexi_module, grp, 1);
-  _model_toggle_solo_form(&flexi_module, grp, 1); // and off again
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 1);
+  dt_masks_model_toggle_solo_form(&flexi_module, grp, 1); // and off again
 
   // solo cleared every HIDDEN bit, but DISABLE is untouched
   assert_false(_any_hidden());
-  assert_int_not_equal(_group_point(grp, 2)->state & DT_MASKS_STATE_DISABLE, 0);
+  assert_int_not_equal(dt_masks_gui_group_point(grp, 2)->state & DT_MASKS_STATE_DISABLE, 0);
 }
 
 static void test_group_bypass_is_independent_of_disable(void **state)
 {
   // bypass is the group's, on its marker; disable an element's own
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  dt_masks_point_group_t *pt = _group_point(grp, FLEXI_GID(1));
+  dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, FLEXI_GID(1));
   pt->state |= DT_MASKS_STATE_OP_BYPASS;
   pt->state |= DT_MASKS_STATE_DISABLE;
 
@@ -465,15 +465,15 @@ static void test_group_bypass_is_independent_of_disable(void **state)
 static void test_ordinal_max_is_per_within_mode(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | i:4");
-  _group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_ISECT;
+  dt_masks_gui_group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_ISECT;
   flexi_set_ordinal(FLEXI_GID(0), 1); // union 1
   flexi_set_ordinal(FLEXI_GID(2), 2); // union 2, though its operator is intersection
   flexi_set_ordinal(FLEXI_GID(1), 1); // intersect 1
 
-  const int u = _within_index_for_state(0);
-  const int i = _within_index_for_state(DT_MASKS_STATE_ISECT);
-  assert_int_equal(_group_ord_max_for_within(&flexi_module, u), 2);
-  assert_int_equal(_group_ord_max_for_within(&flexi_module, i), 1);
+  const int u = dt_masks_gui_within_index_for_state(0);
+  const int i = dt_masks_gui_within_index_for_state(DT_MASKS_STATE_ISECT);
+  assert_int_equal(dt_masks_gui_group_ord_max_for_within(&flexi_module, u), 2);
+  assert_int_equal(dt_masks_gui_group_ord_max_for_within(&flexi_module, i), 1);
 }
 
 // numbered per operator family, as a group's default name is: a smooth union
@@ -481,20 +481,20 @@ static void test_ordinal_max_is_per_within_mode(void **state)
 static void test_ordinal_max_is_per_family(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | i:4");
-  _group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_WITHIN_MULTIPLY;
-  _group_point(grp, FLEXI_GID(2))->state |= DT_MASKS_STATE_SCREEN;
+  dt_masks_gui_group_point(grp, FLEXI_GID(1))->state |= DT_MASKS_STATE_WITHIN_MULTIPLY;
+  dt_masks_gui_group_point(grp, FLEXI_GID(2))->state |= DT_MASKS_STATE_SCREEN;
   flexi_set_ordinal(FLEXI_GID(0), 1); // union (strongest) 1
   flexi_set_ordinal(FLEXI_GID(1), 1); // overlap (smooth) 1
   flexi_set_ordinal(FLEXI_GID(2), 2); // union (smooth) 2
 
-  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_SCREEN), _within_index_for_state(0));
-  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_WITHIN_SUM),
-                   _within_index_for_state(0));
-  assert_int_equal(_within_index_for_state(DT_MASKS_STATE_WITHIN_MULTIPLY),
-                   _within_index_for_state(DT_MASKS_STATE_ISECT));
-  assert_int_equal(_group_ord_max_for_within(&flexi_module, _within_index_for_state(0)), 2);
+  assert_int_equal(dt_masks_gui_within_index_for_state(DT_MASKS_STATE_SCREEN), dt_masks_gui_within_index_for_state(0));
+  assert_int_equal(dt_masks_gui_within_index_for_state(DT_MASKS_STATE_WITHIN_SUM),
+                   dt_masks_gui_within_index_for_state(0));
+  assert_int_equal(dt_masks_gui_within_index_for_state(DT_MASKS_STATE_WITHIN_MULTIPLY),
+                   dt_masks_gui_within_index_for_state(DT_MASKS_STATE_ISECT));
+  assert_int_equal(dt_masks_gui_group_ord_max_for_within(&flexi_module, dt_masks_gui_within_index_for_state(0)), 2);
   assert_int_equal(
-    _group_ord_max_for_within(&flexi_module, _within_index_for_state(DT_MASKS_STATE_ISECT)), 1);
+    dt_masks_gui_group_ord_max_for_within(&flexi_module, dt_masks_gui_within_index_for_state(DT_MASKS_STATE_ISECT)), 1);
 }
 
 // an empty group holds a number too, so a new group must not reuse it
@@ -504,15 +504,15 @@ static void test_ordinal_max_counts_empty_groups(void **state)
   flexi_set_ordinal(FLEXI_GID(0), 1);
   flexi_set_ordinal(FLEXI_GID(1), 5);
 
-  const int u = _within_index_for_state(0);
-  assert_int_equal(_group_ord_max_for_within(&flexi_module, u), 5);
+  const int u = dt_masks_gui_within_index_for_state(0);
+  assert_int_equal(dt_masks_gui_group_ord_max_for_within(&flexi_module, u), 5);
 }
 
 static void test_ordinal_of_cid_reads_back(void **state)
 {
   flexi_build("u:1,2 | i:3");
   flexi_set_ordinal(FLEXI_GID(1), 7);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(1)), 7);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, FLEXI_GID(1)), 7);
 }
 
 // numbers whose group no longer exists are dropped, so a series can restart at
@@ -524,8 +524,8 @@ static void test_pruning_drops_numbers_of_vanished_groups(void **state)
   flexi_set_ordinal(FLEXI_GID(1), 1);
   flexi_set_ordinal(99, 4); // never a group
 
-  g_list_free(_model_delete_group(grp, FLEXI_GID(1)));
-  _prune_group_ordinals(&flexi_module);
+  g_list_free(dt_masks_model_delete_group(grp, FLEXI_GID(1)));
+  dt_masks_gui_prune_group_ordinals(&flexi_module);
 
   assert_int_equal(flexi_get_ordinal(FLEXI_GID(0)), 1);
   assert_int_equal(flexi_get_ordinal(FLEXI_GID(1)), 0);
@@ -539,7 +539,7 @@ static void test_pruning_clears_stale_group_solo(void **state)
   flexi_build("u:1,2");
   flexi_bd.solo_group_key = 99; // no run is headed by 99
 
-  _prune_stale_solo(&flexi_module);
+  dt_masks_gui_prune_stale_solo(&flexi_module);
   assert_int_equal(flexi_bd.solo_group_key, 0);
 }
 
@@ -548,7 +548,7 @@ static void test_pruning_keeps_a_live_group_solo(void **state)
   flexi_build("u:1,2 | i:3");
   flexi_bd.solo_group_key = FLEXI_GID(1); // a real group
 
-  _prune_stale_solo(&flexi_module);
+  dt_masks_gui_prune_stale_solo(&flexi_module);
   assert_int_equal(flexi_bd.solo_group_key, FLEXI_GID(1));
 }
 
@@ -558,7 +558,7 @@ static void test_pruning_clears_solo_keyed_on_non_head(void **state)
   flexi_build("u:1,2 | i:3");
   flexi_bd.solo_group_key = 2; // 2 is an element
 
-  _prune_stale_solo(&flexi_module);
+  dt_masks_gui_prune_stale_solo(&flexi_module);
   assert_int_equal(flexi_bd.solo_group_key, 0);
 }
 
@@ -597,18 +597,18 @@ static void test_refine_scope_element_vs_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
 
-  _group_point(grp, 1)->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
-  _group_point(grp, 1)->refinement.blur_radius = 2.0f;
+  dt_masks_gui_group_point(grp, 1)->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
+  dt_masks_gui_group_point(grp, 1)->refinement.blur_radius = 2.0f;
   // group scope is a broadcast copy onto every member of the run
-  _group_point(grp, 3)->refinement.enabled = DT_MASKS_REFINE_GROUP;
-  _group_point(grp, 3)->refinement.blur_radius = 4.0f;
-  _group_point(grp, 4)->refinement.enabled = DT_MASKS_REFINE_GROUP;
-  _group_point(grp, 4)->refinement.blur_radius = 4.0f;
+  dt_masks_gui_group_point(grp, 3)->refinement.enabled = DT_MASKS_REFINE_GROUP;
+  dt_masks_gui_group_point(grp, 3)->refinement.blur_radius = 4.0f;
+  dt_masks_gui_group_point(grp, 4)->refinement.enabled = DT_MASKS_REFINE_GROUP;
+  dt_masks_gui_group_point(grp, 4)->refinement.blur_radius = 4.0f;
 
-  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
-  assert_int_equal(_group_point(grp, 2)->refinement.enabled, DT_MASKS_REFINE_OFF);
-  assert_int_equal(_group_point(grp, 3)->refinement.enabled, DT_MASKS_REFINE_GROUP);
-  assert_int_equal(_group_point(grp, 4)->refinement.enabled, DT_MASKS_REFINE_GROUP);
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
+  assert_int_equal(dt_masks_gui_group_point(grp, 2)->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(dt_masks_gui_group_point(grp, 3)->refinement.enabled, DT_MASKS_REFINE_GROUP);
+  assert_int_equal(dt_masks_gui_group_point(grp, 4)->refinement.enabled, DT_MASKS_REFINE_GROUP);
 }
 
 // OFF is the zero value, so a zero-filled (pre-v7) point reads as no refinement
@@ -616,20 +616,20 @@ static void test_refine_off_is_the_zero_value(void **state)
 {
   assert_int_equal(DT_MASKS_REFINE_OFF, 0);
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_OFF);
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_OFF);
 }
 
 // a moved element carries its own element-scoped refinement with it
 static void test_element_refinement_follows_a_move(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  _group_point(grp, 2)->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
-  _group_point(grp, 2)->refinement.contrast = 0.5f;
+  dt_masks_gui_group_point(grp, 2)->refinement.enabled = DT_MASKS_REFINE_ELEMENT;
+  dt_masks_gui_group_point(grp, 2)->refinement.contrast = 0.5f;
 
-  _model_drop_element_onto_element(&flexi_module, grp, 2, 3, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 2, 3, TRUE);
 
-  assert_int_equal(_group_point(grp, 2)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
-  assert_float_equal(_group_point(grp, 2)->refinement.contrast, 0.5f, 1e-6);
+  assert_int_equal(dt_masks_gui_group_point(grp, 2)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
+  assert_float_equal(dt_masks_gui_group_point(grp, 2)->refinement.contrast, 0.5f, 1e-6);
 }
 
 // ---------------------------------------------------------------------------

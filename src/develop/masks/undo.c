@@ -327,7 +327,7 @@ static gboolean _undo_cycle(const step_t *st, const int group_index,
   const int pre_end = dev.history_end;
 
   // the edit
-  _apply_step(&dev, grp, st);
+  dt_masks_postedit_apply_step(&dev, grp, st);
   dt_dev_add_masks_history_item_ext(&dev, mod, FALSE, TRUE);
   dt_dev_write_history_ext(&dev, UNDO_IMGID);
 
@@ -399,7 +399,7 @@ static float *_render_state(replay_t *r, const state_t *s)
   // into the module's own allocation: it owns that buffer and frees it on
   // cleanup, so repointing it would double-free
   memcpy(r->module.blend_params, &s->bp, sizeof(dt_develop_blend_params_t));
-  return _render_mask(r, NULL);
+  return dt_masks_verify_render_mask(r, NULL);
 }
 
 static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally)
@@ -460,9 +460,9 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
   // source attached from the fields it names.
   replay_t r;
   const char *init_err =
-    _replay_init(&r, op, &classic_bp,
-                 dt_masks_dup_forms_deep(classic_forms, NULL),
-                 full_w, full_h, w, h);
+    dt_masks_verify_replay_init(&r, op, &classic_bp,
+                                dt_masks_dup_forms_deep(classic_forms, NULL),
+                                full_w, full_h, w, h);
   if(init_err)
   {
     g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
@@ -532,11 +532,11 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
          evaluates), and on an inert edit the undo is trivially correct. A pass
          built only out of those would be evidence of nothing, which is what
          this counter exists to make visible. */
-      const gboolean live = _max_abs_diff(r_before, r_edited, npix) > UNDO_EPS;
+      const gboolean live = dt_masks_verify_max_abs_diff(r_before, r_edited, npix) > UNDO_EPS;
       if(live) { rep->live++; tally[c].live++; }
 
-      const double d_undo = _max_abs_diff(r_before, r_undone, npix);
-      const double d_redo = _max_abs_diff(r_edited, r_redone, npix);
+      const double d_undo = dt_masks_verify_max_abs_diff(r_before, r_undone, npix);
+      const double d_redo = dt_masks_verify_max_abs_diff(r_edited, r_redone, npix);
       const double worst = MAX(d_undo, d_redo);
 
       if(worst > UNDO_EPS)
@@ -579,7 +579,7 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
   }
 
 out:
-  _replay_cleanup(&r);
+  dt_masks_verify_replay_cleanup(&r);
   g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
 }
 

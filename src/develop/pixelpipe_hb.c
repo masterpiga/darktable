@@ -567,7 +567,9 @@ static gboolean _group_wants_details(dt_develop_t *dev,
                                      const dt_masks_form_t *grp,
                                      const int depth)
 {
-  if(!grp || !(grp->type & DT_MASKS_GROUP) || depth > DT_MASKS_NESTING_MAX) return FALSE;
+  // AI objects fold their members like a group, per-member refinement included
+  if(!grp || !(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT)) || depth > DT_MASKS_NESTING_MAX)
+    return FALSE;
 
   for(const GList *l = grp->points; l; l = g_list_next(l))
   {

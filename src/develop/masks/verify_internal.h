@@ -75,38 +75,38 @@ typedef struct
   int devid;
 
   // whatever darktable.develop pointed at before this replay claimed it, put
-  // back on cleanup -- see _replay_init
+  // back on cleanup -- see dt_masks_verify_replay_init
   dt_develop_t *saved_develop;
 
   // the canvas editing state a shape's modify_property() reads; dev.form_gui
-  // points at it. See _replay_init for why it cannot simply be NULL.
+  // points at it. See dt_masks_verify_replay_init for why it cannot simply be NULL.
   dt_masks_form_gui_t form_gui;
 } replay_t;
 
 /** Build a replay around one harvested edit. Returns NULL on success, or a
     static string naming what could not be set up. */
-const char *_replay_init(replay_t *r,
-                         const char *operation,
-                         const dt_develop_blend_params_t *bp,
-                         GList *forms,
-                         const int full_width,
-                         const int full_height,
-                         const int width,
-                         const int height);
+const char *dt_masks_verify_replay_init(replay_t *r,
+                                        const char *operation,
+                                        const dt_develop_blend_params_t *bp,
+                                        GList *forms,
+                                        const int full_width,
+                                        const int full_height,
+                                        const int width,
+                                        const int height);
 
 /** Render the mask for the current blend_params/forms, into a caller-owned
     copy. Returns NULL if the blend published nothing. `image` (may be NULL)
     receives the rendered RGBA image the same way. */
-float *_render_mask(replay_t *r, float **image);
+float *dt_masks_verify_render_mask(replay_t *r, float **image);
 
 /** free everything the replay allocated */
-void _replay_cleanup(replay_t *r);
+void dt_masks_verify_replay_cleanup(replay_t *r);
 
 /** is every value in `m` the same? */
-gboolean _is_uniform(const float *m, const size_t n);
+gboolean dt_masks_verify_is_uniform(const float *m, const size_t n);
 
 /** the largest absolute difference between two buffers */
-double _max_abs_diff(const float *a, const float *b, const size_t n);
+double dt_masks_verify_max_abs_diff(const float *a, const float *b, const size_t n);
 
 G_END_DECLS
 

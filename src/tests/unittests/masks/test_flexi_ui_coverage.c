@@ -154,7 +154,7 @@ static void _poke_coverage(int *bits,
     const dt_masks_point_group_t before = pt;
 
     GList *one = g_list_append(NULL, &pt);
-    _apply_poke(one, k, 0, 0);
+    dt_masks_postedit_apply_poke(one, k, 0, 0);
     g_list_free(one);
 
     *bits |= (pt.state ^ before.state);

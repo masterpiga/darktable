@@ -27,7 +27,7 @@
 // The canvas position does NOT use this lib at all -- it is a genuine extra
 // grid column owned by src/gui/gtk.c (dt_ui_flexi_panel_*), a real
 // independent panel rather than more content stacked inside the existing
-// left/right panels. See _masks_flexi_relocate in
+// left/right panels. See dt_masks_gui_flexi_relocate in
 // develop/masks_gui_panel_host.c for how the two mechanisms are picked
 // between.
 //
@@ -104,7 +104,7 @@ static void _reconfigure(dt_lib_module_t *self)
 {
   if(!self->expander) return;
 
-  const int pos = _masks_panel_position();
+  const int pos = dt_masks_gui_panel_position();
   gtk_widget_set_visible(self->expander, pos == MASKS_PANEL_POS_UTILITY);
 }
 
@@ -271,7 +271,7 @@ void view_enter(dt_lib_module_t *self,
     GtkWidget *levb = darktable.develop->proxy.masks_flexi_host.label_evb;
     if(lbl && GTK_IS_LABEL(lbl))
     {
-      gchar *markup = _model_masks_panel_header_markup(NULL, NULL, TRUE);
+      gchar *markup = dt_masks_model_panel_header_markup(NULL, NULL, TRUE);
       gtk_label_set_markup(GTK_LABEL(lbl), markup);
       g_free(markup);
     }

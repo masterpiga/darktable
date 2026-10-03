@@ -293,12 +293,12 @@ static void _masks_toolbar_init(DtMasksToolbar *tb)
   gtk_widget_set_has_window(GTK_WIDGET(tb), FALSE);
 }
 
-GtkWidget *_masks_toolbar_new(GtkWidget *group,
-                              GtkWidget *shapes,
-                              GtkWidget *channels,
-                              GtkWidget *import,
-                              GtkWidget *presets,
-                              GtkWidget *gap)
+GtkWidget *dt_masks_gui_toolbar_new(GtkWidget *group,
+                                    GtkWidget *shapes,
+                                    GtkWidget *channels,
+                                    GtkWidget *import,
+                                    GtkWidget *presets,
+                                    GtkWidget *gap)
 {
   DtMasksToolbar *tb = g_object_new(_masks_toolbar_get_type(), NULL);
   GtkWidget *children[_TB_N] = { group, shapes, channels, import, presets, gap };

@@ -117,7 +117,7 @@ static void test_removing_a_shape_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3");
   assert_invalidates("removing a shape", ({
-    dt_masks_point_group_t *pt = _group_point(grp, 2);
+    dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 2);
     grp->points = g_list_remove(grp->points, pt);
     free(pt);
   }));
@@ -128,7 +128,7 @@ static void test_reordering_shapes_invalidates(void **state)
   dt_masks_form_t *grp = flexi_build("u:1,2,3");
   // order is a rendering input: the operators fold in list order
   assert_invalidates("reordering shapes", ({
-    dt_masks_point_group_t *pt = _group_point(grp, 1);
+    dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 1);
     grp->points = g_list_remove(grp->points, pt);
     grp->points = g_list_append(grp->points, pt);
   }));
@@ -138,7 +138,7 @@ static void test_moving_a_shape_between_groups_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   assert_invalidates("moving a shape to another group", ({
-    _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+    dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   }));
 }
 
@@ -150,14 +150,14 @@ static void test_shape_opacity_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
   assert_invalidates("changing a shape's opacity",
-                     _group_point(grp, 2)->opacity = 0.5f);
+                     dt_masks_gui_group_point(grp, 2)->opacity = 0.5f);
 }
 
 static void test_operator_change_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   assert_invalidates("changing a group's operator", ({
-    dt_masks_point_group_t *pt = _group_point(grp, 3);
+    dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 3);
     pt->state = (pt->state & ~DT_MASKS_STATE_OP) | DT_MASKS_STATE_DIFFERENCE;
   }));
 }
@@ -166,7 +166,7 @@ static void test_invert_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
   assert_invalidates("inverting an element",
-                     _group_point(grp, 1)->state |= DT_MASKS_STATE_INVERSE);
+                     dt_masks_gui_group_point(grp, 1)->state |= DT_MASKS_STATE_INVERSE);
 }
 
 // solo/mute hide other elements from the render, so they must invalidate
@@ -174,24 +174,24 @@ static void test_solo_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   assert_invalidates("soloing an element (hiding its peers)", ({
-    _group_point(grp, 2)->state |= DT_MASKS_STATE_HIDDEN;
-    _group_point(grp, 3)->state |= DT_MASKS_STATE_HIDDEN;
+    dt_masks_gui_group_point(grp, 2)->state |= DT_MASKS_STATE_HIDDEN;
+    dt_masks_gui_group_point(grp, 3)->state |= DT_MASKS_STATE_HIDDEN;
   }));
 }
 
 static void test_unsolo_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  _group_point(grp, 2)->state |= DT_MASKS_STATE_HIDDEN;
+  dt_masks_gui_group_point(grp, 2)->state |= DT_MASKS_STATE_HIDDEN;
   assert_invalidates("clearing solo",
-                     _group_point(grp, 2)->state &= ~DT_MASKS_STATE_HIDDEN);
+                     dt_masks_gui_group_point(grp, 2)->state &= ~DT_MASKS_STATE_HIDDEN);
 }
 
 static void test_bypass_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   assert_invalidates("bypassing a group's operator",
-                     _group_point(grp, 3)->state |= DT_MASKS_STATE_OP_BYPASS);
+                     dt_masks_gui_group_point(grp, 3)->state |= DT_MASKS_STATE_OP_BYPASS);
 }
 
 // ---------------------------------------------------------------------------
@@ -202,7 +202,7 @@ static void test_shape_refinement_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
   assert_invalidates("per-shape refinement (feathering radius)", ({
-    dt_masks_point_group_t *pt = _group_point(grp, 1);
+    dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 1);
     pt->refinement.enabled = 1;
     pt->refinement.feathering_radius = 4.0f;
   }));
@@ -212,7 +212,7 @@ static void test_shape_refinement_blur_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
   assert_invalidates("per-shape refinement (blur radius)", ({
-    dt_masks_point_group_t *pt = _group_point(grp, 1);
+    dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 1);
     pt->refinement.enabled = 1;
     pt->refinement.blur_radius = 3.0f;
   }));
@@ -224,7 +224,7 @@ static void test_group_refinement_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
   assert_invalidates("group-level refinement", ({
-    dt_masks_point_group_t *marker = _group_point(grp, FLEXI_GID(1));
+    dt_masks_point_group_t *marker = dt_masks_gui_group_point(grp, FLEXI_GID(1));
     marker->refinement.enabled = DT_MASKS_REFINE_GROUP;
     marker->refinement.contrast = 0.4f;
   }));
@@ -233,7 +233,7 @@ static void test_group_refinement_invalidates(void **state)
 static void test_refinement_disable_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  dt_masks_point_group_t *pt = _group_point(grp, 1);
+  dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 1);
   pt->refinement.enabled = 1;
   pt->refinement.blur_radius = 3.0f;
   assert_invalidates("turning a refinement back off", pt->refinement.enabled = 0);
@@ -250,7 +250,7 @@ static void test_group_opacity_invalidates(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   assert_invalidates("changing a group's opacity",
-                     _group_point(grp, FLEXI_GID(0))->group_opacity = 0.5f);
+                     dt_masks_gui_group_point(grp, FLEXI_GID(0))->group_opacity = 0.5f);
 }
 
 // ---------------------------------------------------------------------------
@@ -267,7 +267,7 @@ static dt_masks_point_group_t *_insert_marker(dt_masks_form_t *grp, const dt_mas
   m->parentid = grp->formid;
   m->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_UNION;
   m->group_opacity = 1.0f;
-  const int pos = g_list_index(grp->points, _group_point(grp, at));
+  const int pos = g_list_index(grp->points, dt_masks_gui_group_point(grp, at));
   grp->points = g_list_insert(grp->points, m, pos);
   return m;
 }
@@ -319,7 +319,7 @@ static void test_renaming_a_marker_does_not_invalidate(void **state)
 static void test_renaming_a_group_does_not_invalidate(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  dt_masks_point_group_t *marker = _group_point(grp, FLEXI_GID(0));
+  dt_masks_point_group_t *marker = dt_masks_gui_group_point(grp, FLEXI_GID(0));
   assert_preserves("renaming a group",
                    g_strlcpy(marker->name, "sky", sizeof(marker->name)));
 }

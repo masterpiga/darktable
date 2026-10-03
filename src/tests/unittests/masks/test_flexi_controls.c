@@ -61,7 +61,7 @@ static dt_masks_whisker_geom_t _geom(void)
 static void test_popup_sits_below_when_there_is_room(void **state)
 {
   const dt_masks_whisker_geom_t g = _geom();
-  const GdkRectangle r = _model_whisker_popup_rect(&g);
+  const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
 
   assert_int_equal(r.y, 400 + 20 + 6);
   assert_int_equal(r.width, 180);
@@ -74,7 +74,7 @@ static void test_popup_flips_above_when_below_is_short(void **state)
   dt_masks_whisker_geom_t g = _geom();
   g.anchor.y = 1000; // only 60px of work area left below the slider
 
-  const GdkRectangle r = _model_whisker_popup_rect(&g);
+  const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
   assert_int_equal(r.y, 1000 - 6 - 180);
 }
 
@@ -88,7 +88,7 @@ static void test_popup_never_overlaps_the_slider(void **state)
   {
     dt_masks_whisker_geom_t g = _geom();
     g.anchor.y = anchor_y;
-    const GdkRectangle r = _model_whisker_popup_rect(&g);
+    const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
 
     const gboolean disjoint =
       (r.y + r.height <= g.anchor.y) || (r.y >= g.anchor.y + g.anchor.height);
@@ -108,7 +108,7 @@ static void test_popup_stays_on_screen_when_neither_side_fits(void **state)
   g.workarea.height = 220; // no room for a 180px popup either side of the row
   g.anchor.y = 100;
 
-  const GdkRectangle r = _model_whisker_popup_rect(&g);
+  const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
   assert_true(r.y >= g.workarea.y);
   assert_true(r.y + r.height <= g.workarea.y + g.workarea.height);
 }
@@ -119,7 +119,7 @@ static void test_popup_centres_on_the_requested_point(void **state)
 {
   dt_masks_whisker_geom_t g = _geom();
   g.center_x = 1750;
-  assert_int_equal(_model_whisker_popup_rect(&g).x, 1750 - 90);
+  assert_int_equal(dt_masks_model_whisker_popup_rect(&g).x, 1750 - 90);
 }
 
 // but never at the cost of leaving the panel: a node near either end of the
@@ -133,7 +133,7 @@ static void test_popup_stays_within_the_panel(void **state)
   {
     dt_masks_whisker_geom_t g = base;
     g.center_x = center;
-    const GdkRectangle r = _model_whisker_popup_rect(&g);
+    const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
 
     if(r.x < g.panel_x || r.x + r.width > g.panel_x + g.panel_w)
       fail_msg("popup %d..%d escapes panel %d..%d (centre %d)", r.x, r.x + r.width,
@@ -153,7 +153,7 @@ static void test_popup_follows_the_panel_onto_a_second_monitor(void **state)
   g.center_x += 1920;
   g.panel_x += 1920;
 
-  const GdkRectangle r = _model_whisker_popup_rect(&g);
+  const GdkRectangle r = dt_masks_model_whisker_popup_rect(&g);
   assert_true(r.x >= 1920);
   assert_int_equal(r.x, 1750 + 1920 - 90);
 }
@@ -185,8 +185,8 @@ static void test_hue_spans_exactly_360_degrees(void **state)
 {
   const dt_iop_gui_blendif_channel_t *h = _lab_channel(LAB_h);
 
-  const float lo = _param_row_slider_precise_display(h, 1.0f, 0.0f);
-  const float hi = _param_row_slider_precise_display(h, 1.0f, 1.0f);
+  const float lo = dt_masks_gui_param_row_slider_precise_display(h, 1.0f, 0.0f);
+  const float hi = dt_masks_gui_param_row_slider_precise_display(h, 1.0f, 1.0f);
 
   // exact, not approximate: bauhaus tests the span with == against 360.0f, so
   // a value that is merely very close is a value that loses the wheel
@@ -199,7 +199,7 @@ static void test_hue_spans_exactly_360_degrees(void **state)
 static void test_hue_reads_as_degrees(void **state)
 {
   const dt_iop_gui_blendif_channel_t *h = _lab_channel(LAB_h);
-  assert_float_equal(_param_row_slider_precise_display(h, 1.0f, 0.5f), 180.0f, 1e-4f);
+  assert_float_equal(dt_masks_gui_param_row_slider_precise_display(h, 1.0f, 0.5f), 180.0f, 1e-4f);
 }
 
 // a hue's displayed value must not depend on the boost factor: boost scales a
@@ -212,8 +212,8 @@ static void test_hue_ignores_the_boost_factor(void **state)
   const float boosts[] = { 0.25f, 1.0f, 4.0f };
   for(size_t i = 0; i < sizeof(boosts) / sizeof(*boosts); i++)
   {
-    assert_true(_param_row_slider_precise_display(h, boosts[i], 1.0f) == 360.0f);
-    assert_float_equal(_param_row_slider_precise_display(h, boosts[i], 0.25f), 90.0f,
+    assert_true(dt_masks_gui_param_row_slider_precise_display(h, boosts[i], 1.0f) == 360.0f);
+    assert_float_equal(dt_masks_gui_param_row_slider_precise_display(h, boosts[i], 0.25f), 90.0f,
                        1e-4f);
   }
 }
@@ -236,8 +236,8 @@ static void test_display_and_parse_round_trip(void **state)
       for(size_t f = 0; f < sizeof(fracs) / sizeof(*fracs); f++)
       {
         const float shown =
-          _param_row_slider_precise_display(ch, boosts[b], fracs[f]);
-        const float back = _param_row_slider_precise_parse(ch, boosts[b], shown);
+          dt_masks_gui_param_row_slider_precise_display(ch, boosts[b], fracs[f]);
+        const float back = dt_masks_gui_param_row_slider_precise_parse(ch, boosts[b], shown);
         if(fabsf(back - fracs[f]) > 1e-5f)
           fail_msg("channel %d boost %.2f: %.4f -> %.4f -> %.6f", channels[c],
                    boosts[b], fracs[f], shown, back);
@@ -252,9 +252,9 @@ static void test_lab_ab_is_signed_around_zero(void **state)
 {
   const dt_iop_gui_blendif_channel_t *a = _lab_channel(LAB_a);
 
-  assert_float_equal(_param_row_slider_precise_display(a, 1.0f, 0.5f), 0.0f, 1e-4f);
-  assert_true(_param_row_slider_precise_display(a, 1.0f, 0.0f) < 0.0f);
-  assert_true(_param_row_slider_precise_display(a, 1.0f, 1.0f) > 0.0f);
+  assert_float_equal(dt_masks_gui_param_row_slider_precise_display(a, 1.0f, 0.5f), 0.0f, 1e-4f);
+  assert_true(dt_masks_gui_param_row_slider_precise_display(a, 1.0f, 0.0f) < 0.0f);
+  assert_true(dt_masks_gui_param_row_slider_precise_display(a, 1.0f, 1.0f) > 0.0f);
 }
 
 // ...and unlike hue, a/b and the percentage channels *do* scale with boost:
@@ -264,8 +264,8 @@ static void test_magnitude_channels_scale_with_boost(void **state)
 {
   const dt_iop_gui_blendif_channel_t *l = _lab_channel(LAB_L);
 
-  const float at_1 = _param_row_slider_precise_display(l, 1.0f, 1.0f);
-  const float at_2 = _param_row_slider_precise_display(l, 2.0f, 1.0f);
+  const float at_1 = dt_masks_gui_param_row_slider_precise_display(l, 1.0f, 1.0f);
+  const float at_2 = dt_masks_gui_param_row_slider_precise_display(l, 2.0f, 1.0f);
   assert_float_equal(at_2, at_1 * 2.0f, 1e-3f);
 }
 

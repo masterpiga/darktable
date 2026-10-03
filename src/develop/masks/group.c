@@ -1034,11 +1034,11 @@ error:
   return 0;
 }
 
-void _combine_masks_union(float *const restrict dest,
-                          float *const restrict newmask,
-                          const size_t npixels,
-                          const float opacity,
-                          const int inverted)
+void dt_masks_combine_union(float *const restrict dest,
+                            float *const restrict newmask,
+                            const size_t npixels,
+                            const float opacity,
+                            const int inverted)
 {
   if(inverted)
   {
@@ -1060,11 +1060,11 @@ void _combine_masks_union(float *const restrict dest,
   }
 }
 
-void _combine_masks_intersect(float *const restrict dest,
-                              float *const restrict newmask,
-                              const size_t npixels,
-                              const float opacity,
-                              const int inverted)
+void dt_masks_combine_intersect(float *const restrict dest,
+                                float *const restrict newmask,
+                                const size_t npixels,
+                                const float opacity,
+                                const int inverted)
 {
   if(inverted)
   {
@@ -1093,11 +1093,11 @@ static inline int both_positive(const float val1, const float val2)
   return (val1 > 0.0f) && (val2 > 0.0f);
 }
 
-void _combine_masks_difference(float *const restrict dest,
-                               float *const restrict newmask,
-                               const size_t npixels,
-                               const float opacity,
-                               const int inverted)
+void dt_masks_combine_difference(float *const restrict dest,
+                                 float *const restrict newmask,
+                                 const size_t npixels,
+                                 const float opacity,
+                                 const int inverted)
 {
   if(inverted)
   {
@@ -1119,11 +1119,11 @@ void _combine_masks_difference(float *const restrict dest,
   }
 }
 
-void _combine_masks_sum(float *const restrict dest,
-                        float *const restrict newmask,
-                        const size_t npixels,
-                        const float opacity,
-                        const int inverted)
+void dt_masks_combine_sum(float *const restrict dest,
+                          float *const restrict newmask,
+                          const size_t npixels,
+                          const float opacity,
+                          const int inverted)
 {
   if(inverted)
   {
@@ -1145,11 +1145,11 @@ void _combine_masks_sum(float *const restrict dest,
   }
 }
 
-void _combine_masks_exclusion(float *const restrict dest,
-                              float *const restrict newmask,
-                              const size_t npixels,
-                              const float opacity,
-                              const int inverted)
+void dt_masks_combine_exclusion(float *const restrict dest,
+                                float *const restrict newmask,
+                                const size_t npixels,
+                                const float opacity,
+                                const int inverted)
 {
   if(inverted)
   {
@@ -1178,11 +1178,11 @@ void _combine_masks_exclusion(float *const restrict dest,
   }
 }
 
-void _combine_masks_multiply(float *const restrict dest,
-                             float *const restrict newmask,
-                             const size_t npixels,
-                             const float opacity,
-                             const int inverted)
+void dt_masks_combine_multiply(float *const restrict dest,
+                               float *const restrict newmask,
+                               const size_t npixels,
+                               const float opacity,
+                               const int inverted)
 {
   // multiply the running accumulator by this shape, the way legacy parametric
   // masks combine. Onto the empty base this is degenerate (0), as intersection
@@ -1211,11 +1211,11 @@ void _combine_masks_multiply(float *const restrict dest,
 // the empty mask as identity, but it is *not* idempotent, so feathered overlaps
 // build up smoothly instead of leaving the crease that max() produces. Used as
 // the optional within-group combiner on the flexi group-fold path.
-void _combine_masks_screen(float *const restrict dest,
-                           float *const restrict newmask,
-                           const size_t npixels,
-                           const float opacity,
-                           const int inverted)
+void dt_masks_combine_screen(float *const restrict dest,
+                             float *const restrict newmask,
+                             const size_t npixels,
+                             const float opacity,
+                             const int inverted)
 {
   if(inverted)
   {
@@ -1339,20 +1339,20 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
                          && !dt_masks_raster_is_unresolved(module, piece, sel);
     if(isect)
-      _combine_masks_intersect(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_intersect(buffer, bufs, npixels, op, inverted);
     else if(screen)
-      _combine_masks_screen(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_screen(buffer, bufs, npixels, op, inverted);
     else if(within_multiply)
-      _combine_masks_multiply(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_multiply(buffer, bufs, npixels, op, inverted);
     else if(within_sum)
-      _combine_masks_sum(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_sum(buffer, bufs, npixels, op, inverted);
     else if(within_difference && nb_folded > 0)
-      _combine_masks_difference(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_difference(buffer, bufs, npixels, op, inverted);
     else if(within_exclusion)
-      _combine_masks_exclusion(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_exclusion(buffer, bufs, npixels, op, inverted);
     else
       // union, and the base of a difference: max onto the zero seed is a copy
-      _combine_masks_union(buffer, bufs, npixels, op, inverted);
+      dt_masks_combine_union(buffer, bufs, npixels, op, inverted);
     nb_folded++;
     // a parametric channel still at its full range renders all ones and
     // restricts nothing. Not counting it lets a group of nothing else take
@@ -1394,7 +1394,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   // group-level opacity (see dt_masks_point_group_t.group_opacity): a
   // multiplicative gain on the group's finished mask, on top of each member's
   // own opacity. Applied after invert-output, for the same reason element
-  // opacity multiplies a shape's already-inverted mask in _combine_masks_union
+  // opacity multiplies a shape's already-inverted mask in dt_masks_combine_union
   // et al: it scales the group's actual contribution
   for(size_t i = 0; i < npixels; i++) buffer[i] *= head->group_opacity;
 
@@ -1483,27 +1483,27 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
         // zero-opacity unions (_zero_empty_base_members in migrate_legacy.c)
         if(state & DT_MASKS_STATE_UNION)
         {
-          _combine_masks_union(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_union(buffer, bufs, npixels, op, inverted);
         }
         else if(state & DT_MASKS_STATE_INTERSECTION)
         {
-          _combine_masks_intersect(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_intersect(buffer, bufs, npixels, op, inverted);
         }
         else if(state & DT_MASKS_STATE_DIFFERENCE)
         {
-          _combine_masks_difference(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_difference(buffer, bufs, npixels, op, inverted);
         }
         else if(state & DT_MASKS_STATE_SUM)
         {
-          _combine_masks_sum(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_sum(buffer, bufs, npixels, op, inverted);
         }
         else if(state & DT_MASKS_STATE_EXCLUSION)
         {
-          _combine_masks_exclusion(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_exclusion(buffer, bufs, npixels, op, inverted);
         }
         else if(state & DT_MASKS_STATE_MULTIPLY)
         {
-          _combine_masks_multiply(buffer, bufs, npixels, op, inverted);
+          dt_masks_combine_multiply(buffer, bufs, npixels, op, inverted);
         }
         else // if we are here, this mean that we just have to copy
              // the shape and null other parts

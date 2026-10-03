@@ -102,7 +102,7 @@ static void _flexi_layout_capture_nested(GArray *out,
 // Caller frees the returned array
 static _flexi_layout_node_t *_flexi_layout_capture(dt_iop_module_t *module, int *n_out)
 {
-  dt_masks_form_t *grp = _module_mask_group(module);
+  dt_masks_form_t *grp = dt_masks_gui_module_mask_group(module);
   GArray *out = g_array_new(FALSE, FALSE, sizeof(_flexi_layout_node_t));
 
   // a mask with no group form yet has the one group the panel shows for it
@@ -132,9 +132,9 @@ static void _flexi_layout_apply(dt_iop_module_t *module,
                                 const gchar *const *keys)
 {
   dt_iop_gui_blend_data_t *bd = module->blend_data;
-  _masks_reset_mask_core(module);
+  dt_masks_gui_reset_mask_core(module);
   dt_mask_id_t root_cid = INVALID_MASKID;
-  dt_masks_form_t *grp = _module_flexi_group(module, &root_cid);
+  dt_masks_form_t *grp = dt_masks_gui_module_flexi_group(module, &root_cid);
   if(!grp || n <= 0 || nodes[0].parent != -1) return;
   // the reset left the mask's own group, empty: the layout's first node
   dt_masks_point_group_t *root = grp->points ? grp->points->data : NULL;
@@ -142,7 +142,7 @@ static void _flexi_layout_apply(dt_iop_module_t *module,
   root->state = (root->state & ~DT_MASKS_STATE_WITHIN)
                 | (nodes[0].within & DT_MASKS_STATE_WITHIN);
   root->group_opacity = nodes[0].opacity;
-  g_strlcpy(root->preset_note, keys ? keys[0] : "", sizeof(root->preset_note));
+  dt_strlcpy_to_fixed(root->preset_note, keys ? keys[0] : "", sizeof(root->preset_note));
 
   dt_mask_id_t *cids = g_new(dt_mask_id_t, n);
   cids[0] = root->formid;
@@ -153,12 +153,12 @@ static void _flexi_layout_apply(dt_iop_module_t *module,
     // pre-order: a holder always comes before what it holds
     const int32_t parent = nodes[i].parent;
     if(parent < 0 || parent >= i || !dt_is_valid_maskid(cids[parent])) continue;
-    cids[i] = _model_nest_new_group(grp, nodes[i].within, cids[parent]);
-    dt_masks_point_group_t *marker = _group_point(grp, cids[i]);
+    cids[i] = dt_masks_model_nest_new_group(grp, nodes[i].within, cids[parent]);
+    dt_masks_point_group_t *marker = dt_masks_gui_group_point(grp, cids[i]);
     if(!marker) continue;
     marker->group_opacity = nodes[i].opacity;
-    g_strlcpy(marker->name, nodes[i].name, sizeof(marker->name));
-    g_strlcpy(marker->preset_note, keys ? keys[i] : "", sizeof(marker->preset_note));
+    dt_strlcpy_to_fixed(marker->name, nodes[i].name, sizeof(marker->name));
+    dt_strlcpy_to_fixed(marker->preset_note, keys ? keys[i] : "", sizeof(marker->preset_note));
     if(!dt_is_valid_maskid(first_nested)) first_nested = cids[i];
   }
   g_free(cids);
@@ -173,8 +173,8 @@ static void _flexi_layout_apply(dt_iop_module_t *module,
   bd->masks_notes_all_open = TRUE;
   if(bd->masks_note_open) g_hash_table_remove_all(bd->masks_note_open);
   dt_dev_add_masks_history_item(darktable.develop, module, TRUE);
-  _build_masks_list(module);
-  _refresh_canvas_edit(module);
+  dt_masks_gui_build_list(module);
+  dt_masks_gui_refresh_canvas_edit(module);
 }
 
 // does `list` hold, at any depth, an element an applied layout would discard?
@@ -195,7 +195,7 @@ static gboolean _flexi_list_has_content(const dt_masks_form_t *list, const int d
 
 static gboolean _flexi_layout_has_content(dt_iop_module_t *module)
 {
-  return _flexi_list_has_content(_module_mask_group(module), 0);
+  return _flexi_list_has_content(dt_masks_gui_module_mask_group(module), 0);
 }
 
 // reads back every user-saved layout preset's name + node array. Caller frees
@@ -545,7 +545,7 @@ static gboolean _flexi_builtin_parse_group(_flexi_builtin_t *b,
   key = NULL;
 
   // listed top-first, created bottom-up: each new group lands on top of the
-  // ones before it (see _model_nest_new_group)
+  // ones before it (see dt_masks_model_nest_new_group)
   const int32_t self = (int32_t)b->nodes->len - 1;
   const _flexi_group_src_t *sub_src = _flexi_chain_find(chain, nc, "groups");
   JsonArray *subs = sub_src ? json_object_get_array_member(sub_src->obj, "groups") : NULL;
@@ -679,14 +679,14 @@ static const _flexi_builtin_t *_flexi_builtin_by_id(const gchar *id)
   return NULL;
 }
 
-GPtrArray *_masks_preset_notes(const char *key)
+GPtrArray *dt_masks_gui_preset_notes(const char *key)
 {
   if(!key || !*key) return NULL;
   _flexi_builtins_get();
   return g_hash_table_lookup(_builtins.notes, key);
 }
 
-gboolean _masks_preset_notes_shown(void)
+gboolean dt_masks_gui_preset_notes_shown(void)
 {
   return dt_conf_get_bool("plugins/darkroom/masks/show_preset_notes");
 }
@@ -716,7 +716,7 @@ static gboolean _flexi_builtin_is_plain(const _flexi_builtin_t *b)
 {
   const _flexi_layout_node_t *root = &g_array_index(b->nodes, _flexi_layout_node_t, 0);
   return b->nodes->len == 1 && !root->within && root->opacity == 1.0f
-         && !_masks_preset_notes(g_ptr_array_index(b->keys, 0));
+         && !dt_masks_gui_preset_notes(g_ptr_array_index(b->keys, 0));
 }
 
 static void _flexi_preset_save_clicked(dt_iop_module_t *module)
@@ -810,7 +810,7 @@ static void _flexi_preset_save_action(GSimpleAction *action,
 
 // appends a "presets" section (group-layout presets) directly to `menu` --
 // the menu of the toolbar's presets button (see _masks_presets_press)
-void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
+void dt_masks_gui_add_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
 {
   GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_presets");
   if(action_group == NULL)
@@ -880,7 +880,7 @@ void _add_flexi_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *mo
 // behind FLEXI_USER_PRESET_PREFIX
 #define FLEXI_DEFAULT_PRESET_CONF "plugins/darkroom/masks/default_group_preset"
 
-void _masks_apply_default_preset(dt_iop_module_t *module)
+void dt_masks_gui_apply_default_preset(dt_iop_module_t *module)
 {
   gchar *def = dt_conf_get_string(FLEXI_DEFAULT_PRESET_CONF);
   if(g_str_has_prefix(def, FLEXI_USER_PRESET_PREFIX))
@@ -933,7 +933,7 @@ static GtkWidget *_masks_default_preset_radio(GtkWidget *box,
   return radio;
 }
 
-void _add_masks_default_preset_box(GtkWidget *box)
+void dt_masks_gui_add_default_preset_box(GtkWidget *box)
 {
   GtkWidget *header = gtk_label_new(_("default group layout"));
   gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);

@@ -44,7 +44,7 @@ static int _teardown(void **state)
 
 static void _assert_group_count(const int expect)
 {
-  GList *heads = _group_partition_heads(flexi_group());
+  GList *heads = dt_masks_gui_group_partition_heads(flexi_group());
   const int n = g_list_length(heads);
   g_list_free(heads);
   if(n != expect)
@@ -58,7 +58,7 @@ static void _assert_group_count(const int expect)
 
 static void _name_group(dt_masks_form_t *grp, const dt_mask_id_t cid, const char *name)
 {
-  g_strlcpy(_group_point(grp, cid)->name, name, sizeof(_group_point(grp, cid)->name));
+  g_strlcpy(dt_masks_gui_group_point(grp, cid)->name, name, sizeof(dt_masks_gui_group_point(grp, cid)->name));
 }
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ static void _name_group(dt_masks_form_t *grp, const dt_mask_id_t cid, const char
 static void test_element_onto_group_header(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
   assert_layout("u:2 | i:3,4,1");
   _assert_group_count(2);
 }
@@ -78,7 +78,7 @@ static void test_element_onto_group_header(void **state)
 static void test_element_onto_group_named_by_a_member(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 1, 3));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, 3));
   assert_layout("u:2 | i:3,4,1");
 }
 
@@ -86,7 +86,7 @@ static void test_element_onto_group_named_by_a_member(void **state)
 static void test_element_onto_group_header_adopts_operator(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | d:3");
-  _model_drop_element_onto_group(&flexi_module, grp, 2, FLEXI_GID(1));
+  dt_masks_model_drop_element_onto_group(&flexi_module, grp, 2, FLEXI_GID(1));
   assert_int_equal(flexi_group_op_of(2), DT_MASKS_STATE_DIFFERENCE);
 }
 
@@ -95,7 +95,7 @@ static void test_element_onto_group_header_adopts_operator(void **state)
 static void test_element_onto_its_own_group_header_is_a_noop(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3 | i:4");
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 2, FLEXI_GID(0)));
+  assert_false(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 2, FLEXI_GID(0)));
   assert_layout("u:1,2,3 | i:4");
 }
 
@@ -104,7 +104,7 @@ static void test_element_onto_its_own_group_header_is_a_noop(void **state)
 static void test_element_onto_group_header_leaves_its_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
-  _model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1));
+  dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1));
   assert_layout("[u] | i:2,3,1");
   _assert_group_count(2);
 }
@@ -112,8 +112,8 @@ static void test_element_onto_group_header_leaves_its_group(void **state)
 static void test_element_onto_invalid_group_is_rejected(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 1, INVALID_MASKID));
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 1, 12345));
+  assert_false(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, INVALID_MASKID));
+  assert_false(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, 12345));
   assert_layout("u:1,2");
 }
 
@@ -121,8 +121,8 @@ static void test_element_onto_invalid_group_is_rejected(void **state)
 static void test_marker_is_not_moved_as_an_element(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, FLEXI_GID(0),
-                                              FLEXI_GID(1)));
+  assert_false(dt_masks_model_drop_element_onto_group(&flexi_module, grp, FLEXI_GID(0),
+                                                      FLEXI_GID(1)));
   assert_layout("u:1 | i:2");
 }
 
@@ -134,14 +134,14 @@ static void test_marker_is_not_moved_as_an_element(void **state)
 static void test_element_fills_an_empty_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3 | [d]");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(1)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(1)));
   assert_layout("u:1,2 | d:3");
 }
 
 static void test_element_fills_an_empty_bottom_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("[i] | u:1,2,3");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(0)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(0)));
   assert_layout("i:3 | u:1,2");
 }
 
@@ -150,7 +150,7 @@ static void test_element_fills_an_empty_bottom_group(void **state)
 static void test_filling_the_group_below_keeps_their_order(void **state)
 {
   dt_masks_form_t *grp = flexi_build("[d] | u:1 | i:2");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(0)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(0)));
   assert_layout("d:1 | [u] | i:2");
 }
 
@@ -158,7 +158,7 @@ static void test_filling_the_group_below_keeps_their_order(void **state)
 static void test_filling_the_group_above_keeps_their_order(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | [d] | i:2");
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
   assert_layout("[u] | d:1 | i:2");
 }
 
@@ -167,8 +167,8 @@ static void test_filling_a_group_keeps_its_number(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3 | [d]");
   flexi_set_ordinal(FLEXI_GID(1), 4);
-  _model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(1));
-  assert_int_equal(flexi_get_ordinal(_group_cid_of_form(grp, 3)), 4);
+  dt_masks_model_drop_element_onto_group(&flexi_module, grp, 3, FLEXI_GID(1));
+  assert_int_equal(flexi_get_ordinal(dt_masks_gui_group_cid_of_form(grp, 3)), 4);
 }
 
 // ---------------------------------------------------------------------------
@@ -183,19 +183,19 @@ static void test_moving_elements_renames_no_group(void **state)
   _name_group(grp, FLEXI_GID(0), "sky");
   _name_group(grp, FLEXI_GID(2), "trees");
 
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 2, 1, TRUE));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 1, FLEXI_GID(1)));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 2, 1, TRUE));
   assert_layout("[u] | d:1,2 | [i]");
-  assert_string_equal(_group_point(grp, FLEXI_GID(0))->name, "sky");
-  assert_string_equal(_group_point(grp, FLEXI_GID(1))->name, "");
-  assert_string_equal(_group_point(grp, FLEXI_GID(2))->name, "trees");
+  assert_string_equal(dt_masks_gui_group_point(grp, FLEXI_GID(0))->name, "sky");
+  assert_string_equal(dt_masks_gui_group_point(grp, FLEXI_GID(1))->name, "");
+  assert_string_equal(dt_masks_gui_group_point(grp, FLEXI_GID(2))->name, "trees");
 }
 
 static void test_moving_elements_leaves_every_group_setting(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
-  dt_masks_point_group_t *from = _group_point(grp, FLEXI_GID(0));
-  dt_masks_point_group_t *to = _group_point(grp, FLEXI_GID(1));
+  dt_masks_point_group_t *from = dt_masks_gui_group_point(grp, FLEXI_GID(0));
+  dt_masks_point_group_t *to = dt_masks_gui_group_point(grp, FLEXI_GID(1));
   from->group_opacity = 0.8f;
   to->state |= DT_MASKS_STATE_SCREEN;
   to->group_opacity = 0.5f;
@@ -203,8 +203,8 @@ static void test_moving_elements_leaves_every_group_setting(void **state)
                                             .blur_radius = 3.0f };
   const dt_masks_point_group_t from_before = *from, to_before = *to;
 
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
-  assert_int_equal(_group_cid_of_form(grp, 1), FLEXI_GID(1));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 1), FLEXI_GID(1));
   assert_memory_equal(from, &from_before, sizeof(from_before));
   assert_memory_equal(to, &to_before, sizeof(to_before));
 }
@@ -213,12 +213,12 @@ static void test_moving_elements_leaves_every_group_setting(void **state)
 static void test_moving_keeps_the_elements_own_refinement(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,4 | i:2,3");
-  _group_point(grp, 1)->refinement = (dt_masks_refinement_t){
+  dt_masks_gui_group_point(grp, 1)->refinement = (dt_masks_refinement_t){
     .enabled = DT_MASKS_REFINE_ELEMENT, .blur_radius = 7.0f };
 
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE));
-  assert_int_equal(_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
-  assert_float_equal(_group_point(grp, 1)->refinement.blur_radius, 7.0f, 1e-6);
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE));
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->refinement.enabled, DT_MASKS_REFINE_ELEMENT);
+  assert_float_equal(dt_masks_gui_group_point(grp, 1)->refinement.blur_radius, 7.0f, 1e-6);
 }
 
 // a row drop moving the bottom group's sole member up, under the first element
@@ -226,7 +226,7 @@ static void test_moving_keeps_the_elements_own_refinement(void **state)
 static void test_row_drop_up_from_a_sole_member_keeps_group_order(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 2, FALSE));
   assert_layout("[u] | i:1,2,3");
 }
 
@@ -247,7 +247,7 @@ static void test_cluster_onto_group_header(void **state)
   flexi_build("u:1,2,3 | i:4");
   GList *ids = _ids(2, 3);
 
-  assert_true(_masks_cluster_move(&flexi_module, ids, FLEXI_GID(1), TRUE, FALSE));
+  assert_true(dt_masks_gui_cluster_move(&flexi_module, ids, FLEXI_GID(1), TRUE, FALSE));
   g_list_free(ids);
   assert_layout("u:1 | i:4,2,3");
   _assert_group_count(2);
@@ -258,7 +258,7 @@ static void test_cluster_onto_element_row(void **state)
   flexi_build("u:1,2,3 | i:4,5");
   GList *ids = _ids(2, 3);
 
-  assert_true(_masks_cluster_move(&flexi_module, ids, 4, FALSE, TRUE));
+  assert_true(dt_masks_gui_cluster_move(&flexi_module, ids, 4, FALSE, TRUE));
   g_list_free(ids);
   assert_layout("u:1 | i:4,2,3,5");
   _assert_group_count(2);
@@ -269,7 +269,7 @@ static void test_cluster_onto_an_empty_group(void **state)
   flexi_build("u:1,2,3 | [d]");
   GList *ids = _ids(2, 3);
 
-  assert_true(_masks_cluster_move(&flexi_module, ids, FLEXI_GID(1), TRUE, FALSE));
+  assert_true(dt_masks_gui_cluster_move(&flexi_module, ids, FLEXI_GID(1), TRUE, FALSE));
   g_list_free(ids);
   assert_layout("u:1 | d:2,3");
 }
@@ -280,7 +280,7 @@ static void test_cluster_emptying_group_leaves_it(void **state)
   flexi_build("u:1,2 | i:3,4");
   GList *ids = _ids(3, 4);
 
-  _masks_cluster_move(&flexi_module, ids, FLEXI_GID(0), TRUE, FALSE);
+  dt_masks_gui_cluster_move(&flexi_module, ids, FLEXI_GID(0), TRUE, FALSE);
   g_list_free(ids);
   assert_layout("u:1,2,3,4 | [i]");
 }
@@ -288,7 +288,7 @@ static void test_cluster_emptying_group_leaves_it(void **state)
 static void test_cluster_move_with_no_members_is_rejected(void **state)
 {
   flexi_build("u:1,2");
-  assert_false(_masks_cluster_move(&flexi_module, NULL, FLEXI_GID(0), TRUE, FALSE));
+  assert_false(dt_masks_gui_cluster_move(&flexi_module, NULL, FLEXI_GID(0), TRUE, FALSE));
   assert_layout("u:1,2");
 }
 
@@ -300,21 +300,21 @@ static void test_emptying_a_group_keeps_it(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3 | d:4");
   _name_group(grp, FLEXI_GID(1), "sky");
-  GList *gone = _model_empty_group(grp, FLEXI_GID(1));
+  GList *gone = dt_masks_model_empty_group(grp, FLEXI_GID(1));
   assert_int_equal(g_list_length(gone), 2);
   g_list_free(gone);
   assert_layout("u:1 | [i] | d:4");
-  assert_string_equal(_group_point(grp, FLEXI_GID(1))->name, "sky");
+  assert_string_equal(dt_masks_gui_group_point(grp, FLEXI_GID(1))->name, "sky");
 }
 
 static void test_deleting_a_group_takes_its_elements(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3 | d:4");
-  GList *gone = _model_delete_group(grp, FLEXI_GID(1));
+  GList *gone = dt_masks_model_delete_group(grp, FLEXI_GID(1));
   assert_int_equal(g_list_length(gone), 2);
   g_list_free(gone);
   assert_layout("u:1 | d:4");
-  assert_null(_group_point(grp, FLEXI_GID(1)));
+  assert_null(dt_masks_gui_group_point(grp, FLEXI_GID(1)));
 }
 
 // the bottom group's elements join the group above when it is deleted: that
@@ -322,7 +322,7 @@ static void test_deleting_a_group_takes_its_elements(void **state)
 static void test_deleting_the_bottom_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  g_list_free(_model_delete_group(grp, FLEXI_GID(0)));
+  g_list_free(dt_masks_model_delete_group(grp, FLEXI_GID(0)));
   assert_layout("i:2");
 }
 

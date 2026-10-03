@@ -307,11 +307,12 @@ static void _refine_with_detail_mask(dt_iop_module_t *self,
 // refinement bypass: pipe-local snapshot of a GUI-only preview toggle.
 //
 // The live set lives in the module's blend_data and is mutated on the GTK
-// thread; reading it from a pixelpipe worker would race both the inserts and
-// the teardown at darkroom exit. It is copied into the piece by
-// dt_masks_refine_bypass_commit() below, which commit_params calls on the
-// owning thread. Never serialized: a module without a GUI snapshots as empty,
-// so export/CLI/thumbnail renders are unaffected.
+// thread, while the renderer runs on pixelpipe workers. It is copied into the
+// piece by dt_masks_refine_bypass_commit() below, from commit_params, which
+// runs on a pipe worker too (dev-doc/GUI_Threading.md): the copy reads the set
+// under bd->lock, which the GTK side holds to change it. Never serialized: a
+// module without a GUI snapshots as empty, so export/CLI/thumbnail renders are
+// unaffected.
 
 // binary search over the sorted key array
 gboolean dt_masks_refine_bypass_lookup(const dt_dev_refine_bypass_t *const bypass,
@@ -382,8 +383,8 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
 {
   dt_masks_refine_bypass_cleanup(&piece->refine_bypass);
 
-  const dt_iop_gui_blend_data_t *const bd = module ? module->blend_data : NULL;
-  if(!bd || !bd->masks_refine_bypassed) return;
+  dt_iop_gui_blend_data_t *const bd = module ? module->blend_data : NULL;
+  if(!bd) return;
 
   // Read the params being committed (already memcpy'd into the piece by our
   // caller), NEVER module->blend_params. dt_dev_pixelpipe_synch_all commits
@@ -395,22 +396,27 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   // toggle do nothing at all.
   const dt_develop_blend_params_t *const bp = piece->blendop_data;
   if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return;
-  if(!g_hash_table_size(bd->masks_refine_bypassed)) return;
 
-  GHashTable *const set = bd->masks_refine_bypassed;
-  // Query the keys this mask can use rather than copying the whole table: it
-  // holds entries for what the user bypassed in any mask. A group's key is
-  // its marker's id, which the walk below meets like a member's.
-  dt_masks_form_t *const grp =
-    dt_masks_get_from_id(darktable.develop, bp->mask_id);
   GArray *found = g_array_new(FALSE, FALSE, sizeof(guint32));
+  guint table_size = 0;
 
-  if(g_hash_table_lookup(set, GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL)))
+  dt_pthread_mutex_lock(&bd->lock);
+  GHashTable *const set = bd->masks_refine_bypassed;
+  if(set && (table_size = g_hash_table_size(set)))
   {
-    const guint32 gk = DT_MASKS_REFINE_KEY_GLOBAL;
-    g_array_append_val(found, gk);
+    // Query the keys this mask can use rather than copying the whole table: it
+    // holds entries for what the user bypassed in any mask. A group's key is
+    // its marker's id, which the walk below meets like a member's.
+    dt_masks_form_t *const grp =
+      dt_masks_get_from_id(darktable.develop, bp->mask_id);
+    if(g_hash_table_lookup(set, GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL)))
+    {
+      const guint32 gk = DT_MASKS_REFINE_KEY_GLOBAL;
+      g_array_append_val(found, gk);
+    }
+    if(grp && (grp->type & DT_MASKS_GROUP)) _refine_bypass_collect(set, grp, found, 0);
   }
-  if(grp && (grp->type & DT_MASKS_GROUP)) _refine_bypass_collect(set, grp, found, 0);
+  dt_pthread_mutex_unlock(&bd->lock);
 
   const int n = found->len;
   guint32 *keys = (guint32 *)g_array_free(found, n == 0);
@@ -421,9 +427,9 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   piece->refine_bypass.nkeys = n;
 
   dt_print(DT_DEBUG_MASKS,
-           "[masks] refine bypass '%s': %d of %d table entries apply to this"
+           "[masks] refine bypass '%s': %d of %u table entries apply to this"
            " mask (mask_id=%d)",
-           module->op, n, g_hash_table_size(set), bp->mask_id);
+           module->op, n, table_size, bp->mask_id);
 }
 
 // flexi-only, transient: the GUI can temporarily bypass the whole-mask (global)
@@ -463,8 +469,10 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
     if(!f) continue;
     // a parametric form evaluates blendif against the guide image
     if(f->type & DT_MASKS_PARAMETRIC) return TRUE;
-    // recurse into nested groups
-    if((f->type & DT_MASKS_GROUP) && _group_needs_host_guides(f, piece, depth + 1))
+    // recurse into nested groups and AI objects, which fold their members
+    // through the same renderer (see _group_raster_sources_hash below)
+    if((f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
+       && _group_needs_host_guides(f, piece, depth + 1))
       return TRUE;
   }
   return FALSE;
@@ -1717,24 +1725,25 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
         const size_t out_sz = (size_t)roi_out->width * roi_out->height * ch;
         guide_in = dt_alloc_align_float(in_sz);
         guide_out = dt_alloc_align_float(out_sz);
-        cl_int cerr = CL_SUCCESS;
-        if(guide_in)
-          cerr = dt_opencl_copy_image_to_host(devid, guide_in, dev_in,
-                                              roi_in->width, roi_in->height,
-                                              ch * sizeof(float));
-        if(guide_out && cerr == CL_SUCCESS)
-          cerr = dt_opencl_copy_image_to_host(devid, guide_out, dev_out,
-                                              roi_out->width, roi_out->height,
-                                              ch * sizeof(float));
-        if(cerr != CL_SUCCESS)
+        err = guide_in && guide_out ? CL_SUCCESS : DT_OPENCL_SYSMEM_ALLOCATION;
+        if(err == CL_SUCCESS)
+          err = dt_opencl_copy_image_to_host(devid, guide_in, dev_in,
+                                             roi_in->width, roi_in->height,
+                                             ch * sizeof(float));
+        if(err == CL_SUCCESS)
+          err = dt_opencl_copy_image_to_host(devid, guide_out, dev_out,
+                                             roi_out->width, roi_out->height,
+                                             ch * sizeof(float));
+        if(err != CL_SUCCESS)
         {
-          // readback failed: fall back to no guides rather than a wrong mask
+          // without guides a parametric member renders fully opaque and
+          // per-shape feathering is skipped: let the CPU path render it instead
           dt_print(DT_DEBUG_OPENCL,
                    "[opencl_blendop] mask guide readback failed: %s",
-                   cl_errstr(cerr));
+                   cl_errstr(err));
           dt_free_align(guide_in);
           dt_free_align(guide_out);
-          guide_in = guide_out = NULL;
+          goto error;
         }
       }
       piece->blend_refine_guide_in = guide_in;

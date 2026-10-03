@@ -243,21 +243,6 @@ static void _zero_empty_base_members(GList *forms,
   }
 }
 
-/* Classic applies each member's own operator to the accumulator in turn; a
- * flexi group folds its members in order with one operator. Migration makes a
- * group of each run of members sharing an operator, the groups before it
- * becoming its first member (dt_masks_group_mark_classic_runs in masks.c), so
- * every member is still applied once, by the same combiner (group.c
- * _combine_masks_*), in the same order.
- *
- * A member can itself be a group, and rendering one recurses back into
- * dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
- * now flexi, so the nested group is folded by the flexi fold too and needs
- * the same conversion.
- *
- * The repair runs first, since it decides which members are live, and the
- * no-op duplicate prune next, reading that same live list. Idempotent: a
- * marked list is left as it is, which is what lets this run on every load. */
 /* A member that composites as `max(dest, mask)`: union is
  * `dest = MAX(dest, opacity * mask)`, and the first visible member adds its
  * shape to the empty accumulator whatever its operator, since
@@ -430,6 +415,21 @@ static void _mark_classic_runs(const dt_develop_t *dev, GList **forms, dt_masks_
   g_hash_table_destroy(roots);
 }
 
+/* Classic applies each member's own operator to the accumulator in turn; a
+ * flexi group folds its members in order with one operator. Migration makes a
+ * group of each run of members sharing an operator, the groups before it
+ * becoming its first member (dt_masks_group_mark_classic_runs in masks.c), so
+ * every member is still applied once, by the same combiner (group.c
+ * _combine_masks_*), in the same order.
+ *
+ * A member can itself be a group, and rendering one recurses back into
+ * dt_masks_group_get_mask_roi() -- which reads the *module's* blend_params,
+ * now flexi, so the nested group is folded by the flexi fold too and needs
+ * the same conversion.
+ *
+ * The repair runs first, since it decides which members are live, and the
+ * no-op duplicate prune next, reading that same live list. Idempotent: a
+ * marked list is left as it is, which is what lets this run on every load. */
 static void _normalize_group(const dt_develop_t *dev, GList **forms, dt_masks_form_t *grp)
 {
   _repair_base_case_overwrite(*forms, grp, 0);
@@ -983,7 +983,7 @@ static void _migrate_raster(dt_iop_module_t *module,
   // classic applies raster_mask_invert inline (mask[k] = (1-raster[k])*opacity,
   // see dt_develop_blend_process() in blend.c); the flexi group fold applies a
   // member's own DT_MASKS_STATE_INVERSE bit with the identical formula (see
-  // _combine_masks_union() in group.c), so this is an exact equivalent, not
+  // dt_masks_combine_union() in group.c), so this is an exact equivalent, not
   // an approximation.
   //
   // Except when the source is empty, i.e. the source module was removed at some
@@ -1195,7 +1195,7 @@ static void _migrate_drawn_and_parametric(dt_iop_module_t *module,
   //
   //  - MASKS_POS moves onto the wrapper entry that re-references the drawn
   //    group (applied by the fold before the multiply, exactly matching
-  //    classic ordering, see _combine_masks_union() in group.c).
+  //    classic ordering, see dt_masks_combine_union() in group.c).
   //
   //  - INV has no per-member equivalent (it applies to the *whole* fold
   //    result, not to either operand alone) -- but dt_develop_blend_process()
@@ -1450,32 +1450,6 @@ void dt_masks_finish_flexi_migrations(dt_develop_t *dev)
   dev->pending_flexi_migrations = NULL;
 }
 
-/* Run-boundary normalization for classic drawn groups reused by a migration.
-
-   Must run AFTER dt_masks_read_masks_history(), which is the whole reason this
-   is separate from dt_masks_finish_flexi_migrations() (that one runs before it,
-   because it writes new forms the read then picks up). This one adjusts groups
-   that already exist in the database, so anything it does before the read is
-   discarded by it.
-
-   The markers are written back, onto the history item holding the current
-   forms snapshot, so that the caller's own _dev_write_history() persists them
-   (see _sync_forms_to_history below).
-
-   This used to write nothing back, on the grounds that the stored group should
-   keep the classic shape list exactly as authored: reversible, and a migration
-   that never rewrites a user's form data. That reasoning assumed the markers
-   could always be re-derived on the next load. They cannot. Migration runs only
-   while the stored blendop_version is old, and dt_dev_read_history_ext() writes
-   the upgraded blend_params back unconditionally -- so merely opening or
-   exporting an image persists mask_mode = FLEXI, and from the load after that
-   there is no migration, no queue, and no normalization ever again. The mask
-   then renders as if every marker were absent: consecutive same-operator
-   members that classic combined one at a time fold into a single run. #21905.
-
-   So the two halves have to move together. Persisting mask_mode without
-   persisting the normalization is the one state that is definitely wrong, and
-   it was the one we had. */
 /* Copy the normalized forms onto the history item that owns the current
    snapshot, so the write at the end of dt_dev_read_history_ext() persists them.
 
@@ -1510,32 +1484,6 @@ static void _sync_forms_to_history(dt_develop_t *dev)
   owner->forms = dt_masks_dup_forms_deep(dev->forms, NULL);
 }
 
-/* Normalize the group a stored history item renders through, inside that
-   item's own forms snapshot.
-
-   Every history item is a full cumulative copy of dev->forms as it stood at
-   that step, so an item that carries masks carries its own tree, and the group
-   its blend_params names is in it.
-
-   This has to happen because the *other* half of the migration already did.
-   dt_dev_read_history_ext() runs dt_develop_blend_legacy_params_ext() inside
-   its per-row loop (develop.c), so EVERY item whose stored blendop_version was
-   old comes back with mask_mode = FLEXI, and the write at the end stores all
-   of them that way. Normalizing only the newest left every earlier item as
-   flexi params over an unnormalized tree -- which is exactly the state #21905
-   describes, preserved at that history position.
-
-   And it is reachable without any editing: dt_dev_pop_history_items_ext()
-   takes the last forms snapshot at or below the position being restored
-   (develop.c) and installs it with dt_masks_replace_current_forms(), so
-   dragging the history slider back past the newest mask edit renders the older
-   tree. Two thirds of harvested edits carry a marker of some kind, so this is
-   not a corner.
-
-   Rewriting an older snapshot is not inventing data: the algorithm is the one
-   migration would have applied to that state had it been the current one, and
-   its params have already been rewritten to say FLEXI. Leaving it is the
-   half-migrated state we know to be wrong. */
 /* The params a module renders with at history position `limit`: its last
    item below it. NULL when it has none there, and it then renders its defaults */
 static dt_develop_blend_params_t *_params_at(GList *history,
@@ -1645,6 +1593,32 @@ static void _move_history_polarity(dt_develop_t *dev)
   g_free(items);
 }
 
+/* Normalize the group a stored history item renders through, inside that
+   item's own forms snapshot.
+
+   Every history item is a full cumulative copy of dev->forms as it stood at
+   that step, so an item that carries masks carries its own tree, and the group
+   its blend_params names is in it.
+
+   This has to happen because the *other* half of the migration already did.
+   dt_dev_read_history_ext() runs dt_develop_blend_legacy_params_ext() inside
+   its per-row loop (develop.c), so EVERY item whose stored blendop_version was
+   old comes back with mask_mode = FLEXI, and the write at the end stores all
+   of them that way. Normalizing only the newest left every earlier item as
+   flexi params over an unnormalized tree -- which is exactly the state #21905
+   describes, preserved at that history position.
+
+   And it is reachable without any editing: dt_dev_pop_history_items_ext()
+   takes the last forms snapshot at or below the position being restored
+   (develop.c) and installs it with dt_masks_replace_current_forms(), so
+   dragging the history slider back past the newest mask edit renders the older
+   tree. Two thirds of harvested edits carry a marker of some kind, so this is
+   not a corner.
+
+   Rewriting an older snapshot is not inventing data: the algorithm is the one
+   migration would have applied to that state had it been the current one, and
+   its params have already been rewritten to say FLEXI. Leaving it is the
+   half-migrated state we know to be wrong. */
 static void _normalize_history_item(const dt_develop_t *dev, dt_dev_history_item_t *h)
 {
   if(!h->forms || !h->blend_params) return;
@@ -1657,6 +1631,32 @@ static void _normalize_history_item(const dt_develop_t *dev, dt_dev_history_item
   _normalize_group(dev, &h->forms, grp);
 }
 
+/* Run-boundary normalization for classic drawn groups reused by a migration.
+
+   Must run AFTER dt_masks_read_masks_history(), which is the whole reason this
+   is separate from dt_masks_finish_flexi_migrations() (that one runs before it,
+   because it writes new forms the read then picks up). This one adjusts groups
+   that already exist in the database, so anything it does before the read is
+   discarded by it.
+
+   The markers are written back, onto the history item holding the current
+   forms snapshot, so that the caller's own _dev_write_history() persists them
+   (see _sync_forms_to_history above).
+
+   This used to write nothing back, on the grounds that the stored group should
+   keep the classic shape list exactly as authored: reversible, and a migration
+   that never rewrites a user's form data. That reasoning assumed the markers
+   could always be re-derived on the next load. They cannot. Migration runs only
+   while the stored blendop_version is old, and dt_dev_read_history_ext() writes
+   the upgraded blend_params back unconditionally -- so merely opening or
+   exporting an image persists mask_mode = FLEXI, and from the load after that
+   there is no migration, no queue, and no normalization ever again. The mask
+   then renders as if every marker were absent: consecutive same-operator
+   members that classic combined one at a time fold into a single run. #21905.
+
+   So the two halves have to move together. Persisting mask_mode without
+   persisting the normalization is the one state that is definitely wrong, and
+   it was the one we had. */
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev)
 {
   // every AI object renders as the group it is, a difference group, whatever

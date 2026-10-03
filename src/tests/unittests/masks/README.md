@@ -28,7 +28,7 @@ The panel looks like it needs a GUI harness to test. It mostly does not.
 Its group model is a plain structure — a `dt_masks_form_t` of type
 `DT_MASKS_GROUP` whose `points` list holds one `dt_masks_point_group_t` per
 element, bottom-up, with each group opened by a marker record that holds the
-group's own settings (`DT_MASKS_STATE_GROUP_MARKER`, see `_starts_group`). Every gesture the panel offers is ultimately a mutation of
+group's own settings (`DT_MASKS_STATE_GROUP_MARKER`, see `dt_masks_gui_starts_group`). Every gesture the panel offers is ultimately a mutation of
 that list. The functions that perform those mutations take a mask group and
 plain values; the only global they touch is `darktable.develop`, and only to
 resolve a formid to a form.
@@ -51,7 +51,7 @@ A gesture handler is split in two:
   widget rebuild;
 - **the model function** performs the gesture, and is what the tests call.
 
-`_masks_row_drag_received` and `_model_drop_element_onto_element` in
+`_masks_row_drag_received` and `dt_masks_model_drop_element_onto_element` in
 `blend_gui.c` are the worked example. The handler owns nothing but decode and
 commit, so the tests and the real panel run *identical* logic — there is no
 second implementation to drift.
@@ -73,11 +73,11 @@ e`x`clusion, `s`um.
 
 ```c
 dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
 assert_layout("u:2 | i:3,1,4");
 ```
 
-`flexi_layout()` serialises through `_starts_group`, the same predicate the
+`flexi_layout()` serialises through `dt_masks_gui_starts_group`, the same predicate the
 panel and the renderer use — so a layout assertion tests what the user will see,
 not what the flags happen to say.
 
@@ -234,7 +234,7 @@ widget tree and real event delivery:
   all elements" must flip the shape's handle icon *and* the parametric row's
   slider markers, exactly as inverting either one on its own does.
 - **the expander option** (hamburger → options). Only the rules behind it are
-  covered here (`_model_row_is_expandable`, the anchor pair, and the conf
+  covered here (`dt_masks_model_row_is_expandable`, the anchor pair, and the conf
   default); which widget ends up where needs a real tree. Check, with a group
   holding a drawn shape, a parametric element and a raster mask:
   - *auto-expand selected* on — clicking each of the three in turn expands it
@@ -303,11 +303,11 @@ caught on 264 of the 288 generated edits and only 22 of 118 real ones.
 3. **Prove the test can fail** — break the code deliberately and watch it go
    red before committing it. A test that has never failed has not been shown to
    test anything. Two mutations worth knowing:
-   - in `_model_drop_element_onto_group`, inserting after the group's marker
+   - in `dt_masks_model_drop_element_onto_group`, inserting after the group's marker
      instead of after `_group_last_node` sends an element dropped on a group
      header to the bottom of that group instead of the top, and fails three
      of the header-drop tests;
-   - removing the solo-edit clear in `_model_toggle_solo_form` breaks the
+   - removing the solo-edit clear in `dt_masks_model_toggle_solo_form` breaks the
      solo / solo-edit mutual exclusivity.
 4. Check the invariant after **every** step of a sequence, not just at the end.
    The isolation-mode test originally checked only after all three toggles,

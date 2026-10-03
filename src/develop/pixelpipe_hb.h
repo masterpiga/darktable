@@ -59,8 +59,9 @@ void dt_dev_pixelpipe_clear_mask_cache(struct dt_dev_pixelpipe_t *pipe,
  *
  *  The live state is a GHashTable owned by the module's GUI
  *  (dt_iop_gui_blend_data_t.masks_refine_bypassed) and mutated on the GTK
- *  thread. Pixelpipe worker threads must not touch it, so it is copied here
- *  by dt_masks_refine_bypass_commit() during commit_params. Keys are built
+ *  thread. The renderer must not touch it, so it is copied here, under the
+ *  blend data's lock, by dt_masks_refine_bypass_commit() during
+ *  commit_params. Keys are built
  *  with dt_masks_refine_key_*() (develop/blend.h); the array is sorted so
  *  lookups can bisect and the hash is order-independent. */
 typedef struct dt_dev_refine_bypass_t

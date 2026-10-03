@@ -73,7 +73,7 @@ static void test_adjacent_same_op_groups_stay_separate(void **state)
   flexi_build("u:1,2 | u:3");
   assert_layout("u:1,2 | u:3");
 
-  GList *heads = _group_partition_heads(flexi_group());
+  GList *heads = dt_masks_gui_group_partition_heads(flexi_group());
   assert_int_equal(g_list_length(heads), 2);
   assert_int_equal(GPOINTER_TO_INT(heads->data), FLEXI_GID(0));
   assert_int_equal(GPOINTER_TO_INT(heads->next->data), FLEXI_GID(1));
@@ -90,27 +90,27 @@ static void test_cid_of_form_is_the_groups_marker(void **state)
   flexi_build("u:1,2 | i:3,4 | [d]");
   dt_masks_form_t *grp = flexi_group();
 
-  assert_int_equal(_group_cid_of_form(grp, 1), FLEXI_GID(0));
-  assert_int_equal(_group_cid_of_form(grp, 2), FLEXI_GID(0));
-  assert_int_equal(_group_cid_of_form(grp, 3), FLEXI_GID(1));
-  assert_int_equal(_group_cid_of_form(grp, 4), FLEXI_GID(1));
-  assert_int_equal(_group_cid_of_form(grp, FLEXI_GID(2)), FLEXI_GID(2));
-  assert_int_equal(_group_cid_of_form(grp, 99), INVALID_MASKID);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 1), FLEXI_GID(0));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2), FLEXI_GID(0));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 3), FLEXI_GID(1));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 4), FLEXI_GID(1));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, FLEXI_GID(2)), FLEXI_GID(2));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 99), INVALID_MASKID);
 }
 
 static void test_selected_group_formids(void **state)
 {
   flexi_build("u:1,2 | i:3,4,5");
-  GList *run = _selected_group_formids(flexi_group(), 4);
+  GList *run = dt_masks_gui_selected_group_formids(flexi_group(), 4);
   assert_int_equal(g_list_length(run), 3);
   g_list_free(run);
 
-  run = _selected_group_formids(flexi_group(), 1);
+  run = dt_masks_gui_selected_group_formids(flexi_group(), 1);
   assert_int_equal(g_list_length(run), 2);
   g_list_free(run);
 
   // by the group's own id too, and the marker is no member
-  run = _selected_group_formids(flexi_group(), FLEXI_GID(1));
+  run = dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1));
   assert_int_equal(g_list_length(run), 3);
   assert_int_equal(GPOINTER_TO_INT(run->data), 5);
   g_list_free(run);
@@ -119,7 +119,7 @@ static void test_selected_group_formids(void **state)
 static void test_empty_group_has_no_members(void **state)
 {
   flexi_build("u:1 | [i]");
-  assert_null(_selected_group_formids(flexi_group(), FLEXI_GID(1)));
+  assert_null(dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1)));
 }
 
 // ---------------------------------------------------------------------------
@@ -131,7 +131,7 @@ static void test_drop_element_into_other_group(void **state)
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
 
   // drop 1 onto 3, landing above it
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE));
   assert_layout("u:2 | i:3,1,4");
 }
 
@@ -139,7 +139,7 @@ static void test_drop_element_below_target(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
 
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 3, FALSE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, FALSE));
   assert_layout("u:2 | i:1,3,4");
 }
 
@@ -148,14 +148,14 @@ static void test_drop_adopts_target_operator(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | d:3");
 
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   assert_int_equal(flexi_group_op_of(1), DT_MASKS_STATE_DIFFERENCE);
   assert_layout("u:2 | d:3,1");
 }
 
 static void _assert_group_count(dt_masks_form_t *grp, const int expect)
 {
-  GList *heads = _group_partition_heads(grp);
+  GList *heads = dt_masks_gui_group_partition_heads(grp);
   const int n = g_list_length(heads);
   g_list_free(heads);
   if(n != expect)
@@ -179,13 +179,13 @@ static void _assert_group_count(dt_masks_form_t *grp, const int expect)
 static void test_drop_between_groups_never_creates_a_third(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   _assert_group_count(grp, 2);
   assert_layout("u:2 | i:3,1,4");
   flexi_teardown();
 
   grp = flexi_build("u:1,2 | i:3,4");
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 3, FALSE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, FALSE);
   _assert_group_count(grp, 2);
   assert_layout("u:2 | i:1,3,4");
 }
@@ -195,10 +195,10 @@ static void test_drop_between_same_op_groups_keeps_both(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | u:3,4");
 
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   assert_layout("u:2 | u:3,1,4");
 
-  GList *heads = _group_partition_heads(grp);
+  GList *heads = dt_masks_gui_group_partition_heads(grp);
   assert_int_equal(g_list_length(heads), 2);
   g_list_free(heads);
 }
@@ -209,10 +209,10 @@ static void test_drop_onto_bottom_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
 
-  _model_drop_element_onto_element(&flexi_module, grp, 3, 1, FALSE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 3, 1, FALSE);
   assert_layout("u:3,1,2 | i:4");
 
-  GList *heads = _group_partition_heads(grp);
+  GList *heads = dt_masks_gui_group_partition_heads(grp);
   assert_int_equal(g_list_length(heads), 2);
   g_list_free(heads);
 }
@@ -222,7 +222,7 @@ static void test_drop_onto_bottom_group(void **state)
 static void test_drop_emptying_group_keeps_it(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3");
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 2, TRUE);
   assert_layout("[u] | i:2,1,3");
 }
 
@@ -242,7 +242,7 @@ static void test_prune_drops_lost_members_and_keeps_their_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
   _lose_form(3);
-  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 1);
   assert_layout("u:1,2 | [i]");
 }
 
@@ -259,7 +259,7 @@ static void test_prune_drops_every_reference_to_a_lost_form(void **state)
     grp->points = g_list_append(grp->points, pt);
   }
   _lose_form(2);
-  assert_int_equal(_model_prune_dangling_members(grp), 3);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 3);
   assert_layout("u:1 | [i]");
 }
 
@@ -268,14 +268,14 @@ static void test_prune_keeps_the_rest_of_a_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | i:2,3 | d:4");
   _lose_form(2);
-  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 1);
   assert_layout("u:1 | i:3 | d:4");
 }
 
 static void test_prune_without_lost_members_changes_nothing(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  assert_int_equal(_model_prune_dangling_members(grp), 0);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 0);
   assert_layout("u:1,2 | i:3");
 }
 
@@ -289,9 +289,9 @@ static void test_lost_members_leave_their_groups(void **state)
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
   _lose_form(1);
   _lose_form(2);
-  _model_prune_dangling_members(grp);
+  dt_masks_model_prune_dangling_members(grp);
   assert_layout("[u] | [i]");
-  assert_false(_model_ensure_a_group(grp));
+  assert_false(dt_masks_model_ensure_a_group(grp));
 }
 
 // a list with no points at all gets the foundation group
@@ -300,10 +300,10 @@ static void test_ensure_a_group_on_an_empty_list(void **state)
   dt_masks_form_t *grp = flexi_build("u:1");
   g_list_free_full(grp->points, free);
   grp->points = NULL;
-  assert_true(_model_ensure_a_group(grp));
+  assert_true(dt_masks_model_ensure_a_group(grp));
   assert_layout("[u]");
-  assert_false(_model_ensure_a_group(grp));
-  assert_false(_model_ensure_a_group(NULL));
+  assert_false(dt_masks_model_ensure_a_group(grp));
+  assert_false(dt_masks_model_ensure_a_group(NULL));
 }
 
 // a list stored before markers gets one union marker at the bottom: the one
@@ -311,9 +311,9 @@ static void test_ensure_a_group_on_an_empty_list(void **state)
 static void test_ensure_a_group_gives_an_old_list_one_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1,2 | i:3 | i:4");
-  assert_true(_model_ensure_a_group(grp));
+  assert_true(dt_masks_model_ensure_a_group(grp));
   assert_layout("u:1,2,3,4");
-  assert_false(_model_ensure_a_group(grp));
+  assert_false(dt_masks_model_ensure_a_group(grp));
 }
 
 // the classic migration folds a classic list into one group per run of
@@ -357,7 +357,7 @@ static void test_classic_marking_nests_at_each_operator_change(void **state)
 static void test_a_faded_member_keeps_its_opacity(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | d:2,3");
-  _group_point(grp, 3)->opacity = 0.5f;
+  dt_masks_gui_group_point(grp, 3)->opacity = 0.5f;
   assert_true(dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL));
   assert_tree(grp, "d{1,2,3@0.5}");
 }
@@ -367,7 +367,7 @@ static void test_a_faded_member_keeps_its_opacity(void **state)
 static void test_marking_leaves_members_plain(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2,3");
-  dt_masks_point_group_t *pt = _group_point(grp, 2);
+  dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 2);
   pt->state |= DT_MASKS_STATE_SCREEN | DT_MASKS_STATE_INVERSE;
   pt->opacity = 0.7f;
   pt->group_opacity = 0.5f;
@@ -377,7 +377,7 @@ static void test_marking_leaves_members_plain(void **state)
   dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
   assert_tree(grp, "i{1,2~@0.7,3}");
 
-  const dt_masks_point_group_t *member = _group_point(grp, 2);
+  const dt_masks_point_group_t *member = dt_masks_gui_group_point(grp, 2);
   assert_int_equal(member->state & DT_MASKS_STATE_OP, DT_MASKS_STATE_UNION);
   assert_int_equal(member->state & DT_MASKS_STATE_WITHIN, 0);
   assert_float_equal(member->group_opacity, 1.0f, 1e-6f);
@@ -391,19 +391,19 @@ static void test_marking_the_same_run_twice_gives_the_same_id(void **state)
 {
   dt_masks_form_t *grp = flexi_build_classic("u:1 | i:2");
   dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
-  const dt_mask_id_t first = _group_cid_of_form(grp, 2);
+  const dt_mask_id_t first = dt_masks_gui_group_cid_of_form(grp, 2);
   flexi_teardown();
 
   grp = flexi_build_classic("u:1 | i:2");
   dt_masks_group_mark_classic_runs(&flexi_dev.forms, grp, NULL);
-  assert_int_equal(_group_cid_of_form(grp, 2), first);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2), first);
 }
 
 static void test_drop_onto_self_is_rejected(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
 
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 2, 2, TRUE));
+  assert_false(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 2, 2, TRUE));
   assert_layout("u:1,2 | i:3");
 }
 
@@ -411,7 +411,7 @@ static void test_drop_of_unknown_element_is_rejected(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2");
 
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 77, 1, TRUE));
+  assert_false(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 77, 1, TRUE));
   assert_layout("u:1,2");
 }
 
@@ -425,9 +425,9 @@ static void test_drop_keeps_element_selected_in_new_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
 
-  _model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
+  dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   assert_int_equal(flexi_bd.panel_selected_formid, 1);
-  assert_int_equal(flexi_bd.panel_selected_group_cid, _group_cid_of_form(grp, 1));
+  assert_int_equal(flexi_bd.panel_selected_group_cid, dt_masks_gui_group_cid_of_form(grp, 1));
   assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
 
@@ -448,12 +448,12 @@ static void _apply(const dt_masks_panel_sel_t s)
 
 static void _click_element(const dt_mask_id_t id)
 {
-  _apply(_model_click_element(&flexi_bd, flexi_group(), id));
+  _apply(dt_masks_model_click_element(&flexi_bd, flexi_group(), id));
 }
 
 static void _click_group(const dt_mask_id_t cid)
 {
-  _apply(_model_click_group(&flexi_bd, cid));
+  _apply(dt_masks_model_click_group(&flexi_bd, cid));
 }
 
 static void test_click_group_selects_it(void **state)
@@ -557,7 +557,7 @@ static void test_click_other_group_switches_directly(void **state)
 static dt_masks_chevron_click_t _chevron(const dt_mask_id_t id, const gboolean expanded)
 {
   const dt_masks_chevron_click_t c =
-    _model_element_chevron_click(&flexi_bd, id, expanded, TRUE);
+    dt_masks_model_element_chevron_click(&flexi_bd, id, expanded, TRUE);
   flexi_bd.masks_last_expanded_elem = c.last_expanded;
   return c;
 }
@@ -602,7 +602,7 @@ static void test_chevron_without_auto_expand_moves_nothing(void **state)
   flexi_build("u:1,2,3");
   flexi_bd.masks_last_expanded_elem = 2;
   const dt_masks_chevron_click_t c =
-    _model_element_chevron_click(&flexi_bd, 1, TRUE, FALSE);
+    dt_masks_model_element_chevron_click(&flexi_bd, 1, TRUE, FALSE);
   assert_int_equal(c.collapse, INVALID_MASKID);
   assert_int_equal(c.last_expanded, 2);
 }
@@ -613,7 +613,7 @@ static void test_chevron_without_auto_expand_moves_nothing(void **state)
 
 static gboolean _hidden(const dt_mask_id_t fid)
 {
-  return (_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
+  return (dt_masks_gui_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
 }
 
 static void test_isolate_state_hides_everything_else(void **state)
@@ -722,7 +722,7 @@ static void _aim_at(const dt_mask_id_t top)
 
 static int _users(const dt_mask_id_t fid)
 {
-  GList *users = _model_form_users(fid);
+  GList *users = dt_masks_model_form_users(fid);
   const int n = g_list_length(users);
   g_list_free(users);
   return n;
@@ -751,8 +751,8 @@ static void test_link_lands_in_target_group_in_order(void **state)
   _other_module(other, 2);
   _aim_at(3);
 
-  GList *fids = _model_module_shapes(&_other, INVALID_MASKID);
-  GList *added = _model_import_forms(&flexi_module, &_other, fids, FALSE);
+  GList *fids = dt_masks_model_module_shapes(&_other, INVALID_MASKID);
+  GList *added = dt_masks_model_import_forms(&flexi_module, &_other, fids, FALSE);
   assert_int_equal(g_list_length(added), 2);
   assert_layout("u:1,2 | i:3,11,12");
   // one form in two masks: that is the link
@@ -771,10 +771,10 @@ static void test_link_skips_what_the_mask_already_uses(void **state)
   _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
-  g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
+  g_list_free(dt_masks_model_import_forms(&flexi_module, &_other, fids, FALSE));
   _aim_at(11);
-  assert_null(_model_import_forms(&flexi_module, &_other, fids, FALSE));
-  assert_null(_model_import_forms(&flexi_module, &_other, fids, TRUE));
+  assert_null(dt_masks_model_import_forms(&flexi_module, &_other, fids, FALSE));
+  assert_null(dt_masks_model_import_forms(&flexi_module, &_other, fids, TRUE));
   assert_layout("u:1,2 | i:3,11");
   g_list_free(fids);
 }
@@ -786,16 +786,16 @@ static void test_link_keeps_the_source_look(void **state)
   flexi_build("u:1 | i:3");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  dt_masks_point_group_t *spt = _group_point(_other_grp, 11);
+  dt_masks_point_group_t *spt = dt_masks_gui_group_point(_other_grp, 11);
   spt->opacity = 0.4f;
   spt->state |= DT_MASKS_STATE_INVERSE;
   _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
-  g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
+  g_list_free(dt_masks_model_import_forms(&flexi_module, &_other, fids, FALSE));
   g_list_free(fids);
 
-  const dt_masks_point_group_t *pt = _group_point(flexi_group(), 11);
+  const dt_masks_point_group_t *pt = dt_masks_gui_group_point(flexi_group(), 11);
   assert_non_null(pt);
   assert_float_equal(pt->opacity, 0.4f, 1e-6f);
   assert_true(pt->state & DT_MASKS_STATE_INVERSE);
@@ -811,15 +811,15 @@ static void test_copy_is_a_new_independent_form(void **state)
   _aim_at(3);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
-  GList *added = _model_import_forms(&flexi_module, &_other, fids, TRUE);
+  GList *added = dt_masks_model_import_forms(&flexi_module, &_other, fids, TRUE);
   g_list_free(fids);
   assert_int_equal(g_list_length(added), 1);
   const dt_mask_id_t nid = GPOINTER_TO_INT(added->data);
   g_list_free(added);
 
   assert_int_not_equal(nid, 11);
-  assert_null(_group_point(flexi_group(), 11));
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
+  assert_null(dt_masks_gui_group_point(flexi_group(), 11));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
   assert_int_equal(_users(11), 1);
   assert_int_equal(_users(nid), 1);
   assert_string_equal(dt_masks_get_from_id(&flexi_dev, nid)->name, "form #11");
@@ -846,7 +846,7 @@ static void test_copy_of_object_copies_its_paths(void **state)
   _aim_at(1);
 
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
-  GList *added = _model_import_forms(&flexi_module, &_other, fids, TRUE);
+  GList *added = dt_masks_model_import_forms(&flexi_module, &_other, fids, TRUE);
   g_list_free(fids);
   assert_int_equal(g_list_length(added), 1);
   const dt_masks_form_t *copy = dt_masks_get_from_id(&flexi_dev, GPOINTER_TO_INT(added->data));
@@ -880,13 +880,13 @@ static void test_module_shapes_follow_groups_and_skip_other_kinds(void **state)
   second_marker->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_INTERSECTION;
   _other_grp->points = g_list_insert(_other_grp->points, second_marker, 3);
 
-  GList *all = _model_module_shapes(&_other, INVALID_MASKID);
+  GList *all = dt_masks_model_module_shapes(&_other, INVALID_MASKID);
   assert_int_equal(g_list_length(all), 2);
   assert_int_equal(GPOINTER_TO_INT(all->data), 11);
   assert_int_equal(GPOINTER_TO_INT(all->next->data), 13);
   g_list_free(all);
 
-  GList *second = _model_module_shapes(&_other, OTHER_GROUP_ID + 2);
+  GList *second = dt_masks_model_module_shapes(&_other, OTHER_GROUP_ID + 2);
   assert_int_equal(g_list_length(second), 1);
   assert_int_equal(GPOINTER_TO_INT(second->data), 13);
   g_list_free(second);
@@ -900,16 +900,16 @@ static void test_unlink_gives_this_module_its_own_copy(void **state)
   _other_module(other, 1);
   _aim_at(3);
   GList *fids = g_list_prepend(NULL, GINT_TO_POINTER(11));
-  g_list_free(_model_import_forms(&flexi_module, &_other, fids, FALSE));
+  g_list_free(dt_masks_model_import_forms(&flexi_module, &_other, fids, FALSE));
   g_list_free(fids);
   flexi_bd.panel_selected_formid = 11;
 
-  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 11, NULL);
+  const dt_mask_id_t nid = dt_masks_model_unlink_form_point(&flexi_module, 11, NULL);
   assert_true(dt_is_valid_maskid(nid));
   assert_int_not_equal(nid, 11);
-  assert_null(_group_point(flexi_group(), 11));
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
-  assert_non_null(_group_point(_other_grp, 11));
+  assert_null(dt_masks_gui_group_point(flexi_group(), 11));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
+  assert_non_null(dt_masks_gui_group_point(_other_grp, 11));
   assert_int_equal(_users(11), 1);
   assert_int_equal(flexi_bd.panel_selected_formid, nid);
 }
@@ -925,8 +925,8 @@ static void test_unlink_leaves_the_group_alone(void **state)
   flexi_set_ordinal(FLEXI_GID(1), 2);
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
 
-  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 11, NULL);
-  assert_int_equal(_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
+  const dt_mask_id_t nid = dt_masks_model_unlink_form_point(&flexi_module, 11, NULL);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(flexi_group(), nid), FLEXI_GID(1));
   assert_int_equal(flexi_get_ordinal(FLEXI_GID(1)), 2);
   assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
 }
@@ -949,12 +949,12 @@ static void test_unlink_one_reference_leaves_the_others_linked(void **state)
   flexi_group()->points = g_list_append(flexi_group()->points, second);
   flexi_bd.panel_selected_formid = 1;
 
-  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 1, second);
+  const dt_mask_id_t nid = dt_masks_model_unlink_form_point(&flexi_module, 1, second);
   assert_true(dt_is_valid_maskid(nid));
   assert_int_not_equal(nid, 1);
   // the picked reference now carries the copy, the other still the original
   assert_int_equal(second->formid, nid);
-  assert_non_null(_group_point(flexi_group(), 1));
+  assert_non_null(dt_masks_gui_group_point(flexi_group(), 1));
   // the selection describes the row that kept the shape, so it stays there
   assert_int_equal(flexi_bd.panel_selected_formid, 1);
 }
@@ -969,9 +969,9 @@ static void test_unlink_the_last_reference_carries_the_selection(void **state)
   _other_module(other, 1);
   flexi_bd.panel_selected_formid = 1;
 
-  const dt_mask_id_t nid = _model_unlink_form_point(&flexi_module, 1, NULL);
+  const dt_mask_id_t nid = dt_masks_model_unlink_form_point(&flexi_module, 1, NULL);
   assert_true(dt_is_valid_maskid(nid));
-  assert_null(_group_point(flexi_group(), 1));
+  assert_null(dt_masks_gui_group_point(flexi_group(), 1));
   assert_int_equal(flexi_bd.panel_selected_formid, nid);
 }
 
@@ -984,11 +984,11 @@ static void test_link_shows_only_for_shared_elements_but_raster(void **state)
   _other_module(other, 2);
   dt_masks_get_from_id(&flexi_dev, 3)->type = DT_MASKS_RASTER;
 
-  assert_true(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 1)));
-  assert_false(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
+  assert_true(dt_masks_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 1)));
+  assert_false(dt_masks_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
   // a raster element reads another module's mask; nothing of it is editable
-  assert_false(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 3)));
-  assert_false(_model_form_is_linked(NULL));
+  assert_false(dt_masks_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 3)));
+  assert_false(dt_masks_model_form_is_linked(NULL));
 }
 
 // channels are only ever copied, so even one another module holds never
@@ -1000,7 +1000,7 @@ static void test_parametric_channel_never_shows_the_link(void **state)
   const dt_mask_id_t other[] = { 2 };
   _other_module(other, 1);
   dt_masks_get_from_id(&flexi_dev, 2)->type = DT_MASKS_PARAMETRIC;
-  assert_false(_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
+  assert_false(dt_masks_model_form_is_linked(dt_masks_get_from_id(&flexi_dev, 2)));
 }
 
 // another module linking or unlinking an element of this mask leaves the mask
@@ -1011,8 +1011,8 @@ static void test_list_signature_follows_links_made_elsewhere(void **state)
   flexi_build("u:1,2");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  const dt_hash_t alone = _masks_list_signature(&flexi_module);
-  assert_true(alone == _masks_list_signature(&flexi_module));
+  const dt_hash_t alone = dt_masks_gui_list_signature(&flexi_module);
+  assert_true(alone == dt_masks_gui_list_signature(&flexi_module));
 
   dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
   pt->formid = 2;
@@ -1020,11 +1020,11 @@ static void test_list_signature_follows_links_made_elsewhere(void **state)
   pt->state = DT_MASKS_STATE_UNION | DT_MASKS_STATE_USE;
   pt->opacity = 1.0f;
   _other_grp->points = g_list_append(_other_grp->points, pt);
-  assert_true(_masks_list_signature(&flexi_module) != alone);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) != alone);
 
   _other_grp->points = g_list_remove(_other_grp->points, pt);
   free(pt);
-  assert_true(_masks_list_signature(&flexi_module) == alone);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) == alone);
 }
 
 static void test_list_signature_ignores_links_among_others(void **state)
@@ -1033,14 +1033,14 @@ static void test_list_signature_ignores_links_among_others(void **state)
   flexi_build("u:1,2");
   const dt_mask_id_t other[] = { 11 };
   _other_module(other, 1);
-  const dt_hash_t before = _masks_list_signature(&flexi_module);
+  const dt_hash_t before = dt_masks_gui_list_signature(&flexi_module);
 
   _new_form(12, DT_MASKS_CIRCLE);
   dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
   pt->formid = 12;
   pt->parentid = OTHER_GROUP_ID;
   _other_grp->points = g_list_append(_other_grp->points, pt);
-  assert_true(_masks_list_signature(&flexi_module) == before);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) == before);
 }
 
 // a duplicated instance shares its shapes with the original but gets its own
@@ -1371,11 +1371,11 @@ static void test_canvas_path_selects_its_object_row(void **state)
   flexi_conf_init();
   flexi_build("u:1,5");
   _make_object(5, 21, 2);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 22), 5);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 5), 5);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 1), 1);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 77), 77);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, INVALID_MASKID), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 22), 5);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 5), 5);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 1), 1);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 77), 77);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, INVALID_MASKID), INVALID_MASKID);
 }
 
 // stepped into, the object shows as its group and its paths as its rows
@@ -1385,10 +1385,10 @@ static void test_canvas_path_of_entered_object_selects_its_own_row(void **state)
   flexi_build("u:1,5");
   _make_object(5, 21, 2);
   _with_gui(5);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 22), 22);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 5), 5);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 22), 22);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 5), 5);
   _with_gui(6);
-  assert_int_equal(_model_panel_formid_for(&flexi_module, 22), 5);
+  assert_int_equal(dt_masks_model_panel_formid_for(&flexi_module, 22), 5);
 }
 
 // those rows act on their points through the same lookup every row uses
@@ -1397,14 +1397,14 @@ static void test_points_of_entered_object_are_found(void **state)
   dt_masks_form_t *grp = flexi_build("u:1,5");
   _make_object(5, 21, 2);
   _with_gui(INVALID_MASKID);
-  assert_null(_group_point(grp, 22));
+  assert_null(dt_masks_gui_group_point(grp, 22));
   _with_gui(5);
-  const dt_masks_point_group_t *pt = _group_point(grp, 22);
+  const dt_masks_point_group_t *pt = dt_masks_gui_group_point(grp, 22);
   assert_non_null(pt);
   assert_int_equal(pt->formid, 22);
   // an object the mask does not hold stays out of reach
   _with_gui(6);
-  assert_null(_group_point(grp, 22));
+  assert_null(dt_masks_gui_group_point(grp, 22));
 }
 
 // the group an object is: its outline less its holes
@@ -1448,11 +1448,11 @@ static void test_stepping_in_moves_the_panel_signature(void **state)
   flexi_build("u:1,5");
   _make_object(5, 21, 2);
   _with_gui(INVALID_MASKID);
-  const dt_hash_t outside = _masks_list_signature(&flexi_module);
+  const dt_hash_t outside = dt_masks_gui_list_signature(&flexi_module);
   _with_gui(5);
-  assert_true(_masks_list_signature(&flexi_module) != outside);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) != outside);
   _with_gui(INVALID_MASKID);
-  assert_true(_masks_list_signature(&flexi_module) == outside);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) == outside);
 }
 
 // the properties subpanel follows the selection: a shape's geometry and its
@@ -1464,7 +1464,7 @@ static void test_props_panel_shows_a_shapes_geometry(void **state)
   _make_object(5, 21, 2);
   _with_gui(INVALID_MASKID);
   flexi_bd.panel_selected_formid = 1;
-  dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd);
+  dt_masks_props_target_t t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 1);
   assert_false(t.is_group);
   assert_true(t.shape);
@@ -1472,7 +1472,7 @@ static void test_props_panel_shows_a_shapes_geometry(void **state)
   assert_false(t.boost);
   // an AI object is edited as one shape
   flexi_bd.panel_selected_formid = 5;
-  t = _model_props_panel_target(&flexi_bd);
+  t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 5);
   assert_true(t.shape);
 }
@@ -1486,12 +1486,12 @@ static void test_props_panel_entered_object_has_only_opacity(void **state)
   _make_object(5, 21, 2);
   _with_gui(5);
   flexi_bd.panel_selected_formid = 5;
-  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd);
+  const dt_masks_props_target_t t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 5);
   assert_false(t.shape);
   assert_true(t.opacity);
   flexi_bd.panel_selected_formid = 22;
-  assert_true(_model_props_panel_target(&flexi_bd).shape);
+  assert_true(dt_masks_model_props_panel_target(&flexi_bd).shape);
 }
 
 // a raster mask has only its opacity, which is what it shows there
@@ -1501,7 +1501,7 @@ static void test_props_panel_shows_a_raster_masks_opacity(void **state)
   flexi_build("u:1,2");
   dt_masks_get_from_id(&flexi_dev, 2)->type = DT_MASKS_RASTER;
   flexi_bd.panel_selected_formid = 2;
-  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd);
+  const dt_masks_props_target_t t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 2);
   assert_false(t.shape);
   assert_true(t.opacity);
@@ -1533,7 +1533,7 @@ static void test_props_panel_parametric_shows_its_boost_factor(void **state)
   f->points = g_list_append(NULL, &p);
   flexi_bd.panel_selected_formid = 2;
 
-  dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd);
+  dt_masks_props_target_t t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 2);
   assert_true(t.boost);
   assert_true(t.opacity);
@@ -1542,7 +1542,7 @@ static void test_props_panel_parametric_shows_its_boost_factor(void **state)
   // no boost factor: only the opacity slider is left to show
   p.channel = _channel_with_boost(FALSE);
   assert_true(p.channel >= 0);
-  t = _model_props_panel_target(&flexi_bd);
+  t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, 2);
   assert_false(t.boost);
   assert_true(t.opacity);
@@ -1561,14 +1561,14 @@ static void test_props_panel_shows_a_groups_opacity(void **state)
   assert_true(dt_masks_point_is_marker(head));
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = head->formid;
-  const dt_masks_props_target_t t = _model_props_panel_target(&flexi_bd);
+  const dt_masks_props_target_t t = dt_masks_model_props_panel_target(&flexi_bd);
   assert_int_equal(t.id, head->formid);
   assert_true(t.is_group);
   assert_true(t.opacity);
   assert_false(t.shape);
   flexi_bd.panel_selected_formid = 1;
-  assert_false(_model_props_panel_target(&flexi_bd).is_group);
-  assert_int_equal(_model_props_panel_target(&flexi_bd).id, 1);
+  assert_false(dt_masks_model_props_panel_target(&flexi_bd).is_group);
+  assert_int_equal(dt_masks_model_props_panel_target(&flexi_bd).id, 1);
 }
 
 // nothing selected: nothing to show
@@ -1578,7 +1578,7 @@ static void test_props_panel_empty_without_a_selection(void **state)
   flexi_build("u:1");
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = INVALID_MASKID;
-  assert_int_equal(_model_props_panel_target(&flexi_bd).id, INVALID_MASKID);
+  assert_int_equal(dt_masks_model_props_panel_target(&flexi_bd).id, INVALID_MASKID);
 }
 
 // solo edit inside the object keeps the object: narrowing to the pressed path
@@ -1591,10 +1591,10 @@ static void test_soloedit_inside_entered_object_isolates_the_object(void **state
   _make_object(5, 21, 2);
   flexi_bd.panel_selected_formid = 22;
   _with_gui(5);
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 5);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 5);
   // outside it, a shape isolates itself as always
   flexi_bd.panel_selected_formid = 1;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 1);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 1);
   dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
 }
 
@@ -1607,14 +1607,14 @@ static void test_soloedit_isolates_a_selected_group(void **state)
   flexi_build("u:1,2 | i:3");
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
-  assert_int_equal(_model_soloedit_target(&flexi_bd), FLEXI_GID(1));
-  GList *members = _selected_group_formids(flexi_group(), FLEXI_GID(1));
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), FLEXI_GID(1));
+  GList *members = dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1));
   assert_int_equal(g_list_length(members), 1);
   assert_int_equal(GPOINTER_TO_INT(members->data), 3);
   g_list_free(members);
   // an element of it selected isolates that element instead
   flexi_bd.panel_selected_formid = 3;
-  assert_int_equal(_model_soloedit_target(&flexi_bd), 3);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), 3);
   dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
 }
 
@@ -1625,7 +1625,7 @@ static void test_soloedit_off_for_the_mask_group(void **state)
   flexi_build("u:1,2");
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
-  assert_int_equal(_model_soloedit_target(&flexi_bd), INVALID_MASKID);
+  assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), INVALID_MASKID);
   dt_conf_set_bool("plugins/darkroom/masks/solo_edit_mode", FALSE);
 }
 
@@ -1664,10 +1664,10 @@ static void test_refine_scope_of_removed_element_falls_back_to_its_group(void **
   flexi_bd.panel_selected_formid = 9;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
 
-  assert_true(_model_refine_scope_prune(&flexi_module));
+  assert_true(dt_masks_model_refine_scope_prune(&flexi_module));
   assert_int_equal(flexi_bd.panel_selected_formid, INVALID_MASKID);
   assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(1));
-  _model_refine_scope_from_selection(&flexi_module);
+  dt_masks_model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GROUP);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, FLEXI_GID(1));
 }
@@ -1679,9 +1679,9 @@ static void test_refine_scope_with_nothing_left_is_the_whole_mask(void **state)
   _scope(REFINE_SCOPE_GROUP, 9);
   flexi_bd.panel_selected_group_cid = 9;
 
-  assert_true(_model_refine_scope_prune(&flexi_module));
+  assert_true(dt_masks_model_refine_scope_prune(&flexi_module));
   assert_int_equal(flexi_bd.panel_selected_group_cid, INVALID_MASKID);
-  _model_refine_scope_from_selection(&flexi_module);
+  dt_masks_model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GLOBAL);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, INVALID_MASKID);
 }
@@ -1694,7 +1694,7 @@ static void test_refine_scope_of_the_mask_group_is_the_whole_mask(void **state)
   flexi_build("u:1,2");
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
-  _model_refine_scope_from_selection(&flexi_module);
+  dt_masks_model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GLOBAL);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, INVALID_MASKID);
 }
@@ -1707,11 +1707,11 @@ static void test_refine_scope_of_present_element_is_kept(void **state)
   flexi_bd.panel_selected_formid = 2;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
 
-  assert_false(_model_refine_scope_prune(&flexi_module));
+  assert_false(dt_masks_model_refine_scope_prune(&flexi_module));
   assert_int_equal(flexi_bd.panel_selected_formid, 2);
   assert_int_equal(flexi_bd.panel_selected_group_cid, FLEXI_GID(0));
   _scope(REFINE_SCOPE_GLOBAL, INVALID_MASKID);
-  assert_false(_model_refine_scope_prune(&flexi_module));
+  assert_false(dt_masks_model_refine_scope_prune(&flexi_module));
 }
 
 static void test_refine_scope_follows_the_selection(void **state)
@@ -1720,14 +1720,14 @@ static void test_refine_scope_follows_the_selection(void **state)
   flexi_build("u:1,2 | [i]");
   flexi_bd.panel_selected_formid = 2;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(0);
-  _model_refine_scope_from_selection(&flexi_module);
+  dt_masks_model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_ELEMENT);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, 2);
 
   // an empty group is a group: its refinement is its marker's
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
-  _model_refine_scope_from_selection(&flexi_module);
+  dt_masks_model_refine_scope_from_selection(&flexi_module);
   assert_int_equal(flexi_bd.masks_refine_scope_kind, REFINE_SCOPE_GROUP);
   assert_int_equal(flexi_bd.masks_refine_scope_formid, FLEXI_GID(1));
 }
@@ -1770,7 +1770,7 @@ static void _rename_other(const char *name)
 
 static void _assert_shows(const dt_masks_form_t *f, const char *expect)
 {
-  gchar *shown = _form_display_name(f);
+  gchar *shown = dt_masks_gui_form_display_name(f);
   assert_string_equal(shown, expect);
   g_free(shown);
 }
@@ -1808,7 +1808,7 @@ static void test_renamed_raster_element_keeps_its_name(void **state)
   flexi_conf_init();
   flexi_build("u:1,7");
   dt_masks_form_t *f = _raster_of_other(7);
-  assert_true(_model_rename_form(f, "mine"));
+  assert_true(dt_masks_model_rename_form(f, "mine"));
   _assert_shows(f, "mine");
   _rename_other("sky");
   _assert_shows(f, "mine");
@@ -1820,15 +1820,15 @@ static void test_emptied_raster_name_follows_the_source_again(void **state)
   flexi_conf_init();
   flexi_build("u:1,7");
   dt_masks_form_t *f = _raster_of_other(7);
-  assert_true(_model_rename_form(f, "mine"));
-  assert_true(_model_rename_form(f, ""));
+  assert_true(dt_masks_model_rename_form(f, "mine"));
+  assert_true(dt_masks_model_rename_form(f, ""));
   gchar *label = dt_history_item_get_name(&_other);
   _assert_shows(f, label);
   g_free(label);
 
   dt_masks_form_t *circle = dt_masks_get_from_id(&flexi_dev, 1);
   gchar *was = g_strdup(circle->name);
-  assert_false(_model_rename_form(circle, ""));
+  assert_false(dt_masks_model_rename_form(circle, ""));
   assert_string_equal(circle->name, was);
   g_free(was);
 }
@@ -1857,11 +1857,11 @@ static void test_old_raster_name_follows_its_source(void **state)
   gchar *label = dt_history_item_get_name(&_other);
   g_snprintf(f->name, sizeof(f->name), "%s %s", _("raster mask"), label);
   g_free(label);
-  _model_raster_names_follow_sources(flexi_group());
+  dt_masks_model_raster_names_follow_sources(flexi_group());
   assert_string_equal(f->name, _("raster mask"));
 
   g_snprintf(f->name, sizeof(f->name), "%s mine", _("raster mask"));
-  _model_raster_names_follow_sources(flexi_group());
+  dt_masks_model_raster_names_follow_sources(flexi_group());
   _assert_shows(f, "mine");
 }
 
@@ -1881,7 +1881,7 @@ static void test_add_target_is_the_only_group(void **state)
   flexi_build("u:1,2");
   _no_selection();
 
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  const dt_masks_add_target_t t = dt_masks_gui_resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_true(t.implicit);
   assert_int_equal(t.cid, FLEXI_GID(0));
@@ -1893,7 +1893,7 @@ static void test_add_target_ignores_a_stale_selection_with_one_group(void **stat
   _no_selection();
   flexi_bd.panel_selected_group_cid = 9;
 
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  const dt_masks_add_target_t t = dt_masks_gui_resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_true(t.implicit);
   assert_int_equal(t.cid, FLEXI_GID(0));
@@ -1903,11 +1903,11 @@ static void test_add_target_is_ambiguous_with_two_groups(void **state)
 {
   flexi_build("u:1 | i:2");
   _no_selection();
-  assert_int_equal(_group_count(&flexi_module), 2);
-  assert_false(_resolve_add_target(&flexi_module).valid);
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 2);
+  assert_false(dt_masks_gui_resolve_add_target(&flexi_module).valid);
 
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  const dt_masks_add_target_t t = dt_masks_gui_resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_false(t.implicit);
   assert_int_equal(t.cid, FLEXI_GID(1));
@@ -1918,11 +1918,11 @@ static void test_add_target_counts_an_empty_group(void **state)
 {
   flexi_build("u:1 | [i]");
   _no_selection();
-  assert_int_equal(_group_count(&flexi_module), 2);
-  assert_false(_resolve_add_target(&flexi_module).valid);
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 2);
+  assert_false(dt_masks_gui_resolve_add_target(&flexi_module).valid);
 
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  const dt_masks_add_target_t t = dt_masks_gui_resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_false(t.implicit);
   assert_int_equal(t.cid, FLEXI_GID(1));
@@ -1939,8 +1939,8 @@ static void test_add_target_ignores_a_lost_member(void **state)
   pt->opacity = 1.0f;
   grp->points = g_list_append(grp->points, pt);
 
-  assert_int_equal(_group_count(&flexi_module), 1);
-  const dt_masks_add_target_t t = _resolve_add_target(&flexi_module);
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 1);
+  const dt_masks_add_target_t t = dt_masks_gui_resolve_add_target(&flexi_module);
   assert_true(t.valid);
   assert_int_equal(t.cid, FLEXI_GID(0));
 }
@@ -1950,14 +1950,14 @@ static void test_list_signature_follows_source_rename(void **state)
   flexi_conf_init();
   flexi_build("u:1,7");
   dt_masks_form_t *f = _raster_of_other(7);
-  const dt_hash_t before = _masks_list_signature(&flexi_module);
+  const dt_hash_t before = dt_masks_gui_list_signature(&flexi_module);
   _rename_other("sky");
-  assert_true(_masks_list_signature(&flexi_module) != before);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) != before);
 
-  assert_true(_model_rename_form(f, "mine"));
-  const dt_hash_t named = _masks_list_signature(&flexi_module);
+  assert_true(dt_masks_model_rename_form(f, "mine"));
+  const dt_hash_t named = dt_masks_gui_list_signature(&flexi_module);
   _rename_other("trees");
-  assert_true(_masks_list_signature(&flexi_module) == named);
+  assert_true(dt_masks_gui_list_signature(&flexi_module) == named);
 }
 
 // a group marker (DT_MASKS_STATE_GROUP_MARKER) put in front of member `at`
@@ -1971,7 +1971,7 @@ static dt_masks_point_group_t *_insert_marker(dt_masks_form_t *grp,
   m->state = DT_MASKS_STATE_GROUP_MARKER | DT_MASKS_STATE_INTERSECTION;
   m->group_opacity = 0.5f;
   g_strlcpy(m->name, "sky", sizeof(m->name));
-  const int pos = g_list_index(grp->points, _group_point(grp, at));
+  const int pos = g_list_index(grp->points, dt_masks_gui_group_point(grp, at));
   grp->points = g_list_insert(grp->points, m, pos);
   return m;
 }
@@ -2041,7 +2041,7 @@ static void test_copy_of_a_group_keeps_its_markers(void **state)
   // copying a shape reads its default size from the preferences
   flexi_conf_init();
   dt_masks_form_t *grp = flexi_build("u:1 | i:2");
-  dt_masks_point_group_t *src = _group_point(grp, FLEXI_GID(1));
+  dt_masks_point_group_t *src = dt_masks_gui_group_point(grp, FLEXI_GID(1));
   src->group_opacity = 0.5f;
   g_strlcpy(src->name, "sky", sizeof(src->name));
 
@@ -2069,7 +2069,7 @@ static void test_copy_of_a_group_keeps_its_markers(void **state)
 static void test_prune_spares_markers(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1 | [i]");
-  assert_int_equal(_model_prune_dangling_members(grp), 0);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 0);
   assert_int_equal(g_list_length(grp->points), 3);
 }
 
@@ -2260,8 +2260,8 @@ static void test_mask_group_takes_no_number(void **state)
   const dt_mask_id_t members[] = { 11 };
   dt_masks_form_t *sub = _nested_group(2000, 2500, members, 1);
 
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 0);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2500), 1);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 0);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, 2500), 1);
 
   _free_nested_points(sub);
 }
@@ -2269,14 +2269,14 @@ static void test_mask_group_takes_no_number(void **state)
 static void test_nested_points_are_found_with_their_group(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
-  assert_non_null(_group_point(grp, 13));
-  assert_int_equal(_group_cid_of_form(grp, 13), 2501);
-  assert_int_equal(_group_cid_of_form(grp, 11), 2500);
-  assert_int_equal(_group_cid_of_form(grp, 2501), 2501);
+  assert_non_null(dt_masks_gui_group_point(grp, 13));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 13), 2501);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 11), 2500);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2501), 2501);
   // the nested group itself is a member of the top list's group
-  assert_int_equal(_group_cid_of_form(grp, 2000), FLEXI_GID(1));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2000), FLEXI_GID(1));
 
-  GList *run = _selected_group_formids(grp, 2500);
+  GList *run = dt_masks_gui_selected_group_formids(grp, 2500);
   assert_int_equal(g_list_length(run), 2);
   g_list_free(run);
 }
@@ -2284,11 +2284,11 @@ static void test_nested_points_are_found_with_their_group(void **state)
 static void test_nested_drop_stays_in_its_list(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 11, 13, TRUE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 11, 13, TRUE));
   assert_layout_of(_sub, "u:12 | d:13,11");
   assert_layout("u:1,2 | i:3,2000");
 
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 13, 2500));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 13, 2500));
   assert_layout_of(_sub, "u:12,13 | d:11");
 }
 
@@ -2296,18 +2296,18 @@ static void test_nested_drop_stays_in_its_list(void **state)
 static void test_nested_drop_moves_across_levels(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 1, 13, TRUE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 13, TRUE));
   assert_layout("u:2 | i:3,2000");
   assert_layout_of(_sub, "u:11,12 | d:13,1");
-  assert_int_equal(_group_point(grp, 1)->parentid, 2000);
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->parentid, 2000);
 
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 12, FLEXI_GID(0)));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 12, FLEXI_GID(0)));
   assert_layout("u:2,12 | i:3,2000");
   assert_layout_of(_sub, "u:11 | d:13,1");
-  assert_int_equal(_group_point(grp, 12)->parentid, flexi_group()->formid);
+  assert_int_equal(dt_masks_gui_group_point(grp, 12)->parentid, flexi_group()->formid);
 
-  assert_false(_model_drop_element_onto_element(&flexi_module, grp, 2000, 11, TRUE));
-  assert_false(_model_drop_element_onto_group(&flexi_module, grp, 2000, 2501));
+  assert_false(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 2000, 11, TRUE));
+  assert_false(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 2000, 2501));
   assert_layout("u:2,12 | i:3,2000");
 }
 
@@ -2318,12 +2318,12 @@ static void test_a_nested_group_goes_deeper(void **state)
   _circle(14);
   const dt_mask_id_t m[] = { 14 };
   dt_masks_form_t *other = _nested_group(3000, 3500, m, 1);
-  assert_true(_model_drop_element_onto_group(&flexi_module, grp, 3000, 2500));
+  assert_true(dt_masks_model_drop_element_onto_group(&flexi_module, grp, 3000, 2500));
   assert_layout("u:1,2 | i:3,2000");
   assert_layout_of(_sub, "u:11,12,3000 | d:13");
-  assert_true(_model_drop_element_onto_element(&flexi_module, grp, 3000, 13, TRUE));
+  assert_true(dt_masks_model_drop_element_onto_element(&flexi_module, grp, 3000, 13, TRUE));
   assert_layout_of(_sub, "u:11,12 | d:13,3000");
-  assert_true(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, 2500)));
+  assert_true(dt_is_valid_maskid(dt_masks_model_nest_new_group(grp, DT_MASKS_STATE_UNION, 2500)));
   _free_nested_points(other);
 }
 
@@ -2332,20 +2332,20 @@ static void test_a_cluster_moves_across_levels(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
   GList *ids = g_list_append(g_list_append(NULL, GINT_TO_POINTER(11)), GINT_TO_POINTER(12));
-  assert_true(_masks_cluster_move(&flexi_module, ids, 3, FALSE, TRUE));
+  assert_true(dt_masks_gui_cluster_move(&flexi_module, ids, 3, FALSE, TRUE));
   assert_layout("u:1,2 | i:3,11,12,2000");
   assert_layout_of(_sub, "[u] | d:13");
-  assert_int_equal(_group_point(grp, 11)->parentid, flexi_group()->formid);
+  assert_int_equal(dt_masks_gui_group_point(grp, 11)->parentid, flexi_group()->formid);
   g_list_free(ids);
 
   ids = g_list_append(g_list_append(NULL, GINT_TO_POINTER(1)), GINT_TO_POINTER(2));
-  assert_true(_masks_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
+  assert_true(dt_masks_gui_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
   assert_layout("[u] | i:3,11,12,2000");
   assert_layout_of(_sub, "[u] | d:13,1,2");
-  assert_int_equal(_group_point(grp, 1)->parentid, 2000);
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->parentid, 2000);
 
   // onto the group it is already in: nothing to do, as for one element
-  assert_false(_masks_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
+  assert_false(dt_masks_gui_cluster_move(&flexi_module, ids, 2501, TRUE, FALSE));
   assert_layout_of(_sub, "[u] | d:13,1,2");
   g_list_free(ids);
 }
@@ -2361,13 +2361,13 @@ static void test_a_drop_acts_on_the_row_reference(void **state)
   const dt_masks_point_group_t *inner = g_list_nth_data(_sub->points, 1);
   assert_int_equal(inner->formid, 1);
 
-  assert_true(_model_drop_point_onto_point(&flexi_module, grp, _group_point(grp, 3), inner,
-                                           TRUE));
+  assert_true(dt_masks_model_drop_point_onto_point(&flexi_module, grp, dt_masks_gui_group_point(grp, 3), inner,
+                                                   TRUE));
   assert_layout("u:1,2 | i:2000");
   assert_layout_of(_sub, "u:1,3,11");
 
   // the inner reference, not the top one that is already there
-  assert_true(_model_drop_point_onto_group(&flexi_module, grp, inner, FLEXI_GID(0)));
+  assert_true(dt_masks_model_drop_point_onto_group(&flexi_module, grp, inner, FLEXI_GID(0)));
   assert_layout("u:1,2,1 | i:2000");
   assert_layout_of(_sub, "u:3,11");
 }
@@ -2379,10 +2379,10 @@ static void test_nesting_stops_where_walks_stop(void **state)
   dt_mask_id_t cid = FLEXI_GID(0);
   for(int depth = 1; depth <= DT_MASKS_NESTING_MAX; depth++)
   {
-    cid = _model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid);
+    cid = dt_masks_model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid);
     assert_true(dt_is_valid_maskid(cid));
   }
-  assert_false(dt_is_valid_maskid(_model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid)));
+  assert_false(dt_is_valid_maskid(dt_masks_model_nest_new_group(grp, DT_MASKS_STATE_UNION, cid)));
   for(GList *l = flexi_dev.forms; l; l = g_list_next(l))
     if(l->data != grp && (((dt_masks_form_t *)l->data)->type & DT_MASKS_GROUP))
       _free_nested_points(l->data);
@@ -2402,33 +2402,33 @@ static dt_masks_form_t *_nested_at(dt_masks_form_t *grp, const int at)
 static void test_add_a_group_inside_a_group(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3");
-  const dt_mask_id_t cid = _model_nest_new_group(grp, DT_MASKS_STATE_UNION, FLEXI_GID(0));
+  const dt_mask_id_t cid = dt_masks_model_nest_new_group(grp, DT_MASKS_STATE_UNION, FLEXI_GID(0));
   assert_true(dt_is_valid_maskid(cid));
   // on top of the group's members: a nested group holding one empty group
   _sub = _nested_at(grp, 3);
   assert_layout_of(_sub, "[u]");
-  assert_int_equal(_group_cid_of_form(grp, cid), cid);
-  assert_int_equal(_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
-  assert_int_equal(_group_count(&flexi_module), 3);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, cid), cid);
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 3);
 }
 
 static void test_drop_a_group_inside_another(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3 | d:4");
-  assert_true(_model_nest_group(grp, FLEXI_GID(2), FLEXI_GID(0)));
+  assert_true(dt_masks_model_nest_group(grp, FLEXI_GID(2), FLEXI_GID(0)));
   // the group keeps its id, as the one group of a new nested group
   _sub = _nested_at(grp, 3);
   assert_layout_of(_sub, "d:4");
-  assert_int_equal(_group_cid_of_form(grp, 4), FLEXI_GID(2));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 4), FLEXI_GID(2));
   assert_int_equal(((dt_masks_point_group_t *)_sub->points->data)->parentid, _sub->formid);
   // a group is not put inside itself; one holding a nested group goes a level
   // down with it
-  assert_false(_model_nest_group(grp, FLEXI_GID(1), FLEXI_GID(1)));
-  assert_true(_model_nest_group(grp, FLEXI_GID(0), FLEXI_GID(1)));
-  assert_int_equal(_group_count(&flexi_module), 3);
+  assert_false(dt_masks_model_nest_group(grp, FLEXI_GID(1), FLEXI_GID(1)));
+  assert_true(dt_masks_model_nest_group(grp, FLEXI_GID(0), FLEXI_GID(1)));
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 3);
   dt_masks_form_t *outer = _nested_at(grp, 2);
   assert_true(outer != _sub);
-  assert_int_equal(_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, _sub->formid), FLEXI_GID(0));
   _free_nested_points(outer);
 }
 
@@ -2453,16 +2453,16 @@ static int _teardown_composed(void **state)
 static void test_compose_an_element(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3");
-  dt_masks_point_group_t *two = _group_point(grp, 2);
+  dt_masks_point_group_t *two = dt_masks_gui_group_point(grp, 2);
   two->opacity = 0.5f;
   two->state |= DT_MASKS_STATE_INVERSE;
-  const dt_mask_id_t eid = _model_compose(grp, two, DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  const dt_mask_id_t eid = dt_masks_model_compose(grp, two, DT_MASKS_STATE_WITHIN_DIFFERENCE);
   assert_true(dt_is_valid_maskid(eid));
   assert_tree(grp, "u{1,d{2~@0.5,u{}},3}");
-  const dt_masks_point_group_t *empty = _group_point(grp, eid);
+  const dt_masks_point_group_t *empty = dt_masks_gui_group_point(grp, eid);
   assert_non_null(empty);
   assert_true(dt_masks_point_is_marker(empty));
-  assert_int_equal(two->parentid, _group_point(grp, _group_cid_of_form(grp, 2))->parentid);
+  assert_int_equal(two->parentid, dt_masks_gui_group_point(grp, dt_masks_gui_group_cid_of_form(grp, 2))->parentid);
 }
 
 // a group is composed through its holder's reference, keeping its settings
@@ -2472,11 +2472,11 @@ static void test_compose_a_nested_group(void **state)
   for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
   const dt_mask_id_t m[] = { 11, 12 };
   _sub = _nested_group(2000, 2500, m, 2);
-  _group_point(grp, 2500)->group_opacity = 0.5f;
+  dt_masks_gui_group_point(grp, 2500)->group_opacity = 0.5f;
   assert_tree(grp, "u{1,u@0.5{11,12}}");
 
-  assert_true(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, 2500),
-                                                DT_MASKS_STATE_ISECT)));
+  assert_true(dt_is_valid_maskid(dt_masks_model_compose(grp, dt_masks_gui_group_point(grp, 2500),
+                                                        DT_MASKS_STATE_ISECT)));
   assert_tree(grp, "u{1,i{u@0.5{11,12},u{}}}");
 }
 
@@ -2491,7 +2491,7 @@ static void test_compose_the_whole_mask(void **state)
   root->refinement.enabled = DT_MASKS_REFINE_GROUP;
   root->refinement.blur_radius = 3.0f;
 
-  assert_true(dt_is_valid_maskid(_model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE)));
+  assert_true(dt_is_valid_maskid(dt_masks_model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE)));
   assert_tree(grp, "d{o~@0.7{1,2},u{}}");
   assert_ptr_equal(grp->points->data, root);
   assert_int_equal(root->formid, FLEXI_GID(0));
@@ -2511,24 +2511,24 @@ static void test_compose_stops_where_nesting_does(void **state)
   dt_masks_form_t *grp = flexi_build("u:1");
   dt_mask_id_t cid = FLEXI_GID(0);
   for(int depth = 1; depth <= DT_MASKS_NESTING_MAX; depth++)
-    cid = _model_nest_new_group(grp, 0, cid);
-  assert_false(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, cid), DT_MASKS_STATE_ISECT)));
-  assert_false(dt_is_valid_maskid(_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
-  assert_true(dt_is_valid_maskid(_model_compose(grp, _group_point(grp, 1), DT_MASKS_STATE_ISECT)));
+    cid = dt_masks_model_nest_new_group(grp, 0, cid);
+  assert_false(dt_is_valid_maskid(dt_masks_model_compose(grp, dt_masks_gui_group_point(grp, cid), DT_MASKS_STATE_ISECT)));
+  assert_false(dt_is_valid_maskid(dt_masks_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
+  assert_true(dt_is_valid_maskid(dt_masks_model_compose(grp, dt_masks_gui_group_point(grp, 1), DT_MASKS_STATE_ISECT)));
 
   _teardown_composed(state);
   grp = flexi_build("u:1 | i:2");
-  assert_false(dt_is_valid_maskid(_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
+  assert_false(dt_is_valid_maskid(dt_masks_model_compose(grp, grp->points->data, DT_MASKS_STATE_ISECT)));
 }
 
 // compose, then simplify with the empty group still empty: back where it was
 static void test_simplify_undoes_a_compose(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2,3");
-  _model_compose(grp, _group_point(grp, 2), DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  dt_masks_model_compose(grp, dt_masks_gui_group_point(grp, 2), DT_MASKS_STATE_WITHIN_DIFFERENCE);
   assert_true(dt_masks_group_simplify(flexi_dev.forms, grp));
   assert_tree(grp, "u{1,2,3}");
-  assert_int_equal(_group_point(grp, 2)->parentid, grp->formid);
+  assert_int_equal(dt_masks_gui_group_point(grp, 2)->parentid, grp->formid);
   assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
 }
 
@@ -2540,16 +2540,16 @@ static void test_hoist_undoes_a_whole_mask_compose(void **state)
   dt_masks_point_group_t *root = grp->points->data;
   root->state |= DT_MASKS_STATE_SCREEN;
   root->group_opacity = 0.7f;
-  _model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE);
+  dt_masks_model_compose(grp, root, DT_MASKS_STATE_WITHIN_DIFFERENCE);
   dt_masks_refinement_t whole = { 0 };
-  assert_false(_model_hoist_sole_group(grp, &whole)); // the empty group is still there
+  assert_false(dt_masks_model_hoist_sole_group(grp, &whole)); // the empty group is still there
   assert_true(dt_masks_group_simplify(flexi_dev.forms, grp));
   assert_tree(grp, "d{o@0.7{1,2}}");
-  assert_true(_model_hoist_sole_group(grp, &whole));
+  assert_true(dt_masks_model_hoist_sole_group(grp, &whole));
   assert_tree(grp, "o@0.7{1,2}");
   assert_int_equal(whole.enabled, DT_MASKS_REFINE_OFF);
-  assert_int_equal(_group_point(grp, 1)->parentid, grp->formid);
-  assert_false(_model_hoist_sole_group(grp, &whole));
+  assert_int_equal(dt_masks_gui_group_point(grp, 1)->parentid, grp->formid);
+  assert_false(dt_masks_model_hoist_sole_group(grp, &whole));
   _teardown_composed(state);
 
   // a group's refinement becomes the whole mask's, unless that has one
@@ -2557,12 +2557,12 @@ static void test_hoist_undoes_a_whole_mask_compose(void **state)
   root = grp->points->data;
   root->refinement.enabled = DT_MASKS_REFINE_GROUP;
   root->refinement.details = 0.3f;
-  _model_compose(grp, root, DT_MASKS_STATE_ISECT);
+  dt_masks_model_compose(grp, root, DT_MASKS_STATE_ISECT);
   dt_masks_group_simplify(flexi_dev.forms, grp);
   whole.enabled = DT_MASKS_REFINE_GROUP;
-  assert_false(_model_hoist_sole_group(grp, &whole));
+  assert_false(dt_masks_model_hoist_sole_group(grp, &whole));
   whole.enabled = DT_MASKS_REFINE_OFF;
-  assert_true(_model_hoist_sole_group(grp, &whole));
+  assert_true(dt_masks_model_hoist_sole_group(grp, &whole));
   assert_int_equal(whole.enabled, DT_MASKS_REFINE_GROUP);
   assert_true(whole.details == 0.3f);
   _teardown_composed(state);
@@ -2572,10 +2572,10 @@ static void test_hoist_undoes_a_whole_mask_compose(void **state)
   root = grp->points->data;
   root->group_opacity = 0.5f;
   root->refinement.enabled = DT_MASKS_REFINE_GROUP;
-  _model_compose(grp, root, DT_MASKS_STATE_ISECT);
+  dt_masks_model_compose(grp, root, DT_MASKS_STATE_ISECT);
   dt_masks_group_simplify(flexi_dev.forms, grp);
   whole.enabled = DT_MASKS_REFINE_OFF;
-  assert_false(_model_hoist_sole_group(grp, &whole));
+  assert_false(dt_masks_model_hoist_sole_group(grp, &whole));
 }
 
 // a group folding with its holder's operator gives the holder its members,
@@ -2594,7 +2594,7 @@ static void test_simplify_splices_same_operator_groups(void **state)
   for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
   _sub = _nested_group(2000, 2500, m, 2);
   ((dt_masks_point_group_t *)grp->points->data)->state |= DT_MASKS_STATE_WITHIN_DIFFERENCE;
-  _group_point(grp, 2500)->state |= DT_MASKS_STATE_WITHIN_DIFFERENCE;
+  dt_masks_gui_group_point(grp, 2500)->state |= DT_MASKS_STATE_WITHIN_DIFFERENCE;
   assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
   assert_tree(grp, "d{1,d{11,12}}");
 }
@@ -2617,7 +2617,7 @@ static void test_simplify_leaves_a_group_another_module_renders(void **state)
   flexi_dev.iop = g_list_append(NULL, &other);
 
   dt_masks_group_simplify(flexi_dev.forms, grp);
-  assert_float_equal(_group_point(grp, 2500)->group_opacity, 1.0f, 1e-6);
+  assert_float_equal(dt_masks_gui_group_point(grp, 2500)->group_opacity, 1.0f, 1e-6);
 
   g_list_free(flexi_dev.iop);
   flexi_dev.iop = NULL;
@@ -2631,9 +2631,9 @@ static void test_simplify_keeps_what_changes_something(void **state)
   for(dt_mask_id_t id = 11; id <= 12; id++) _circle(id);
   const dt_mask_id_t m[] = { 11, 12 };
   _sub = _nested_group(2000, 2500, m, 2);
-  _group_point(grp, 2500)->group_opacity = 0.5f;
+  dt_masks_gui_group_point(grp, 2500)->group_opacity = 0.5f;
   const dt_masks_form_t *named = _nested_group(3000, 3500, NULL, 0);
-  g_strlcpy(_group_point(grp, 3500)->name, "later", sizeof(((dt_masks_point_group_t *)0)->name));
+  g_strlcpy(dt_masks_gui_group_point(grp, 3500)->name, "later", sizeof(((dt_masks_point_group_t *)0)->name));
   assert_false(dt_masks_group_simplify(flexi_dev.forms, grp));
   assert_tree(grp, "u{1,u@0.5{11,12},u{}}");
   assert_non_null(named);
@@ -2659,9 +2659,9 @@ static void test_a_nested_group_does_not_move_beside_the_mask(void **state)
   _circle(11);
   const dt_mask_id_t m[] = { 11 };
   _sub = _nested_group(2000, 2500, m, 1);
-  assert_ptr_equal(_model_nested_group_of(grp, 2500), _sub);
+  assert_ptr_equal(dt_masks_model_nested_group_of(grp, 2500), _sub);
 
-  assert_false(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
+  assert_false(dt_masks_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
   assert_layout("u:1,2,2000");
   assert_layout_of(_sub, "u:11");
 }
@@ -2674,8 +2674,8 @@ static void test_a_faded_nested_group_stays_nested(void **state)
   _circle(11);
   const dt_mask_id_t m[] = { 11 };
   _sub = _nested_group(2000, 2500, m, 1);
-  _group_point(flexi_group(), 2000)->opacity = 0.5f;
-  assert_false(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
+  dt_masks_gui_group_point(flexi_group(), 2000)->opacity = 0.5f;
+  assert_false(dt_masks_model_move_group(&flexi_module, 2500, FLEXI_GID(0), TRUE, FALSE));
   assert_layout("u:1,2 | i:3,2000");
   assert_layout_of(_sub, "u:11");
 }
@@ -2690,13 +2690,13 @@ static void test_a_group_beside_a_nested_group_is_nested(void **state)
   _sub = _nested_group(2000, 2500, m, 1);
   assert_layout("u:1,2 | i:3 | d:4,2000");
 
-  assert_true(_model_move_group(&flexi_module, FLEXI_GID(0), 2500, TRUE, FALSE));
+  assert_true(dt_masks_model_move_group(&flexi_module, FLEXI_GID(0), 2500, TRUE, FALSE));
   assert_layout_of(_sub, "u:11");
   dt_masks_form_t *added = _nested_at(grp, 5);
   assert_true(added != _sub);
   assert_layout_of(added, "u:1,2");
-  assert_int_equal(_group_cid_of_form(grp, 1), FLEXI_GID(0));
-  assert_int_equal(_group_cid_of_form(grp, added->formid), FLEXI_GID(2));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 1), FLEXI_GID(0));
+  assert_int_equal(dt_masks_gui_group_cid_of_form(grp, added->formid), FLEXI_GID(2));
   _free_nested_points(added);
 }
 
@@ -2712,12 +2712,12 @@ static void test_a_nested_group_moves_as_an_element(void **state)
   dt_masks_form_t *other = _nested_group(3000, 3500, m2, 1);
   assert_layout("u:1,2 | i:3,2000,3000");
 
-  assert_true(_model_move_group(&flexi_module, 2500, 3500, TRUE, FALSE));
+  assert_true(dt_masks_model_move_group(&flexi_module, 2500, 3500, TRUE, FALSE));
   assert_layout("u:1,2 | i:3,3000,2000");
-  assert_true(_model_move_group(&flexi_module, 2500, FLEXI_GID(0), FALSE, TRUE));
+  assert_true(dt_masks_model_move_group(&flexi_module, 2500, FLEXI_GID(0), FALSE, TRUE));
   assert_layout("u:1,2,2000 | i:3,3000");
   // never into itself
-  assert_false(_model_move_group(&flexi_module, 2500, 2500, FALSE, TRUE));
+  assert_false(dt_masks_model_move_group(&flexi_module, 2500, 2500, FALSE, TRUE));
   (void)grp;
   _free_nested_points(other);
 }
@@ -2739,7 +2739,7 @@ static void test_new_element_lands_in_a_nested_target(void **state)
 
 static gboolean _is_hidden(const dt_mask_id_t fid)
 {
-  return (_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
+  return (dt_masks_gui_group_point(flexi_group(), fid)->state & DT_MASKS_STATE_HIDDEN) != 0;
 }
 
 // soloing an element inside a nested group hides everything else at every
@@ -2768,7 +2768,7 @@ static void test_solo_inside_a_nested_group_keeps_the_path(void **state)
 static void test_solo_of_a_nested_group_clears_inside_it(void **state)
 {
   dt_masks_form_t *grp = _two_levels();
-  _group_point(grp, 11)->state |= DT_MASKS_STATE_HIDDEN;
+  dt_masks_gui_group_point(grp, 11)->state |= DT_MASKS_STATE_HIDDEN;
   GList *keep = g_list_prepend(NULL, GINT_TO_POINTER(2000));
   dt_masks_group_isolate_state(grp, keep, DT_MASKS_STATE_HIDDEN);
   g_list_free(keep);
@@ -2781,17 +2781,17 @@ static void test_solo_of_a_nested_group_clears_inside_it(void **state)
 static void test_nested_groups_are_counted_and_numbered(void **state)
 {
   _two_levels();
-  assert_int_equal(_group_count(&flexi_module), 4);
+  assert_int_equal(dt_masks_gui_group_count(&flexi_module), 4);
 
   // one numbering for the whole mask, by within-group mode: every group here
   // folds its members by union, whatever its operator
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 1);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2500), 2);
-  assert_int_equal(_group_ordinal_of_cid(&flexi_module, 2501), 3);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, FLEXI_GID(0)), 1);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, 2500), 2);
+  assert_int_equal(dt_masks_gui_group_ordinal_of_cid(&flexi_module, 2501), 3);
 
   // a soloed nested group is still a group
   flexi_bd.solo_group_key = 2501;
-  _prune_stale_solo(&flexi_module);
+  dt_masks_gui_prune_stale_solo(&flexi_module);
   assert_int_equal(flexi_bd.solo_group_key, 2501);
 }
 
@@ -2800,16 +2800,16 @@ static void test_nested_shapes_are_listed_and_signed(void **state)
   dt_masks_form_t *grp = _two_levels();
 
   // what another mask can link from this group: its shapes, nested ones too
-  GList *shapes = _model_module_shapes(&flexi_module, FLEXI_GID(1));
+  GList *shapes = dt_masks_model_module_shapes(&flexi_module, FLEXI_GID(1));
   assert_int_equal(g_list_length(shapes), 4);
   assert_int_equal(GPOINTER_TO_INT(g_list_nth_data(shapes, 0)), 3);
   assert_int_equal(GPOINTER_TO_INT(g_list_nth_data(shapes, 3)), 13);
   g_list_free(shapes);
 
   // a change the rows show, inside the nested group, rebuilds the panel
-  const dt_hash_t before = _masks_list_signature(&flexi_module);
-  g_strlcpy(_group_point(grp, 13)->name, "sky", sizeof(((dt_masks_point_group_t *)0)->name));
-  assert_true(_masks_list_signature(&flexi_module) != before);
+  const dt_hash_t before = dt_masks_gui_list_signature(&flexi_module);
+  g_strlcpy(dt_masks_gui_group_point(grp, 13)->name, "sky", sizeof(((dt_masks_point_group_t *)0)->name));
+  assert_true(dt_masks_gui_list_signature(&flexi_module) != before);
 }
 
 // a member of a nested group whose form is gone leaves that group's list
@@ -2823,7 +2823,7 @@ static void test_lost_member_leaves_a_nested_group(void **state)
       flexi_dev.forms = g_list_delete_link(flexi_dev.forms, l);
       break;
     }
-  assert_int_equal(_model_prune_dangling_members(grp), 1);
+  assert_int_equal(dt_masks_model_prune_dangling_members(grp), 1);
   assert_layout_of(_sub, "u:11 | d:13");
   assert_layout("u:1,2 | i:3,2000");
 }

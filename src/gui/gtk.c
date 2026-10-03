@@ -3836,7 +3836,7 @@ static gboolean _flexi_shape_highlighted(void)
 
 
 // clicking a sliver pins the panel open on that side. Like the toolbar button
-// and the "blend mask" caption (_flexi_inline_collapse_clicked in
+// and the "blend mask" caption (dt_masks_gui_flexi_inline_collapse_clicked in
 // develop/masks_gui_panel_host.c), it never switches the mask on: showing the
 // panel is a view action, and the first control the user touches in it
 // switches the mask on
@@ -3844,7 +3844,7 @@ static void _flexi_sliver_activate(dt_ui_t *ui, const gboolean right)
 {
   dt_ui_flexi_panel_set_side(ui, right);
   // record the side here and not only on the expand below: a relocate of the
-  // panel re-applies the stored side (_masks_flexi_relocate in
+  // panel re-applies the stored side (dt_masks_gui_flexi_relocate in
   // develop/masks_gui_panel_host.c), which would pull the panel straight back
   // to whichever edge the key still named
   dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", right);
@@ -4074,7 +4074,7 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // this, wide content (e.g. gradient sliders) blew the panel width up and
   // dragging the resize handle had no visible effect. The header is the
   // module's own "blend mask" header, reparented into ui->flexi_header (see
-  // _masks_flexi_relocate).
+  // dt_masks_gui_flexi_relocate).
   GtkWidget *widget = ui->flexi_panel_body = dtgtk_side_panel_new();
   gtk_widget_set_name(widget, "flexi");
 
@@ -4199,8 +4199,9 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   gtk_overlay_add_overlay(GTK_OVERLAY(dt_ui_center_base(ui)), over);
   // whatever width the panel actually ends up with is what it hides from the
   // canvas, so let the allocation itself drive the report rather than trying to
-  // predict it at every call site (dt_dev_set_occlusion ignores no-op changes,
-  // so this cannot feed back into another allocation)
+  // predict it at every call site (dt_dev_set_occlusion only records it for
+  // the pan clamp and lays nothing out, so this cannot feed back into another
+  // allocation)
   g_signal_connect(G_OBJECT(over), "size-allocate",
                    G_CALLBACK(_flexi_overlay_size_allocate), NULL);
 
@@ -4884,7 +4885,7 @@ void dt_ui_flexi_panel_set_collapsed(dt_ui_t *ui,
     // which edge the user wants it on. A deliberate fold is not a side change,
     // so only the expand direction records one. Written
     // directly, like the collapse key above -- develop/masks_gui_panel_host.c
-    // reads both back through _masks_panel_side_right/_masks_panel_collapsed_pref.
+    // reads both back through dt_masks_gui_panel_side_right/_masks_panel_collapsed_pref.
     if(!collapsed)
       dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right",
                        ui->flexi_panel_right);
@@ -4900,7 +4901,7 @@ void dt_ui_flexi_panel_set_collapsed(dt_ui_t *ui,
   // the panel is where "edit on canvas" is driven from, so it must not stay
   // armed once the panel folds away to the sliver -- and re-expanding
   // puts back the editing mode that collapsing interrupted. Only on a real
-  // transition: the same-state re-applications (see _masks_flexi_release)
+  // transition: the same-state re-applications (see dt_masks_gui_flexi_release)
   // are not the user putting the panel away or bringing it back.
   if(collapsed != was_collapsed) dt_iop_gui_blend_masks_panel_collapsed(collapsed);
 
