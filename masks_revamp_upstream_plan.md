@@ -14,10 +14,10 @@ module's blending section or in a movable panel on the darkroom canvas.
 Against master:
 
 - **Masks format v6 → v7.** The group point gains per-shape refinement, a group
-  name and a group opacity, appended to the struct. The v6 → v7 step sets the
-  group opacity to 1.0; zero-fill is neutral for the rest. New form types:
-  `DT_MASKS_PARAMETRIC`, `DT_MASKS_RASTER`, `DT_MASKS_OBJECT`. New `state` bits
-  for the group operators and modes, all previously unused.
+  name, a group opacity and a preset note, appended to the struct (16 → 240
+  bytes). The v6 → v7 step sets the group opacity to 1.0; zero-fill is neutral
+  for the rest. New form types: `DT_MASKS_PARAMETRIC`, `DT_MASKS_RASTER`. New
+  `state` bits for the group operators and modes, all previously unused.
 - **Blend params v14 → v15.** Same layout. The bump makes every older edit go
   through `dt_develop_blend_legacy_params`, where the migration runs. The mask
   lock takes over a reserved field.
@@ -83,7 +83,17 @@ would ship migrated edits with no panel that can show them.
 ### 1. Model
 
 The masks v7 format and its v6 → v7 step, the new form types and `state`
-bits, `DEVELOP_MASK_FLEXI`, and a `dev-doc/` page describing the data model.
+bits, `DEVELOP_MASK_FLEXI`, the parametric and raster point structs, and a
+`dev-doc/` page describing the data model. The growing group point also
+needs:
+- the readers of stored points (the masks history loader and the XMP
+  format 2 importer) to step through a blob at the size of the version that
+  wrote it (`dt_masks_point_stride`);
+- every place that builds a group point to zero it, so that no
+  indeterminate byte reaches a blob.
+
+Tree helpers, the cache hash of the new fields and everything that reads
+them go with the code that first uses them.
 
 The only visible effect: masks are written as v7, which older darktable
 versions cannot read.

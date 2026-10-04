@@ -127,7 +127,7 @@ static GList *_geom_snapshot(const dt_masks_form_t *form)
   GList *out = NULL;
   for(GList *l = form->points; l; l = g_list_next(l))
   {
-    void *copy = malloc(sz);
+    void *copy = calloc(1, sz);
     if(!copy) { g_list_free_full(out, free); return NULL; }
     memcpy(copy, l->data, sz);
     out = g_list_append(out, copy);

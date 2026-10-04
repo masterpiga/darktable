@@ -400,7 +400,7 @@ void dt_masks_harvest_read_blend_params(JsonObject *b, dt_develop_blend_params_t
   _obj_float_array(b, "blendif_boost_factors", p->blendif_boost_factors,
                    DEVELOP_BLENDIF_SIZE);
   const char *src = dt_masks_harvest_obj_str(b, "raster_mask_source", "");
-  g_strlcpy(p->raster_mask_source, src ? src : "", sizeof(p->raster_mask_source));
+  dt_strlcpy_to_fixed(p->raster_mask_source, src ? src : "", sizeof(p->raster_mask_source));
   p->raster_mask_instance = (int)dt_masks_harvest_obj_int(b, "raster_mask_instance", 0);
   p->raster_mask_id = (dt_mask_id_t)dt_masks_harvest_obj_int(b, "raster_mask_id", INVALID_MASKID);
   p->raster_mask_invert = dt_masks_harvest_obj_int(b, "raster_mask_invert", 0) ? TRUE : FALSE;
@@ -1490,7 +1490,7 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
       replayed_unique++;
       if(key)
       {
-        edit_report_t *store = malloc(sizeof(edit_report_t));
+        edit_report_t *store = calloc(1, sizeof(edit_report_t));
         if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
         else g_free(key);
       }

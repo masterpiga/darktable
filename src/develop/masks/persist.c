@@ -622,7 +622,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
     {
       if(key)
       {
-        persist_report_t *store = malloc(sizeof(persist_report_t));
+        persist_report_t *store = calloc(1, sizeof(persist_report_t));
         if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
         else g_free(key);
       }
@@ -675,7 +675,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
 
     if(key)
     {
-      persist_report_t *store = malloc(sizeof(persist_report_t));
+      persist_report_t *store = calloc(1, sizeof(persist_report_t));
       if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
       else g_free(key);
     }

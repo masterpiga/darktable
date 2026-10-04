@@ -611,7 +611,7 @@ gboolean dt_masks_undo_harvest_section(const char *json_path, FILE *rf)
     {
       if(key)
       {
-        undo_report_t *store = malloc(sizeof(undo_report_t));
+        undo_report_t *store = calloc(1, sizeof(undo_report_t));
         if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
         else g_free(key);
       }
@@ -675,7 +675,7 @@ gboolean dt_masks_undo_harvest_section(const char *json_path, FILE *rf)
 
     if(key)
     {
-      undo_report_t *store = malloc(sizeof(undo_report_t));
+      undo_report_t *store = calloc(1, sizeof(undo_report_t));
       if(store) { *store = rep; g_hash_table_insert(seen, key, store); }
       else g_free(key);
     }

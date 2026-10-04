@@ -469,7 +469,7 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
 
     if(key)
     {
-      _rt_cached_t *store = malloc(sizeof(_rt_cached_t));
+      _rt_cached_t *store = calloc(1, sizeof(_rt_cached_t));
       if(store)
       {
         store->kind = diff ? 1 : ((snap1 && snap2) ? 0 : 2);

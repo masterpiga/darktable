@@ -93,7 +93,7 @@ static gboolean _pick_host(JsonObject *root, JsonArray *edits, _host_t *host)
     const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
     if(!op) { g_list_free_full(forms, (GDestroyNotify)dt_masks_free_form); continue; }
 
-    g_strlcpy(host->operation, op, sizeof(host->operation));
+    dt_strlcpy_to_fixed(host->operation, op, sizeof(host->operation));
     host->blendop_version = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
     host->bp = bp;
     host->forms = forms;
@@ -680,7 +680,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
 
     if(key)
     {
-      _sa_cached_t *store = malloc(sizeof(_sa_cached_t));
+      _sa_cached_t *store = calloc(1, sizeof(_sa_cached_t));
       if(store)
       {
         store->verdict = verdict; store->outcome = outcome;

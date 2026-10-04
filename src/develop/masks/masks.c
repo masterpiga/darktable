@@ -616,7 +616,7 @@ dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid)
   _check_id(dest);
   memcpy(dest->source, base->source, sizeof(dest->source));
   dest->version = base->version;
-  g_strlcpy(dest->name, base->name, sizeof(dest->name));
+  dt_strlcpy_fixed_to_fixed(dest->name, sizeof(dest->name), base->name, sizeof(base->name));
   dev->forms = g_list_append(dev->forms, dest);
 
   // a container's members are copied too: dt_masks_group_duplicate_points
@@ -633,7 +633,7 @@ dt_mask_id_t dt_masks_form_copy(dt_develop_t *dev, const dt_mask_id_t formid)
       }
       const dt_mask_id_t nid = dt_masks_form_copy(dev, pt->formid);
       if(!dt_is_valid_maskid(nid)) continue;
-      dt_masks_point_group_t *npt = malloc(sizeof(dt_masks_point_group_t));
+      dt_masks_point_group_t *npt = calloc(1, sizeof(dt_masks_point_group_t));
       memcpy(npt, pt, sizeof(dt_masks_point_group_t));
       npt->formid = nid;
       npt->parentid = dest->formid;
@@ -1082,7 +1082,7 @@ dt_masks_point_group_t *dt_masks_group_copy_marker(GList *forms,
                                                    dt_masks_form_t *dest,
                                                    const dt_masks_point_group_t *marker)
 {
-  dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
+  dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
   if(!pt) return NULL;
   memcpy(pt, marker, sizeof(dt_masks_point_group_t));
   pt->formid = dt_masks_new_marker_id(forms);
@@ -1459,7 +1459,7 @@ static gboolean _splice_nested(GList **forms,
           if(dt_masks_point_is_marker(cp)) continue;
           if(keep)
           {
-            dt_masks_point_group_t *copy = malloc(sizeof(dt_masks_point_group_t));
+            dt_masks_point_group_t *copy = calloc(1, sizeof(dt_masks_point_group_t));
             memcpy(copy, cp, sizeof(dt_masks_point_group_t));
             cp = copy;
           }
@@ -1495,14 +1495,14 @@ static dt_masks_form_t *_copy_group(GList **forms,
                                     const dt_masks_form_t *src,
                                     const dt_mask_id_t parent)
 {
-  dt_masks_form_t *copy = malloc(sizeof(dt_masks_form_t));
+  dt_masks_form_t *copy = calloc(1, sizeof(dt_masks_form_t));
   memcpy(copy, src, sizeof(dt_masks_form_t));
   copy->points = NULL;
   copy->formid = _run_marker_id(*forms, parent, src->formid);
   *forms = g_list_append(*forms, copy);
   for(const GList *l = src->points; l; l = g_list_next(l))
   {
-    dt_masks_point_group_t *pt = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *pt = calloc(1, sizeof(dt_masks_point_group_t));
     memcpy(pt, l->data, sizeof(dt_masks_point_group_t));
     pt->parentid = copy->formid;
     if(dt_masks_point_is_marker(pt))
@@ -1732,7 +1732,7 @@ static gboolean _collapse_single_members(GList *forms, dt_masks_form_t *grp, con
 
     // the element takes the reference's place and parent, and the group
     // stays behind unreferenced, as a dissolved one does
-    dt_masks_point_group_t *e = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *e = calloc(1, sizeof(dt_masks_point_group_t));
     memcpy(e, m, sizeof(dt_masks_point_group_t));
     e->parentid = grp->formid;
     e->state = (e->state & ~(DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN))
@@ -2053,7 +2053,7 @@ static gboolean _collapse_plain_wrappers(GList *forms, dt_masks_form_t *grp, con
     if(!f || (f->type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER))) continue;
 
     // the member is copied: another reference to the group keeps it
-    dt_masks_point_group_t *e = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *e = calloc(1, sizeof(dt_masks_point_group_t));
     memcpy(e, m, sizeof(dt_masks_point_group_t));
     e->parentid = grp->formid;
     free(ref);

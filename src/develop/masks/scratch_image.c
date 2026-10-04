@@ -159,13 +159,13 @@ void dt_masks_scratch_seed_iop_order(const dt_imgid_t imgid,
   GList *list = dt_ioppr_get_iop_order_list(imgid, FALSE);
   if(!list) return;
 
-  dt_iop_order_entry_t *entry = malloc(sizeof(dt_iop_order_entry_t));
+  dt_iop_order_entry_t *entry = calloc(1, sizeof(dt_iop_order_entry_t));
   if(!entry)
   {
     dt_ioppr_iop_order_list_free(list);
     return;
   }
-  g_strlcpy(entry->operation, operation, sizeof(entry->operation));
+  dt_strlcpy_to_fixed(entry->operation, operation, sizeof(entry->operation));
   entry->instance = multi_priority;
   entry->name[0] = '\0';
   entry->o.iop_order = 0;

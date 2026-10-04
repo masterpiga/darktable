@@ -120,7 +120,7 @@ static void _raster_duplicate_points(dt_develop_t *const dev,
 {
   for(GList *pts = base->points; pts; pts = g_list_next(pts))
   {
-    dt_masks_point_raster_t *p = malloc(sizeof(dt_masks_point_raster_t));
+    dt_masks_point_raster_t *p = calloc(1, sizeof(dt_masks_point_raster_t));
     memcpy(p, pts->data, sizeof(dt_masks_point_raster_t));
     dest->points = g_list_append(dest->points, p);
   }

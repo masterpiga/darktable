@@ -2391,7 +2391,7 @@ static void _collect_parametric_forms(dt_masks_form_t *grp,
 
     if(f->type & DT_MASKS_PARAMETRIC)
     {
-      _parametric_ref_t *const ref = malloc(sizeof(_parametric_ref_t));
+      _parametric_ref_t *const ref = calloc(1, sizeof(_parametric_ref_t));
       ref->grpid = grp->formid;
       ref->formid = f->formid;
       *out = g_list_prepend(*out, ref);
@@ -3969,7 +3969,7 @@ dt_mask_id_t dt_masks_model_compose(dt_masks_form_t *grp,
     dt_masks_point_group_t *root = node->data;
     dt_masks_form_t *sub = _new_nested_group();
     if(!sub) return INVALID_MASKID;
-    dt_masks_point_group_t *mk = malloc(sizeof(dt_masks_point_group_t));
+    dt_masks_point_group_t *mk = calloc(1, sizeof(dt_masks_point_group_t));
     memcpy(mk, root, sizeof(dt_masks_point_group_t));
     mk->formid = dt_masks_new_marker_id(darktable.develop->forms);
     mk->parentid = sub->formid;
@@ -9062,7 +9062,7 @@ gboolean dt_masks_model_rename_form(dt_masks_form_t *form, const char *txt)
   else
     return FALSE;
   if(!strcmp(name, form->name)) return FALSE;
-  g_strlcpy(form->name, name, sizeof(form->name));
+  dt_strlcpy_to_fixed(form->name, name, sizeof(form->name));
   return TRUE;
 }
 
@@ -9079,7 +9079,7 @@ void dt_masks_model_raster_names_follow_sources(dt_masks_form_t *grp)
     if(!src) continue;
     gchar *label = dt_history_item_get_name(src);
     gchar *stored = g_strdup_printf("%s %s", _form_type_prefix(f), label);
-    if(!strcmp(f->name, stored)) g_strlcpy(f->name, _form_type_prefix(f), sizeof(f->name));
+    if(!strcmp(f->name, stored)) dt_strlcpy_to_fixed(f->name, _form_type_prefix(f), sizeof(f->name));
     g_free(stored);
     g_free(label);
   }
@@ -17180,7 +17180,7 @@ static void _add_raster_mask(dt_iop_module_t *self,
 
   dt_masks_form_t *form = dt_masks_create(DT_MASKS_RASTER);
   dt_masks_point_raster_t *p = calloc(1, sizeof(dt_masks_point_raster_t));
-  g_strlcpy(p->source, src->op, sizeof(p->source));
+  dt_strlcpy_to_fixed(p->source, src->op, sizeof(p->source));
   p->instance = src->multi_priority;
   p->id = id;
   form->points = g_list_append(form->points, p);
@@ -17195,7 +17195,7 @@ static void _add_raster_mask(dt_iop_module_t *self,
   // named by its type alone, the element shows its source's current name (see
   // dt_masks_gui_form_display_name). Set AFTER save_creation, whose de-dup numbering names
   // it "raster mask #N"
-  g_strlcpy(form->name, _("raster mask"), sizeof(form->name));
+  dt_strlcpy_to_fixed(form->name, _("raster mask"), sizeof(form->name));
   dt_dev_add_masks_history_item(darktable.develop, self, TRUE);
 
   dt_masks_gui_build_list(self);

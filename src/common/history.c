@@ -725,7 +725,8 @@ static void _locked_masks_restore(dt_develop_t *dev_dest,
     // along would otherwise send it off to create another instance
     if(dest)
     {
-      g_strlcpy(mod->multi_name, dest->multi_name, sizeof(mod->multi_name));
+      dt_strlcpy_fixed_to_fixed(mod->multi_name, sizeof(mod->multi_name),
+                                dest->multi_name, sizeof(dest->multi_name));
       mod->multi_name_hand_edited = dest->multi_name_hand_edited;
     }
     dt_develop_blend_keep_locked_mask(&blend, mod->blend_params);

@@ -975,7 +975,8 @@ static void _migrate_raster(dt_iop_module_t *module,
   dt_masks_form_t *raster_form = dt_masks_create(DT_MASKS_RASTER);
   dt_masks_form_t *grp = dt_masks_create(DT_MASKS_GROUP);
   dt_masks_point_raster_t *rp = calloc(1, sizeof(dt_masks_point_raster_t));
-  g_strlcpy(rp->source, o->raster_mask_source, sizeof(rp->source));
+  dt_strlcpy_fixed_to_fixed(rp->source, sizeof(rp->source),
+                            o->raster_mask_source, sizeof(o->raster_mask_source));
   rp->instance = o->raster_mask_instance;
   rp->id = o->raster_mask_id;
   raster_form->points = g_list_append(raster_form->points, rp);
@@ -1386,7 +1387,7 @@ void dt_masks_migrate_classic_to_flexi(dt_iop_module_t *module,
     // defer: dt_masks_finish_flexi_migrations() knows the *final*
     // history_end and runs before dt_masks_read_masks_history(), so the
     // form it writes actually survives being read back.
-    _pending_flexi_migration_t *pending = malloc(sizeof(_pending_flexi_migration_t));
+    _pending_flexi_migration_t *pending = calloc(1, sizeof(_pending_flexi_migration_t));
     pending->module = module;
     pending->classic = o;
     pending->bp = bp;

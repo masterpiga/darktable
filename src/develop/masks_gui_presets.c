@@ -91,7 +91,7 @@ static void _flexi_layout_capture_nested(GArray *out,
     _flexi_layout_node_t node = { .within = marker->state & DT_MASKS_STATE_WITHIN,
                                   .opacity = marker->group_opacity,
                                   .parent = parent };
-    g_strlcpy(node.name, marker->name, sizeof(node.name));
+    dt_strlcpy_fixed_to_fixed(node.name, sizeof(node.name), marker->name, sizeof(marker->name));
     g_array_append_val(out, node);
     _flexi_layout_capture_nested(out, sub, (int32_t)out->len - 1, depth + 1);
   }
@@ -224,9 +224,9 @@ static GList *_flexi_preset_list_load(void)
   {
     const int n = sqlite3_column_bytes(stmt, 1) / (int)sizeof(_flexi_layout_node_t);
     if(n <= 0) continue;
-    _flexi_preset_t *p = malloc(sizeof(_flexi_preset_t));
+    _flexi_preset_t *p = calloc(1, sizeof(_flexi_preset_t));
     p->name = g_strdup((const gchar *)sqlite3_column_text(stmt, 0));
-    p->nodes = malloc(n * sizeof(_flexi_layout_node_t));
+    p->nodes = calloc(n, sizeof(_flexi_layout_node_t));
     memcpy(p->nodes, sqlite3_column_blob(stmt, 1), n * sizeof(_flexi_layout_node_t));
     p->n = n;
     out = g_list_append(out, p);
@@ -504,7 +504,7 @@ static gboolean _flexi_builtin_parse_group(_flexi_builtin_t *b,
     node.opacity = CLAMPF(json_object_get_double_member(src->obj, "opacity"), 0.0f, 1.0f);
   src = _flexi_chain_find(chain, nc, "name");
   const gchar *name = src ? _json_string(src->obj, "name") : NULL;
-  if(name) g_strlcpy(node.name, name, sizeof(node.name));
+  if(name) dt_strlcpy_to_fixed(node.name, name, sizeof(node.name));
 
   // the notes, and the key they go by: that of the object they are written
   // in, or with none, of the group as its innermost preset defines it. Within
@@ -713,7 +713,12 @@ static _flexi_layout_node_t *_flexi_builtin_nodes(const _flexi_builtin_t *b)
   _flexi_layout_node_t *nodes = g_new(_flexi_layout_node_t, b->nodes->len);
   memcpy(nodes, b->nodes->data, b->nodes->len * sizeof(_flexi_layout_node_t));
   for(guint i = 0; i < b->nodes->len; i++)
-    if(nodes[i].name[0]) g_strlcpy(nodes[i].name, _(nodes[i].name), sizeof(nodes[i].name));
+  {
+    // gettext hands back its argument when there is no translation, and
+    // dt_strlcpy_to_fixed clears the destination before copying
+    const char *tr = nodes[i].name[0] ? _(nodes[i].name) : nodes[i].name;
+    if(tr != nodes[i].name) dt_strlcpy_to_fixed(nodes[i].name, tr, sizeof(nodes[i].name));
+  }
   return nodes;
 }
 
