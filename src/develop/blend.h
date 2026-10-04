@@ -39,7 +39,7 @@
 // 2 and 3 were "separate panel, left" and "separate panel, right", one position
 // each. They are now a single one whose side is not part of the choice: the
 // panel comes out on whichever edge the user reaches for and stays there once
-// pinned (see dt_masks_gui_panel_side_right, and _flexi_sliver_button in gui/gtk.c).
+// pinned (see dt_masks_gui_panel_side_right, and _flexi_sliver_pressed in gui/gtk.c).
 // Read only by dt_masks_gui_panel_position, which migrates them and never returns
 // them; nothing else may compare against these.
 #define MASKS_PANEL_POS_LEGACY_LEFT  2
@@ -475,7 +475,7 @@ typedef struct dt_iop_gui_blend_data_t
 
   // flexi-only: opens the menu that links or copies elements from other
   // modules' masks, or adds or uses another module's whole mask. See
-  // _masks_import_btn_press
+  // _masks_import_btn_pressed
   GtkWidget *masks_import_btn;
   GtkWidget *masks_shapes[DEVELOP_MASKS_NB_SHAPES];
   int masks_type[DEVELOP_MASKS_NB_SHAPES];
@@ -623,17 +623,11 @@ typedef struct dt_iop_gui_blend_data_t
   int masks_refine_scope_kind;
   dt_mask_id_t masks_refine_scope_formid;
   gboolean masks_refine_updating;
-  // one-shot guard: a control in a row or header that lets its press or release
-  // bubble on up to the row/header event box, which would toggle the selection,
-  // sets this when it acts so the next release only selects, never deselects.
-  // Cleared on a genuine row/header press.
+  // one-shot guard: set where the next release on a row or group header must
+  // not toggle the selection (the second press of a double-click that stepped
+  // into an AI object, a group drag that still ends in a release), so that
+  // release only selects, never deselects. Cleared on a genuine row/header press.
   gboolean masks_skip_group_select_release;
-  // event time the flag above was last set at: a control that sets the flag
-  // on a press lets that same press bubble on (so drag sources can still arm),
-  // and _row_click_press, which clears a stale flag, must not clear one its own
-  // press just set. Comparing event times tells the two cases apart without
-  // needing a widget-identity check.
-  guint32 masks_skip_group_select_release_time;
   // set around _auto_expand_selected_row's own programmatic
   // gtk_toggle_button_set_active calls (see blend_gui.c): its own
   // "toggling this row's expander also selects it" side effect is meant for
@@ -667,14 +661,12 @@ typedef struct dt_iop_gui_blend_data_t
   // reopen what the user just closed. INVALID_MASKID when nothing is pending.
   dt_mask_id_t masks_group_collapse_click;
   // set by _row_drag_begin (element rows' handle/name), consumed by
-  // _row_click_release: a plain click that turns into a real drag still gets
-  // its row selected (see _row_drag_begin), so the eventual release -- drop or
-  // cancel alike -- must not also run the plain-click select/toggle a second
-  // time, which would flip an already-selected row straight back off. Also
-  // covers a drag source spuriously arming for what was, from the user's
-  // perspective, an ordinary click with no real movement (observed on macOS):
-  // either way, by the time release fires the row is already correctly
-  // selected, so this flag is enough to make the release a no-op.
+  // _row_click_release: a press that turned into a drag is settled by the
+  // drag (a drop selects what it moved; a drag that ends where it began, a
+  // drag source spuriously arming for an ordinary click as observed on macOS,
+  // selects its row, see _masks_drag_end), so a release that still reaches
+  // the row afterwards must not also run the plain-click select/toggle, which
+  // would flip the row straight back off.
   gboolean masks_row_click_handled;
   // the AI object the canvas was stepped into when a row's last click began:
   // that click's own release can step out of it (deselecting the object

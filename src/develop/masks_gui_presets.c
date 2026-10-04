@@ -806,7 +806,7 @@ static void _flexi_preset_delete_action(GSimpleAction *action,
 }
 
 // appends a "presets" section (group-layout presets) directly to `menu` --
-// the menu of the toolbar's presets button (see _masks_presets_press)
+// the menu of the toolbar's presets button (see _masks_presets_pressed)
 void dt_masks_gui_add_presets_menu(GMenu *menu, GtkWidget *anchor, dt_iop_module_t *module)
 {
   GActionGroup *action_group = gtk_widget_get_action_group(anchor, "masks_presets");

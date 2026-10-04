@@ -951,15 +951,17 @@ dialog .sidebar row:selected:hover label,
   border-width: 2px;
 }
 
-/* a cluster is dropped beside as one element, so it takes the same line */
-#mask-shape-row.mask-list-row-drop-above,
-.mask-cluster.mask-list-row-drop-above
+/* the insertion line beside an element or a cluster (a cluster is dropped
+   beside as one element). Neither paints anything itself, so the line goes on
+   the part showing at that edge, its header or bottom-most part (see
+   _drop_line_paint_widget): an inset shadow, drawn over that part's own
+   background and reserving no space */
+.masks-list .mask-drop-line-above
 {
   box-shadow: inset 0 2px #ffffff;
 }
 
-#mask-shape-row.mask-list-row-drop-below,
-.mask-cluster.mask-list-row-drop-below
+.masks-list .mask-drop-line-below
 {
   box-shadow: inset 0 -2px #ffffff;
 }
@@ -1098,12 +1100,21 @@ dialog .sidebar row:selected:hover label,
   border-bottom: 2px solid transparent;
 }
 
-/* group reorder DnD: a bright insertion line spanning the whole group block
-   (header + its elements), not just the header row, so it reads as landing
-   above/below the group (see _group_drop_motion / _group_drop_leave). The gap
-   between two groups is one slot with two names ("below the upper", "above the
-   lower"); _canonical_drop_frame collapses them onto the lower group's top
-   edge, so only one of these ever lights up for a given gap. */
+/* the block's content stops short of its bottom edge by the line's width: its
+   last element reaches down to it and painted over the line below the group,
+   which then read as the line below that element. The header's own top margin
+   already keeps the top edge clear */
+.mask-group-block > box
+{
+  margin-bottom: 2px;
+}
+
+/* DnD: a bright insertion line spanning the whole group block (header + its
+   elements), as wide as an element dropped beside the group would be, so it
+   reads as landing above/below the group (see _drop_motion). The gap between
+   two groups is one slot with two names ("below the upper", "above the
+   lower"); _drop_line draws both on the lower group's top edge, so only one of
+   these ever lights up for a given gap. */
 .mask-group-block.mask-list-row-drop-above
 {
   border-top-color: #ffffff;
@@ -1295,6 +1306,16 @@ dialog .sidebar row:selected:hover label,
 #mask-shape-row.mask-list-row-hover
 {
   background-color: transparent;
+}
+
+/* DnD: the group a drop would land in (see _drop_group_of) lights its header
+   up like a hovered one, over any selection shade, so where the element goes
+   is read off the group as well as off the insertion line */
+.mask-group-block.mask-list-row-drop > box > * > #mask-group-header-row
+{
+  background-color: transparent;
+  background-image: linear-gradient(to bottom, @mask_hover_top, @mask_hover);
+  outline-color: @mask_hover;
 }
 
 /* header names follow their header's state through the same selectors as its

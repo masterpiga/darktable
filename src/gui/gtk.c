@@ -3878,58 +3878,69 @@ static void _flexi_header_pressed(GtkGestureSingle *gesture,
 
 // Set once the pointer has actually moved far enough for the press to be a
 // resize rather than a click, so releasing without moving can mean "hide"
-// without stealing the drag (see _flexi_handle_button_callback).
+// without stealing the drag (see _flexi_handle_released).
 static gboolean _flexi_handle_dragged = FALSE;
 
-static gboolean _flexi_handle_button_callback(GtkWidget *w,
-                                              const GdkEventButton *e,
-                                              gpointer user_data)
+// claimed whatever the button, so no press on the grip reaches the widgets
+// beneath it or the window's shortcut dispatcher
+static void _flexi_handle_pressed(GtkGestureSingle *gesture,
+                                  const gint n_press,
+                                  const gdouble x,
+                                  const gdouble y,
+                                  GtkWidget *widget)
 {
-  if(e->button == GDK_BUTTON_PRIMARY)
-  {
-    if(e->type == GDK_BUTTON_PRESS)
-    {
-      GtkWidget *widget = (GtkWidget *)user_data;
-      panel_drag_start_x = e->x_root;
-      panel_drag_start_size = gtk_widget_get_allocated_width(widget);
-      panel_canvas_toast_shown = FALSE;
-      darktable.gui->widgets.panel_handle_dragging = TRUE;
-      _flexi_handle_dragged = FALSE;
-    }
-    else if(e->type == GDK_BUTTON_RELEASE)
-    {
-      panel_canvas_toast_shown = FALSE;
-      darktable.gui->widgets.panel_handle_dragging = FALSE;
-      // a press that never moved was a click, and a click here hides the panel.
-      // Deciding on release rather than press is what lets one control carry
-      // both: the drag has already declared itself by then.
-      if(!_flexi_handle_dragged)
-      {
-        // the handle is about to be unmapped with the pointer still inside it,
-        // and an unmapped widget is not guaranteed a leave-notify, so put the
-        // cursor back here rather than relying on the crossing handler
-        dt_control_change_cursor("default");
-        dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, TRUE, TRUE);
-      }
-    }
-  }
-  return TRUE;
+  dt_gui_claim(gesture);
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+
+  const GdkEvent *event = gtk_gesture_get_last_event(GTK_GESTURE(gesture), NULL);
+  gdouble root_x = 0, root_y = 0;
+  if(event) dt_gui_get_event_coords(event, &root_x, &root_y);
+  panel_drag_start_x = root_x;
+  panel_drag_start_size = gtk_widget_get_allocated_width(widget);
+  panel_canvas_toast_shown = FALSE;
+  darktable.gui->widgets.panel_handle_dragging = TRUE;
+  _flexi_handle_dragged = FALSE;
 }
 
-static gboolean _flexi_handle_motion_callback(GtkWidget *w,
-                                              const GdkEventMotion *e,
-                                              const gpointer user_data)
+// connected as "released" alone: dt_gui_connect_click() would also turn a
+// canceled press into a release, which here would read as a click and fold the
+// panel away
+static void _flexi_handle_released(GtkGestureSingle *gesture,
+                                   const gint n_press,
+                                   const gdouble x,
+                                   const gdouble y,
+                                   GtkWidget *widget)
 {
-  GtkWidget *widget = (GtkWidget *)user_data;
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  panel_canvas_toast_shown = FALSE;
+  darktable.gui->widgets.panel_handle_dragging = FALSE;
+  // a press that never moved was a click, and a click here hides the panel.
+  // Deciding on release rather than press is what lets one control carry
+  // both: the drag has already declared itself by then.
+  if(!_flexi_handle_dragged)
+  {
+    // the handle is about to be unmapped with the pointer still inside it,
+    // and an unmapped widget is not guaranteed a leave-notify, so put the
+    // cursor back here rather than relying on the crossing handler
+    dt_control_change_cursor("default");
+    dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, TRUE, TRUE);
+  }
+}
 
+static void _flexi_handle_motion(GtkEventControllerMotion *controller,
+                                 const gdouble x,
+                                 const gdouble y,
+                                 GtkWidget *widget)
+{
   // A drag lasts exactly as long as the button is held, so read that off the
   // event rather than trusting the flag on its own. The flag is only cleared by
   // the release handler, and a release that never reaches this widget (a grab
   // taken elsewhere, the panel collapsing out from under the pointer) used to
   // leave it set for good: the panel then resized on a bare hover, since this is
   // the only condition the resize is under, and the cursor stayed stuck because
-  // _flexi_handle_cursor_callback stands down while a drag is in progress.
-  if(darktable.gui->widgets.panel_handle_dragging && !(e->state & GDK_BUTTON1_MASK))
+  // _flexi_handle_crossing stands down while a drag is in progress.
+  if(darktable.gui->widgets.panel_handle_dragging
+     && !(dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller)) & GDK_BUTTON1_MASK))
   {
     darktable.gui->widgets.panel_handle_dragging = FALSE;
     // the pointer is over the handle (this is its own motion event), so the
@@ -3939,7 +3950,13 @@ static gboolean _flexi_handle_motion_callback(GtkWidget *w,
 
   if(darktable.gui->widgets.panel_handle_dragging)
   {
-    const gdouble delta_x = e->x_root - panel_drag_start_x;
+    gdouble root_x = 0, root_y = 0;
+    GdkEvent *event = dt_gui_get_current_event(GTK_EVENT_CONTROLLER(controller));
+    if(event) dt_gui_get_event_coords(event, &root_x, &root_y);
+#if !GTK_CHECK_VERSION(4, 0, 0)
+    if(event) gdk_event_free(event);
+#endif
+    const gdouble delta_x = root_x - panel_drag_start_x;
     // a few pixels of slop, so the hand shaking on a click does not turn it
     // into a resize (and stop it being read as a click)
     if(fabs(delta_x) > DT_PIXEL_APPLY_DPI(3)) _flexi_handle_dragged = TRUE;
@@ -3951,14 +3968,12 @@ static gboolean _flexi_handle_motion_callback(GtkWidget *w,
     // min/max_panel_width alone: that ignored the window width, the other
     // panels and min_center_width, so this handle could squeeze the canvas to
     // nothing. Same drag-start convention (panel_drag_start_size, set by
-    // _flexi_handle_button_callback on press), so it can be used as-is.
+    // _flexi_handle_pressed), so it can be used as-is.
     _panel_set_side_panel_width(widget, DT_UI_PANEL_FLEXI, signed_delta);
     gtk_widget_queue_resize(widget);
     // the panel just got wider or narrower, so it covers more or less canvas
     _flexi_report_occlusion(darktable.gui->ui);
-    return TRUE;
   }
-  return FALSE;
 }
 
 // A GtkDrawingArea has no CSS gadget, so GTK3 never folds min-width into its
@@ -3975,9 +3990,8 @@ static int _flexi_css_min_width(GtkWidget *w, const int fallback)
   return v > 0 ? v : fallback;
 }
 
-static gboolean _flexi_handle_cursor_callback(GtkWidget *w,
-                                              const GdkEventCrossing *e,
-                                              gpointer user_data)
+static void _flexi_handle_crossing(GtkEventControllerMotion *controller,
+                                   const gboolean entering)
 {
   // the flexi handle is always a side (left/right) handle, never the
   // bottom one, so it's always the ew-resize cursor -- see
@@ -3985,21 +3999,35 @@ static gboolean _flexi_handle_cursor_callback(GtkWidget *w,
   // equivalent used by the other panel handles
   // the arrow drawn on the handle brightens under the pointer, so the crossing
   // has to repaint it (a GtkDrawingArea gets no PRELIGHT state of its own)
-  g_object_set_data(G_OBJECT(w), "flexi-handle-hover",
-                    GINT_TO_POINTER(e->type == GDK_ENTER_NOTIFY));
+  GtkWidget *w = dt_gui_get_widget(controller);
+  g_object_set_data(G_OBJECT(w), "flexi-handle-hover", GINT_TO_POINTER(entering));
   gtk_widget_queue_draw(w);
 
   // leave the cursor alone during a real drag: it carries on outside the handle
   // until the button comes up. A flag set with no button down is stale (see
-  // _flexi_handle_motion_callback), and honoring it here is what left the
+  // _flexi_handle_motion), and honoring it here is what left the
   // pointer stuck in "ew-resize" over the whole canvas.
   if(darktable.gui->widgets.panel_handle_dragging)
   {
-    if(e->state & GDK_BUTTON1_MASK) return FALSE;
+    if(dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller)) & GDK_BUTTON1_MASK)
+      return;
     darktable.gui->widgets.panel_handle_dragging = FALSE;
   }
-  dt_control_change_cursor((e->type == GDK_ENTER_NOTIFY) ? "ew-resize" : "default");
-  return TRUE;
+  dt_control_change_cursor(entering ? "ew-resize" : "default");
+}
+
+static void _flexi_handle_enter(GtkEventControllerMotion *controller,
+                                gdouble x,
+                                gdouble y,
+                                GtkWidget *widget)
+{
+  _flexi_handle_crossing(controller, TRUE);
+}
+
+static void _flexi_handle_leave(GtkEventControllerMotion *controller,
+                                GtkWidget *widget)
+{
+  _flexi_handle_crossing(controller, FALSE);
 }
 
 // TRUE while the handle is a visible grip carrying its fold-away arrow, FALSE
@@ -4011,7 +4039,7 @@ static gboolean _flexi_handle_is_shown(void)
 }
 
 // The handle is both the resize grip and the panel's fold-away control (a
-// click on it collapses, see _flexi_handle_button_callback), so it says
+// click on it collapses, see _flexi_handle_released), so it says
 // so: an arrow pointing the way that fold sends the panel, drawn like the view's
 // own border expanders (_draw_borders) and like the canvas halo's. Opaque, at
 // the theme's own colors: it stands on the image, and a translucent strip there
@@ -4121,8 +4149,10 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
                                  dt_conf_get_bool("panel_scrollbars_always_visible")
                                  ? GTK_POLICY_ALWAYS
                                  : GTK_POLICY_AUTOMATIC);
+#if !GTK_CHECK_VERSION(4, 0, 0)
   g_signal_connect(G_OBJECT(scroll), "scroll-event",
                    G_CALLBACK(_ui_init_panel_container_center_scroll_event), NULL);
+#endif
 
   // the handle's row: the scrollable content, and the handle beside it. Beside
   // the content rather than beside the whole panel, so the header keeps the full
@@ -4145,6 +4175,16 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
 
   ui->flexi_content = dt_gui_vbox();
   gtk_container_add(GTK_CONTAINER(scroll), ui->flexi_content);
+#if GTK_CHECK_VERSION(4, 0, 0)
+  /* GTK4 panel-scroll gating, see _panel_center_scroll */
+  {
+    GtkEventController *panel_scroll =
+      gtk_event_controller_scroll_new(ui->flexi_content, GTK_EVENT_CONTROLLER_SCROLL_BOTH_AXES);
+    gtk_event_controller_set_propagation_phase(panel_scroll, GTK_PHASE_BUBBLE);
+    dt_gui_add_controller(ui->flexi_content, panel_scroll);
+    g_signal_connect(panel_scroll, "scroll", G_CALLBACK(_panel_center_scroll), NULL);
+  }
+#endif
 
   // the scrollbar appears and disappears with the content's height, and the
   // header's inset follows it (see _flexi_sync_header_scrollbar_pad)
@@ -4167,16 +4207,10 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
                         GDK_BUTTON_PRESS_MASK | GDK_BUTTON_RELEASE_MASK
                         | GDK_ENTER_NOTIFY_MASK
                         | GDK_LEAVE_NOTIFY_MASK | GDK_POINTER_MOTION_MASK);
-  g_signal_connect(G_OBJECT(handle), "button-press-event",
-                   G_CALLBACK(_flexi_handle_button_callback), widget);
-  g_signal_connect(G_OBJECT(handle), "button-release-event",
-                   G_CALLBACK(_flexi_handle_button_callback), widget);
-  g_signal_connect(G_OBJECT(handle), "motion-notify-event",
-                   G_CALLBACK(_flexi_handle_motion_callback), widget);
-  g_signal_connect(G_OBJECT(handle), "leave-notify-event",
-                   G_CALLBACK(_flexi_handle_cursor_callback), handle);
-  g_signal_connect(G_OBJECT(handle), "enter-notify-event",
-                   G_CALLBACK(_flexi_handle_cursor_callback), handle);
+  GtkGestureSingle *handle_gesture = dt_gui_connect_click(handle, _flexi_handle_pressed, NULL, widget);
+  g_signal_connect(handle_gesture, "released", G_CALLBACK(_flexi_handle_released), widget);
+  dt_gui_connect_motion(handle, _flexi_handle_motion, _flexi_handle_enter, _flexi_handle_leave,
+                        widget);
   dt_ui_flexi_panel_update_handle(ui);
   gtk_widget_show(handle);
 
@@ -4375,17 +4409,28 @@ static void _flexi_sliver_hint(dt_ui_t *ui, const gboolean right)
   g_free(hint);
 }
 
-static gboolean _flexi_sliver_crossing(GtkWidget *w, GdkEventCrossing *e, gpointer user_data)
+static void _flexi_sliver_enter(GtkEventControllerMotion *controller,
+                                gdouble x,
+                                gdouble y,
+                                GtkWidget *w)
 {
   dt_ui_t *ui = darktable.gui->ui;
-  if(e->type == GDK_ENTER_NOTIFY) _flexi_sliver_hint(ui, _flexi_sliver_is_right(ui, w));
-  else if(e->type == GDK_LEAVE_NOTIFY) dt_control_hinter_message("");
-  return FALSE;
+  _flexi_sliver_hint(ui, _flexi_sliver_is_right(ui, w));
 }
 
-static gboolean _flexi_sliver_button(GtkWidget *w, GdkEventButton *e, gpointer user_data)
+static void _flexi_sliver_leave(GtkEventControllerMotion *controller, GtkWidget *w)
 {
-  if(e->button != GDK_BUTTON_PRIMARY || e->type != GDK_BUTTON_PRESS) return FALSE;
+  dt_control_hinter_message("");
+}
+
+static void _flexi_sliver_pressed(GtkGestureSingle *gesture,
+                                  const gint n_press,
+                                  const gdouble x,
+                                  const gdouble y,
+                                  GtkWidget *w)
+{
+  if(gtk_gesture_single_get_current_button(gesture) != GDK_BUTTON_PRIMARY) return;
+  dt_gui_claim(gesture);
   dt_ui_t *ui = darktable.gui->ui;
   const gboolean right = _flexi_sliver_is_right(ui, w);
 
@@ -4397,7 +4442,6 @@ static gboolean _flexi_sliver_button(GtkWidget *w, GdkEventButton *e, gpointer u
     dt_ui_flexi_panel_set_collapsed(ui, TRUE, TRUE, TRUE);
   else
     _flexi_sliver_activate(ui, right);
-  return TRUE;
 }
 
 // How wide the revealed band is, and how close the pointer has to get to summon
@@ -4429,7 +4473,7 @@ static int _flexi_halo_width(GtkWidget *halo)
 // for a left-docked panel the two land on the same strip, with the handle on
 // top. Every press meant for the scrollbar went to the handle instead: a drag
 // resized the panel and a click folded it away (see
-// _flexi_handle_button_callback).
+// _flexi_handle_released).
 //
 // Putting the scrollbar on the panel's *outer* edge keeps them apart whichever
 // side the panel is docked on, and leaves the handle a clear strip of its own.
@@ -4536,12 +4580,8 @@ static GtkWidget *_flexi_build_sliver(dt_ui_t *ui, const gboolean right)
   gtk_widget_set_events(s, GDK_BUTTON_PRESS_MASK | GDK_ENTER_NOTIFY_MASK
                            | GDK_LEAVE_NOTIFY_MASK);
   g_signal_connect(G_OBJECT(s), "draw", G_CALLBACK(_flexi_sliver_draw), NULL);
-  g_signal_connect(G_OBJECT(s), "enter-notify-event",
-                   G_CALLBACK(_flexi_sliver_crossing), NULL);
-  g_signal_connect(G_OBJECT(s), "leave-notify-event",
-                   G_CALLBACK(_flexi_sliver_crossing), NULL);
-  g_signal_connect(G_OBJECT(s), "button-press-event",
-                   G_CALLBACK(_flexi_sliver_button), NULL);
+  dt_gui_connect_motion(s, NULL, _flexi_sliver_enter, _flexi_sliver_leave, s);
+  dt_gui_connect_click(s, _flexi_sliver_pressed, NULL, s);
   gtk_widget_set_no_show_all(s, TRUE);
   gtk_widget_hide(s);
   return s;
@@ -4613,13 +4653,9 @@ static GtkWidget *_flexi_build_halo(dt_ui_t *ui, const gboolean right)
   gtk_widget_set_events(h, GDK_BUTTON_PRESS_MASK | GDK_ENTER_NOTIFY_MASK
                            | GDK_LEAVE_NOTIFY_MASK);
   g_signal_connect(G_OBJECT(h), "draw", G_CALLBACK(_flexi_sliver_draw), NULL);
-  g_signal_connect(G_OBJECT(h), "enter-notify-event",
-                   G_CALLBACK(_flexi_sliver_crossing), NULL);
-  g_signal_connect(G_OBJECT(h), "leave-notify-event",
-                   G_CALLBACK(_flexi_sliver_crossing), NULL);
-  g_signal_connect(G_OBJECT(h), "button-press-event",
-                   G_CALLBACK(_flexi_sliver_button), NULL);
-  dt_gui_connect_motion(h, (GCallback)_flexi_halo_motion, NULL, NULL, h);
+  dt_gui_connect_motion(h, (GCallback)_flexi_halo_motion, _flexi_sliver_enter,
+                        _flexi_sliver_leave, h);
+  dt_gui_connect_click(h, _flexi_sliver_pressed, NULL, h);
   gtk_widget_set_no_show_all(h, TRUE);
   gtk_overlay_add_overlay(GTK_OVERLAY(dt_ui_center_base(ui)), h);
   gtk_widget_hide(h);
