@@ -327,7 +327,7 @@ static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
 // iterated on without a rebuild, else the installed one. The file is read
 // again whenever it changes, so an edit shows the next time a menu opens or
 // the list is rebuilt. Its strings are extracted for translation at build
-// time (tools/generate_masks_presets_strings.py) and translated here with _().
+// time (tools/generate_masks_presets_strings.sh) and translated here with _().
 //
 // A preset is a tree: "mask" is the mask's own group, and each group lists
 // the groups nested in it top-first, as the panel shows them. A group can

@@ -1116,24 +1116,20 @@ add_custom_target(
 
 # the masks panel's built-in group layout presets are read from JSON at
 # runtime; their strings are only extracted here, for translation
-find_package(Python3 COMPONENTS Interpreter QUIET)
-if(Python3_Interpreter_FOUND)
-  add_custom_command(
-    DEPENDS ${CMAKE_SOURCE_DIR}/data/masks_group_presets.json
-            ${CMAKE_SOURCE_DIR}/tools/generate_masks_presets_strings.py
-    OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
-    COMMAND ${Python3_EXECUTABLE} ${CMAKE_SOURCE_DIR}/tools/generate_masks_presets_strings.py
-            ${CMAKE_SOURCE_DIR}/data/masks_group_presets.json
-            ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
-    COMMENT "Generating masks group preset strings for translation"
-  )
-  add_custom_target(
-    generate_masks_presets_strings ALL
-    DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
-  )
-else()
-  message(STATUS "Missing python3, masks group preset strings will not be translatable")
-endif()
+add_custom_command(
+  DEPENDS ${CMAKE_SOURCE_DIR}/data/masks_group_presets.json
+          ${CMAKE_SOURCE_DIR}/tools/generate_masks_presets_strings.sh
+  OUTPUT ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
+  COMMAND bash ${CMAKE_SOURCE_DIR}/tools/generate_masks_presets_strings.sh
+          ${CMAKE_SOURCE_DIR}/data/masks_group_presets.json
+          ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
+  COMMENT "Generating masks group preset strings for translation"
+)
+
+add_custom_target(
+  generate_masks_presets_strings ALL
+  DEPENDS ${CMAKE_CURRENT_BINARY_DIR}/masks_group_presets_strings.h
+)
 
 add_custom_target(
   generate_preferences ALL

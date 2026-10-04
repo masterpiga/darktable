@@ -121,7 +121,7 @@ can be edited without rebuilding.
   The notes are looked up by that key each time the group is shown, so edits
   show on groups made earlier; changing an `id` detaches them.
 - Names, descriptions and notes are extracted for translation at build time
-  by `tools/generate_masks_presets_strings.py`.
+  by `tools/generate_masks_presets_strings.sh`.
 - Problems in the file are reported on the console, and the preset is
   skipped.
 

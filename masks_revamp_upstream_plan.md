@@ -36,9 +36,15 @@ Against master:
   selected by `DEVELOP_MASK_FLEXI` on the module. The classic fold stays: it is
   the reference the verification tools and the pixel suite compare against.
 - **UI.** The panel (`blend_gui.c`), its host and canvas placement (`gtk.c`,
-  `masks_gui_panel_host.c`), a darkroom toolbar toggle, slider and glyph
-  changes in `dtgtk/` and `bauhaus/`, CSS, and ten preferences under
-  `plugins/darkroom/masks/` and `plugins/darkroom/blend/`.
+  `masks_gui_panel_host.c`, `libs/masks_flexi_host.c`), a darkroom toolbar
+  toggle (`masks_gui_toolbar.c`), slider and glyph changes in `dtgtk/` and
+  `bauhaus/`, CSS, and eleven preferences under `plugins/darkroom/masks/` and
+  `plugins/darkroom/blend/`. The built-in group presets and their notes are a
+  data file, `data/masks_group_presets.json`. A bash build step
+  (`tools/generate_masks_presets_strings.sh`) extracts their strings for
+  translation into a header that only `xgettext` reads (`po/POTFILES.in`),
+  as `tools/generate_styles_string.sh` does for styles. The panel uses event controllers throughout, except
+  raw `scroll-event` on GTK3, as master does.
 - **Tools.** `--harvest-masks`, `--verify-masks` and `--check-masks` let a user
   hand over a reproducer for a mask that migrated wrong, and let anyone re-run
   the migration check. They do nothing unless their flag is given.
@@ -46,25 +52,25 @@ Against master:
 ### Size
 
 Code going upstream (`src/` and `data/`, without tests and docs): about
-**+42.6k / −5.6k lines**. The panel in `blend_gui.c` is the largest part, at
-about 18k.
+**+43.4k / −5.9k lines**. The panel in `blend_gui.c` is the largest part, at
+about 17k.
 
 | PR | Files | Lines |
 |---|---|---:|
-| 1 model | `masks.h`, `masks/masks.c`, `blend.h` | +3.0k / −0.4k |
+| 1 model | `masks.h`, `masks/masks.c`, `blend.h` | +3.0k / −0.5k |
 | 2 engine | `masks/group.c`, `group_internal.h` | +1.0k / −0.1k |
-| | `masks/{parametric,raster,object}.c` | +1.0k / −0.1k |
+| | `masks/{parametric,raster,object}.c` | +1.1k / −0.1k |
 | | `blend.c`, `pixelpipe_hb`, `imageop`, `develop`, `blendop.cl`, `blends/*`, `imagebuf.c` | +1.6k / −0.2k |
 | | `masks/migrate_legacy.c` | +1.7k |
-| 3 tests | `masks/{harvest,verify,check,persist,undo,roundtrip,styleapply,lockcheck,postedit,probe_image,scratch_image}` and the CLI flags | +9.5k |
-| 4 UI | `blend_gui.c`, `blend_gui_internal.h`, `masks_gui_presets.c` | +18.1k / −2.0k |
-| | `gtk.c`, panel host, darkroom toolbar | +3.5k |
-| | CSS | +1.6k / −0.1k |
-| | `dtgtk/*`, `bauhaus/*` | +1.1k / −0.1k |
-| | `history.c`, color picker, shape tools, preferences, small touches | +0.5k / −0.1k |
+| 3 tests | `masks/{harvest,verify,check,persist,undo,roundtrip,styleapply,lockcheck,postedit,probe_image,scratch_image}` and the CLI flags | +9.3k |
+| 4 UI | `blend_gui.c`, `blend_gui_internal.h`, `masks_gui_presets.c` | +18.3k / −2.1k |
+| | `gtk.c`, panel hosts, darkroom toolbar | +3.7k |
+| | CSS | +1.9k / −0.1k |
+| | `dtgtk/*`, `bauhaus/*` | +1.0k / −0.2k |
+| | `history.c`, color picker, shape tools, preferences, presets JSON, small touches | +0.7k / −0.1k |
 | | `libs/masks.c` | −2.5k |
 
-Tests add ~11.1k lines of cmocka suites and a 44-scenario pixel suite.
+Tests add ~11.6k lines of cmocka suites and a 44-scenario pixel suite.
 
 ## PR sequence
 
@@ -88,13 +94,15 @@ The flexi fold and its dispatch, render paths for the new form types, the
 blend and pixelpipe changes (cache hashing, raster-user pruning), and
 `migrate_legacy.c`, which is compiled but not called. Also a fix to
 `dt_iop_copy_image_roi`, whose per-line fast path read before the start of the
-input buffer for a negative RoI offset. That bug is on master today.
+input buffer for a negative RoI offset. That bug is still on master.
 
 ### 3. Tests and verification tools
 
 The unit suites for model, fold, cache hashing, persistence and migration;
 the pixel suite `src/tests/masking/flexi/`; and the three CLI tools. The
-harvested corpus (19 MB) stays out of tree; the tools take a path.
+harvested corpus stays out of tree, and the tools take a path to it. The
+branch carries it as `data/masks_corpus.db` (23 MB), which nothing builds or
+installs; it must be left out of the PR.
 
 The migration is not wired in yet, so the pixel suite checks it through
 `--verify-masks`, which calls it directly.
@@ -105,13 +113,17 @@ In order, each commit building:
 
 1. widget layer: gradient slider markers, new glyphs, expander, bauhaus
 2. panel host and canvas placement, darkroom toolbar toggle
-3. the panel, its presets, CSS, preferences, shape-tool changes
+3. the panel, its presets (JSON plus the string-extraction step), CSS,
+   preferences, shape-tool changes
 4. mask lock: locked masks survive reset, presets, styles and paste
 5. the switch: call the migration from `dt_develop_blend_legacy_params_ext`,
    bump `DEVELOP_BLEND_VERSION` to 15, delete `libs/masks.c`, take a forced
    pre-migration backup (below), and stop turning an unknown newer
    `blendop_version` silently into default params
-6. panel test suites, user documentation, `RELEASE_NOTES.md`
+6. panel test suites, user documentation, `RELEASE_NOTES.md`. The user
+   documentation is drafted in `dev-doc/flexi_masks/` (`user_docs.md`, with
+   screenshots); it belongs in the user manual, which is a separate
+   repository, so only a developer-facing page stays in `dev-doc/`
 
 #### Pre-migration backup
 
@@ -126,7 +138,7 @@ part that matters, because sidecar writing can be off.
 
 | Check | Result |
 |---|---|
-| 12 cmocka suites | structure, grouping, operators, cache hash, persistence, migration cases; no pixels |
+| 13 cmocka suites | structure, grouping, operators, drag and drop, cache hash, persistence, migration cases, panel styling; no pixels |
 | pixel suite against a stock master build | 38/46 bit-identical; the other 8 use v7-only fields (per-shape refinement), which master cannot read |
 | pixel suite against its reference images | 46/46 |
 | corpus: 14 contributors, 63,157 edits, 8,203 distinct configuration shapes | 0 migration failures: failure rate below 0.037% (1 in 2,738) at 95% confidence |
@@ -136,9 +148,9 @@ same binary, which follows master's rules. The bound treats each distinct
 configuration shape as an independent sample; the shapes come from 14
 contributors.
 
-It depends on one fix to master, submitted separately: `dt_gradient_lookup()`
-extrapolated below zero for a negative table index, so a gradient mask
-applied its module in reverse along its outer edge.
+It depends on one fix to master, which has landed (a87e42fc82):
+`dt_gradient_lookup()` extrapolated below zero for a negative table index, so
+a gradient mask applied its module in reverse along its outer edge.
 
 **A master bug this exposes.** Master's classic fold never clears its output,
 and `dt_develop_blend_process` allocates the mask without initializing it. A
