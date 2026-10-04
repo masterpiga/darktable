@@ -18,17 +18,15 @@
 
 #pragma once
 
-// Internal seam between the flexi masks panel's translation units.
-//
-// The panel was built as one 16k-line file (blend_gui.c) and is being split
-// into cohesive pieces. Everything declared here was file-static before the
-// split and is shared only between those pieces -- it is not public API, and
-// blend.h remains the place for anything an IOP or the pipe may call.
+// Internal seam between the flexi masks panel's translation units: blend_gui.c,
+// masks_gui_presets.c, masks_gui_toolbar.c and masks_gui_panel_host.c. Nothing
+// here is public API; blend.h remains the place for anything an IOP or the
+// pipe may call.
 //
 // Keep this small. A symbol lands here only because its definition and one of
-// its callers ended up in different files -- either from a split, or because
-// the caller is the panel's model test suite; if that stops being true, it
-// goes back to static.
+// its callers live in different files, the caller being another panel file or
+// the panel's model test suite; if that stops being true, it goes back to
+// static.
 
 #include "develop/blend.h"
 #include "develop/masks.h"
@@ -52,7 +50,6 @@ dt_masks_add_target_t dt_masks_gui_resolve_add_target(dt_iop_module_t *module);
 // blend_gui.c -> masks_gui_presets.c
 // ---------------------------------------------------------------------------
 
-/** the module's mask group, or NULL if it has none / it is not a group */
 /** what the refinement controls target (dt_iop_gui_blend_data_t's
     masks_refine_scope_kind); see the scope comment in blend_gui.c */
 enum
@@ -62,6 +59,7 @@ enum
   REFINE_SCOPE_GROUP
 };
 
+/** the module's mask group, or NULL if it has none / it is not a group */
 dt_masks_form_t *dt_masks_gui_module_mask_group(dt_iop_module_t *module);
 /** the module's flexi group, created with its first group if it has no group
     form yet. *cid, when given and invalid, becomes that first group's id */
@@ -97,10 +95,10 @@ void dt_masks_gui_refresh_canvas_edit(dt_iop_module_t *module);
 // not, since the tests are the regression net for the panel's behavior.
 
 /** every group's marker id, bottom-up. Caller frees the list. */
-GList *dt_masks_gui_group_partition_heads(dt_masks_form_t *grp);
+GList *dt_masks_model_group_markers(dt_masks_form_t *grp);
 /** the member ids of the group `id` is in (`id` a member or the group's
     marker), top-first. Caller frees the list. */
-GList *dt_masks_gui_selected_group_formids(dt_masks_form_t *grp, const dt_mask_id_t id);
+GList *dt_masks_model_group_members(dt_masks_form_t *grp, const dt_mask_id_t id);
 /** the id of the group `fid` is in -- its marker's -- or INVALID_MASKID */
 dt_mask_id_t dt_masks_gui_group_cid_of_form(dt_masks_form_t *grp, const dt_mask_id_t fid);
 /** a new empty nested group on top of the members of group `cid`, folding
@@ -455,6 +453,8 @@ GtkWidget *dt_masks_gui_toolbar_new(GtkWidget *group,
 // blend_gui.c -> masks_gui_panel_host.c
 // ---------------------------------------------------------------------------
 
+/** a section title in the panel options popover; `tip` may be NULL */
+void dt_masks_gui_pref_section(GtkWidget *box, const gchar *title, const gchar *tip);
 /** re-home a widget into a new parent (no-op if already there), keeping its
     shown state */
 void dt_masks_gui_reparent_into(GtkWidget *w, GtkWidget *parent,
@@ -465,14 +465,15 @@ void dt_masks_gui_reparent_into(GtkWidget *w, GtkWidget *parent,
 // masks_gui_panel_host.c -> blend_gui.c
 // ---------------------------------------------------------------------------
 
-/** (re)decide where this module's panel content should live, and move it */
-void dt_masks_gui_flexi_relocate(dt_iop_module_t *module);
+/** the utility lib's header with no module hosted: titled for no module, its
+    arrow and title insensitive */
+void dt_masks_gui_utility_header_unhosted(struct dt_lib_module_t *host);
 /** move this module's panel content back into its own expander */
 void dt_masks_gui_flexi_release(dt_iop_module_t *module);
 /** "collapse" button shown in the "blend mask" header */
 void dt_masks_gui_flexi_inline_collapse_clicked(GtkWidget *w, gpointer user_data);
 /** record whether the masking panel should be folded away. Shared by all three
-    positions, and only ever *applied* by dt_masks_gui_flexi_relocate/-release, so a
+    positions, and only ever *applied* by dt_iop_gui_blend_masks_panel_relocate/-release, so a
     caller states the intent and every position carries it out the same way */
 void dt_masks_gui_panel_set_collapsed_pref(const gboolean collapsed);
 // the position preference, read through here so that the retired
@@ -486,8 +487,8 @@ void dt_masks_gui_add_panel_position_box(GtkWidget *box, dt_iop_module_t *module
 
 G_END_DECLS
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

@@ -237,7 +237,7 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
     {
       // !self->initialized covers two cases identically: this picker has
       // truly never been armed before, or a caller explicitly invalidated it
-      // (see dt_iop_color_picker_force_reinit, used by the flexi-mask range
+      // (see dt_iop_color_picker_forget, used by the flexi-mask range
       // reset to make a deferred picker forget its last box once the range
       // it fed goes back to its own base/no-op state -- see
       // _param_row_slider_reset_callback). Either way "start blank" is

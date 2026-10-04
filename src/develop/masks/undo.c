@@ -46,23 +46,6 @@
 // real match is bit-exact -- the same reasoning as verify.c and persist.c.
 #define UNDO_EPS 1e-6
 
-static gint64 _obj_int(JsonObject *o, const char *k, const gint64 dflt)
-{
-  if(!o || !json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(!n || json_node_get_node_type(n) != JSON_NODE_VALUE) return dflt;
-  return json_node_get_int(n);
-}
-
-static const char *_obj_str(JsonObject *o, const char *k, const char *dflt)
-{
-  if(!o || !json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(!n || json_node_get_node_type(n) != JSON_NODE_VALUE) return dflt;
-  const char *v = json_node_get_string(n);
-  return v ? v : dflt;
-}
-
 // ---------------------------------------------------------------------------
 // the edits that get undone
 // ---------------------------------------------------------------------------
@@ -166,96 +149,12 @@ static void _state_free(state_t *s)
   s->ok = FALSE;
 }
 
-/** the module's own mask group in `dev`, or NULL -- see persist.c's copy for
-    why this is read from the module and not from dev->forms at large */
-static dt_masks_form_t *_target_group(dt_develop_t *dev,
-                                      const dt_develop_blend_params_t *bp)
-{
-  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return NULL;
-  if(!dt_is_valid_maskid(bp->mask_id)) return NULL;
-  dt_masks_form_t *grp = dt_masks_get_from_id(dev, bp->mask_id);
-  return (grp && (grp->type & DT_MASKS_GROUP)) ? grp : NULL;
-}
-
-/** every group the module renders through, top first then nested, as in
-    persist.c: depth-bounded and deduplicated against a malformed tree */
-static GList *_all_groups(dt_develop_t *dev, const dt_develop_blend_params_t *bp)
-{
-  dt_masks_form_t *top = _target_group(dev, bp);
-  if(!top) return NULL;
-
-  GList *out = g_list_append(NULL, top);
-  for(GList *l = out; l; l = g_list_next(l))
-  {
-    if(g_list_position(out, l) > 64) break;
-    const dt_masks_form_t *grp = l->data;
-    for(GList *p = grp->points; p; p = g_list_next(p))
-    {
-      const dt_masks_point_group_t *pt = p->data;
-      dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
-      if(child && (child->type & DT_MASKS_GROUP) && !g_list_find(out, child))
-        out = g_list_append(out, child);
-    }
-  }
-  return out;
-}
-
-/** Read the scratch image back through the real history reader, into a state
-    the caller owns. The close-and-reopen that stands in for
-    dt_dev_reload_history_items(), which needs the GUI. */
+/** read the scratch image back into a state the caller owns */
 static state_t _read_state(void)
 {
   state_t s = { .ok = FALSE };
-
-  dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, UNDO_IMGID);
-  dt_dev_read_history_ext(&dev, UNDO_IMGID, TRUE);
-
-  GList *last = g_list_last(dev.history);
-  if(last)
-  {
-    const dt_dev_history_item_t *h = last->data;
-    if(h->blend_params)
-    {
-      memcpy(&s.bp, h->blend_params, sizeof(dt_develop_blend_params_t));
-      s.forms = dt_masks_dup_forms_deep(dev.forms, NULL);
-      s.ok = TRUE;
-    }
-  }
-
-  dt_dev_cleanup(&dev);
+  s.ok = dt_masks_scratch_read_last(UNDO_IMGID, &s.bp, &s.forms);
   return s;
-}
-
-/** Put the scratch image back to its just-migrated state: seed the classic
-    history again and open it once, which is what runs migration. Same
-    reasoning as persist.c's function of the same name -- the baseline both
-    arms start from must be what a user gets by opening the image, nothing
-    more. */
-static gboolean _reset_to_migrated(const char *op, const int mp, const int bv,
-                                   const int w, const int h,
-                                   const dt_develop_blend_params_t *bp,
-                                   GList *forms)
-{
-  dt_masks_scratch_wipe_history(UNDO_IMGID);
-  dt_masks_scratch_seed_image(UNDO_IMGID, w, h);
-  // the iop-order entry must exist before the history row referencing it, or
-  // dt_dev_read_history_ext() drops the row without a word (scratch_image.h)
-  if(op) dt_masks_scratch_seed_iop_order(UNDO_IMGID, op, mp);
-  if(!op || !dt_masks_scratch_seed_history(UNDO_IMGID, 0, op, mp, bv, bp, forms))
-    return FALSE;
-
-  // opening the image is what migrates it, and what stores the result
-  dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, UNDO_IMGID);
-  dt_dev_read_history_ext(&dev, UNDO_IMGID, TRUE);
-  const gboolean ok = dev.history != NULL;
-  dt_dev_cleanup(&dev);
-  return ok;
 }
 
 // ---------------------------------------------------------------------------
@@ -291,10 +190,7 @@ static gboolean _undo_cycle(const step_t *st, const int group_index,
                             state_t *undone, state_t *redone)
 {
   dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, UNDO_IMGID);
-  dt_dev_read_history_ext(&dev, UNDO_IMGID, TRUE);
+  dt_masks_scratch_open(&dev, UNDO_IMGID);
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
   dt_iop_module_t *mod = NULL;
@@ -302,8 +198,8 @@ static gboolean _undo_cycle(const step_t *st, const int group_index,
   for(GList *m = dev.iop; m; m = g_list_next(m))
   {
     dt_iop_module_t *cand = m->data;
-    if(!_target_group(&dev, cand->blend_params)) continue;
-    GList *all = _all_groups(&dev, cand->blend_params);
+    if(!dt_masks_postedit_target_group(&dev, cand->blend_params)) continue;
+    GList *all = dt_masks_postedit_groups(&dev, cand->blend_params);
     grp = g_list_nth_data(all, group_index);
     g_list_free(all);
     if(grp) mod = cand;
@@ -423,8 +319,8 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
   }
 
   JsonObject *img = json_object_get_object_member(edit, "image");
-  const int full_w = (int)_obj_int(img, "width", 0);
-  const int full_h = (int)_obj_int(img, "height", 0);
+  const int full_w = (int)dt_masks_harvest_obj_int(img, "width", 0);
+  const int full_h = (int)dt_masks_harvest_obj_int(img, "height", 0);
   if(full_w <= 0 || full_h <= 0) { rep->skip_reason = "no image dimensions"; return; }
 
   int w = full_w, h = full_h;
@@ -444,11 +340,12 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
     return;
   }
 
-  const char *op = _obj_str(edit, "operation", NULL);
-  const int mp = (int)_obj_int(edit, "multi_priority", 0);
-  const int bv = (int)_obj_int(edit, "blendop_version", 14);
+  const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
+  const int mp = (int)dt_masks_harvest_obj_int(edit, "multi_priority", 0);
+  const int bv = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
 
-  if(!_reset_to_migrated(op, mp, bv, full_w, full_h, &classic_bp, classic_forms))
+  if(!dt_masks_scratch_reset_to_migrated(UNDO_IMGID, op, mp, bv, full_w, full_h,
+                                          &classic_bp, classic_forms, NULL, NULL))
   {
     g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
     rep->skip_reason = "history row could not be seeded";
@@ -479,11 +376,11 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
     state_t opened = _read_state();
     if(opened.ok)
     {
-      // _all_groups resolves member formids through the dev, so the opened
+      // dt_masks_postedit_groups resolves member formids through the dev, so the opened
       // tree has to be installed before it is walked
       g_list_free_full(r.dev.forms, (GDestroyNotify)dt_masks_free_form);
       r.dev.forms = dt_masks_dup_forms_deep(opened.forms, NULL);
-      GList *g0 = _all_groups(&r.dev, &opened.bp);
+      GList *g0 = dt_masks_postedit_groups(&r.dev, &opened.bp);
       rep->groups = (int)g_list_length(g0);
       g_list_free(g0);
     }
@@ -504,7 +401,8 @@ static void _undo_edit(JsonObject *edit, undo_report_t *rep, case_tally_t *tally
     // every cycle starts from the same migrated image: the previous cycle
     // wrote its redo state back, so without this each case would be building
     // on the last one's edit rather than on the first open
-    if(!_reset_to_migrated(op, mp, bv, full_w, full_h, &classic_bp, classic_forms))
+    if(!dt_masks_scratch_reset_to_migrated(UNDO_IMGID, op, mp, bv, full_w, full_h,
+                                          &classic_bp, classic_forms, NULL, NULL))
       continue;
 
     state_t before = { .ok = FALSE }, edited = { .ok = FALSE };
@@ -743,7 +641,7 @@ gboolean dt_masks_undo_harvest_section(const char *json_path, FILE *rf)
         rep.worst_case >= 0 ? &_cases[rep.worst_case] : NULL;
       printf("[undo] DIFFERENT at edit %u (%s): %d/%d cycles did not come back"
              " (%d undo, %d redo), worst '%s' by %.6f -- %s\n",
-             i, _obj_str(edit, "operation", "?"), rep.disagreed, rep.compared,
+             i, dt_masks_harvest_obj_str(edit, "operation", "?"), rep.disagreed, rep.compared,
              rep.undo_bad, rep.redo_bad, worst ? worst->name : "?",
              rep.worst_diff, worst ? worst->seam : "?");
       if(rep.worst_diff > worst_diff)
@@ -762,7 +660,7 @@ gboolean dt_masks_undo_harvest_section(const char *json_path, FILE *rf)
                   " \"result\": \"%s\", \"repeat\": false,"
                   " \"compared\": %d, \"disagreed\": %d, \"live\": %d,"
                   " \"undo_failed\": %d, \"redo_failed\": %d",
-              first_report ? "" : ",", i, _obj_str(edit, "operation", "?"),
+              first_report ? "" : ",", i, dt_masks_harvest_obj_str(edit, "operation", "?"),
               _result_name(rep.result), rep.compared, rep.disagreed, rep.live,
               rep.undo_bad, rep.redo_bad);
       if(worst)
@@ -878,8 +776,8 @@ gboolean dt_masks_undo_harvest(const char *json_path, const char *report_path)
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

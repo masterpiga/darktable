@@ -63,6 +63,12 @@ JsonParser *dt_masks_harvest_load(const char *path, GError **error);
     Caller owns the returned string. */
 gchar *dt_masks_harvest_edit_key(JsonObject *edit);
 
+/** Read member `k` of `o`; `dflt` if `o` is NULL or the member is absent, null
+    or not a plain value. */
+gint64 dt_masks_harvest_obj_int(JsonObject *o, const char *k, const gint64 dflt);
+float dt_masks_harvest_obj_float(JsonObject *o, const char *k, const float dflt);
+const char *dt_masks_harvest_obj_str(JsonObject *o, const char *k, const char *dflt);
+
 /** Rebuild the form list for one harvested edit from its "forms" array.
     Returns NULL if anything is unreconstructable, so a malformed record is
     skipped rather than replayed as something subtly different. Caller owns the
@@ -76,8 +82,8 @@ void dt_masks_harvest_read_blend_params(JsonObject *b,
 
 G_END_DECLS
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

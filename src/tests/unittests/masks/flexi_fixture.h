@@ -133,8 +133,8 @@ void flexi_assert_layout_of_(const dt_masks_form_t *g,
                              const int line);
 #define assert_layout_of(g, expect) flexi_assert_layout_of_((g), (expect), __FILE__, __LINE__)
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

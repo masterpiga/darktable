@@ -107,8 +107,6 @@ void dtgtk_cairo_paint_eye(cairo_t *cr, gint x, gint y, gint w, gint h, gint fla
 void dtgtk_cairo_paint_eye_toggle(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** paint a filled eye with the pupil cut out: soloed */
 void dtgtk_cairo_paint_eye_solo(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
-/** Paint an eye whose right half is inverted (invert visibility) */
-void dtgtk_cairo_paint_invert_visibility(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a selection box with corner handles (solo-edit) */
 void dtgtk_cairo_paint_soloedit(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint a timer icon */
@@ -312,9 +310,6 @@ void dtgtk_cairo_paint_masks_object(cairo_t *cr, gint x, gint y, gint w, gint h,
 void dtgtk_cairo_paint_masks_multi(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an inverse icon for masks */
 void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
-/** Paint a horizontally-split invert icon for inverting mask values (distinct
- * from the blend-order invert) */
-void dtgtk_cairo_paint_mask_invert(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op union icon for masks */
 void dtgtk_cairo_paint_masks_union(cairo_t *cr, gint x, gint y, gint w, gint h, gint flags, void *data);
 /** Paint an op smooth union (screen) icon for masks */

@@ -102,16 +102,13 @@ float *dt_masks_verify_render_mask(replay_t *r, float **image);
 /** free everything the replay allocated */
 void dt_masks_verify_replay_cleanup(replay_t *r);
 
-/** is every value in `m` the same? */
-gboolean dt_masks_verify_is_uniform(const float *m, const size_t n);
-
 /** the largest absolute difference between two buffers */
 double dt_masks_verify_max_abs_diff(const float *a, const float *b, const size_t n);
 
 G_END_DECLS
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

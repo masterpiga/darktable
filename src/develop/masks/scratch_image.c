@@ -49,8 +49,13 @@ void dt_masks_scratch_seed_image(const dt_imgid_t imgid,
   sqlite3_finalize(stmt);
 }
 
-void dt_masks_scratch_claim_image(dt_develop_t *dev, const dt_imgid_t imgid)
+void dt_masks_scratch_open(dt_develop_t *dev, const dt_imgid_t imgid)
 {
+  dt_dev_init(dev, FALSE);
+  // dt_dev_init leaves dev->iop NULL and dt_dev_read_history_ext refuses to do
+  // anything without it
+  dev->iop = dt_iop_load_modules(dev);
+
   // id is what migration's content probe binds; the dimensions come along
   // because the same struct is what anything else asking "how big is this
   // image" would read, and leaving them zero invites a divide-by-zero
@@ -68,6 +73,63 @@ void dt_masks_scratch_claim_image(dt_develop_t *dev, const dt_imgid_t imgid)
     dev->image_storage.height = sqlite3_column_int(stmt, 1);
   }
   sqlite3_finalize(stmt);
+
+  dt_dev_read_history_ext(dev, imgid, TRUE);
+}
+
+// copy out the mask of the last history item; FALSE if it has none
+static gboolean _copy_last_mask(const dt_develop_t *dev,
+                                dt_develop_blend_params_t *bp_out,
+                                GList **forms_out)
+{
+  const GList *last = g_list_last(dev->history);
+  const dt_dev_history_item_t *h = last ? last->data : NULL;
+  if(!h || !h->blend_params) return FALSE;
+  if(bp_out) memcpy(bp_out, h->blend_params, sizeof(dt_develop_blend_params_t));
+  if(forms_out) *forms_out = dt_masks_dup_forms_deep(dev->forms, NULL);
+  return TRUE;
+}
+
+gboolean dt_masks_scratch_read_last(const dt_imgid_t imgid,
+                                    dt_develop_blend_params_t *bp_out,
+                                    GList **forms_out)
+{
+  dt_develop_t dev;
+  dt_masks_scratch_open(&dev, imgid);
+  const gboolean ok = _copy_last_mask(&dev, bp_out, forms_out);
+  dt_dev_cleanup(&dev);
+  return ok;
+}
+
+gboolean dt_masks_scratch_reset_to_migrated(const dt_imgid_t imgid,
+                                            const char *operation,
+                                            const int multi_priority,
+                                            const int blendop_version,
+                                            const int width,
+                                            const int height,
+                                            const dt_develop_blend_params_t *bp,
+                                            GList *forms,
+                                            dt_develop_blend_params_t *bp_out,
+                                            GList **forms_out)
+{
+  if(!operation) return FALSE;
+  dt_masks_scratch_wipe_history(imgid);
+  dt_masks_scratch_seed_image(imgid, width, height);
+  // the iop-order entry must exist before the history row referencing it, or
+  // dt_dev_read_history_ext() drops the row without a word
+  dt_masks_scratch_seed_iop_order(imgid, operation, multi_priority);
+  if(!dt_masks_scratch_seed_history(imgid, 0, operation, multi_priority,
+                                    blendop_version, bp, forms))
+    return FALSE;
+
+  // deliberately a plain open with no edit of our own: the baseline has to be
+  // what a user gets by opening the image and nothing more
+  dt_develop_t dev;
+  dt_masks_scratch_open(&dev, imgid);
+  const gboolean ok = (bp_out || forms_out) ? _copy_last_mask(&dev, bp_out, forms_out)
+                                            : dev.history != NULL;
+  dt_dev_cleanup(&dev);
+  return ok;
 }
 
 void dt_masks_scratch_wipe_history(const dt_imgid_t imgid)
@@ -200,8 +262,8 @@ gboolean dt_masks_scratch_seed_history(const dt_imgid_t imgid,
   return TRUE;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

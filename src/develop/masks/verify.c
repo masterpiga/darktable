@@ -119,28 +119,31 @@ typedef struct
 // JSON helpers
 // ---------------------------------------------------------------------------
 
-static gint64 _obj_int(JsonObject *o, const char *k, const gint64 dflt)
+// a member that is absent, null or not a plain value reads as `dflt`
+static JsonNode *_obj_value(JsonObject *o, const char *k)
 {
-  if(!json_object_has_member(o, k)) return dflt;
+  if(!o || !json_object_has_member(o, k)) return NULL;
   JsonNode *n = json_object_get_member(o, k);
-  if(JSON_NODE_HOLDS_NULL(n)) return dflt;
-  return json_node_get_int(n);
+  return (n && json_node_get_node_type(n) == JSON_NODE_VALUE) ? n : NULL;
 }
 
-static float _obj_float(JsonObject *o, const char *k, const float dflt)
+gint64 dt_masks_harvest_obj_int(JsonObject *o, const char *k, const gint64 dflt)
 {
-  if(!json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(JSON_NODE_HOLDS_NULL(n)) return dflt;
-  return (float)json_node_get_double(n);
+  JsonNode *n = _obj_value(o, k);
+  return n ? json_node_get_int(n) : dflt;
 }
 
-static const char *_obj_str(JsonObject *o, const char *k, const char *dflt)
+float dt_masks_harvest_obj_float(JsonObject *o, const char *k, const float dflt)
 {
-  if(!json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(JSON_NODE_HOLDS_NULL(n)) return dflt;
-  return json_node_get_string(n);
+  JsonNode *n = _obj_value(o, k);
+  return n ? (float)json_node_get_double(n) : dflt;
+}
+
+const char *dt_masks_harvest_obj_str(JsonObject *o, const char *k, const char *dflt)
+{
+  JsonNode *n = _obj_value(o, k);
+  const char *v = n ? json_node_get_string(n) : NULL;
+  return v ? v : dflt;
 }
 
 /** read a float array member into `out`, up to `n` entries */
@@ -167,17 +170,17 @@ static void _read_point(JsonObject *p, const int type, void *out)
   {
     dt_masks_point_circle_t *c = out;
     _obj_float_array(p, "center", c->center, 2);
-    c->radius = _obj_float(p, "radius", 0.0f);
-    c->border = _obj_float(p, "border", 0.0f);
+    c->radius = dt_masks_harvest_obj_float(p, "radius", 0.0f);
+    c->border = dt_masks_harvest_obj_float(p, "border", 0.0f);
   }
   else if(type & DT_MASKS_ELLIPSE)
   {
     dt_masks_point_ellipse_t *e = out;
     _obj_float_array(p, "center", e->center, 2);
     _obj_float_array(p, "radius", e->radius, 2);
-    e->rotation = _obj_float(p, "rotation", 0.0f);
-    e->border = _obj_float(p, "border", 0.0f);
-    e->flags = (int)_obj_int(p, "flags", 0);
+    e->rotation = dt_masks_harvest_obj_float(p, "rotation", 0.0f);
+    e->border = dt_masks_harvest_obj_float(p, "border", 0.0f);
+    e->flags = (int)dt_masks_harvest_obj_int(p, "flags", 0);
   }
   else if(type & DT_MASKS_PATH)
   {
@@ -186,7 +189,7 @@ static void _read_point(JsonObject *p, const int type, void *out)
     _obj_float_array(p, "ctrl1", q->ctrl1, 2);
     _obj_float_array(p, "ctrl2", q->ctrl2, 2);
     _obj_float_array(p, "border", q->border, 2);
-    q->state = (int)_obj_int(p, "state", 0);
+    q->state = (int)dt_masks_harvest_obj_int(p, "state", 0);
   }
   else if(type & DT_MASKS_BRUSH)
   {
@@ -195,41 +198,41 @@ static void _read_point(JsonObject *p, const int type, void *out)
     _obj_float_array(p, "ctrl1", b->ctrl1, 2);
     _obj_float_array(p, "ctrl2", b->ctrl2, 2);
     _obj_float_array(p, "border", b->border, 2);
-    b->density = _obj_float(p, "density", 1.0f);
-    b->hardness = _obj_float(p, "hardness", 1.0f);
-    b->state = (int)_obj_int(p, "state", 0);
+    b->density = dt_masks_harvest_obj_float(p, "density", 1.0f);
+    b->hardness = dt_masks_harvest_obj_float(p, "hardness", 1.0f);
+    b->state = (int)dt_masks_harvest_obj_int(p, "state", 0);
   }
   else if(type & DT_MASKS_GRADIENT)
   {
     dt_masks_point_gradient_t *g = out;
     _obj_float_array(p, "anchor", g->anchor, 2);
-    g->rotation = _obj_float(p, "rotation", 0.0f);
-    g->compression = _obj_float(p, "compression", 0.0f);
-    g->steepness = _obj_float(p, "steepness", 0.0f);
-    g->curvature = _obj_float(p, "curvature", 0.0f);
-    g->state = (int)_obj_int(p, "state", 0);
+    g->rotation = dt_masks_harvest_obj_float(p, "rotation", 0.0f);
+    g->compression = dt_masks_harvest_obj_float(p, "compression", 0.0f);
+    g->steepness = dt_masks_harvest_obj_float(p, "steepness", 0.0f);
+    g->curvature = dt_masks_harvest_obj_float(p, "curvature", 0.0f);
+    g->state = (int)dt_masks_harvest_obj_int(p, "state", 0);
   }
   else if(type & DT_MASKS_GROUP)
   {
     dt_masks_point_group_t *g = out;
-    g->formid = (dt_mask_id_t)_obj_int(p, "formid", INVALID_MASKID);
-    g->parentid = (dt_mask_id_t)_obj_int(p, "parentid", INVALID_MASKID);
-    g->state = (int)_obj_int(p, "state", 0);
-    g->opacity = _obj_float(p, "opacity", 1.0f);
-    g->group_opacity = _obj_float(p, "group_opacity", 1.0f);
+    g->formid = (dt_mask_id_t)dt_masks_harvest_obj_int(p, "formid", INVALID_MASKID);
+    g->parentid = (dt_mask_id_t)dt_masks_harvest_obj_int(p, "parentid", INVALID_MASKID);
+    g->state = (int)dt_masks_harvest_obj_int(p, "state", 0);
+    g->opacity = dt_masks_harvest_obj_float(p, "opacity", 1.0f);
+    g->group_opacity = dt_masks_harvest_obj_float(p, "group_opacity", 1.0f);
 
     if(json_object_has_member(p, "refinement"))
     {
       JsonObject *r = json_object_get_object_member(p, "refinement");
       if(r)
       {
-        g->refinement.enabled = (int)_obj_int(r, "enabled", 0);
-        g->refinement.feathering_radius = _obj_float(r, "feathering_radius", 0.0f);
-        g->refinement.feathering_guide = (int)_obj_int(r, "feathering_guide", 0);
-        g->refinement.blur_radius = _obj_float(r, "blur_radius", 0.0f);
-        g->refinement.contrast = _obj_float(r, "contrast", 0.0f);
-        g->refinement.brightness = _obj_float(r, "brightness", 0.0f);
-        g->refinement.details = _obj_float(r, "details", 0.0f);
+        g->refinement.enabled = (int)dt_masks_harvest_obj_int(r, "enabled", 0);
+        g->refinement.feathering_radius = dt_masks_harvest_obj_float(r, "feathering_radius", 0.0f);
+        g->refinement.feathering_guide = (int)dt_masks_harvest_obj_int(r, "feathering_guide", 0);
+        g->refinement.blur_radius = dt_masks_harvest_obj_float(r, "blur_radius", 0.0f);
+        g->refinement.contrast = dt_masks_harvest_obj_float(r, "contrast", 0.0f);
+        g->refinement.brightness = dt_masks_harvest_obj_float(r, "brightness", 0.0f);
+        g->refinement.details = dt_masks_harvest_obj_float(r, "details", 0.0f);
       }
     }
   }
@@ -326,19 +329,19 @@ GList *dt_masks_harvest_read_forms(JsonArray *forms_arr)
     JsonObject *fo = json_array_get_object_element(forms_arr, i);
     if(!fo) goto fail;
 
-    const int type = (int)_obj_int(fo, "type", 0);
+    const int type = (int)dt_masks_harvest_obj_int(fo, "type", 0);
     dt_masks_form_t *form = dt_masks_create(type);
     if(!form) goto fail;
 
-    form->formid = (dt_mask_id_t)_obj_int(fo, "formid", INVALID_MASKID);
-    form->version = (int)_obj_int(fo, "version", dt_masks_version());
+    form->formid = (dt_mask_id_t)dt_masks_harvest_obj_int(fo, "formid", INVALID_MASKID);
+    form->version = (int)dt_masks_harvest_obj_int(fo, "version", dt_masks_version());
     snprintf(form->name, sizeof(form->name), "form %d", form->formid);
     _obj_float_array(fo, "source", form->source, 3);
 
     // harvests made before empty forms were emitted as such flag them as
     // errors: a form with no points and no bytes is just empty
-    const gboolean empty = _obj_int(fo, "points_count", -1) == 0
-                           && _obj_int(fo, "points_blob_bytes", -1) == 0;
+    const gboolean empty = dt_masks_harvest_obj_int(fo, "points_count", -1) == 0
+                           && dt_masks_harvest_obj_int(fo, "points_blob_bytes", -1) == 0;
     if(json_object_has_member(fo, "points_error") && !empty)
     {
       dt_masks_free_form(form);
@@ -377,30 +380,30 @@ fail:
 void dt_masks_harvest_read_blend_params(JsonObject *b, dt_develop_blend_params_t *p)
 {
   memset(p, 0, sizeof(*p));
-  p->mask_mode = (uint32_t)_obj_int(b, "mask_mode", 0);
-  p->blend_cst = (int32_t)_obj_int(b, "blend_cst", 0);
-  p->blend_mode = (uint32_t)_obj_int(b, "blend_mode", 0);
-  p->blend_parameter = _obj_float(b, "blend_parameter", 0.0f);
-  p->opacity = _obj_float(b, "opacity", 100.0f);
-  p->mask_combine = (uint32_t)_obj_int(b, "mask_combine", 0);
-  p->mask_id = (dt_mask_id_t)_obj_int(b, "mask_id", INVALID_MASKID);
-  p->blendif = (uint32_t)_obj_int(b, "blendif", 0);
-  p->feathering_radius = _obj_float(b, "feathering_radius", 0.0f);
-  p->feathering_guide = (uint32_t)_obj_int(b, "feathering_guide", 0);
-  p->blur_radius = _obj_float(b, "blur_radius", 0.0f);
-  p->contrast = _obj_float(b, "contrast", 0.0f);
-  p->brightness = _obj_float(b, "brightness", 0.0f);
-  p->details = _obj_float(b, "details", 0.0f);
-  p->feather_version = (uint32_t)_obj_int(b, "feather_version", 0);
+  p->mask_mode = (uint32_t)dt_masks_harvest_obj_int(b, "mask_mode", 0);
+  p->blend_cst = (int32_t)dt_masks_harvest_obj_int(b, "blend_cst", 0);
+  p->blend_mode = (uint32_t)dt_masks_harvest_obj_int(b, "blend_mode", 0);
+  p->blend_parameter = dt_masks_harvest_obj_float(b, "blend_parameter", 0.0f);
+  p->opacity = dt_masks_harvest_obj_float(b, "opacity", 100.0f);
+  p->mask_combine = (uint32_t)dt_masks_harvest_obj_int(b, "mask_combine", 0);
+  p->mask_id = (dt_mask_id_t)dt_masks_harvest_obj_int(b, "mask_id", INVALID_MASKID);
+  p->blendif = (uint32_t)dt_masks_harvest_obj_int(b, "blendif", 0);
+  p->feathering_radius = dt_masks_harvest_obj_float(b, "feathering_radius", 0.0f);
+  p->feathering_guide = (uint32_t)dt_masks_harvest_obj_int(b, "feathering_guide", 0);
+  p->blur_radius = dt_masks_harvest_obj_float(b, "blur_radius", 0.0f);
+  p->contrast = dt_masks_harvest_obj_float(b, "contrast", 0.0f);
+  p->brightness = dt_masks_harvest_obj_float(b, "brightness", 0.0f);
+  p->details = dt_masks_harvest_obj_float(b, "details", 0.0f);
+  p->feather_version = (uint32_t)dt_masks_harvest_obj_int(b, "feather_version", 0);
   _obj_float_array(b, "blendif_parameters", p->blendif_parameters,
                    4 * DEVELOP_BLENDIF_SIZE);
   _obj_float_array(b, "blendif_boost_factors", p->blendif_boost_factors,
                    DEVELOP_BLENDIF_SIZE);
-  const char *src = _obj_str(b, "raster_mask_source", "");
+  const char *src = dt_masks_harvest_obj_str(b, "raster_mask_source", "");
   g_strlcpy(p->raster_mask_source, src ? src : "", sizeof(p->raster_mask_source));
-  p->raster_mask_instance = (int)_obj_int(b, "raster_mask_instance", 0);
-  p->raster_mask_id = (dt_mask_id_t)_obj_int(b, "raster_mask_id", INVALID_MASKID);
-  p->raster_mask_invert = _obj_int(b, "raster_mask_invert", 0) ? TRUE : FALSE;
+  p->raster_mask_instance = (int)dt_masks_harvest_obj_int(b, "raster_mask_instance", 0);
+  p->raster_mask_id = (dt_mask_id_t)dt_masks_harvest_obj_int(b, "raster_mask_id", INVALID_MASKID);
+  p->raster_mask_invert = dt_masks_harvest_obj_int(b, "raster_mask_invert", 0) ? TRUE : FALSE;
 }
 
 // ---------------------------------------------------------------------------
@@ -653,7 +656,7 @@ double dt_masks_verify_max_abs_diff(const float *a, const float *b, const size_t
 /** is this mask the same value everywhere? A uniform mask makes the comparison
     vacuous -- it would match another uniform mask regardless of what migration
     did to the configuration that produced it. */
-gboolean dt_masks_verify_is_uniform(const float *m, const size_t n)
+static gboolean _is_uniform(const float *m, const size_t n)
 {
   if(n == 0) return TRUE;
   for(size_t i = 1; i < n; i++)
@@ -1109,8 +1112,8 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   }
 
   JsonObject *img = json_object_get_object_member(edit, "image");
-  const int full_w = img ? (int)_obj_int(img, "width", 0) : 0;
-  const int full_h = img ? (int)_obj_int(img, "height", 0) : 0;
+  const int full_w = img ? (int)dt_masks_harvest_obj_int(img, "width", 0) : 0;
+  const int full_h = img ? (int)dt_masks_harvest_obj_int(img, "height", 0) : 0;
   int w = full_w, h = full_h;
   if(w <= 0 || h <= 0) { rep->skip_reason = "no image dimensions"; return; }
 
@@ -1134,7 +1137,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 
   replay_t r;
   const char *init_err =
-    dt_masks_verify_replay_init(&r, _obj_str(edit, "operation", NULL), &bp, forms,
+    dt_masks_verify_replay_init(&r, dt_masks_harvest_obj_str(edit, "operation", NULL), &bp, forms,
                                 full_w, full_h, w, h);
   if(init_err)
   {
@@ -1157,7 +1160,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
     return;
   }
 
-  rep->inert = dt_masks_verify_is_uniform(before, npix);
+  rep->inert = _is_uniform(before, npix);
 
   // the same classic edit on the GPU, before anything is migrated: this is the
   // baseline the post-migration CPU/GPU gap gets judged against
@@ -1479,8 +1482,8 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
       // configuration did it.
       if(darktable.unmuted & DT_DEBUG_MASKS)
         printf("[verify] edit %u op=%s mask_mode=%d\n", i,
-               _obj_str(edit, "operation", "?"),
-               (int)_obj_int(json_object_get_object_member(edit, "blend"),
+               dt_masks_harvest_obj_str(edit, "operation", "?"),
+               (int)dt_masks_harvest_obj_int(json_object_get_object_member(edit, "blend"),
                              "mask_mode", -1));
       _verify_edit(edit, &rep);
       rep.repeat = FALSE;
@@ -1586,7 +1589,7 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
                   " \"dev_diff_after\": %.9g,"
                   " \"nopost_ran\": %s, \"dev_diff_after_nopost\": %.9g%s%s%s}",
               first_report ? "" : ",", i,
-              _obj_str(edit, "operation", "?"),
+              dt_masks_harvest_obj_str(edit, "operation", "?"),
               _result_name(rep.result),
               rep.inert ? "true" : "false", rep.nesting,
               rep.max_diff, rep.mean_diff, rep.differing_pixels,
@@ -1746,8 +1749,8 @@ gboolean dt_masks_verify_harvest(const char *json_path, const char *report_path)
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

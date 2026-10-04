@@ -1615,7 +1615,7 @@ static gboolean _configure(GtkWidget *da,
 //
 // _panel_set_side_panel_width arbitrates only while a resize handle is being
 // dragged. Shrinking the WINDOW afterwards never re-ran it, and a panel's width
-// is a gtk_widget_set_size_request -- a hard minimum GTK honours at the center's
+// is a gtk_widget_set_size_request -- a hard minimum GTK honors at the center's
 // expense -- so widening a panel and then shrinking the window made the canvas
 // disappear entirely (user-reported).
 //
@@ -3844,7 +3844,7 @@ static void _flexi_sliver_activate(dt_ui_t *ui, const gboolean right)
 {
   dt_ui_flexi_panel_set_side(ui, right);
   // record the side here and not only on the expand below: a relocate of the
-  // panel re-applies the stored side (dt_masks_gui_flexi_relocate in
+  // panel re-applies the stored side (dt_iop_gui_blend_masks_panel_relocate in
   // develop/masks_gui_panel_host.c), which would pull the panel straight back
   // to whichever edge the key still named
   dt_conf_set_bool("plugins/darkroom/blend/masks_panel_side_right", right);
@@ -4074,7 +4074,7 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
   // this, wide content (e.g. gradient sliders) blew the panel width up and
   // dragging the resize handle had no visible effect. The header is the
   // module's own "blend mask" header, reparented into ui->flexi_header (see
-  // dt_masks_gui_flexi_relocate).
+  // dt_iop_gui_blend_masks_panel_relocate).
   GtkWidget *widget = ui->flexi_panel_body = dtgtk_side_panel_new();
   gtk_widget_set_name(widget, "flexi");
 

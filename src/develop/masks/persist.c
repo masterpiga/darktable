@@ -45,23 +45,6 @@
 // real match is bit-exact; the same reasoning as verify.c.
 #define PERSIST_EPS 1e-6
 
-static gint64 _obj_int(JsonObject *o, const char *k, const gint64 dflt)
-{
-  if(!o || !json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(!n || json_node_get_node_type(n) != JSON_NODE_VALUE) return dflt;
-  return json_node_get_int(n);
-}
-
-static const char *_obj_str(JsonObject *o, const char *k, const char *dflt)
-{
-  if(!o || !json_object_has_member(o, k)) return dflt;
-  JsonNode *n = json_object_get_member(o, k);
-  if(!n || json_node_get_node_type(n) != JSON_NODE_VALUE) return dflt;
-  const char *v = json_node_get_string(n);
-  return v ? v : dflt;
-}
-
 // ---------------------------------------------------------------------------
 // the sequences
 // ---------------------------------------------------------------------------
@@ -207,108 +190,16 @@ static const seq_t _sequences[] =
 // driving the scratch image
 // ---------------------------------------------------------------------------
 
-/** The module's own mask group in `dev`, or NULL.
-
-    Read from the module rather than from dev->forms at large: dev->forms is
-    per image and every masks_history row is a cumulative snapshot, so it
-    routinely carries groups belonging to other modules and groups orphaned by
-    earlier edits (see roundtrip.c, which learned the same thing the hard way). */
-static dt_masks_form_t *_target_group(dt_develop_t *dev,
-                                      const dt_develop_blend_params_t *bp)
-{
-  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return NULL;
-  if(!dt_is_valid_maskid(bp->mask_id)) return NULL;
-  dt_masks_form_t *grp = dt_masks_get_from_id(dev, bp->mask_id);
-  return (grp && (grp->type & DT_MASKS_GROUP)) ? grp : NULL;
-}
-
-/** Every group the module renders through, the top one first and its nested
-    groups after, in a deterministic order.
-
-    Sweeping only the top group was the earlier behavior, on the grounds that
-    masks_history stores one flat row per form so a nested group traverses the
-    same storage code. That is true of the storage half and wrong about the
-    rest: a sequence here pokes a control and then reads the *partition* back,
-    and a nested group is where the partition is easiest to get wrong, because
-    the fold recurses into the child while taking run state from the parent's
-    head. 5.7% of harvested edits carry one (19% in some libraries).
-
-    Order is a breadth-first walk over member formids in list order, so both
-    arms resolve the same index to the same group without either being handed
-    a partition the other did not compute. Depth-bounded and deduplicated: a
-    malformed or cyclic tree must not spin. */
-static GList *_all_groups(dt_develop_t *dev, const dt_develop_blend_params_t *bp)
-{
-  dt_masks_form_t *top = _target_group(dev, bp);
-  if(!top) return NULL;
-
-  GList *out = g_list_append(NULL, top);
-  for(GList *l = out; l; l = g_list_next(l))
-  {
-    if(g_list_position(out, l) > 64) break;   // bound on a malformed tree
-    const dt_masks_form_t *grp = l->data;
-    for(GList *p = grp->points; p; p = g_list_next(p))
-    {
-      const dt_masks_point_group_t *pt = p->data;
-      dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
-      if(child && (child->type & DT_MASKS_GROUP) && !g_list_find(out, child))
-        out = g_list_append(out, child);
-    }
-  }
-  return out;
-}
-
-/** the `index`-th group of that walk, or NULL when the tree has fewer */
+/** the `index`-th group of dt_masks_postedit_groups(), or NULL when the tree
+    has fewer */
 static dt_masks_form_t *_group_at(dt_develop_t *dev,
                                   const dt_develop_blend_params_t *bp,
                                   const int index)
 {
-  GList *all = _all_groups(dev, bp);
+  GList *all = dt_masks_postedit_groups(dev, bp);
   dt_masks_form_t *grp = g_list_nth_data(all, index);
   g_list_free(all);
   return grp;
-}
-
-/** Read the scratch image back through the real history reader.
-
-    `bp_out` receives a copy of the effective blend_params and `forms_out` a
-    deep copy of the form tree, both owned by the caller, so that the dev can
-    be torn down immediately. `op_out` receives the module name, which points
-    into a static-lifetime string on the history item and is copied by the
-    caller if it needs to outlive this. Returns FALSE if nothing masked came
-    back. */
-static gboolean _read_state(dt_develop_blend_params_t *bp_out,
-                            GList **forms_out,
-                            char *op_out,
-                            const size_t op_len)
-{
-  dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  // dt_dev_init leaves dev->iop NULL and dt_dev_read_history_ext refuses to do
-  // anything without it
-  dev.iop = dt_iop_load_modules(&dev);
-  // no_image: there is no raw file behind the scratch row, and the
-  // default-module machinery this flag skips would add auto-applied modules
-  // that have nothing to do with the mask
-  dt_masks_scratch_claim_image(&dev, PERSIST_IMGID);
-  dt_dev_read_history_ext(&dev, PERSIST_IMGID, TRUE);
-
-  gboolean ok = FALSE;
-  GList *last = g_list_last(dev.history);
-  if(last)
-  {
-    const dt_dev_history_item_t *h = last->data;
-    if(h->blend_params)
-    {
-      memcpy(bp_out, h->blend_params, sizeof(dt_develop_blend_params_t));
-      g_strlcpy(op_out, h->op_name, op_len);
-      *forms_out = dt_masks_dup_forms_deep(dev.forms, NULL);
-      ok = TRUE;
-    }
-  }
-
-  dt_dev_cleanup(&dev);
-  return ok;
 }
 
 /** One step of the persisted arm: read, apply the step, write back.
@@ -326,17 +217,14 @@ static gboolean _read_state(dt_develop_blend_params_t *bp_out,
 static gboolean _read_poke_write(const step_t *st, const int group_index)
 {
   dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, PERSIST_IMGID);
-  dt_dev_read_history_ext(&dev, PERSIST_IMGID, TRUE);
+  dt_masks_scratch_open(&dev, PERSIST_IMGID);
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
   gboolean ok = FALSE;
   for(GList *m = dev.iop; m; m = g_list_next(m))
   {
     dt_iop_module_t *mod = m->data;
-    if(!_target_group(&dev, mod->blend_params)) continue;
+    if(!dt_masks_postedit_target_group(&dev, mod->blend_params)) continue;
     dt_masks_form_t *grp = _group_at(&dev, mod->blend_params, group_index);
     if(!grp) break;
 
@@ -354,66 +242,6 @@ static gboolean _read_poke_write(const step_t *st, const int group_index)
   }
 
   if(ok) dt_dev_write_history_ext(&dev, PERSIST_IMGID);
-  dt_dev_cleanup(&dev);
-  return ok;
-}
-
-/** Put the scratch image back to its just-migrated state: seed the classic
-    history again and open it once, which is what runs migration.
-
-    `bp_out` and `forms_out` (either may be NULL) receive the migrated state as
-    it stands IN MEMORY, before anything has been read back. That distinction
-    is the whole point of this check. The in-memory state is what the user sees
-    in the darkroom on the first open; whether the database now holds enough to
-    reconstruct it is precisely the open question, so an arm that wants "the
-    first open" must take it from here and not from a re-read. Taking it from a
-    re-read instead is how the first version of this file managed to pass with
-    the half-persisted migration reinstated: both arms were then sitting on the
-    far side of the loss, agreeing with each other about the wrong mask.
-
-    Returns FALSE if the row could not be seeded. */
-static gboolean _reset_to_migrated(const char *op, const int mp, const int bv,
-                                   const int w, const int h,
-                                   const dt_develop_blend_params_t *bp,
-                                   GList *forms,
-                                   dt_develop_blend_params_t *bp_out,
-                                   GList **forms_out)
-{
-  dt_masks_scratch_wipe_history(PERSIST_IMGID);
-  dt_masks_scratch_seed_image(PERSIST_IMGID, w, h);
-  // the iop-order entry must exist before the history row referencing it, or
-  // dt_dev_read_history_ext() drops the row without a word (scratch_image.h)
-  if(op) dt_masks_scratch_seed_iop_order(PERSIST_IMGID, op, mp);
-  if(!op || !dt_masks_scratch_seed_history(PERSIST_IMGID, 0, op, mp, bv, bp, forms))
-    return FALSE;
-
-  // Opening the image is what migrates it, and -- since the half-persisted
-  // migration fix -- what stores the result. Deliberately a plain read with no
-  // edit of our own: the baseline both arms start from has to be what a user
-  // gets by opening the image and nothing more.
-  dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, PERSIST_IMGID);
-  dt_dev_read_history_ext(&dev, PERSIST_IMGID, TRUE);
-
-  gboolean ok = TRUE;
-  if(bp_out || forms_out)
-  {
-    ok = FALSE;
-    GList *last = g_list_last(dev.history);
-    if(last)
-    {
-      const dt_dev_history_item_t *hi = last->data;
-      if(hi->blend_params)
-      {
-        if(bp_out) memcpy(bp_out, hi->blend_params, sizeof(dt_develop_blend_params_t));
-        if(forms_out) *forms_out = dt_masks_dup_forms_deep(dev.forms, NULL);
-        ok = TRUE;
-      }
-    }
-  }
-
   dt_dev_cleanup(&dev);
   return ok;
 }
@@ -494,8 +322,8 @@ static void _persist_edit(JsonObject *edit,
   }
 
   JsonObject *img = json_object_get_object_member(edit, "image");
-  const int full_w = (int)_obj_int(img, "width", 0);
-  const int full_h = (int)_obj_int(img, "height", 0);
+  const int full_w = (int)dt_masks_harvest_obj_int(img, "width", 0);
+  const int full_h = (int)dt_masks_harvest_obj_int(img, "height", 0);
   if(full_w <= 0 || full_h <= 0) { rep->skip_reason = "no image dimensions"; return; }
 
   int w = full_w, h = full_h;
@@ -515,11 +343,11 @@ static void _persist_edit(JsonObject *edit,
     return;
   }
 
-  const char *op = _obj_str(edit, "operation", NULL);
-  const int mp = (int)_obj_int(edit, "multi_priority", 0);
-  const int bv = (int)_obj_int(edit, "blendop_version", 14);
+  const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
+  const int mp = (int)dt_masks_harvest_obj_int(edit, "multi_priority", 0);
+  const int bv = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
 
-  if(!_reset_to_migrated(op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
+  if(!dt_masks_scratch_reset_to_migrated(PERSIST_IMGID, op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
                          NULL, NULL))
   {
     g_list_free_full(classic_forms, (GDestroyNotify)dt_masks_free_form);
@@ -552,8 +380,7 @@ static void _persist_edit(JsonObject *edit,
   // reported as evidence when both arms rendered the same untouched mask.
   dt_develop_blend_params_t bp;
   GList *forms = NULL;
-  char opbuf[128] = { 0 };
-  if(!_reset_to_migrated(op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
+  if(!dt_masks_scratch_reset_to_migrated(PERSIST_IMGID, op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
                          &bp, &forms))
   {
     rep->result = PERSIST_ERROR;
@@ -563,7 +390,7 @@ static void _persist_edit(JsonObject *edit,
   _install_state(&r, &bp, forms);
 
   // a mask this check cannot poke: no group means no run and no member
-  if(!_target_group(&r.dev, &bp))
+  if(!dt_masks_postedit_target_group(&r.dev, &bp))
   {
     rep->skip_reason = "no group to edit";
     goto out;
@@ -582,7 +409,7 @@ static void _persist_edit(JsonObject *edit,
   // how many groups the module renders through, counted once on the un-poked
   // tree: no poke here creates or destroys a group, so the count is stable and
   // both arms resolve the same index to the same group
-  GList *g0 = _all_groups(&r.dev, &bp);
+  GList *g0 = dt_masks_postedit_groups(&r.dev, &bp);
   const int ngroups = (int)g_list_length(g0);
   g_list_free(g0);
   rep->groups = ngroups;
@@ -596,7 +423,7 @@ static void _persist_edit(JsonObject *edit,
        open it once, and from then on only change things. Reseeding per
        sequence also undoes what the previous sequence's arm B wrote, so each
        sequence starts where it says it does. */
-    if(!_reset_to_migrated(op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
+    if(!dt_masks_scratch_reset_to_migrated(PERSIST_IMGID, op, mp, bv, full_w, full_h, &classic_bp, classic_forms,
                            &bp, &forms))
       continue;
     _install_state(&r, &bp, forms);
@@ -609,13 +436,13 @@ static void _persist_edit(JsonObject *edit,
 
     /* ---- arm B is the same edits with the image closed and reopened between
        every one of them. Back to the same starting point first. */
-    gboolean b_ok = _reset_to_migrated(op, mp, bv, full_w, full_h,
+    gboolean b_ok = dt_masks_scratch_reset_to_migrated(PERSIST_IMGID, op, mp, bv, full_w, full_h,
                                        &classic_bp, classic_forms, NULL, NULL);
     for(int s = 0; b_ok && s < seq->n; s++)
       b_ok = _read_poke_write(&seq->step[s], gi);
 
     float *b = NULL;
-    if(b_ok && _read_state(&bp, &forms, opbuf, sizeof(opbuf)))
+    if(b_ok && dt_masks_scratch_read_last(PERSIST_IMGID, &bp, &forms))
     {
       _install_state(&r, &bp, forms);
       b = dt_masks_verify_render_mask(&r, NULL);
@@ -822,7 +649,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
       const seq_t *worst = rep.worst_seq >= 0 ? &_sequences[rep.worst_seq] : NULL;
       printf("[persist] DIFFERENT at edit %u (%s): %d/%d sequences disagree,"
              " worst '%s' by %.6f -- %s\n",
-             i, _obj_str(edit, "operation", "?"), rep.disagreed, rep.compared,
+             i, dt_masks_harvest_obj_str(edit, "operation", "?"), rep.disagreed, rep.compared,
              worst ? worst->name : "?", rep.worst_diff,
              worst ? worst->seam : "?");
     }
@@ -834,7 +661,7 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
       fprintf(rf, "%s\n    {\"index\": %u, \"operation\": \"%s\","
                   " \"result\": \"%s\", \"repeat\": false,"
                   " \"compared\": %d, \"disagreed\": %d, \"live\": %d",
-              first_report ? "" : ",", i, _obj_str(edit, "operation", "?"),
+              first_report ? "" : ",", i, dt_masks_harvest_obj_str(edit, "operation", "?"),
               _result_name(rep.result), rep.compared, rep.disagreed, rep.live);
       if(worst)
         fprintf(rf, ", \"worst_sequence\": \"%s\", \"seam\": \"%s\","
@@ -931,8 +758,8 @@ gboolean dt_masks_persist_harvest(const char *json_path, const char *report_path
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

@@ -503,7 +503,7 @@ static void _gradient_slider_button_pressed(GtkGestureSingle *gesture,
   // panel this slider lives in) can't steal it once the pointer starts
   // moving -- without this, dragging a marker is canceled after the
   // first move: the panel's gesture claims the in-progress sequence, and
-  // this widget's own gesture receives "cancel" (see _gesture_cancel,
+  // this widget's own gesture receives "cancel" (see _gesture_cancel in gui/gtk.c,
   // which synthesizes a "released" and ends the drag right there)
   dt_gui_claim(gesture);
 }
@@ -946,8 +946,7 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
   // plain outline around the flat, fully-selected zone between the two
   // filled points. The open marker's own up/down bit decides which edge
   // (top or bottom) each wedge's point sits on, so this follows polarity
-  // (the "invert" toggle swaps that bit, see _blendop_blendif_polarity_callback)
-  // instead of assuming a fixed orientation.
+  // (the "invert" toggle swaps that bit) instead of assuming a fixed orientation.
   if(gslider->positions == 4
      && !(gslider->marker[0] & 0x01) && (gslider->marker[1] & 0x01)
      && (gslider->marker[2] & 0x01) && !(gslider->marker[3] & 0x01))

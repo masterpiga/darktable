@@ -1003,7 +1003,8 @@ static gboolean _changes_tooltip_callback(GtkWidget *widget,
     {
       gboolean first = TRUE;
 
-      for(const dt_iop_gui_blendif_channel_t *b = bd ? bd->channel : NULL;
+      for(const dt_iop_gui_blendif_channel_t *b =
+            bd ? dt_develop_blendif_channels_for_csp(bd->csp) : NULL;
           b && b->label != NULL;
           b++)
       {

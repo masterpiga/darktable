@@ -67,13 +67,12 @@ const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form)
 // full/base range ({0,0,1,1} per channel). The group fold skips such an
 // element and the panel badges it as a no-op, both from this test, so a row
 // is badged exactly when it does not render. A legacy multi-channel form
-// (single == 0) has too many
-// independent ranges to summarize as one badge, so it is never flagged here.
+// (single == 0) has too many independent ranges to summarize as one badge, so
+// it is never flagged here.
 // `p->channel` indexes the colorspace's channel[] array, NOT the
-// blendif_parameters slot directly -- that slot is
-// channels[p->channel].param_channels[in_out] (same indirection every other
-// reader of blendif_parameters in this file goes through, e.g.
-// _blendif_scale_ex). Both input and
+// blendif_parameters slot directly: that slot is
+// channels[p->channel].param_channels[in_out], the same indirection
+// blend_gui.c's _blendif_scale goes through. Both input and
 // output sub-ranges are checked: per dt_masks_point_parametric_t's own field
 // comment, a non-empty output range still refines the mask even while its
 // slider is hidden, so it must count too, not just whichever one the UI

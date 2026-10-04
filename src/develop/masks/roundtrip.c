@@ -199,20 +199,12 @@ static gchar *_check_run_invariant(dt_develop_t *dev)
 }
 
 /** Load the scratch image through the real history reader and snapshot it.
-    `written_back` optionally receives whether the write path ran. */
+    `write_back` then also stores the loaded state, the way a user's first edit
+    would; `violation` (may be NULL) receives the run-invariant report. */
 static gchar *_load_and_snapshot(const gboolean write_back, gchar **violation)
 {
   dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  // dt_dev_init leaves dev->iop NULL and dt_dev_read_history_ext refuses to do
-  // anything without it
-  dev.iop = dt_iop_load_modules(&dev);
-
-  // no_image = TRUE: there is no raw file behind the scratch row, and the
-  // default-module machinery that flag skips would add auto-applied modules
-  // that have nothing to do with what is being measured
-  dt_masks_scratch_claim_image(&dev, ROUNDTRIP_IMGID);
-  dt_dev_read_history_ext(&dev, ROUNDTRIP_IMGID, TRUE);
+  dt_masks_scratch_open(&dev, ROUNDTRIP_IMGID);
 
   gchar *snap = _snapshot(&dev);
   if(violation) *violation = _check_run_invariant(&dev);
@@ -368,10 +360,8 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     if(bp.mask_mode & DEVELOP_MASK_FLEXI) ROUNDTRIP_SKIP("already flexi");
 
     JsonObject *img = json_object_get_object_member(edit, "image");
-    const int w = img && json_object_has_member(img, "width")
-      ? (int)json_object_get_int_member(img, "width") : 0;
-    const int h = img && json_object_has_member(img, "height")
-      ? (int)json_object_get_int_member(img, "height") : 0;
+    const int w = (int)dt_masks_harvest_obj_int(img, "width", 0);
+    const int h = (int)dt_masks_harvest_obj_int(img, "height", 0);
     if(w <= 0 || h <= 0) ROUNDTRIP_SKIP("no image dimensions");
 
     JsonArray *fa = json_object_has_member(edit, "forms")
@@ -380,12 +370,9 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     if(fa && json_array_get_length(fa) > 0 && !forms)
       ROUNDTRIP_SKIP("forms could not be reconstructed");
 
-    const char *op = json_object_has_member(edit, "operation")
-      ? json_object_get_string_member(edit, "operation") : NULL;
-    const int mp = json_object_has_member(edit, "multi_priority")
-      ? (int)json_object_get_int_member(edit, "multi_priority") : 0;
-    const int bv = json_object_has_member(edit, "blendop_version")
-      ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
+    const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
+    const int mp = (int)dt_masks_harvest_obj_int(edit, "multi_priority", 0);
+    const int bv = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
 
     dt_masks_scratch_wipe_history(ROUNDTRIP_IMGID);
     dt_masks_scratch_seed_image(ROUNDTRIP_IMGID, w, h);
@@ -557,8 +544,8 @@ gboolean dt_masks_roundtrip_harvest(const char *json_path, const char *report_pa
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

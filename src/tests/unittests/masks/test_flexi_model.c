@@ -73,7 +73,7 @@ static void test_adjacent_same_op_groups_stay_separate(void **state)
   flexi_build("u:1,2 | u:3");
   assert_layout("u:1,2 | u:3");
 
-  GList *heads = dt_masks_gui_group_partition_heads(flexi_group());
+  GList *heads = dt_masks_model_group_markers(flexi_group());
   assert_int_equal(g_list_length(heads), 2);
   assert_int_equal(GPOINTER_TO_INT(heads->data), FLEXI_GID(0));
   assert_int_equal(GPOINTER_TO_INT(heads->next->data), FLEXI_GID(1));
@@ -101,16 +101,16 @@ static void test_cid_of_form_is_the_groups_marker(void **state)
 static void test_selected_group_formids(void **state)
 {
   flexi_build("u:1,2 | i:3,4,5");
-  GList *run = dt_masks_gui_selected_group_formids(flexi_group(), 4);
+  GList *run = dt_masks_model_group_members(flexi_group(), 4);
   assert_int_equal(g_list_length(run), 3);
   g_list_free(run);
 
-  run = dt_masks_gui_selected_group_formids(flexi_group(), 1);
+  run = dt_masks_model_group_members(flexi_group(), 1);
   assert_int_equal(g_list_length(run), 2);
   g_list_free(run);
 
   // by the group's own id too, and the marker is no member
-  run = dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1));
+  run = dt_masks_model_group_members(flexi_group(), FLEXI_GID(1));
   assert_int_equal(g_list_length(run), 3);
   assert_int_equal(GPOINTER_TO_INT(run->data), 5);
   g_list_free(run);
@@ -119,7 +119,7 @@ static void test_selected_group_formids(void **state)
 static void test_empty_group_has_no_members(void **state)
 {
   flexi_build("u:1 | [i]");
-  assert_null(dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1)));
+  assert_null(dt_masks_model_group_members(flexi_group(), FLEXI_GID(1)));
 }
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,7 @@ static void test_drop_adopts_target_operator(void **state)
 
 static void _assert_group_count(dt_masks_form_t *grp, const int expect)
 {
-  GList *heads = dt_masks_gui_group_partition_heads(grp);
+  GList *heads = dt_masks_model_group_markers(grp);
   const int n = g_list_length(heads);
   g_list_free(heads);
   if(n != expect)
@@ -198,7 +198,7 @@ static void test_drop_between_same_op_groups_keeps_both(void **state)
   dt_masks_model_drop_element_onto_element(&flexi_module, grp, 1, 3, TRUE);
   assert_layout("u:2 | u:3,1,4");
 
-  GList *heads = dt_masks_gui_group_partition_heads(grp);
+  GList *heads = dt_masks_model_group_markers(grp);
   assert_int_equal(g_list_length(heads), 2);
   g_list_free(heads);
 }
@@ -212,7 +212,7 @@ static void test_drop_onto_bottom_group(void **state)
   dt_masks_model_drop_element_onto_element(&flexi_module, grp, 3, 1, FALSE);
   assert_layout("u:3,1,2 | i:4");
 
-  GList *heads = dt_masks_gui_group_partition_heads(grp);
+  GList *heads = dt_masks_model_group_markers(grp);
   assert_int_equal(g_list_length(heads), 2);
   g_list_free(heads);
 }
@@ -1608,7 +1608,7 @@ static void test_soloedit_isolates_a_selected_group(void **state)
   flexi_bd.panel_selected_formid = INVALID_MASKID;
   flexi_bd.panel_selected_group_cid = FLEXI_GID(1);
   assert_int_equal(dt_masks_model_soloedit_target(&flexi_bd), FLEXI_GID(1));
-  GList *members = dt_masks_gui_selected_group_formids(flexi_group(), FLEXI_GID(1));
+  GList *members = dt_masks_model_group_members(flexi_group(), FLEXI_GID(1));
   assert_int_equal(g_list_length(members), 1);
   assert_int_equal(GPOINTER_TO_INT(members->data), 3);
   g_list_free(members);
@@ -2276,7 +2276,7 @@ static void test_nested_points_are_found_with_their_group(void **state)
   // the nested group itself is a member of the top list's group
   assert_int_equal(dt_masks_gui_group_cid_of_form(grp, 2000), FLEXI_GID(1));
 
-  GList *run = dt_masks_gui_selected_group_formids(grp, 2500);
+  GList *run = dt_masks_model_group_members(grp, 2500);
   assert_int_equal(g_list_length(run), 2);
   g_list_free(run);
 }
@@ -3007,8 +3007,8 @@ int main(void)
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

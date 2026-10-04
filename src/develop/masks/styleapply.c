@@ -90,13 +90,11 @@ static gboolean _pick_host(JsonObject *root, JsonArray *edits, _host_t *host)
     GList *forms = dt_masks_harvest_read_forms(fa);
     if(!forms) continue;
 
-    const char *op = json_object_has_member(edit, "operation")
-      ? json_object_get_string_member(edit, "operation") : NULL;
+    const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
     if(!op) { g_list_free_full(forms, (GDestroyNotify)dt_masks_free_form); continue; }
 
     g_strlcpy(host->operation, op, sizeof(host->operation));
-    host->blendop_version = json_object_has_member(edit, "blendop_version")
-      ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
+    host->blendop_version = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
     host->bp = bp;
     host->forms = forms;
     host->valid = TRUE;
@@ -194,20 +192,6 @@ static const dt_dev_history_item_t *_history_item_for(dt_develop_t *dev,
 // the three phases
 // ---------------------------------------------------------------------------
 
-/** Read the scratch image through the real history reader. Caller cleans up. */
-static void _open_scratch_dev(dt_develop_t *dev)
-{
-  dt_dev_init(dev, FALSE);
-  // dt_dev_init leaves dev->iop NULL and dt_dev_read_history_ext refuses to do
-  // anything without it
-  dev->iop = dt_iop_load_modules(dev);
-  // no_image = TRUE: there is no raw file behind the scratch row, and the
-  // default-module machinery that flag skips would add auto-applied modules
-  // that have nothing to do with what is being measured
-  dt_masks_scratch_claim_image(dev, STYLEAPPLY_IMGID);
-  dt_dev_read_history_ext(dev, STYLEAPPLY_IMGID, TRUE);
-}
-
 /** Phase 1: read the seeded classic rows and write them back as flexi, exactly
     as --roundtrip-masks does, so the image on disk is a normal migrated image
     before any style touches it. Reports the host's mask state, which is what
@@ -215,7 +199,7 @@ static void _open_scratch_dev(dt_develop_t *dev)
 static void _settle(const _host_t *host, gchar **host_desc)
 {
   dt_develop_t dev;
-  _open_scratch_dev(&dev);
+  dt_masks_scratch_open(&dev, STYLEAPPLY_IMGID);
 
   // pop the stack onto the modules, then snapshot dev->forms into a history
   // item -- dt_dev_write_history_ext() persists the *item's* forms, and a
@@ -287,7 +271,7 @@ static gboolean _apply_as_style(const char *operation,
                                 int *landed)
 {
   dt_develop_t dev;
-  _open_scratch_dev(&dev);
+  dt_masks_scratch_open(&dev, STYLEAPPLY_IMGID);
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
   dt_iop_module_t *mod_src = dt_iop_get_module_by_op_priority(dev.iop, operation, -1);
@@ -469,19 +453,15 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     // an already-flexi edit has no migration to survive
     if(bp.mask_mode & DEVELOP_MASK_FLEXI) STYLEAPPLY_SKIP("already flexi");
 
-    const char *op = json_object_has_member(edit, "operation")
-      ? json_object_get_string_member(edit, "operation") : NULL;
+    const char *op = dt_masks_harvest_obj_str(edit, "operation", NULL);
     if(!op) STYLEAPPLY_SKIP("no operation");
 
     JsonObject *img = json_object_get_object_member(edit, "image");
-    const int w = img && json_object_has_member(img, "width")
-      ? (int)json_object_get_int_member(img, "width") : 0;
-    const int h = img && json_object_has_member(img, "height")
-      ? (int)json_object_get_int_member(img, "height") : 0;
+    const int w = (int)dt_masks_harvest_obj_int(img, "width", 0);
+    const int h = (int)dt_masks_harvest_obj_int(img, "height", 0);
     if(w <= 0 || h <= 0) STYLEAPPLY_SKIP("no image dimensions");
 
-    const int bv = json_object_has_member(edit, "blendop_version")
-      ? (int)json_object_get_int_member(edit, "blendop_version") : 14;
+    const int bv = (int)dt_masks_harvest_obj_int(edit, "blendop_version", 14);
 
     const gboolean collides = !strcmp(op, host.operation);
     if(collides) same_op++;
@@ -493,8 +473,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
        had the module twice when the style was captured. Both items then have to
        migrate, both have to persist, and neither may end up standing on the
        other's form. */
-    const int mp = json_object_has_member(edit, "multi_priority")
-      ? (int)json_object_get_int_member(edit, "multi_priority") : 0;
+    const int mp = (int)dt_masks_harvest_obj_int(edit, "multi_priority", 0);
     const int n_items = mp > 0 ? 2 : 1;
 
     // A style never carries drawn geometry: masks_history is per image, and
@@ -570,7 +549,7 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
 
     // phase 3: reload from the database and see what actually persisted
     dt_develop_t dev;
-    _open_scratch_dev(&dev);
+    dt_masks_scratch_open(&dev, STYLEAPPLY_IMGID);
 
     /* Every item the style carried has to have arrived. The verdict is taken
        from the *worst* of them, so a style whose second instance was lost
@@ -792,8 +771,8 @@ gboolean dt_masks_styleapply_harvest(const char *json_path, const char *report_p
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

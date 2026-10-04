@@ -35,8 +35,8 @@
 // This is a height-for-width container rather than a box whose children are
 // moved around from "size-allocate": the row count is decided inside GTK's
 // own measure and allocate passes, so nothing is reparented, shown, hidden or
-// resized while GTK is laying out (see masks_toolbar in blend.h for the
-// schemes that were tried that way and dropped).
+// resized while GTK is laying out; schemes that moved widgets around raced
+// that layout pass.
 
 #include "develop/blend_gui_internal.h"
 
@@ -310,8 +310,8 @@ GtkWidget *dt_masks_gui_toolbar_new(GtkWidget *group,
   return GTK_WIDGET(tb);
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

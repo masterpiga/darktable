@@ -1371,7 +1371,7 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     // nothing contributed (bypassed, or every member hidden, disabled or
     // gone). As the mask, this renders as "no active mask element", which in
     // dt is a fully opaque mask (the module stays 100% active), matching the
-    // `mode_drawn && !form` fallback in dt_develop_blend. As a nested group,
+    // `mode_drawn && !form` fallback in dt_develop_blend_process. As a nested group,
     // returning 0 makes its parent skip it
     for(size_t i = 0; i < npixels; i++) buffer[i] = 1.0f;
     return 0;

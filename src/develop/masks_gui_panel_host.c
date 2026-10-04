@@ -27,9 +27,8 @@
 // the blending options the user picks a position from -- and nothing else. It builds no
 // panel content of its own; blend_gui.c does that.
 //
-// Split out of blend_gui.c. The seam is small on purpose: it needs one helper
-// from there (dt_masks_gui_reparent_into) and exports its entry points back, all declared
-// in blend_gui_internal.h.
+// It needs one helper from blend_gui.c (dt_masks_gui_reparent_into) and
+// exports its entry points back, all declared in blend_gui_internal.h.
 
 #include "develop/blend_gui_internal.h"
 
@@ -46,7 +45,7 @@
 // "separate panel, left/right" values are migrated in exactly one place rather
 // than understood in fifteen. Their side survives the migration as the panel's
 // current side, which is now a separate setting the panel updates itself
-// whenever the user pins it somewhere (see _masks_panel_set_side_right).
+// whenever the user pins it somewhere (see dt_ui_flexi_panel_set_collapsed).
 int dt_masks_gui_panel_position(void)
 {
   const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
@@ -120,7 +119,7 @@ static const char *_mask_mode_label(const uint32_t mask_mode)
 // unconditionally -- it has no persist=FALSE the way the separate panel's
 // dt_ui_flexi_panel_set_collapsed() does. So this file drives that expander
 // itself from the shared preference (see _masks_utility_apply_collapsed and
-// dt_masks_gui_flexi_relocate), which makes the lib's own key a mirror rather than a
+// dt_iop_gui_blend_masks_panel_relocate), which makes the lib's own key a mirror rather than a
 // source of truth in this position.
 static gboolean _masks_panel_collapsed_pref(void)
 {
@@ -209,9 +208,9 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   // the shared fold preference rather than each position's own widget: it is
   // what all three positions already agree on, so this reads the same however
   // the panel is hosted.
-  ++darktable.gui->reset;
+  DT_ENTER_GUI_UPDATE();
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(btn), showing);
-  --darktable.gui->reset;
+  DT_LEAVE_GUI_UPDATE();
 
   // the panel always belongs to one module, so with no module focused there is
   // nothing for it to show: say that, rather than leaving a button that looks
@@ -266,9 +265,9 @@ static void _sync_mask_enable_toggle(dt_iop_gui_blend_data_t *bd)
   // guarded: the toggle is driven by a click gesture rather than "toggled"
   // (see _blendop_mask_enable_toggled), and this is a correction, not a user
   // action -- nothing downstream should treat it as one
-  ++darktable.gui->reset;
+  DT_ENTER_GUI_UPDATE();
   gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(bd->mask_enable_toggle), on);
-  --darktable.gui->reset;
+  DT_LEAVE_GUI_UPDATE();
 }
 
 static void _masks_utility_apply_collapsed(dt_lib_module_t *host,
@@ -337,11 +336,10 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
                                      const gboolean mirrored)
 {
   GtkWidget *pin = bd->flexi_inline_collapse_btn;
-  GtkWidget *pref = bd->masks_options_btn;
   GtkWidget *toggle = bd->mask_enable_toggle;
   GtkWidget *showmask = bd->showmask;
-  if(!pin || !pref || !toggle || !showmask || !bd->masks_blend_header || !bd->masks_right_cluster) return;
-  if(!GTK_IS_WIDGET(pin) || !GTK_IS_WIDGET(pref) || !GTK_IS_WIDGET(toggle) || !GTK_IS_WIDGET(showmask)
+  if(!pin || !toggle || !showmask || !bd->masks_blend_header || !bd->masks_right_cluster) return;
+  if(!GTK_IS_WIDGET(pin) || !GTK_IS_WIDGET(toggle) || !GTK_IS_WIDGET(showmask)
      || !GTK_IS_BOX(bd->masks_blend_header) || !GTK_IS_BOX(bd->masks_right_cluster)) return;
 
   dt_masks_gui_reparent_into(showmask, bd->masks_right_cluster, FALSE, FALSE);
@@ -378,7 +376,6 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   const gboolean is_mask_enabled = (bd->module->blend_params->mask_mode != DEVELOP_MASK_DISABLED);
   gtk_widget_set_visible(pin, show_pin);
   gtk_widget_set_visible(showmask, is_mask_enabled && !bd->module->hide_enable_button);
-  gtk_widget_hide(pref);
   gtk_widget_show(toggle);
 }
 
@@ -567,24 +564,6 @@ void dt_iop_gui_blend_masks_panel_collapsed(const gboolean collapsed)
   }
 }
 
-// move bd->relocatable_box back into this module's own expander (the
-// "embedded" home), clearing the host's bookkeeping if this module was the
-// one occupying it. No-op if the box is already home. This only happens
-// when the module stops being eligible to be hosted at all (lost focus,
-// position switched away from utility/left/right, or module torn down) --
-// having no mask does NOT release it anymore, see dt_masks_gui_flexi_relocate.
-// Whether the box is actually revealed once back home always follows real
-// focus (darktable.develop->gui_module == module), for every position
-// preference: an expanded-but-unfocused module must never show its full
-// blend/mask panel inline, whether it fell back here because the position
-// preference IS "embedded", or because it used to be hosted elsewhere
-// (utility/left/right) and just lost focus -- both are the same case from
-// the user's point of view.
-void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
-{
-  dt_masks_gui_flexi_relocate(module);
-}
-
 static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean handoff);
 
 // does any of this module's panel content currently sit in a host? Asked of
@@ -735,6 +714,63 @@ char *dt_masks_model_panel_header_markup(const char *module_name,
   return markup;
 }
 
+// put the panel's header and body back into bd->relocatable_box, in that order
+static void _masks_header_body_home(dt_iop_gui_blend_data_t *bd)
+{
+  GtkWidget *home = GTK_WIDGET(bd->relocatable_box);
+  GtkWidget *const parts[2] = { bd->masks_blend_header, GTK_WIDGET(bd->masks_panel_body) };
+  for(int i = 0; i < 2; i++)
+    if(parts[i] && GTK_IS_WIDGET(parts[i]) && gtk_widget_get_parent(parts[i]) != home)
+    {
+      dt_masks_gui_reparent_into(parts[i], home, FALSE, FALSE);
+      gtk_box_reorder_child(bd->relocatable_box, parts[i], i);
+    }
+}
+
+// the title label on the utility lib's expander header, and in *evb the event
+// box around it. Looked up once, then kept in the host proxy
+static GtkWidget *_utility_header_label(dt_lib_module_t *host, GtkWidget **evb)
+{
+  GtkWidget *lbl = darktable.develop->proxy.masks_flexi_host.header_label;
+  if(!lbl)
+  {
+    GList *children =
+      gtk_container_get_children(GTK_CONTAINER(DTGTK_EXPANDER(host->expander)->header));
+    for(GList *c = children; c && !lbl; c = g_list_next(c))
+    {
+      GtkWidget *child = GTK_IS_EVENT_BOX(c->data) ? gtk_bin_get_child(GTK_BIN(c->data)) : NULL;
+      if(child && GTK_IS_LABEL(child))
+      {
+        lbl = darktable.develop->proxy.masks_flexi_host.header_label = child;
+        darktable.develop->proxy.masks_flexi_host.label_evb = GTK_WIDGET(c->data);
+      }
+    }
+    g_list_free(children);
+  }
+  *evb = darktable.develop->proxy.masks_flexi_host.label_evb;
+  return lbl && GTK_IS_LABEL(lbl) ? lbl : NULL;
+}
+
+void dt_masks_gui_utility_header_unhosted(dt_lib_module_t *host)
+{
+  if(!host || !host->expander) return;
+  GtkWidget *levb = NULL;
+  GtkWidget *lbl = _utility_header_label(host, &levb);
+  if(lbl)
+  {
+    gchar *markup = dt_masks_model_panel_header_markup(NULL, NULL, TRUE);
+    gtk_label_set_markup(GTK_LABEL(lbl), markup);
+    g_free(markup);
+  }
+  GtkWidget *const off[2] = { host->arrow, levb };
+  for(int i = 0; i < 2; i++)
+    if(off[i])
+    {
+      gtk_widget_set_sensitive(off[i], FALSE);
+      gtk_widget_set_tooltip_text(off[i], _("disabled because no module is selected"));
+    }
+}
+
 // `handoff`: whether the module giving the panel up is doing so because
 // another one is taking focus, in which case the panel is passed straight on
 // to whatever dev->gui_module now names. FALSE on teardown, where there is no
@@ -752,26 +788,8 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
     darktable.develop->proxy.masks_flexi_host.hosted_module == module;
   if(was_hosted) darktable.develop->proxy.masks_flexi_host.hosted_module = NULL;
 
-  if(bd->masks_right_cluster && GTK_IS_WIDGET(bd->masks_right_cluster))
-  {
-    if(bd->showmask && GTK_IS_WIDGET(bd->showmask) && gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-      dt_masks_gui_reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
-    if(bd->mask_enable_toggle && GTK_IS_WIDGET(bd->mask_enable_toggle) && gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
-      dt_masks_gui_reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
-    _place_mask_lock(bd);
-  }
-  if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header)
-     && gtk_widget_get_parent(bd->masks_blend_header) != GTK_WIDGET(bd->relocatable_box))
-  {
-    dt_masks_gui_reparent_into(bd->masks_blend_header, GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-    gtk_box_reorder_child(bd->relocatable_box, bd->masks_blend_header, 0);
-  }
-  if(bd->masks_panel_body && GTK_IS_WIDGET(bd->masks_panel_body)
-     && gtk_widget_get_parent(GTK_WIDGET(bd->masks_panel_body)) != GTK_WIDGET(bd->relocatable_box))
-  {
-    dt_masks_gui_reparent_into(GTK_WIDGET(bd->masks_panel_body), GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-    gtk_box_reorder_child(bd->relocatable_box, GTK_WIDGET(bd->masks_panel_body), 1);
-  }
+  // the header's controls come home with _masks_header_apply_side below
+  _masks_header_body_home(bd);
   if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header))
     gtk_widget_set_visible(bd->masks_blend_header, TRUE);
 
@@ -791,7 +809,6 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
   // reads left-to-right like every other module's
   _masks_header_apply_side(bd, FALSE);
   _masks_embedded_apply_collapsed(module, embedded && (!module->expanded || _masks_panel_collapsed_pref()));
-  gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
   // back in the module's own content -- restore the embedded inset (see
   // darktable.css's "#blending-tabs.blending-tabs-embedded")
   dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
@@ -804,48 +821,7 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
     if(util_host && util_host->expander)
     {
       _masks_utility_apply_collapsed(util_host, TRUE);
-
-      GtkWidget *lbl = darktable.develop->proxy.masks_flexi_host.header_label;
-      GtkWidget *levb = darktable.develop->proxy.masks_flexi_host.label_evb;
-      if(!lbl)
-      {
-        GtkWidget *header = DTGTK_EXPANDER(util_host->expander)->header;
-        GList *children = gtk_container_get_children(GTK_CONTAINER(header));
-        for(GList *c = children; c; c = g_list_next(c))
-        {
-          if(GTK_IS_EVENT_BOX(c->data))
-          {
-            GtkWidget *child = gtk_bin_get_child(GTK_BIN(c->data));
-            if(GTK_IS_LABEL(child))
-            {
-              lbl = child;
-              levb = GTK_WIDGET(c->data);
-              darktable.develop->proxy.masks_flexi_host.header_label = lbl;
-              darktable.develop->proxy.masks_flexi_host.label_evb = levb;
-              break;
-            }
-          }
-        }
-        g_list_free(children);
-      }
-
-      if(lbl && GTK_IS_LABEL(lbl))
-      {
-        gchar *markup = dt_masks_model_panel_header_markup(NULL, NULL, TRUE);
-        gtk_label_set_markup(GTK_LABEL(lbl), markup);
-        g_free(markup);
-      }
-
-      if(util_host->arrow)
-      {
-        gtk_widget_set_sensitive(util_host->arrow, FALSE);
-        gtk_widget_set_tooltip_text(util_host->arrow, _("disabled because no module is selected"));
-      }
-      if(levb)
-      {
-        gtk_widget_set_sensitive(levb, FALSE);
-        gtk_widget_set_tooltip_text(levb, _("disabled because no module is selected"));
-      }
+      dt_masks_gui_utility_header_unhosted(util_host);
     }
     if(util_host && util_host->preset_label && GTK_IS_LABEL(util_host->preset_label))
       gtk_label_set_text(GTK_LABEL(util_host->preset_label), "");
@@ -938,7 +914,7 @@ static void _release_stray_hosted(dt_iop_module_t *keep)
 // on the module being focused and masking-capable -- NOT on the current mask
 // mode, so the panel's controls stay reachable with the mask off, and whether
 // it shows follows the shared fold preference (see dt_masks_model_panel_state)
-void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
+void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
   dt_iop_gui_blend_data_t *bd = module->blend_data;
@@ -975,25 +951,8 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
       if(prev && prev != module) dt_masks_gui_flexi_release(prev);
       darktable.develop->proxy.masks_flexi_host.hosted_module = module;
 
-      if(bd->masks_blend_header && gtk_widget_get_parent(bd->masks_blend_header) != GTK_WIDGET(bd->relocatable_box))
-      {
-        dt_masks_gui_reparent_into(bd->masks_blend_header, GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-        gtk_box_reorder_child(bd->relocatable_box, bd->masks_blend_header, 0);
-      }
-      if(bd->masks_panel_body && gtk_widget_get_parent(GTK_WIDGET(bd->masks_panel_body)) != GTK_WIDGET(bd->relocatable_box))
-      {
-        dt_masks_gui_reparent_into(GTK_WIDGET(bd->masks_panel_body), GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-        gtk_box_reorder_child(bd->relocatable_box, GTK_WIDGET(bd->masks_panel_body), 1);
-      }
-
-      if(bd->masks_right_cluster && GTK_IS_WIDGET(bd->masks_right_cluster))
-      {
-        if(bd->showmask && GTK_IS_WIDGET(bd->showmask) && gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-          dt_masks_gui_reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
-        if(bd->mask_enable_toggle && GTK_IS_WIDGET(bd->mask_enable_toggle) && gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
-          dt_masks_gui_reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
-        _place_mask_lock(bd);
-      }
+      // the header's controls come home with _masks_header_apply_side below
+      _masks_header_body_home(bd);
       if(bd->masks_blend_header && GTK_IS_WIDGET(bd->masks_blend_header))
         gtk_widget_set_visible(bd->masks_blend_header, TRUE);
 
@@ -1007,7 +966,6 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
       _masks_header_apply_side(bd, FALSE);
       if(focus_changed)
         _masks_embedded_apply_collapsed(module, _masks_panel_collapsed_pref());
-      gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
       dt_gui_add_class(bd->masks_blend_header, "blending-tabs-embedded");
       if(bd->masks_blend_header_label && GTK_IS_LABEL(bd->masks_blend_header_label))
         gtk_label_set_text(GTK_LABEL(bd->masks_blend_header_label), _("blend mask"));
@@ -1048,16 +1006,7 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
   }
   else
   {
-    if(bd->masks_blend_header && gtk_widget_get_parent(bd->masks_blend_header) != GTK_WIDGET(bd->relocatable_box))
-    {
-      dt_masks_gui_reparent_into(bd->masks_blend_header, GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-      gtk_box_reorder_child(bd->relocatable_box, bd->masks_blend_header, 0);
-    }
-    if(bd->masks_panel_body && gtk_widget_get_parent(GTK_WIDGET(bd->masks_panel_body)) != GTK_WIDGET(bd->relocatable_box))
-    {
-      dt_masks_gui_reparent_into(GTK_WIDGET(bd->masks_panel_body), GTK_WIDGET(bd->relocatable_box), FALSE, FALSE);
-      gtk_box_reorder_child(bd->relocatable_box, GTK_WIDGET(bd->masks_panel_body), 1);
-    }
+    _masks_header_body_home(bd);
     dt_masks_gui_reparent_into(GTK_WIDGET(bd->relocatable_box), target, FALSE, FALSE);
     gtk_widget_show(GTK_WIDGET(bd->relocatable_box));
   }
@@ -1102,31 +1051,9 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
     dt_lib_module_t *host = darktable.develop->proxy.masks_flexi_host.module;
     if(host && host->expander)
     {
-      GtkWidget *lbl = darktable.develop->proxy.masks_flexi_host.header_label;
-      GtkWidget *levb = darktable.develop->proxy.masks_flexi_host.label_evb;
-      if(!lbl)
-      {
-        GtkWidget *header = DTGTK_EXPANDER(host->expander)->header;
-        GList *children = gtk_container_get_children(GTK_CONTAINER(header));
-        for(GList *c = children; c; c = g_list_next(c))
-        {
-          if(GTK_IS_EVENT_BOX(c->data))
-            {
-            GtkWidget *child = gtk_bin_get_child(GTK_BIN(c->data));
-            if(GTK_IS_LABEL(child))
-            {
-              lbl = child;
-              levb = GTK_WIDGET(c->data);
-              darktable.develop->proxy.masks_flexi_host.header_label = lbl;
-              darktable.develop->proxy.masks_flexi_host.label_evb = levb;
-              break;
-            }
-          }
-        }
-        g_list_free(children);
-      }
-
-      if(lbl && GTK_IS_LABEL(lbl))
+      GtkWidget *levb = NULL;
+      GtkWidget *lbl = _utility_header_label(host, &levb);
+      if(lbl)
       {
         gchar *markup = dt_masks_model_panel_header_markup(module ? module->name() : NULL,
                                                            module ? dt_iop_get_instance_name(module) : NULL,
@@ -1158,14 +1085,7 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
   }
   else
   {
-    if(bd->masks_right_cluster)
-    {
-      if(gtk_widget_get_parent(bd->showmask) != bd->masks_right_cluster)
-        dt_masks_gui_reparent_into(bd->showmask, bd->masks_right_cluster, FALSE, FALSE);
-      if(gtk_widget_get_parent(bd->mask_enable_toggle) != bd->masks_right_cluster)
-        dt_masks_gui_reparent_into(bd->mask_enable_toggle, bd->masks_right_cluster, FALSE, FALSE);
-      _place_mask_lock(bd);
-    }
+    // the header's controls come home with _masks_header_apply_side below
     gtk_widget_set_visible(bd->masks_blend_header, TRUE);
     // hosted elsewhere now -- drop the embedded inset, the host already
     // provides its own (see darktable.css's "#blending-tabs.blending-tabs-embedded")
@@ -1185,22 +1105,14 @@ void dt_masks_gui_flexi_relocate(dt_iop_module_t *module)
     g_free(markup);
   }
 
-  gtk_widget_hide(bd->masks_options_btn);  // options open on the toggle's right-click now
-
   if(pos == MASKS_PANEL_POS_CANVAS)
   {
     dt_ui_flexi_panel_set_icon(darktable.gui->ui, state.corner_icon_active,
                                _mask_mode_label(mask_mode));
     // the shared state again -- applying it, not deciding it, so persist=FALSE.
-    //
-    // Also when the panel simply disagrees with the state, not only on a focus
-    // change: expanding a module that already has focus is a relocate with
-    // focus_changed FALSE, and state.panel_collapsed has just gone from TRUE
-    // (a collapsed module never shows the panel, see dt_masks_model_panel_state)
-    // to the user's preference. Gated on focus alone, nothing applied that, so
-    // the first module you expanded came up with its panel still hidden and
-    // only a detour through another module brought it back.
-    //
+    // Also when the panel disagrees with the state without a focus change:
+    // expanding the focused module turns state.panel_collapsed from TRUE (a
+    // collapsed module never shows the panel) to the user's preference
     const gboolean panel_disagrees =
       state.panel_collapsed != dt_ui_flexi_panel_is_collapsed(darktable.gui->ui);
     if(focus_changed || panel_disagrees)
@@ -1254,7 +1166,8 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
 {
   // a real GtkRadioButton group, which fires "toggled" on both the item losing
   // the selection and the one gaining it -- only act on the latter
-  if(darktable.gui->reset || !gtk_toggle_button_get_active(mi)) return;
+  DT_GUARD_GUI_UPDATE();
+  if(!gtk_toggle_button_get_active(mi)) return;
 
   const int pos = GPOINTER_TO_INT(g_object_get_data(G_OBJECT(mi), "dt-panel-pos"));
   dt_conf_set_int("plugins/darkroom/blend/masks_panel_position", pos);
@@ -1264,7 +1177,7 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
 
   // leaving the separate-panel (left/right) mechanism entirely: force it
   // fully hidden (not just emptied) rather than leaving an empty panel
-  // visible -- dt_masks_gui_flexi_relocate()'s own release path only re-applies
+  // visible -- dt_iop_gui_blend_masks_panel_relocate()'s own release path only re-applies
   // whatever visibility it already had, which isn't enough here
   if(pos != MASKS_PANEL_POS_CANVAS)
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
@@ -1279,7 +1192,7 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
   // decide where this (focused) module's content should live now
   if(module)
   {
-    dt_masks_gui_flexi_relocate(module);
+    dt_iop_gui_blend_masks_panel_relocate(module);
 
     switch(pos)
     {
@@ -1313,12 +1226,9 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
 // section label, so the current choice is visible at a glance
 void dt_masks_gui_add_panel_position_box(GtkWidget *box, dt_iop_module_t *module)
 {
-  GtkWidget *header = gtk_label_new(_("blend mask panel position"));
-  gtk_label_set_justify(GTK_LABEL(header), GTK_JUSTIFY_CENTER);
-  dt_gui_add_class(header, "dt_section_label");
-  gtk_widget_set_tooltip_text(header, _("where the blend mask panel (groups, elements,\n"
-                                        "refinements) is shown. a change applies at once"));
-  dt_gui_box_add(box, header);
+  dt_masks_gui_pref_section(box, _("blend mask panel position"),
+                            _("where the blend mask panel (groups, elements,\n"
+                              "refinements) is shown. a change applies at once"));
 
   static const struct
   {
@@ -1338,7 +1248,7 @@ void dt_masks_gui_add_panel_position_box(GtkWidget *box, dt_iop_module_t *module
 
   // states first, handlers after: setting the active radio while building would
   // otherwise read as the user choosing a position and relocate the panel
-  ++darktable.gui->reset;
+  DT_ENTER_GUI_UPDATE();
   for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
   {
     radios[i] = gtk_radio_button_new_with_label_from_widget(
@@ -1348,7 +1258,7 @@ void dt_masks_gui_add_panel_position_box(GtkWidget *box, dt_iop_module_t *module
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(radios[i]), items[i].pos == cur_pos);
     dt_gui_box_add(box, radios[i]);
   }
-  --darktable.gui->reset;
+  DT_LEAVE_GUI_UPDATE();
 
   for(size_t i = 0; i < G_N_ELEMENTS(items); i++)
     g_signal_connect(G_OBJECT(radios[i]), "toggled",

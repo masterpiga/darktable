@@ -327,7 +327,7 @@ static void test_channel_used_detects_a_touched_range(void **state)
 
 // the channel's own enable bit counts as "used" even at a full range, so a
 // channel the user explicitly switched on does not read as untouched
-static void test_channel_used_honours_the_active_bit(void **state)
+static void test_channel_used_honors_the_active_bit(void **state)
 {
   dt_masks_form_t *f = _make_parametric();
   dt_masks_point_parametric_t *p = f->points->data;
@@ -754,7 +754,7 @@ int main(void)
     cmocka_unit_test_setup_teardown(test_auto_expand_has_no_anchor_when_nothing_is_known,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_teardown(test_channel_used_detects_a_touched_range, _teardown),
-    cmocka_unit_test_teardown(test_channel_used_honours_the_active_bit, _teardown),
+    cmocka_unit_test_teardown(test_channel_used_honors_the_active_bit, _teardown),
     cmocka_unit_test_setup_teardown(test_sticky_opacity_preference_roundtrips,
                                     _conf_setup, _conf_teardown),
     cmocka_unit_test_setup_teardown(test_auto_expand_preference_roundtrips,
@@ -796,8 +796,8 @@ int main(void)
   return cmocka_run_group_tests(tests, NULL, NULL);
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

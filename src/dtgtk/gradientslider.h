@@ -114,7 +114,7 @@ struct _GtkDarktableGradientSlider
   // pointer, so the marker being edited stays visibly picked out on the
   // slider the whole time that editor is open, not just while the mouse is
   // actually over/dragging it. See the "pinned" check in
-  // dtgtk_gradient_slider_multivalue's draw handler.
+  // _gradient_slider_draw.
   gint pinned;
   gint markers_type;
   // css-driven geometry, cached because reading it back costs a full

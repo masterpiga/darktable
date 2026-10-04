@@ -900,47 +900,6 @@ void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, const gint x, const gint y, co
   FINISH
 }
 
-// "invert mask values" for the flexi mask UI. Evokes the "display mask overlay"
-// glyph (dtgtk_cairo_paint_showmask: a filled square with a circular hole) but
-// inverted across the main diagonal: the lower-left triangle keeps the
-// square-minus-circle fill, while the upper-right triangle shows the negative
-// (only the circle filled). The diagonal split reads as "invert".
-void dtgtk_cairo_paint_mask_invert(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, gint flags, void *data)
-{
-  PREAMBLE(1, 1, 0, 0)
-
-  // lower-left triangle: square with the circle punched out (like showmask)
-  cairo_save(cr);
-  cairo_move_to(cr, 0.0, 0.0);
-  cairo_line_to(cr, 1.0, 1.0);
-  cairo_line_to(cr, 0.0, 1.0);
-  cairo_close_path(cr);
-  cairo_clip(cr);
-  cairo_rectangle(cr, 0.0, 0.0, 1.0, 1.0);
-  cairo_new_sub_path(cr);
-  cairo_arc(cr, 0.5, 0.5, 0.32, 0, 2.0 * M_PI);
-  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // upper-right triangle: only the circle filled (the inverted negative)
-  cairo_save(cr);
-  cairo_move_to(cr, 0.0, 0.0);
-  cairo_line_to(cr, 1.0, 1.0);
-  cairo_line_to(cr, 1.0, 0.0);
-  cairo_close_path(cr);
-  cairo_clip(cr);
-  cairo_arc(cr, 0.5, 0.5, 0.32, 0, 2.0 * M_PI);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // outline the square so the empty upper-right corner reads
-  cairo_rectangle(cr, 0.0, 0.0, 1.0, 1.0);
-  cairo_stroke(cr);
-
-  FINISH
-}
-
 // the group operator icons: a square (the bottom element) and a circle (the
 // one above it) overlapping diagonally, combined with the operator's own
 // formula (group.c _combine_masks_*) evaluated per device pixel, so each icon
@@ -1235,47 +1194,6 @@ void dtgtk_cairo_paint_eye_solo(cairo_t *cr, const gint x, const gint y, const g
   cairo_fill(cr);
   cairo_pop_group_to_source(cr);
   cairo_paint(cr);
-
-  FINISH
-}
-
-// "invert visibility": an open eye whose entire right half is inverted (the eye
-// body filled solid with the pupil punched out), so it reads clearly distinct
-// from the plain open eye used for "show all".
-void dtgtk_cairo_paint_invert_visibility(cairo_t *cr, const gint x, const gint y, const gint w, const gint h, const gint flags, void *data)
-{
-  PREAMBLE(1, 1, 0, 0)
-
-  // eye almond outline, same proportions as dtgtk_cairo_paint_eye_toggle
-  cairo_save(cr);
-  cairo_translate(cr, 0, 0.22);
-  cairo_scale(cr, 1.0, 0.55);
-  cairo_arc(cr, 0.5, 0.5, 0.45, 0, 2 * M_PI);
-  cairo_restore(cr);
-  cairo_stroke(cr);
-
-  // right half of the eye filled solid (the inverted side), pupil punched out
-  cairo_save(cr);
-  cairo_rectangle(cr, 0.5, -0.3, 0.9, 1.6);
-  cairo_clip(cr);
-  cairo_save(cr);
-  cairo_translate(cr, 0, 0.22);
-  cairo_scale(cr, 1.0, 0.55);
-  cairo_arc(cr, 0.5, 0.5, 0.45, 0, 2 * M_PI);
-  cairo_restore(cr);
-  cairo_new_sub_path(cr);
-  cairo_arc(cr, 0.5, 0.5, 0.16, 0, 2 * M_PI);
-  cairo_set_fill_rule(cr, CAIRO_FILL_RULE_EVEN_ODD);
-  cairo_fill(cr);
-  cairo_restore(cr);
-
-  // left half: pupil drawn solid
-  cairo_save(cr);
-  cairo_rectangle(cr, -0.4, -0.3, 0.9, 1.6);
-  cairo_clip(cr);
-  cairo_arc(cr, 0.5, 0.5, 0.16, 0, 2 * M_PI);
-  cairo_fill(cr);
-  cairo_restore(cr);
 
   FINISH
 }

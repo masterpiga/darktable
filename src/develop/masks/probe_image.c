@@ -159,9 +159,7 @@ static inline int _tile_size(const int width, const int height)
   return t;
 }
 
-void dt_masks_probe_generate(float *const buf,
-                             const int width,
-                             const int height)
+static void _generate(float *const buf, const int width, const int height)
 {
   if(!buf || width <= 0 || height <= 0) return;
 
@@ -303,12 +301,12 @@ float *dt_masks_probe_new(const int width, const int height)
   if(width <= 0 || height <= 0) return NULL;
   float *const buf = dt_alloc_align_float((size_t)width * height * 4);
   if(!buf) return NULL;
-  dt_masks_probe_generate(buf, width, height);
+  _generate(buf, width, height);
   return buf;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

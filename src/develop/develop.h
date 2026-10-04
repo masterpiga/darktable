@@ -377,7 +377,7 @@ typedef struct dt_develop_t
       GtkWidget *label_evb;
       // which iop module's relocatable_box currently occupies content_box,
       // NULL if empty. Tracked here (rather than inspecting content_box's
-      // children) so dt_masks_gui_flexi_relocate can cheaply tell whether it needs
+      // children) so dt_iop_gui_blend_masks_panel_relocate can cheaply tell whether it needs
       // to move a previous occupant out first.
       struct dt_iop_module_t *hosted_module;
       // called right after the blending options write a new

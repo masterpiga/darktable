@@ -27,16 +27,21 @@
 /* Putting a harvested edit into a throwaway database as *classic* history, so
  * that reading it back runs the real migration.
  *
- * Shared by --roundtrip-masks and --styleapply-masks, which both need an image
- * that exists only for the duration of one comparison. Every one of these
+ * Shared by the --*-masks checks (roundtrip, styleapply, persist, undo, the
+ * lock check), which all need an image that exists only for the duration of
+ * one comparison. Every one of these
  * writes to the database, so they are only ever safe against a scratch library
  * (`--library :memory:`), never a real catalog.
  */
 
-/** Give `dev` the scratch image's identity, before reading its history.
+/** Open the scratch image `imgid` into `dev` the way darktable opens an
+    image, through the real history reader. Caller cleans up with
+    dt_dev_cleanup().
 
-    dt_dev_read_history_ext(..., no_image = TRUE) skips the block that loads
-    the image, so dev->image_storage keeps whatever dt_dev_init() left there:
+    The read passes no_image = TRUE: there is no raw file behind the scratch
+    row, and the default-module machinery that flag skips would add
+    auto-applied modules that have nothing to do with what is being measured.
+    It also skips the block that loads the image, so dev->image_storage keeps whatever dt_dev_init() left there:
     an invalid id. That is not cosmetic. Migration's _mask_id_has_content()
     (migrate_legacy.c) decides whether a classic drawn group has any content,
     and whenever it is given a real history num it answers by querying
@@ -54,9 +59,44 @@
 
     It cost --persist-masks 219 of zisoft's 229 distinct edits (reported as
     "no group to edit") and made the flexi half of --roundtrip-masks' run
-    invariant unreachable on the same edits. Call this after dt_dev_init() and
-    before dt_dev_read_history_ext(). */
-void dt_masks_scratch_claim_image(dt_develop_t *dev, const dt_imgid_t imgid);
+    invariant unreachable on the same edits. So this sets the identity between
+    dt_dev_init() and the read. */
+void dt_masks_scratch_open(dt_develop_t *dev, const dt_imgid_t imgid);
+
+/** Open the scratch image and copy out the mask of its last history item:
+    `bp_out` gets the blend_params and `forms_out` a deep copy of the form
+    tree, both owned by the caller (either may be NULL). Stands in for the
+    close-and-reopen of dt_dev_reload_history_items(), which needs the GUI.
+    Returns FALSE if nothing masked came back. */
+gboolean dt_masks_scratch_read_last(const dt_imgid_t imgid,
+                                    dt_develop_blend_params_t *bp_out,
+                                    GList **forms_out);
+
+/** Put the scratch image back to its just-migrated state: seed the classic
+    history row again and open it once, which is what runs migration and, since
+    the half-persisted migration fix, what stores the result.
+
+    `bp_out` and `forms_out` (either may be NULL) receive the migrated state as
+    it stands IN MEMORY, before anything has been read back. That is what the
+    user sees in the darkroom on the first open; whether the database now holds
+    enough to reconstruct it is the open question for --persist-masks, so an
+    arm that wants "the first open" must take it from here and not from a
+    re-read. Taking it from a re-read is how --persist-masks once passed with
+    the half-persisted migration reinstated: both arms sat on the far side of
+    the loss, agreeing with each other about the wrong mask.
+
+    Returns FALSE if the row could not be seeded, or if a requested output
+    found no mask to copy. */
+gboolean dt_masks_scratch_reset_to_migrated(const dt_imgid_t imgid,
+                                            const char *operation,
+                                            const int multi_priority,
+                                            const int blendop_version,
+                                            const int width,
+                                            const int height,
+                                            const dt_develop_blend_params_t *bp,
+                                            GList *forms,
+                                            dt_develop_blend_params_t *bp_out,
+                                            GList **forms_out);
 
 /** Wipe history, masks_history and module_order for `imgid`. */
 void dt_masks_scratch_wipe_history(const dt_imgid_t imgid);
@@ -115,8 +155,8 @@ void dt_masks_scratch_seed_iop_order(const dt_imgid_t imgid,
                                      const char *operation,
                                      const int multi_priority);
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

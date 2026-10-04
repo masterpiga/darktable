@@ -27,7 +27,7 @@
 // The canvas position does NOT use this lib at all -- it is a genuine extra
 // grid column owned by src/gui/gtk.c (dt_ui_flexi_panel_*), a real
 // independent panel rather than more content stacked inside the existing
-// left/right panels. See dt_masks_gui_flexi_relocate in
+// left/right panels. See dt_iop_gui_blend_masks_panel_relocate in
 // develop/masks_gui_panel_host.c for how the two mechanisms are picked
 // between.
 //
@@ -68,9 +68,8 @@ const char *name(dt_lib_module_t *self)
 
 const char *description(dt_lib_module_t *self)
 {
-  return _("blend mask panel for the focused module\n"
-           "(see the panel options menu on the module\n"
-           "whose masking is being edited)");
+  return _("blend mask panel of the focused module\n"
+           "(right-click the mask on/off toggle for its options)");
 }
 
 dt_view_type_flags_t views(dt_lib_module_t *self)
@@ -203,7 +202,6 @@ void view_enter(dt_lib_module_t *self,
   if(self->expander && d && d->toggle_box && !gtk_widget_get_parent(GTK_WIDGET(d->toggle_box)))
   {
     GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
-    dt_gui_add_class(header, "masks-flexi-host-header");
     gtk_box_pack_end(GTK_BOX(header), GTK_WIDGET(d->toggle_box), FALSE, FALSE, 0);
     // visual reading order from left to right: overlay | toggle
     // For GTK_PACK_END, the earlier child in the list is placed further to the right.
@@ -211,34 +209,13 @@ void view_enter(dt_lib_module_t *self,
     gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->toggle_box), 2);
     if(d->actions_box)
       gtk_box_reorder_child(GTK_BOX(header), GTK_WIDGET(d->actions_box), 3);
-    if(self->arrow)
-      gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
     gtk_widget_show(GTK_WIDGET(d->toggle_box));
   }
 
   if(self->expander)
   {
-    GtkWidget *header = DTGTK_EXPANDER(self->expander)->header;
-    dt_gui_add_class(header, "masks-flexi-host-header");
-    if(self->arrow)
-      gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
-    if(self->presets_button)
-      gtk_widget_set_valign(self->presets_button, GTK_ALIGN_CENTER);
-    GList *children = gtk_container_get_children(GTK_CONTAINER(header));
-    for(GList *c = children; c; c = g_list_next(c))
-    {
-      if(GTK_IS_EVENT_BOX(c->data))
-      {
-        GtkWidget *child = gtk_bin_get_child(GTK_BIN(c->data));
-        if(GTK_IS_LABEL(child))
-        {
-          darktable.develop->proxy.masks_flexi_host.label_evb = GTK_WIDGET(c->data);
-          darktable.develop->proxy.masks_flexi_host.header_label = child;
-          break;
-        }
-      }
-    }
-    g_list_free(children);
+    dt_gui_add_class(DTGTK_EXPANDER(self->expander)->header, "masks-flexi-host-header");
+    if(self->arrow) gtk_widget_set_valign(self->arrow, GTK_ALIGN_CENTER);
   }
 
   if(self->reset_button)
@@ -264,28 +241,8 @@ void view_enter(dt_lib_module_t *self,
   }
   else
   {
-    if(self->expander)
-      dt_lib_gui_set_expanded(self, FALSE);
-
-    GtkWidget *lbl = darktable.develop->proxy.masks_flexi_host.header_label;
-    GtkWidget *levb = darktable.develop->proxy.masks_flexi_host.label_evb;
-    if(lbl && GTK_IS_LABEL(lbl))
-    {
-      gchar *markup = dt_masks_model_panel_header_markup(NULL, NULL, TRUE);
-      gtk_label_set_markup(GTK_LABEL(lbl), markup);
-      g_free(markup);
-    }
-
-    if(self->arrow)
-    {
-      gtk_widget_set_sensitive(self->arrow, FALSE);
-      gtk_widget_set_tooltip_text(self->arrow, _("disabled because no module is selected"));
-    }
-    if(levb)
-    {
-      gtk_widget_set_sensitive(levb, FALSE);
-      gtk_widget_set_tooltip_text(levb, _("disabled because no module is selected"));
-    }
+    if(self->expander) dt_lib_gui_set_expanded(self, FALSE);
+    dt_masks_gui_utility_header_unhosted(self);
   }
 }
 
@@ -301,7 +258,7 @@ void view_leave(dt_lib_module_t *self,
     GtkWidget *parent = boxes[i] ? gtk_widget_get_parent(boxes[i]) : NULL;
     if(parent) gtk_container_remove(GTK_CONTAINER(parent), boxes[i]);
   }
-  // they point into the same header; view_enter finds them again in the new one
+  // they point into the same header; the next use finds them in the new one
   darktable.develop->proxy.masks_flexi_host.header_label = NULL;
   darktable.develop->proxy.masks_flexi_host.label_evb = NULL;
 }

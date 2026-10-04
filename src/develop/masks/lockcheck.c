@@ -141,10 +141,7 @@ typedef struct _expect_t
 static gboolean _check(const char *name, const _expect_t *want)
 {
   dt_develop_t dev;
-  dt_dev_init(&dev, FALSE);
-  dev.iop = dt_iop_load_modules(&dev);
-  dt_masks_scratch_claim_image(&dev, LOCK_DEST);
-  dt_dev_read_history_ext(&dev, LOCK_DEST, TRUE);
+  dt_masks_scratch_open(&dev, LOCK_DEST);
   dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
   const dt_iop_module_t *mod = dt_iop_get_module_by_op_priority(dev.iop, "exposure", 0);
@@ -243,8 +240,8 @@ gboolean dt_masks_lock_check(void)
   return ok;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

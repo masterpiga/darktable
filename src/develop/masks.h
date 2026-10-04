@@ -990,8 +990,7 @@ void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form);
  * other member of `grp`. A nested group holding a named point keeps its own
  * member clear and is isolated the same way, at any depth; one that is named
  * is cleared whole. Passing formids == NULL clears `bits` on every member at
- * every depth (i.e. "solo off"), which is why this is not just the negation
- * of dt_masks_group_set_state. A nested group another module's mask also
+ * every depth (i.e. "solo off"). A nested group another module's mask also
  * holds is isolated for that mask too, since the two share its points. */
 void dt_masks_group_isolate_state(dt_masks_form_t *grp,
                                   GList *formids,

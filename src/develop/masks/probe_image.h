@@ -87,21 +87,16 @@
 
 G_BEGIN_DECLS
 
-/** Fill `buf` with the probe image: `width` * `height` pixels, 4 floats each
-    (RGBx, linear scene-referred; the 4th channel is set to 0). `buf` must hold
-    at least width*height*4 floats. Deterministic for a given size. */
-void dt_masks_probe_generate(float *const buf,
-                             const int width,
-                             const int height);
-
-/** Allocate and generate in one step; free with dt_free_align(). Returns NULL
+/** Allocate and fill the probe image: `width` * `height` pixels, 4 floats each
+    (RGBx, linear scene-referred; the 4th channel is set to 0), deterministic
+    for a given size; free with dt_free_align(). Returns NULL
     on allocation failure or non-positive dimensions. */
 float *dt_masks_probe_new(const int width, const int height);
 
 G_END_DECLS
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

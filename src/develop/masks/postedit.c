@@ -29,21 +29,6 @@
 // the pokes
 // ---------------------------------------------------------------------------
 
-
-static const char *const _poke_name[POKE_N] =
-{
-  "within:union", "within:screen",   "within:intersect", "within:multiply",
-  "within:sum",   "within:difference", "within:exclusion",
-  "group:bypass", "group:invert",    "group:opacity",    "group:refine",
-  "elem:disable", "elem:hidden",     "elem:inverse",     "elem:opacity",
-  "elem:refine",
-};
-
-const char *dt_masks_postedit_poke_label(const poke_t k)
-{
-  return (k < POKE_N) ? _poke_name[k] : "?";
-}
-
 // A refinement that visibly changes any mask it is applied to, whatever the
 // shapes are: a blur wide enough to move a feathered edge at the replay's
 // 512px scale, plus a contrast lift so a mask that is already smooth still
@@ -122,17 +107,6 @@ void dt_masks_postedit_apply_poke(GList *points, const poke_t k,
 // the shape controls
 // ---------------------------------------------------------------------------
 
-static const char *const _geom_name[GEOM_N] =
-{
-  "geom:translate", "geom:node",     "geom:size",       "geom:feather",
-  "geom:hardness",  "geom:rotation", "geom:curvature",  "geom:compression",
-};
-
-const char *dt_masks_postedit_geom_label(const geom_t g)
-{
-  return (g < GEOM_N) ? _geom_name[g] : "?";
-}
-
 /** the size of one point of `form`, or 0 if the form has no editable geometry */
 static size_t _point_size(const dt_masks_form_t *form)
 {
@@ -144,7 +118,8 @@ static size_t _point_size(const dt_masks_form_t *form)
   return (size_t)form->functions->point_struct_size;
 }
 
-GList *dt_masks_postedit_geom_snapshot(const dt_masks_form_t *form)
+// a copy of `form`'s point list; NULL for a form with no editable geometry
+static GList *_geom_snapshot(const dt_masks_form_t *form)
 {
   const size_t sz = _point_size(form);
   if(!sz) return NULL;
@@ -158,16 +133,6 @@ GList *dt_masks_postedit_geom_snapshot(const dt_masks_form_t *form)
     out = g_list_append(out, copy);
   }
   return out;
-}
-
-void dt_masks_postedit_geom_restore(dt_masks_form_t *form, GList *snapshot)
-{
-  if(!snapshot) return;
-  // wholesale rather than element-wise: the list is put back exactly as it was
-  // even if a control had added or dropped a node, and the caller cannot then
-  // leak the snapshot by forgetting to free it
-  g_list_free_full(form->points, free);
-  form->points = snapshot;
 }
 
 /** shift every coordinate of `form` by (dx, dy), in normalized image space */
@@ -233,12 +198,21 @@ static gboolean _drag_node(dt_masks_form_t *form, const float dx, const float dy
   return FALSE;
 }
 
-gboolean dt_masks_postedit_apply_geom(dt_masks_form_t *form, const geom_t g)
+/* Apply one shape control to `form`, which must be a leaf shape.
+
+   Returns TRUE only if the form's points actually changed. Most shapes
+   implement only some of the properties -- a circle has no rotation, a
+   gradient no feather -- and modify_property() silently ignores the rest, so a
+   caller that tallied every call would be reporting coverage it does not have.
+   The return value is compared over the real point data rather than taken from
+   modify_property's `count`, because a property can be accepted and then
+   clamped back to where it already was. */
+static gboolean _apply_geom(dt_masks_form_t *form, const geom_t g)
 {
   const size_t sz = _point_size(form);
   if(!sz || !form->points) return FALSE;
 
-  GList *before = dt_masks_postedit_geom_snapshot(form);
+  GList *before = _geom_snapshot(form);
   if(!before) return FALSE;
 
   switch(g)
@@ -313,7 +287,9 @@ static int _member_index(dt_masks_form_t *grp, const gboolean top)
   return found;
 }
 
-gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
+// resolve a step's scope against `grp` as it stands, into [first, last]. FALSE
+// if the group has no members to address
+static gboolean _resolve_scope(dt_masks_form_t *grp, const scope_t s,
                                          int *first, int *last)
 {
   const int n = (int)g_list_length(grp->points);
@@ -345,7 +321,7 @@ gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
 void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st)
 {
   int first = 0, last = 0;
-  if(!dt_masks_postedit_resolve_scope(grp, st->s, &first, &last)) return;
+  if(!_resolve_scope(grp, st->s, &first, &last)) return;
 
   if(st->kind == STEP_POKE)
   {
@@ -364,7 +340,7 @@ void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const
     const dt_masks_point_group_t *pt = g_list_nth_data(grp->points, first);
     dt_masks_form_t *shape =
       (pt && dev) ? dt_masks_get_from_id(dev, pt->formid) : NULL;
-    if(shape) dt_masks_postedit_apply_geom(shape, (geom_t)st->k);
+    if(shape) _apply_geom(shape, (geom_t)st->k);
     return;
   }
 
@@ -391,19 +367,38 @@ void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const
   }
 }
 
-const char *dt_masks_postedit_step_label(const step_t *st)
+dt_masks_form_t *dt_masks_postedit_target_group(dt_develop_t *dev,
+                                                const dt_develop_blend_params_t *bp)
 {
-  switch(st->kind)
-  {
-    case STEP_REMOVE:  return "remove";
-    case STEP_MOVE_UP: return "reorder";
-    case STEP_GEOM:    return dt_masks_postedit_geom_label((geom_t)st->k);
-    default:           return dt_masks_postedit_poke_label(st->k);
-  }
+  if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return NULL;
+  if(!dt_is_valid_maskid(bp->mask_id)) return NULL;
+  dt_masks_form_t *grp = dt_masks_get_from_id(dev, bp->mask_id);
+  return (grp && (grp->type & DT_MASKS_GROUP)) ? grp : NULL;
 }
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+GList *dt_masks_postedit_groups(dt_develop_t *dev, const dt_develop_blend_params_t *bp)
+{
+  dt_masks_form_t *top = dt_masks_postedit_target_group(dev, bp);
+  if(!top) return NULL;
+
+  GList *out = g_list_append(NULL, top);
+  for(GList *l = out; l; l = g_list_next(l))
+  {
+    if(g_list_position(out, l) > 64) break;   // bound on a malformed tree
+    const dt_masks_form_t *grp = l->data;
+    for(GList *p = grp->points; p; p = g_list_next(p))
+    {
+      const dt_masks_point_group_t *pt = p->data;
+      dt_masks_form_t *child = dt_masks_get_from_id(dev, pt->formid);
+      if(child && (child->type & DT_MASKS_GROUP) && !g_list_find(out, child))
+        out = g_list_append(out, child);
+    }
+  }
+  return out;
+}
+
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

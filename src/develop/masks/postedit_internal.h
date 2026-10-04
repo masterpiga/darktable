@@ -33,6 +33,7 @@
 // Nothing outside src/develop/masks/ may use this: it exists for the
 // --harvest-masks tooling, not for the GUI or the pipeline.
 
+#include "develop/blend.h"
 #include "develop/masks.h"
 
 #include <glib.h>
@@ -98,28 +99,6 @@ typedef enum
   GEOM_N
 } geom_t;
 
-/** the shape control's label, for reports */
-const char *dt_masks_postedit_geom_label(const geom_t g);
-
-/** Apply one shape control to `form`, which must be a leaf shape.
-
-    Returns TRUE only if the form's points actually changed. Most shapes
-    implement only some of the properties -- a circle has no rotation, a
-    gradient no feather -- and modify_property() silently ignores the rest, so a
-    caller that tallied every call would be reporting coverage it does not have.
-    The return value is compared over the real point data rather than taken from
-    modify_property's `count`, because a property can be accepted and then
-    clamped back to where it already was. */
-gboolean dt_masks_postedit_apply_geom(dt_masks_form_t *form, const geom_t g);
-
-/** A copy of `form`'s point list, for restoring it after a geometry sweep.
-    Returns NULL for a form with no point_struct_size (a group, a raster or a
-    parametric element), which is also what dt_masks_postedit_apply_geom refuses to touch. */
-GList *dt_masks_postedit_geom_snapshot(const dt_masks_form_t *form);
-
-/** Put a dt_masks_postedit_geom_snapshot() back and free it. */
-void dt_masks_postedit_geom_restore(dt_masks_form_t *form, GList *snapshot);
-
 // ---------------------------------------------------------------------------
 // one panel action, addressed to part of a group
 // ---------------------------------------------------------------------------
@@ -128,11 +107,8 @@ void dt_masks_postedit_geom_restore(dt_masks_form_t *form, GList *snapshot);
    WHERE, and adds the two things that are neither -- deleting a member and
    reordering the list.
 
-   This lives here rather than in the check that first needed it because two
-   now do (--persist-masks and --undo-masks) and a third will. Each keeping its
-   own would let them drift, and the weaker one would then be reporting on a
-   panel that no longer exists -- the same argument the poke vocabulary above
-   is shared for. */
+   Shared by --persist-masks and --undo-masks, for the same reason the poke
+   vocabulary above is. */
 typedef enum
 {
   SCOPE_RUN = 0,    // the whole run the first member belongs to
@@ -157,10 +133,26 @@ typedef struct { poke_t k; scope_t s; step_kind_t kind; } step_t;
 
 #define GEOM_STEP(g, sc) { (poke_t)(g), (sc), STEP_GEOM }
 
-/** Resolve a step's scope against `grp` as it stands, into [first, last].
-    Returns FALSE if the group has no members to address. */
-gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
-                                         int *first, int *last);
+/** The module's own flexi mask group in `dev`, or NULL.
+
+    Read from the module rather than from dev->forms at large: dev->forms is
+    per image and every masks_history row is a cumulative snapshot, so it
+    routinely carries groups belonging to other modules and groups orphaned by
+    earlier edits (see roundtrip.c). */
+dt_masks_form_t *dt_masks_postedit_target_group(dt_develop_t *dev,
+                                                const dt_develop_blend_params_t *bp);
+
+/** Every group the module renders through: the target group first, then its
+    nested groups in a breadth-first walk over member formids in list order.
+
+    The order is deterministic, so two arms of a check resolve the same index
+    to the same group without either being handed a partition the other did
+    not compute. Nested groups matter because the fold recurses into the child
+    while taking run state from the parent's head, which is where the
+    partition is easiest to get wrong; 5.7% of harvested edits carry one. The
+    walk is bounded and deduplicated, so a malformed or cyclic tree cannot
+    spin. Free the list (not its data) with g_list_free(). */
+GList *dt_masks_postedit_groups(dt_develop_t *dev, const dt_develop_blend_params_t *bp);
 
 /** Apply one step to `grp` as it currently stands.
 
@@ -171,12 +163,6 @@ gboolean dt_masks_postedit_resolve_scope(dt_masks_form_t *grp, const scope_t s,
     neither is a state the panel can produce either. */
 void dt_masks_postedit_apply_step(dt_develop_t *dev, dt_masks_form_t *grp, const step_t *st);
 
-/** the step's label, for reports */
-const char *dt_masks_postedit_step_label(const step_t *st);
-
-/** the control's label, for reports */
-const char *dt_masks_postedit_poke_label(const poke_t k);
-
 /** Apply one poke to the member index range [first, last] of `points`.
 
     A run-level poke is broadcast across the whole range, which starts at the
@@ -186,8 +172,8 @@ void dt_masks_postedit_apply_poke(GList *points, const poke_t k, const int first
 
 G_END_DECLS
 
-// modelines: These editor modelines have been set for all relevant files
-// by tools/update_modelines.py
+// clang-format off
+// modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py
 // vim: shiftwidth=2 expandtab tabstop=2 cindent
-// kate: tab-indents: off; indent-width 2; replace-tabs on;
-// indent-mode cstyle; remove-trailing-spaces modified;
+// kate: tab-indents: off; indent-width 2; replace-tabs on; indent-mode cstyle; remove-trailing-spaces modified;
+// clang-format on

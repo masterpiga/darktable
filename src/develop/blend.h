@@ -403,10 +403,8 @@ typedef struct dt_iop_gui_blend_data_t
 {
   gboolean blendif_support;
   gboolean blend_inited;
-  gboolean blendif_inited;
   gboolean masks_support;
   gboolean masks_inited;
-  gboolean raster_inited;
 
   dt_develop_blend_colorspace_t csp;
   dt_iop_module_t *module;
@@ -424,16 +422,12 @@ typedef struct dt_iop_gui_blend_data_t
   // collapse button prepended to the blend-mask header, shown only while
   // this module's masking content is hosted in the separate flexi masks
   // panel (left/right) -- lets the user collapse it without a dedicated
-  // panel header (see dt_masks_gui_flexi_relocate in blend_gui.c)
+  // panel header (see dt_iop_gui_blend_masks_panel_relocate in masks_gui_panel_host.c)
   GtkWidget *flexi_inline_collapse_btn;
-  // blending options button (blend colorspace, masking panel position, ...),
-  // hidden in every position: the options open on the on/off toggle's
-  // right-click instead (see _blendop_mask_enable_toggled)
-  GtkWidget *masks_options_btn;
   // holds the blend-mask header (masks_blend_header) plus everything below
   // it (blend/opacity, masks, raster, blendif, refinement). This box is the
   // unit that gets reparented when the flexi masks panel is relocated to a
-  // side panel (see dt_masks_gui_flexi_relocate in blend_gui.c and
+  // side panel (see dt_iop_gui_blend_masks_panel_relocate in masks_gui_panel_host.c and
   // "plugins/darkroom/blend/masks_panel_position" conf key).
   GtkBox *relocatable_box;
   // everything inside relocatable_box *below* the "blend mask" header, as a
@@ -444,9 +438,7 @@ typedef struct dt_iop_gui_blend_data_t
   // its own expander header). Its children keep their own mode-driven
   // visibility across a fold, since only this wrapper is hidden.
   GtkBox *masks_panel_body;
-  GtkBox *blendif_box;
   GtkBox *masks_box;
-  GtkBox *raster_box;
 
   GtkWidget *showmask;
   // locks the mask against reset, presets, styles, paste and editing (see
@@ -466,10 +458,7 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *brightness_slider;
 
   dt_develop_blend_colorspace_t blend_modes_csp;
-  dt_develop_blend_colorspace_t channel_tabs_csp;
 
-  const dt_iop_gui_blendif_channel_t *channel;
-  int tab;
   // "preview channel under cursor" state: the parametric range slider or
   // "add channel" button the pointer is currently over, the channel display
   // bits it stands for, whether a hover preview is on right now, and what
@@ -482,13 +471,6 @@ typedef struct dt_iop_gui_blend_data_t
   // or it fires into freed blend_data.
   guint preview_dwell_timer;
   dt_dev_pixelpipe_display_mask_t save_for_leave;
-  // single-channel parametric editing chrome (flexi): blendif_invert = the
-  // "invert all channels" header button (hidden when a single-channel form is
-  // bound, where it is meaningless). The in/out toggle itself lives on the
-  // shape row (see _make_shape_row / _masks_param_inout_toggled), not in
-  // this editor chrome.
-  GtkWidget *blendif_invert;
-  int param_output_saved;
   GtkWidget *details_slider;
 
   // flexi-only: opens the menu that links or copies elements from other
@@ -532,48 +514,35 @@ typedef struct dt_iop_gui_blend_data_t
   // enough to scroll, which is not always the case).
   GtkWidget *masks_new_op;
   GtkWidget *masks_new_op_box;
-  // masks_new_op_label: unused, always NULL (the button is icon-only).
   // masks_new_group_op: the operator the "add group above selected group"
   // shortcut uses: the one last picked from the add-group menu, never derived
   // from the current selection.
-  GtkWidget *masks_new_op_label;
   int masks_new_group_op;
   // masks_toolbar: flexi's single toolbar for every "add an element to the
   // mask" action, inside masks_list_area, above masks_list_box: add-group
-  // (masks_new_op_box), shapes (masks_shapes_box), parametric channels
+  // (masks_new_op_box), the shape buttons, parametric channels
   // (masks_param_channels_box) and import (masks_import_btn), plus the group
   // layout presets button at the top right. They share one line when the
   // panel is wide enough and take two or three rows otherwise; the layout
   // is a height-for-width container (masks_gui_toolbar.c), so it is decided
-  // in GTK's own measure/allocate passes. Several schemes that moved widgets
-  // around instead (GtkFlowBox; destroy-and-rebuild rows driven by
-  // "size-allocate"; a careful in-place reflow of individually-flowing
-  // widgets) were each tried and rejected -- see the git history on this
-  // branch -- for looking broken, racing GTK's own layout pass, or leaving
-  // icon-drawn buttons invisible until an unrelated redraw. Every button is
-  // inserted once, at construction (the parametric buttons lazily, once the
-  // csp is known), and never moved again.
+  // in GTK's own measure/allocate passes rather than by moving widgets
+  // around, which raced GTK's own layout pass. Every button is inserted
+  // once, at construction (the parametric buttons lazily, once the csp is
+  // known), and never moved again.
   GtkWidget *masks_toolbar;
-  // masks_shapes_box: the shape buttons, wrapped as one group so the toolbar
-  // can space them as a unit.
-  GtkWidget *masks_shapes_box;
-  // the "blend mask" section header -- unrelated to the "mask elements" header
-  // above. Reading order:
+  // the "blend mask" section header. Reading order:
   //
-  //   expander | title | <space> | show_mask_overlay | edit run | toggle
+  //   expander | title | <space> | lock | show_mask_overlay | edit run | toggle
   //
   // (the expander moves to the far right when docked in the separate right
   // panel -- see _masks_header_apply_side).
   GtkWidget *masks_blend_header;
-  // show_mask_overlay + edit run + preferences (hidden) + toggle, packed END
+  // lock + show_mask_overlay + edit run + toggle, packed END
   GtkWidget *masks_right_cluster;
   // the edit run on the panel header: edit on canvas and solo edit between two
   // fixed gaps (see _pack_header_edit_run). Whole-mask canvas controls, so on
   // the header wherever the panel is hosted, never on the mask's own group
   GtkWidget *masks_header_edit_box;
-  // the on/off toggle's home box -- the utility position lends the toggle to
-  // that lib's header and dt_masks_gui_flexi_release hands it back here
-  GtkWidget *masks_left_cluster;
   // the flexi group list: each group's header followed by that group's element rows,
   // nested (indented) directly under it (built by _pack_group_elements).
   GtkBox *masks_list_box;
@@ -603,10 +572,6 @@ typedef struct dt_iop_gui_blend_data_t
   GtkWidget *pending_ai_cleanup_slider;
   float pending_ai_smoothing_last;
   float pending_ai_cleanup_last;
-  // blendif_home: the container the shared classic (legacy multi-channel)
-  // parametric editor lives in. Flexi never reparents it anymore -- each
-  // parametric row owns its own editor instead (see _build_param_row_editor).
-  GtkWidget *blendif_home;
   // the area the module's parametric pickers last set a range from: with
   // "reuse the last picked area" on, arming any of them samples it again
   // (see _param_row_master_picker_pressed). param_pick_box_set is FALSE until
@@ -779,7 +744,9 @@ typedef struct dt_iop_gui_blend_data_t
   // which commit_params takes to snapshot it (dt_dev_refine_bypass_t, see
   // dt_masks_refine_bypass_commit); the renderer reads only the snapshot.
   GHashTable *masks_refine_bypassed;
-
+  // row/group key -> expanded (see _remember_expanded): element rows by form
+  // id, groups by their marker's id, nested group rows by their form id.
+  // Created on first use
   GHashTable *masks_props_expanded;
   // group cid -> the page its preset note shows (see _make_group_note), so a
   // list rebuild keeps it. Created on first use
@@ -791,12 +758,9 @@ typedef struct dt_iop_gui_blend_data_t
   // a preset was just applied: every note is open until another group is
   // selected
   gboolean masks_notes_all_open;
+  // group cid -> its displayed number (see _group_ordinal_any)
   GHashTable *group_ordinals;
 
-  GtkWidget *raster_combo;
-  GtkWidget *raster_polarity;
-
-  int control_button_pressed;
   dt_pthread_mutex_t lock;
 } dt_iop_gui_blend_data_t;
 
@@ -1056,7 +1020,7 @@ void dt_iop_gui_cleanup_blending(dt_iop_module_t *module);
 void dt_iop_gui_blending_lose_focus(dt_iop_module_t *module);
 // symmetric counterpart, called when a module gains focus: relocates the
 // flexi masks panel content into whichever host the user picked (see
-// dt_masks_gui_flexi_relocate in blend_gui.c). No-op outside flexi / embedded mode.
+// dt_iop_gui_blend_masks_panel_relocate in masks_gui_panel_host.c). No-op outside flexi / embedded mode.
 void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module);
 // move the flexi masks panel's content out of whatever host holds it and back
 // into this module's own expander, whether or not the module would still be
@@ -1065,7 +1029,6 @@ void dt_iop_gui_blending_gain_focus(dt_iop_module_t *module);
 // otherwise outlive the module it belongs to (see the definition in
 // masks_gui_panel_host.c). No-op if this module is not the one hosted.
 void dt_iop_gui_blend_masks_panel_release(dt_iop_module_t *module);
-void dt_iop_gui_blending_reload_defaults(dt_iop_module_t *module);
 // dev->forms/history was just rewritten wholesale (undo/redo, jump to a
 // history step, style paste, snapshot restore, compress history): drop any
 // GUI-only empty-group placeholders, since they have no counterpart in what
