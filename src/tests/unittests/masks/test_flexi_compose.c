@@ -19,15 +19,13 @@
 // The mask operators themselves: the arithmetic behind every operator name the
 // panel shows.
 //
-// Until now these were only ever checked end-to-end, by rendering an image and
-// comparing pixels. That proves the whole pipeline agrees with itself on the
-// fixtures it has, but it does not pin what an operator *means*, and it cannot
-// state the properties the rest of the design leans on. Those properties are
-// load-bearing:
+// Rendering an image and comparing pixels shows the pipeline agrees with
+// itself on its fixtures, but does not pin what an operator means, nor the
+// properties the rest of the design leans on:
 //
-//   * a group's members combine order-independently -- which is the whole
-//     justification for treating a group as an unordered bag of shapes, and for
-//     the panel letting members be reordered freely within a group;
+//   * union and screen combine members order-independently, so reordering
+//     the members of such a group changes nothing; difference does not, its
+//     first member being the base;
 //   * an empty group is the identity for its operator -- which is what stops an
 //     empty intersect group from blanking the entire mask;
 //   * opacity and invert compose the same way for every operator.
@@ -163,12 +161,11 @@ static void test_every_operator_keeps_the_mask_in_range(void **state)
 }
 
 // ---------------------------------------------------------------------------
-// order independence -- what makes a group an unordered bag
+// order independence, and where it does not hold
 // ---------------------------------------------------------------------------
 
-// A group's members are folded by union (default) or screen. Both must be
-// commutative, or the panel's freedom to reorder members within a group would
-// silently change the rendered mask.
+// union and screen must be commutative, or reordering the members of such a
+// group would silently change the rendered mask
 static void test_group_fold_operators_are_commutative(void **state)
 {
   float ab[N], ba[N];
@@ -221,7 +218,8 @@ static void test_difference_is_order_dependent(void **state)
 // ---------------------------------------------------------------------------
 
 // fold `src` into a group seeded empty, at `opacity`, by screen; then invert
-// the finished sub-mask, the way a group's invert-output does (group.c:1427)
+// the finished sub-mask, the way a group's invert-output does
+// (_group_get_mask_roi_flexi)
 static void _inverted_screen_group(const float *src, const float opacity, float *out)
 {
   const float empty[N] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
@@ -231,7 +229,7 @@ static void _inverted_screen_group(const float *src, const float opacity, float 
 
 /* A hole is `multiply { A, inverted screen group { B } }`. The screen group's
    sub-mask is o*B, inverting it gives 1 - o*B, and multiplying that into A is
-   exactly classic's acc * (1 - o*B) (group.c:1081).
+   exactly classic's acc * (1 - o*B) (dt_masks_combine_difference).
 
    The opacity ORDER is the whole point: inside the group the hole's opacity
    applies before the invert, which is what the negative control below pins. */
@@ -272,7 +270,8 @@ static void test_a_run_of_faded_holes_folds_into_one_screen_group(void **state)
 
 /* The negative control, and the reason the operand is wrapped in a group at
    all: an element's own invert applies its opacity AFTER inverting
-   (group.c:1012), giving o*(1 - B) instead of 1 - o*B. At a fractional
+   (the `inverted` branch of dt_masks_combine_*), giving o*(1 - B) instead
+   of 1 - o*B. At a fractional
    opacity those are different masks, so inverting the element directly would
    silently change every faded hole. */
 static void test_inverting_the_element_is_not_the_faded_hole_form(void **state)
@@ -293,7 +292,7 @@ static void test_inverting_the_element_is_not_the_faded_hole_form(void **state)
 
 /* Exclusion is `union { multiply { A, inverted P }, multiply { P, inverted A } }`.
    Classic computes MAX((1-A)*P, A*(1-P)) where both operands are positive, and
-   falls back to MAX(A, P) where either is zero (group.c:1112-1145) -- the two
+   falls back to MAX(A, P) where either is zero (dt_masks_combine_exclusion): the two
    agree, since with A or P zero the products reduce to the surviving operand. */
 static void test_exclusion_is_the_union_of_two_multiplies(void **state)
 {

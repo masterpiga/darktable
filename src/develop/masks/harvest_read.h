@@ -18,12 +18,9 @@
 
 #pragma once
 
-// Reconstruction of a harvested edit (see harvest.h) back into live darktable
-// structures. Shared by the two tools that consume a harvest file --
-// --verify-masks (verify.h) and --roundtrip-masks (roundtrip.h) -- so that
-// both read the format through exactly the same code. A second reader would be
-// a second set of beliefs about the format, and a disagreement between them
-// would show up as a difference in whichever tool was wrong.
+// rebuilding a harvested edit (see harvest.h) into darktable structures,
+// shared by every tool that reads a harvest file, so that all read the format
+// through the same code: a second reader could disagree with the first
 
 #include "develop/blend.h"
 #include "develop/masks.h"
@@ -33,50 +30,36 @@
 
 G_BEGIN_DECLS
 
-/** Load a harvest file into a JsonParser, transparently decompressing it if it
-    is gzipped. --harvest-masks writes FILE and FILE.gz and asks contributors to
-    send the second, so the compressed one is what usually arrives; whether it
-    is compressed is decided by the magic number, not the extension. Returns
-    NULL on failure with `error` set; caller owns the parser. */
+/** load a harvest file into a JsonParser, decompressing it when it is
+    gzipped, as the copy contributors are asked to send is. The magic number
+    decides, not the extension. NULL on failure, with `error` set; the caller
+    owns the parser */
 JsonParser *dt_masks_harvest_load(const char *path, GError **error);
 
-/** A key identifying everything about one harvested edit that a replay depends
-    on: the module, the blend params, the forms and the image dimensions --
-    everything except where it sat in the harvest.
-
-    Real libraries are full of exact repeats: a preset or a copied history
-    applied across hundreds of images stores the same mask specification each
-    time. 61% of the edits in the seven contributed corpora are byte-identical
-    to an earlier one, 74% in the largest. Replaying them is not extra evidence
-    -- the same specification rendered against the same probe by the same
-    single-threaded code cannot produce a different answer -- so the checks
-    render each distinct edit once and reuse the verdict for its repeats, while
-    still counting every occurrence in the statistics.
-
-    Deliberately content-based rather than shape-based. The configuration
-    *shape* used for the reliability statistics (tools/masks_migration_confidence.py)
-    excludes geometry and parameter values on purpose, and 330 of the 5,521
-    recorded shapes contain more than one distinct outcome -- so sampling a few
-    edits per shape would be sampling, with a real chance of missing the
-    minority. Equal content is the only equivalence that is free.
-
-    Caller owns the returned string. */
+/** a key for everything a replay of one harvested edit depends on: the
+    module, the blend params, the forms and the image size, but not its place
+    in the harvest. A preset or a copied history stores the same mask on many
+    images, and a repeat rendered the same way cannot render differently, so
+    the checks replay each distinct edit once and count its repeats. Keyed on
+    content, not on the configuration's shape: edits of one shape can render
+    differently, so sampling by shape could miss one. The caller owns the
+    string */
 gchar *dt_masks_harvest_edit_key(JsonObject *edit);
 
-/** Read member `k` of `o`; `dflt` if `o` is NULL or the member is absent, null
-    or not a plain value. */
+/** member `k` of `o`; `dflt` if `o` is NULL or the member is absent, null or
+    not a plain value */
 gint64 dt_masks_harvest_obj_int(JsonObject *o, const char *k, const gint64 dflt);
 float dt_masks_harvest_obj_float(JsonObject *o, const char *k, const float dflt);
 const char *dt_masks_harvest_obj_str(JsonObject *o, const char *k, const char *dflt);
 
-/** Rebuild the form list for one harvested edit from its "forms" array.
-    Returns NULL if anything is unreconstructable, so a malformed record is
-    skipped rather than replayed as something subtly different. Caller owns the
-    list (free with dt_masks_free_form). */
+/** rebuild the forms of one harvested edit from its "forms" array. NULL if
+    anything cannot be rebuilt, so that a malformed record is skipped rather
+    than replayed as something else. The caller owns the list (free it with
+    dt_masks_free_form) */
 GList *dt_masks_harvest_read_forms(JsonArray *forms_arr);
 
-/** Rebuild the classic blend params for one harvested edit from its "blend"
-    object. Zeroes `p` first, so absent members take their zero value. */
+/** rebuild the blend params of one harvested edit from its "blend" object.
+    `p` is zeroed first, so absent members are 0 */
 void dt_masks_harvest_read_blend_params(JsonObject *b,
                                         dt_develop_blend_params_t *p);
 

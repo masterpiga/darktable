@@ -55,15 +55,12 @@ gboolean dt_dev_pixelpipe_prepare_mask_cache(struct dt_dev_pixelpipe_iop_t *piec
 void dt_dev_pixelpipe_clear_mask_cache(struct dt_dev_pixelpipe_t *pipe,
                                        dt_dev_distorted_mask_cache_t *c);
 
-/** pipe-local snapshot of the flexi mask refinement-bypass preview state.
- *
- *  The live state is a GHashTable owned by the module's GUI
- *  (dt_iop_gui_blend_data_t.masks_refine_bypassed) and mutated on the GTK
- *  thread. The renderer must not touch it, so it is copied here, under the
- *  blend data's lock, by dt_masks_refine_bypass_commit() during
- *  commit_params. Keys are built
- *  with dt_masks_refine_key_*() (develop/blend.h); the array is sorted so
- *  lookups can bisect and the hash is order-independent. */
+/** the pipe's snapshot of the refinements previewed as off. The set itself
+ *  (dt_iop_gui_blend_data_t.masks_refine_bypassed) changes on the GTK thread,
+ *  where the renderer must not read it, so dt_masks_refine_bypass_commit()
+ *  copies it here under the blend data's lock, in commit_params. The keys
+ *  (dt_masks_refine_key_*() in blend.h) are sorted, so that lookups can bisect
+ *  and the hash does not depend on the set's order */
 typedef struct dt_dev_refine_bypass_t
 {
   guint32 *keys;  // sorted bypass keys, or NULL when nothing is bypassed
@@ -106,24 +103,22 @@ typedef struct dt_dev_pixelpipe_iop_t
   // cached distorted masks at geometric module boundaries
   dt_dev_distorted_mask_cache_t detail_mask_cache;
   dt_dev_distorted_mask_cache_t raster_mask_cache;
-  // cached output of dt_masks_group_render_roi (the rasterized drawn mask,
-  // before global post-ops/invert). hash = dt_masks_group_hash + roi_out;
-  // src_hash = pipe->scharr.hash (covers per-shape details refinement).
-  // only populated when the group needs no host guides (no guided-filter
-  // feathering / parametric member), whose result depends on module pixels.
+  // the output of dt_masks_group_render_roi, before the whole-mask refinement
+  // and inversion (key: see _render_drawn_mask_cached in blend.c). src_hash is
+  // pipe->scharr.hash, for element details thresholds. Not filled when the
+  // group's parametric members or feathering read the module's pixels
   dt_dev_distorted_mask_cache_t drawn_mask_cache;
 
-  // transient guides used by optional per-shape mask refinement (feathering)
-  // inside the group renderer. They point into the module in/out buffers and
-  // are only valid for the duration of dt_develop_blend_process; NULL when no
-  // shape in the group requests refinement.
+  // the module's input and output images, lent to the group renderer for its
+  // parametric members and feathering while dt_develop_blend_process runs;
+  // NULL otherwise
   const float *blend_refine_guide_in;
   const float *blend_refine_guide_out;
   const dt_iop_roi_t *blend_refine_roi_in;
   const dt_iop_roi_t *blend_refine_roi_out;
 
-  // GUI-owned refinement bypass state, snapshotted at commit time so the
-  // renderer never reads live GTK data from a worker thread
+  // the refinements previewed as off, copied at commit time so that the
+  // renderer never reads the GUI's set from a worker thread
   dt_dev_refine_bypass_t refine_bypass;
 } dt_dev_pixelpipe_iop_t;
 
@@ -458,19 +453,15 @@ void dt_dev_pixelpipe_synch_top(dt_dev_pixelpipe_t *pipe, struct dt_develop_t *d
 // force a rebuild of the pipe, needed when a module order is changed for example
 void dt_dev_pixelpipe_rebuild(struct dt_develop_t *dev);
 
-/* Drop phantom entries -- deleted, disabled or de-synced consumers -- from
-   `module`'s raster mask user table, judging every consumer from its node in
-   THIS pipe.
+/* drop the deleted, disabled or out-of-sync consumers from `module`'s raster
+   mask users, judging each consumer by its node in this pipe.
 
-   Called by synch_all and synch_top, which is where it belongs; declared here
-   only so it can be tested directly. It has to answer for two consumer shapes
-   that look nothing alike (the exclusive raster sink, and a DT_MASKS_RASTER
-   form element inside a mask group) and for a pipe whose module state is stale
-   by design (the export pipe, where piece->enabled is authoritative and
-   module->enabled is not). Getting one cell of that matrix wrong drops a live
-   consumer's mask, silently and only on export -- which is what regression
-   0167-raster-mask was. Reaching it through synch_all would mean standing up a
-   history stack to test a decision that reads none of it. */
+   Called by synch_all and synch_top, and declared here only so the tests can
+   call it directly. It must handle two kinds of consumer, the raster sink and
+   a raster element of a mask, in every pipe, the export one included, where
+   piece->enabled is right and module->enabled is not. A wrong answer drops a
+   live consumer's mask, silently and only on export (integration test
+   0167-raster-mask) */
 void dt_dev_pixelpipe_prune_stale_raster_users(dt_dev_pixelpipe_t *pipe,
                                                struct dt_iop_module_t *module);
 

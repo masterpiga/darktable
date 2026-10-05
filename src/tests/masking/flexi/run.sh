@@ -59,9 +59,8 @@ IMAGE="$HERE/images/Sweep_sRGB_Linear_Half_Zip_01.tif"
 # on inlining and vectorisation decisions rather than on darktable's logic
 # alone. (That cancellation is the subject of "finding 2" in
 # upstreamed_rendering_fixes_from_flexi_migration.md; the fix there reduced it,
-# it does not remove it.) Measured across builds of the same commit, they move
-# by at most 5/255 over ~1,250 of 90,000 pixels -- and by the same amount at
-# this branch's first commit as at its tip, so it is build variance, not drift.
+# it does not remove it.) Across builds of the same commit they move by at
+# most 5/255 over about 1,250 of 90,000 pixels: build variance, not drift.
 #
 # An exact-match assertion on them therefore fails for anyone whose compiler or
 # build options differ from whoever last generated the reference, which is a

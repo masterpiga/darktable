@@ -138,8 +138,8 @@ static inline gboolean _test_if_marker_is_upper_or_down(const gint marker,
 // slider read alike.
 //
 // the two parts are css child nodes of the widget, so a theme writes
-// `.mask-param-slider gslider-bar { min-height: 5px; }` and the widget's own
-// selectors, which size the whole control, stay out of a part's answer
+// `<selector> gslider-bar { min-height: 5px; }`, and the widget's own
+// selectors, which size the whole control, do not size a part
 #define GRADIENT_SLIDER_NODE_BAR "gslider-bar"
 #define GRADIENT_SLIDER_NODE_MARKER "gslider-marker"
 
@@ -288,13 +288,10 @@ static gint _get_active_marker_from_screen(GtkWidget *widget,
   gtk_widget_get_allocation(widget, &allocation);
   const gboolean up = (y <= allocation.height / 2.f);
 
-  // side-aware selection: from the vertical middle of the slider and above,
-  // only markers drawn on the upper half are eligible, and likewise below --
-  // this keeps close-together upper/lower markers (e.g. a zero-width
-  // feather/range band) independently selectable based on which side the
-  // pointer is on. DOUBLE markers (drawn full height) match either side and
-  // remain always eligible; if for some reason no marker matches the
-  // pointer's side, fall back to the closest marker overall.
+  // only the markers on the pointer's half (upper or lower) are eligible, so
+  // that an upper and a lower marker at the same place (a zero-width feather)
+  // can each be picked. A full-height marker counts on both halves; with none
+  // on the pointer's half, the closest marker overall wins
   const gdouble newposition = _get_position_from_screen(widget, x);
 
   gint best = -1;
@@ -499,12 +496,9 @@ static void _gradient_slider_button_pressed(GtkGestureSingle *gesture,
     }
   }
 
-  // claim the sequence so an ancestor's own gesture (e.g. the scrolled
-  // panel this slider lives in) can't steal it once the pointer starts
-  // moving -- without this, dragging a marker is canceled after the
-  // first move: the panel's gesture claims the in-progress sequence, and
-  // this widget's own gesture receives "cancel" (see _gesture_cancel in gui/gtk.c,
-  // which synthesizes a "released" and ends the drag right there)
+  // claim the sequence, or an ancestor's gesture (the scrolled panel the
+  // slider is in) claims it on the first move, and this gesture's cancel
+  // (_gesture_cancel in gui/gtk.c) ends the drag there
   dt_gui_claim(gesture);
 }
 
@@ -880,10 +874,9 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
   const int gw = cwidth - 2 * hpad;
 
   // the bar takes the height css gives it, centered in the widget, and the
-  // markers below are placed against the widget's own edges rather than the
-  // bar's: the gap between the two is what a theme tunes by setting the two
-  // heights apart. unset (0) keeps the historical full-height bar, inset by
-  // a pixel top and bottom
+  // markers below sit against the widget's edges, not the bar's: a theme sets
+  // the gap between them with the two heights. Unset (0), the bar fills the
+  // widget but for a pixel top and bottom
   _update_css_metrics(widget);
   const int y1 = DT_PIXEL_APPLY_DPI(1);
   const int gheight = CLAMP(gslider->css_bar_height > 0
@@ -977,13 +970,9 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
 
     cairo_set_source_rgba(cr, 0.0, 0.0, 0.0, 0.8);
     cairo_set_line_width(cr, DT_PIXEL_APPLY_DPI(1.0));
-    // apex0's own up/down bit already tells us the polarity (see the wedge
-    // comment above): inverted means the selected zone is everything OUTSIDE
-    // [x1, x2], so the outline belongs on the two exterior bands instead of
-    // the interior one. marker[0] sits on the UPPER edge (bit set, hollow
-    // marker above the filled one) for an inverted/excluded range, and on
-    // the LOWER edge (bit clear, hollow below filled) for the normal,
-    // non-inverted/included range -- same bit apex0 above already keys off.
+    // marker[0]'s up bit is the polarity, as for the wedges: inverted, the
+    // selection is everything outside [x1, x2], so the two outer bands get
+    // the outline instead of the inner one
     if(gslider->marker[0] & 0x04)
     {
       cairo_rectangle(cr, gx + 0.5, top + 0.5, fmax(x1 - gx - 1, 0), fmax(bottom - top - 1, 0));
@@ -998,14 +987,11 @@ static gboolean _gradient_slider_draw(GtkWidget *widget,
     }
   }
 
-  // highlight the marker the pointer is actually closest to right now.
-  // gslider->selected is sticky (stays set after release so keyboard/scroll
-  // input keeps targeting the last-touched marker -- see button_release),
-  // so it tracks stale state, not the cursor; while dragging, follow the
-  // grabbed marker instead so it stays highlighted even if the pointer
-  // drifts past a neighbor. gslider->active is recomputed on every motion
-  // event via the same nearest-wins hit-test as clicking uses, so hover
-  // tracks the closest point even without an exact hit.
+  // highlight the marker closest to the pointer (gslider->active, from the
+  // click's hit test on every motion), or the dragged one while dragging, so
+  // that it stays lit when the pointer passes a neighbor, or the pinned one.
+  // Not gslider->selected, which stays set after release for the keyboard
+  // and the scroll wheel
   const gint hovered_marker = gslider->pinned >= 0 ? gslider->pinned
                              : gslider->is_dragging ? gslider->selected
                              : (gslider->is_entered ? gslider->active : -1);

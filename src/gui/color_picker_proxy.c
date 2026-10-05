@@ -104,14 +104,10 @@ static gboolean _record_point_area(dt_iop_color_picker_t *self)
   return changed;
 }
 
-// forget this picker's remembered box/point entirely -- its next arm starts
-// blank (see the `!self->initialized` branches in
-// _color_picker_callback_button_press) instead of resuming from wherever it
-// was last left, exactly as if it had never been used before. For a
-// DT_COLOR_PICKER_DEFERRED_AREA picker this is how a caller says "the value
-// this picker was feeding just went back to its own base/reset state, so
-// the picker should wait for an entirely fresh selection next time too" --
-// see _param_row_slider_reset_callback in blend_gui.c, its only caller.
+// forget this picker's box and point, so that its next arm starts blank (the
+// `!self->initialized` branches of _color_picker_callback_button_press). A
+// deferred picker then waits for a new selection, as after resetting the
+// value it feeds (_param_row_slider_reset_callback in blend_gui.c)
 void dt_iop_color_picker_forget(GtkWidget *picker_widget)
 {
   dt_iop_color_picker_t *picker =
@@ -125,7 +121,7 @@ void dt_iop_color_picker_forget(GtkWidget *picker_widget)
 // start this picker's next arm from `box` and sample it at once: a deferred
 // picker otherwise waits for a drag on canvas even with a box to resume from.
 // The flexi mask panel uses it to carry one area across a module's parametric
-// elements, as classic blending's single picker did
+// elements
 void dt_iop_color_picker_reuse_area(GtkWidget *picker_widget, const dt_pickerbox_t box)
 {
   dt_iop_color_picker_t *picker =
@@ -235,24 +231,15 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
     // pull picker's last recorded positions
     if(kind & DT_COLOR_PICKER_AREA)
     {
-      // !self->initialized covers two cases identically: this picker has
-      // truly never been armed before, or a caller explicitly invalidated it
-      // (see dt_iop_color_picker_forget, used by the flexi-mask range
-      // reset to make a deferred picker forget its last box once the range
-      // it fed goes back to its own base/no-op state -- see
-      // _param_row_slider_reset_callback). Either way "start blank" is
-      // right; a picker that already has a real remembered box from an
-      // earlier, still-live pick keeps resuming from it, same as ever.
+      // never armed, or forgotten (dt_iop_color_picker_forget): start blank.
+      // A picker with a remembered box resumes from it
       if(!self->initialized && deferred_area)
         memset(self->pick_box, 0, sizeof(self->pick_box));
       else if(!self->initialized)
         dt_lib_colorpicker_reset_box_area(self->pick_box);
-      // still registers a BOX-kind sample (size == DT_LIB_COLORPICKER_SIZE_BOX)
-      // so darkroom.c's button_pressed still lets the user drag a box at all --
-      // deferred just means self->pick_box may still be its zeroed initial
-      // value here, which is a harmless degenerate box: the user's very first
-      // click on canvas replaces it with a real one from scratch regardless
-      // (see button_pressed's own corner-grab-or-create-fresh-box logic).
+      // a box sample all the same, so that darkroom.c's button_pressed lets
+      // the user drag one: the zeroed pick_box is replaced by the first
+      // click on the canvas
       dt_lib_colorpicker_set_box_area(darktable.lib, self->pick_box);
     }
     else if(kind & DT_COLOR_PICKER_POINT)
@@ -281,11 +268,9 @@ static gboolean _color_picker_callback_button_press(GtkWidget *button,
 
     if(deferred_area)
     {
-      // still bring the module's own panel into focus, just without forcing
-      // a sample from whatever (possibly stale/degenerate) box happens to be
-      // set -- the user's own click/drag on canvas (darkroom.c's
-      // button_pressed) dirties the preview pipe itself once it defines a
-      // real box, which is the only trigger a deferred picker gets.
+      // focus the module without sampling the box there is: a deferred
+      // picker samples when a drag on the canvas defines its box
+      // (darkroom.c's button_pressed)
       if(module) dt_iop_request_focus(module);
     }
     else if(module)

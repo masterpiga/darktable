@@ -127,32 +127,17 @@ typedef struct dt_dev_viewport_t
   // dimensions of window
   int width, height;
   int32_t border_size;
-  /* Width hidden behind something drawn on top of the canvas, per side -- in
-     practice the flexi masks panel, which is an overlay rather than a column
-     (see gui/gtk.c).
-
-     Deliberately NOT subtracted from `width`: the image stays laid out for the
-     whole canvas, so showing or hiding the overlay never re-fits or moves it.
-     These only widen the pan clamp (_clamp_zoom_to_mask), by exactly the strip
-     each side hides, so anything underneath can be pulled out into the part
-     that can be seen. The trade that buys the stable view is that at fit the
-     covered strip really is covered until you pan it out.
-
-     Both are 0 for every other viewport and whenever nothing overlays the
-     canvas, and then the clamp is exactly what it always was. */
+  /* width hidden per side behind an overlay on the canvas: the flexi masks
+     panel, which floats over it (see gui/gtk.c). Not subtracted from `width`,
+     so that showing or hiding the overlay never moves the image. Instead the
+     pan clamp (_clamp_zoom_to_mask) lets the view travel that much further, so
+     what lies underneath can be pulled into view. 0 when nothing overlays the
+     canvas */
   int32_t occlusion_left, occlusion_right;
-  /* The allowance actually granted to the clamp, which is >= the occlusion
-     above and never shrinks on its own.
-
-     Dropping the allowance the instant the overlay is hidden would leave the
-     view sitting outside the tighter bound, and the next pan or zoom would find
-     it there and yank it back -- a jump, arriving one gesture after the event
-     that caused it. So the allowance is only ever reduced to what the *current*
-     position still needs: hiding the overlay leaves the view exactly where it
-     is (with empty canvas where the panel was, which is the truth), and the
-     allowance melts away as the view is panned back inside, reaching zero the
-     moment it is no longer holding anything up. The clamp then goes back to
-     stopping motion without ever causing any. */
+  /* the allowance the clamp grants, at least the occlusion above. Hiding the
+     overlay leaves it as it is: dropping it at once would make the next pan
+     or zoom yank the view back inside. It shrinks only to what the current
+     position still uses */
   int32_t occlusion_hold_left, occlusion_hold_right;
   double dpi, dpi_factor, ppd;
 
@@ -274,36 +259,19 @@ typedef struct dt_develop_t
   struct dt_masks_form_gui_t *form_gui;
   // all forms to be linked here for cleanup:
   GList *allforms;
-  // classic-to-flexi mask migrations (dt_masks_migrate_classic_to_flexi(),
-  // src/develop/masks/migrate_legacy.c) queued during dt_dev_read_history_ext()'s
-  // per-row loop, still to be synthesized. Deferred rather than done inline
-  // because the newly-created forms must be written into main.masks_history
-  // under the *final* dev->history_end - 1 (the row dt_masks_read_masks_history()
-  // will treat as "current"), which is only known once the whole loop finishes
-  // and history_end has been corrected from the DB -- not yet, mid-loop, where
-  // dev->history_end is merely a running count of rows processed so far.
-  // Drained and freed by dt_masks_finish_flexi_migrations(), always empty
-  // (NULL) between dt_dev_read_history_ext() calls.
+  // mask migrations that create forms, queued while dt_dev_read_history_ext()
+  // converts the history rows (dt_masks_migrate_classic_to_flexi()). The new
+  // forms go under the final history_end, which is only known once every row
+  // is read. Drained by dt_masks_finish_flexi_migrations(), before
+  // dt_masks_read_masks_history(), so that the read picks the forms up.
+  // Empty between dt_dev_read_history_ext() calls
   GList *pending_flexi_migrations;
 
-  // mask_ids of *pre-existing* classic drawn groups a migration reused as-is
-  // (cases MASK and MASK|CONDITIONAL), queued for the run-boundary
-  // normalization dt_masks_normalize_flexi_groups() applies.
-  //
-  // Separate from pending_flexi_migrations above, and drained at the opposite
-  // moment: that list synthesizes *new* forms and must run BEFORE
-  // dt_masks_read_masks_history() so its writes are picked up, while this one
-  // adjusts forms that already exist in the DB and must therefore run AFTER
-  // that read -- which replaces dev->forms wholesale and would otherwise
-  // discard the adjustment. Nothing here is written back to the database: the
-  // stored group keeps its original classic shape list, and only picks up the
-  // markers if the user edits the image and dt_dev_write_history_ext()
-  // rewrites masks_history from dev->forms.
-  //
-  // Holds mask_ids (GINT_TO_POINTER), always empty (NULL) between
-  // dt_dev_read_history_ext() calls. This pass is also the first point where a
-  // group's members exist on the darkroom-load path, so it is where malformed
-  // member lists are repaired (see _repair_base_case_overwrite()).
+  // mask_ids (GINT_TO_POINTER) of classic groups a migration kept, to convert
+  // to flexi groups. Drained by dt_masks_normalize_flexi_groups(), after
+  // dt_masks_read_masks_history(): the groups are already in the database, and
+  // the read would replace a conversion made before it. Empty between
+  // dt_dev_read_history_ext() calls
   GList *pending_flexi_group_splits;
 
   //full preview stuff
@@ -354,15 +322,10 @@ typedef struct dt_develop_t
                                        const gboolean doit);
     } modulegroups;
 
-    // flexi masks panel relocation host for the "utility module" position
-    // ONLY (masks_panel_position == MASKS_PANEL_POS_UTILITY, see
-    // masks_flexi_host.c and develop/blend_gui.c). The "separate panel,
-    // left/right" positions don't use this -- they're a genuine extra grid
-    // column owned by gui/gtk.c instead (dt_ui_flexi_panel_*), a real
-    // independent panel rather than more content stacked inside the
-    // existing left/right panels. The lib always registers and sets
-    // module/content_box regardless of the conf position -- it just stays
-    // hidden and unused outside "utility".
+    // the utility module that hosts the flexi masks panel in the "utility
+    // module" position (masks_flexi_host.c). The separate panel positions use
+    // gui/gtk.c's dt_ui_flexi_panel_* instead. The lib fills this in whatever
+    // the position, and stays hidden outside "utility module"
     struct
     {
       struct dt_lib_module_t *module;
@@ -375,10 +338,8 @@ typedef struct dt_develop_t
       // header title label and event box
       GtkWidget *header_label;
       GtkWidget *label_evb;
-      // which iop module's relocatable_box currently occupies content_box,
-      // NULL if empty. Tracked here (rather than inspecting content_box's
-      // children) so dt_iop_gui_blend_masks_panel_relocate can cheaply tell whether it needs
-      // to move a previous occupant out first.
+      // the module whose panel is in content_box, NULL if none, for
+      // dt_iop_gui_blend_masks_panel_relocate to move out first
       struct dt_iop_module_t *hosted_module;
       // called right after the blending options write a new
       // masks_panel_position (see _masks_flexi_host_reconfigure), so the lib
@@ -387,10 +348,9 @@ typedef struct dt_develop_t
     } masks_flexi_host;
   } proxy;
 
-  // the darkroom bottom-toolbar toggle that shows/hides the mask panel, owned
-  // by views/darkroom.c. Kept here so masks_gui_panel_host.c can reflect the
-  // panel's state onto it (dt_iop_gui_blend_masks_panel_sync_toolbox) without
-  // the develop side having to know about the view's widget tree.
+  // the darkroom toolbar toggle that shows or hides the masks panel, owned by
+  // views/darkroom.c, for masks_gui_panel_host.c to show the panel's state on
+  // (dt_iop_gui_blend_masks_panel_sync_toolbox)
   GtkWidget *masks_panel_button;
 
   dt_dev_chroma_t chroma;
@@ -602,10 +562,9 @@ void dt_dev_get_viewport_params(dt_dev_viewport_t *port,
 
 void dt_dev_configure(dt_dev_viewport_t *port);
 
-/** record how much of the canvas is hidden behind an overlay on each side.
-    Only the pan clamp reads it: the viewport keeps its layout (see
-    dt_dev_viewport_t::occlusion_left), so it is cheap to call on every
-    relevant GUI event. */
+/** record how much of the canvas an overlay hides on each side. Only the pan
+    clamp reads it (see dt_dev_viewport_t::occlusion_left), so it is cheap to
+    call on every GUI event that may change it */
 void dt_dev_set_occlusion(dt_dev_viewport_t *port,
                           const int32_t left,
                           const int32_t right);

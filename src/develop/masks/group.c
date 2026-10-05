@@ -24,16 +24,9 @@
 #include "develop/masks.h"
 #include "develop/masks/group_internal.h"
 
-// a flattened scratch-group entry's own parentid is the id of its *real*
-// structural parent (see dt_masks_group_ungroup, masks/masks.c), not
-// necessarily the module's own top group -- for a committed AI-mask bundle's
-// child (see _register_vectorized_forms, masks/object.c), that is the
-// bundle's own formid. Returns the bundle form if `fpt` is one of its
-// children, else NULL. Used throughout this file to treat a bundle as one
-// coordinated unit on the canvas (select/highlight/drag/grow-shrink), while
-// individual bezier-node dragging still targets just the one child. Returns
-// NULL too for the object the user stepped into (see
-// dt_masks_form_gui_t.entered_object), whose paths then act one by one.
+// the AI object `fpt` is a path of, or NULL. In the flattened edit group a
+// point's parentid is its own parent (dt_masks_group_ungroup), which for a
+// path of an object is the object
 static dt_masks_form_t *_object_of(const dt_masks_point_group_t *fpt)
 {
   dt_masks_form_t *parent = dt_masks_get_from_id(darktable.develop, fpt->parentid);
@@ -68,11 +61,9 @@ gboolean dt_masks_gui_step_object(dt_iop_module_t *module,
   return step_in;
 }
 
-// after a bundle-wide edit (coordinated resize/drag) has mutated every
-// child's own points directly, force-rebuild each child's own display buffer
-// in `gui->points` -- dt_masks_gui_form_create (unlike its "only if the pipe
-// hash changed" dt_masks_gui_form_test_create sibling) always recomputes, the
-// same call path.c's own scroll/drag handlers use after mutating one form.
+// after an edit of a whole AI object changed its paths' points, rebuild their
+// outlines in gui->points: dt_masks_gui_form_create() always recomputes,
+// unlike dt_masks_gui_form_test_create()
 static void _bundle_refresh_children(dt_masks_form_t *scratch_grp,
                                      const dt_masks_form_t *bundle,
                                      dt_masks_form_gui_t *gui,
@@ -108,27 +99,15 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel || !sel->functions) return 0;
 
-    // Bundle-coordinated scroll gestures. dt_modifier_is is an *exact* match
-    // among Shift+Control+Alt/Meta, so the four modifier states (none, ctrl,
-    // shift, ctrl+shift) must be told apart the same way path.c's own
-    // _path_events_mouse_scrolled does -- as one mutually exclusive
-    // if/else-if chain -- rather than four independent conditions that can
-    // silently overlap (e.g. "not exactly ctrl" AND "not exactly shift" is
-    // also true for ctrl+shift together, which an earlier version of this
-    // function got wrong: it hijacked ctrl+shift's legacy-resize gesture into
-    // plain resize instead of leaving it alone).
-    // opacity stays the object's even inside it: a path's own opacity within
-    // the object is shown nowhere
+    // an AI object's scroll gestures. dt_modifier_is() matches the modifiers
+    // exactly, so none, ctrl, shift and ctrl+shift are told apart by one
+    // if/else-if chain, as in path.c: separate conditions would overlap.
+    // ctrl+scroll changes the object's opacity, as the panel's opacity control
+    // for it does, even inside the object: a path's own opacity within the
+    // object is shown nowhere
     dt_masks_form_t *object = _object_of(fpt);
     if(object && dt_modifier_is(state, GDK_CONTROL_MASK))
     {
-      // ctrl+scroll (opacity): the panel's own inline opacity control for a
-      // bundle row edits the bundle's own membership entry in the module's
-      // top group (its overall contribution to the composite) via
-      // dt_masks_form_change_opacity(module, bundle, module's group formid, ...) --
-      // not any child's own internal per-membership opacity within the
-      // bundle, which is invisible bookkeeping nothing else in the UI
-      // exposes. Drive the exact same call here.
       const float amount = up ? 0.05f : -0.05f;
       dt_masks_form_change_opacity(module, object, module->blend_params->mask_id, amount);
       dt_masks_iop_update(module);
@@ -141,12 +120,8 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
       if(dt_modifier_is(state, GDK_SHIFT_MASK) && bundle->functions
          && bundle->functions->modify_property)
       {
-        // shift+scroll (feather): drives the bundle's own FEATHER case
-        // (_object_bundle_modify_property) directly, exactly as the panel's
-        // own feather slider does -- every child, the scrolled one included,
-        // scaled by the one ratio a scroll tick represents (matching
-        // dt_masks_change_size's own step), through the identical call. No
-        // child is special-cased against its siblings.
+        // shift+scroll feathers every path by one step, as the panel's
+        // feather slider does
         const float ratio = up ? 1.0f / 0.97f : 0.97f;
         float sum = 0.0f, minv = 0.0f, maxv = 0.0f;
         int count = 0;
@@ -162,12 +137,9 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
               && gui->edit_mode == DT_MASKS_EDIT_FULL && bundle->functions
               && bundle->functions->modify_property)
       {
-        // ctrl+shift (legacy centroid resize, path.c's _path_resize_centroid)
-        // is the exact same affine scale-about-center operation as the
-        // panel's own SIZE slider -- same dt_masks_change_size step ratio,
-        // same math, just driven by a scroll tick instead of a dragged
-        // value. Drives the bundle's own coordinated SIZE case directly, the
-        // same way plain-scroll resize and shift-scroll feather already do.
+        // ctrl+shift+scroll scales the object about its center by one step,
+        // as path.c's centroid resize does for a path and the panel's size
+        // slider does for the object
         const float ratio = up ? 1.0f / 0.97f : 0.97f;
         float sum = 0.0f, minv = 0.0f, maxv = 0.0f;
         int count = 0;
@@ -182,9 +154,8 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
       else if(gui->edit_mode == DT_MASKS_EDIT_FULL && bundle->functions
               && bundle->functions->resize && bundle->functions->resize_get)
       {
-        // plain scroll (grow/shrink): drives the bundle's own coordinated
-        // resize (same cached-baseline mechanism as the panel's "shrink or
-        // grow" slider, see _object_bundle_resize/object.c).
+        // plain scroll grows or shrinks the object, as the panel's "shrink
+        // or grow" slider does (_object_bundle_resize in object.c)
         const gboolean use_percent = !g_strcmp0(
           dt_conf_get_string_const("masks/path_resize_unit"), "% of path size");
         float amount = 0.0f;
@@ -200,8 +171,7 @@ static int _group_events_mouse_scrolled(dt_iop_module_t *module,
         return 1;
       }
     }
-    // anything not handled above (ordinary, non-bundle members) falls
-    // straight through to the child's own handler, unchanged.
+    // anything else goes to the shape's own handler
     return sel->functions->mouse_scrolled(module, pzx, pzy, up, state, sel, fpt->parentid,
                                           gui, gui->group_edited);
   }
@@ -319,12 +289,8 @@ static int _group_events_button_pressed(dt_iop_module_t *module,
       const int ret =
         sel->functions->button_pressed(module, pzx, pzy, pressure, which, type, state,
                                        sel, fpt->parentid, gui, gui->group_edited);
-      // a plain click just selected this child individually (dt_masks_select_form,
-      // called from inside the child's own button_pressed) -- if it belongs to
-      // an AI-mask bundle, promote that selection to the whole bundle instead,
-      // so canvas clicks always select the bundle as one unit, matching the
-      // panel row's own selection (see dt_group_events_post_expose's highlight
-      // logic below, which highlights every child sharing the selected parent).
+      // the click selected one path of an AI object: select the object as one
+      // unit, as its row in the panel does
       if(darktable.develop->mask_form_selected_id == sel->formid)
       {
         dt_masks_form_t *bundle = dt_masks_bundle_of(fpt);
@@ -354,11 +320,8 @@ static int _group_events_button_released(dt_iop_module_t *module,
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel || !sel->functions) return 0;
 
-    // a bundle-wide rotation drag (see _bundle_rotate_step) deliberately
-    // skips the panel-sync call on every mouse_moved tick -- a full rebuild
-    // per tick during a live drag would be janky -- but the panel's own
-    // rotation slider still needs to catch up once the drag actually ends,
-    // the same way scroll-driven feather/size/opacity already do per tick.
+    // rotating an AI object updates no panel control while the drag lasts
+    // (_bundle_rotate_step), so they are updated once it ends
     const gboolean was_rotating = gui->form_rotating;
     const dt_masks_form_t *bundle = was_rotating ? dt_masks_bundle_of(fpt) : NULL;
     const int ret = sel->functions->button_released(
@@ -383,15 +346,10 @@ static inline gboolean _is_handling_form(dt_masks_form_gui_t *gui)
     || (gui->seg_dragging != -1);
 }
 
-// canvas ctrl+drag rotation on a bundle child rotates the whole AI-mask
-// bundle together about one shared center, exactly like the panel's own
-// rotation slider (reuses _object_bundle_modify_property's ROTATION case,
-// the already skew-free pixel-space rotation) -- the child's own
-// screen-space, per-shape-centroid rotation (dt_masks_rotate_ctrl_points via
-// its own gpt display buffer, see path.c's form_rotating branch) is bypassed
-// entirely: this computes the angular sweep about the bundle's own shared
-// center instead and lets modify_property apply it to every child. Returns 1
-// (always handles the tick) once form_rotating + a bundle parent are found.
+// a rotation drag on a path of an AI object rotates the whole object about
+// its center, as the panel's rotation slider does
+// (_object_bundle_modify_property), not the path about its own. Always
+// handles the motion: returns 1
 static int _bundle_rotate_step(dt_iop_module_t *module,
                                dt_masks_form_t *bundle,
                                dt_masks_form_t *scratch_grp,
@@ -408,8 +366,8 @@ static int _bundle_rotate_step(dt_iop_module_t *module,
     return 1;
   }
 
-  // shared bundle center: pooled mean of every child's own corner points
-  // (form space), same convention _object_bundle_modify_property itself uses
+  // the object's center: the mean of all its paths' corner points, as
+  // _object_bundle_modify_property computes it
   double cx = 0.0, cy = 0.0;
   int npts = 0;
   for(GList *l = bundle->points; l; l = g_list_next(l))
@@ -434,10 +392,8 @@ static int _bundle_rotate_step(dt_iop_module_t *module,
   cx /= npts;
   cy /= npts;
 
-  // forward-transform the shared center into backbuffer/screen space -- the
-  // same space the mouse position and path.c's own rotation gesture both
-  // measure their angular sweep in, so the drag pivots visually where the
-  // bundle actually is on screen.
+  // the center on screen, where the pointer's angle is measured, so the drag
+  // pivots where the object is shown
   float piv[2] = { (float)cx * iwidth, (float)cy * iheight };
   dt_dev_distort_transform(darktable.develop, piv, 1);
 
@@ -462,9 +418,8 @@ static int _bundle_rotate_step(dt_iop_module_t *module,
   return 1;
 }
 
-// canvas -> list hover sync: highlight the matching row (or collapsed cluster
-// header) in the in-module mask list, or drop the highlight for INVALID_MASKID.
-// Only reported when the hovered shape changes.
+// highlight the hovered shape's row in the panel (or its folded cluster's
+// header), or clear it for INVALID_MASKID, when the hovered shape changes
 static void _group_hover_form(dt_iop_module_t *module,
                               dt_masks_form_gui_t *gui,
                               const dt_mask_id_t formid)
@@ -529,24 +484,17 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return 0;
 
-    // a ctrl+drag rotation on a bundle child rotates the whole bundle about
-    // its own shared center instead -- fully handled here, bypassing the
-    // child's own per-shape rotation entirely (see _bundle_rotate_step).
+    // a rotation drag on a path of an AI object rotates the object
+    // (_bundle_rotate_step)
     if(gui->form_rotating)
     {
       dt_masks_form_t *rot_bundle = dt_masks_bundle_of(fpt);
       if(rot_bundle) return _bundle_rotate_step(module, rot_bundle, form, gui, pzx, pzy);
     }
 
-    // a whole-shape (body) drag on a bundle child should translate the whole
-    // AI-mask bundle together, not just this one child -- path.c's own
-    // form_dragging case (the only kind of drag this applies to; a node/
-    // feather/segment drag is left alone, still purely per-child) recomputes
-    // its per-tick delta from its own first point's corner each call, so
-    // snapshotting that corner before and after the delegated call recovers
-    // exactly the delta it just applied, which is then reapplied verbatim to
-    // every sibling (a pure translation needs no per-child sign-awareness,
-    // unlike SIZE/ROTATION).
+    // dragging a path of an AI object by its body moves the whole object:
+    // how far path.c moves the path's first point is applied to the other
+    // paths. Node, feather and segment drags stay on the one path
     dt_masks_form_t *bundle = gui->form_dragging ? dt_masks_bundle_of(fpt) : NULL;
     float anchor_before[2] = { 0.0f, 0.0f };
     if(bundle && sel->points)
@@ -594,12 +542,10 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
     // form can be selected
     if(gui->point_edited >= 0)
     {
-      // the delegated pass above has just refreshed the hover flags, so sync the
-      // row highlight from them here: the code below that normally does it is
-      // skipped for as long as a node holds the selection, which would leave
-      // canvas_hover_formid latched on the last hovered shape indefinitely. That
-      // in turn keeps the panel halo suppressed with nothing under the cursor
-      // (gui/gtk.c:_flexi_shape_highlighted)
+      // the code below that syncs the row highlight is skipped while a node
+      // holds the selection, so sync it here from the hover flags the call
+      // above set. Otherwise canvas_hover_formid stays on the last shape and
+      // keeps the panel's halo off (_flexi_shape_highlighted in gui/gtk.c)
       _group_hover_form(module, gui, _form_under_cursor(gui) ? sel->formid : INVALID_MASKID);
       return 0;
     }
@@ -626,8 +572,8 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   {
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *frm = dt_masks_get_from_id(darktable.develop, fpt->formid);
-    // a hidden or disabled shape is not editable on the canvas: skip it when picking the
-    // form under the cursor (it also draws no outline).
+    // a hidden or disabled shape draws no outline and cannot be edited on the
+    // canvas: it is never the shape under the cursor
     if(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE))
     {
       pos++;
@@ -673,11 +619,9 @@ static int _group_events_mouse_moved(dt_iop_module_t *module,
   return 0;
 }
 
-// is this formid (or, for an AI-mask bundle child, its parent bundle's own
-// formid) one the in-module panel asked us to highlight (a hovered list row,
-// or every member of a hovered cluster header)? The parentid check is what
-// makes hovering/selecting a bundle's single panel row highlight every one
-// of its children together, the same way a real cluster header already does.
+// does the panel ask for this shape to be highlighted: its row or a cluster
+// header holding it is hovered? `parentid` makes the row of an AI object
+// highlight all of its paths
 static gboolean _panel_hovered(const dt_masks_form_gui_t *gui,
                                const dt_mask_id_t formid,
                                const dt_mask_id_t parentid)
@@ -690,9 +634,8 @@ static gboolean _panel_hovered(const dt_masks_form_gui_t *gui,
   return FALSE;
 }
 
-// is this formid soloed or solo-edited in the panel? Unlike the hover sync above,
-// this stays true regardless of what the mouse is doing, so a soloed shape keeps
-// its canvas highlight while the user works elsewhere in the list.
+// is this shape soloed or solo-edited in the panel? Unlike a hover, this
+// highlight stays whatever the pointer does
 static gboolean _panel_soloed(const dt_masks_form_gui_t *gui,
                               const dt_mask_id_t formid,
                               const dt_mask_id_t parentid)
@@ -716,9 +659,8 @@ void dt_group_events_post_expose(cairo_t *cr,
   const int base_sel = gui->group_selected;
   const gboolean any_list_hover = gui->panel_hover_formids != NULL;
 
-  // if the canvas-hovered/selected entry is a child of an AI-mask bundle,
-  // every sibling shares its highlight too -- the bundle is one coordinated
-  // unit (see dt_masks_bundle_of/masks/object.c), not N independent shapes.
+  // a hovered path of an AI object highlights all its paths: the object acts
+  // as one unit (dt_masks_bundle_of)
   dt_mask_id_t base_sel_bundle = INVALID_MASKID;
   if(base_sel >= 0)
   {
@@ -733,9 +675,8 @@ void dt_group_events_post_expose(cairo_t *cr,
     dt_masks_point_group_t *fpt = fpts->data;
     dt_masks_form_t *sel = dt_masks_get_from_id(darktable.develop, fpt->formid);
     if(!sel) return;
-    // a hidden or disabled shape draws no outline/handles on the canvas (matches the
-    // renderer, which excludes it from the composite). keep pos in step with
-    // gui->points by skipping only the draw call.
+    // a hidden or disabled shape draws nothing, as it renders nothing. Only the
+    // draw is skipped, so that pos stays in step with gui->points
     if(sel->functions && !(fpt->state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)))
     {
       // decide whether this shape draws its own highlight (feather + anchors) by
@@ -743,13 +684,11 @@ void dt_group_events_post_expose(cairo_t *cr,
       // call only: a hovered list row/cluster member, else -- when nothing is
       // hovered -- the persistently selected shape.
       int eff = base_sel;
-      // a list-row hover must look exactly like a canvas hover, which takes two
-      // flags, not one: group_selected alone only brings out the feather and the
-      // anchors, while the bold outline every shape draws asks for
-      // form_selected on top of it (see the `selected` predicate in circle.c's
-      // post_expose, and its equivalent in every other shape). Forced on for
-      // this one call, the same way group_selected is, so nothing outside the
-      // draw sees a hover the pointer never made.
+      // a row hover must look like a canvas hover, which takes two flags:
+      // group_selected brings out the feather and the anchors, form_selected
+      // the bold outline (the `selected` test in circle.c's post_expose and
+      // the other shapes'). Both are set for this one call only, so nothing
+      // outside the draw sees a hover the pointer never made
       gboolean bold = FALSE;
       // inside the object stepped into, its paths are highlighted one by one:
       // being soloed or selected as a whole no longer lights them all up, or
@@ -1184,9 +1123,9 @@ void dt_masks_combine_multiply(float *const restrict dest,
                                const float opacity,
                                const int inverted)
 {
-  // multiply the running accumulator by this shape, the way legacy parametric
-  // masks combine. Onto the empty base this is degenerate (0), as intersection
-  // is.
+  // multiply the accumulator by this shape, as a classic multi-channel
+  // parametric mask combines its channels. Onto the empty base this gives 0,
+  // as intersection does
   if(inverted)
   {
     DT_OMP_FOR_SIMD(aligned(dest, newmask : 64))
@@ -1207,10 +1146,10 @@ void dt_masks_combine_multiply(float *const restrict dest,
   }
 }
 
-// soft union ("screen"): a+b-ab. Like union it is associative/commutative with
-// the empty mask as identity, but it is *not* idempotent, so feathered overlaps
-// build up smoothly instead of leaving the crease that max() produces. Used as
-// the optional within-group combiner on the flexi group-fold path.
+// soft union ("screen"): a + b - ab, a flexi group operator. Like union it is
+// associative and commutative, with the empty mask as identity, but not
+// idempotent, so feathered overlaps build up smoothly instead of leaving the
+// crease max() makes
 void dt_masks_combine_screen(float *const restrict dest,
                              float *const restrict newmask,
                              const size_t npixels,
@@ -1245,9 +1184,8 @@ void dt_masks_combine_screen(float *const restrict dest,
 // the result is then refined once with the refinement the marker holds,
 // inverted and scaled. A nested group renders through here as a member of its
 // parent. A group with no visible member contributes nothing: the caller skips
-// it, so an empty intersect group never blanks the mask. The classic
-// sequential fold below is left untouched, so legacy (non-flexi) masks render
-// byte-identically.
+// it, so an empty intersect group never blanks the mask. Classic masks render
+// through the sequential fold below
 static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict module,
                                      const dt_dev_pixelpipe_iop_t *const restrict piece,
                                      dt_masks_form_t *const form,
@@ -1261,10 +1199,9 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
   float *const restrict bufs = dt_alloc_align_float(npixels); // one raw member
   if(bufs == NULL) return 0;
 
-  // transient (non-serialized, flexi-only) refinement bypass: the GUI toggles
-  // it on the module's blend_data and triggers a reprocess, which re-commits
-  // the pipe-local snapshot read here (see dt_masks_refine_bypass_commit).
-  // Never read blend_data directly from this thread.
+  // the refinements previewed as off: the pipe's snapshot, committed with the
+  // params (dt_masks_refine_bypass_commit). Never read blend_data from this
+  // thread
   const dt_dev_refine_bypass_t *const bypass = &piece->refine_bypass;
 
   // the panel and the migration give every list a marker first
@@ -1315,9 +1252,8 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
     memset(bufs, 0, npixels * sizeof(float));
     if(!dt_masks_get_mask_roi(module, piece, sel, roi, bufs)) continue;
 
-    // this member's own refinement, applied to its raw mask before inversion
-    // and compositing -- the same point the classic renderer applies it (see
-    // _group_get_mask_roi below). No-op unless this member carries one.
+    // the member's own refinement, on its raw mask before inversion and
+    // combining, where the classic fold below applies it too
     const gboolean elem_bypassed =
       dt_masks_refine_bypass_lookup(bypass, dt_masks_refine_key_element(m->formid));
     if(m->refinement.enabled == DT_MASKS_REFINE_ELEMENT && !elem_bypassed)
@@ -1326,16 +1262,10 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
                                         &m->refinement);
 
     const float op = m->opacity;
-    // A raster element whose source module is gone renders as all-zero
-    // (_raster_unresolved() in raster.c) and contributes nothing -- but
-    // zero is not a fixed point of the compositor: inverting it would turn
-    // "this element selects nothing" into "this element selects the entire
-    // frame", so a broken reference would apply the module at full strength
-    // everywhere. Drop the inversion instead, matching what the classic
-    // renderer does with the same situation (its raster branch fills 0.0f
-    // and never reaches the invert, see blend.c) and keeping a broken
-    // element harmless until the user fixes it. The panel badges the row
-    // so it is visible rather than silent.
+    // a raster element that cannot obtain a mask renders 0. Inverted, it
+    // would select the whole frame and apply the module everywhere, so it is
+    // not inverted, as classic's raster branch fills 0 without inverting
+    // (blend.c). The panel badges its row
     const int inverted = (m->state & DT_MASKS_STATE_INVERSE)
                          && !dt_masks_raster_is_unresolved(module, piece, sel);
     if(isect)
@@ -1354,14 +1284,12 @@ static int _group_get_mask_roi_flexi(const dt_iop_module_t *const restrict modul
       // union, and the base of a difference: max onto the zero seed is a copy
       dt_masks_combine_union(buffer, bufs, npixels, op, inverted);
     nb_folded++;
-    // a parametric channel still at its full range renders all ones and
-    // restricts nothing. Not counting it lets a group of nothing else take
-    // the "no active mask element" fallback below (fully opaque, no yellow
-    // overlay) while the user is still setting up a fresh channel. Decided
-    // from the form's own ranges, the test the panel's no-op badge uses,
-    // never from the pixels: a narrowed channel that happens to cover this
-    // image is a real element, and skipping it would drop the group's invert
-    // and opacity along with it
+    // a parametric channel at its full range renders all ones and restricts
+    // nothing, so a group of nothing else takes the "no active mask element"
+    // fallback below (opaque, no overlay) while a new channel is set up.
+    // Decide it from the form's ranges, as the panel's badge does, never from
+    // the pixels: a narrowed channel that happens to cover this image is a
+    // real element, and skipping it would drop the group's invert and opacity
     if(!dt_masks_parametric_is_noop(sel)) nb_members++;
   }
   dt_free_align(bufs);
@@ -1463,24 +1391,23 @@ static int _group_get_mask_roi(const dt_iop_module_t *const restrict module,
 
       if(ok)
       {
-        // optional per-shape refinement, applied to the raw shape mask before
-        // inversion and compositing. No-op (and zero cost) unless this shape
-        // has refinement enabled, so existing masks render unchanged.
+        // the shape's own refinement, on its raw mask before inversion and
+        // combining
         if(fpt->refinement.enabled)
           dt_develop_blend_refine_form_mask((dt_iop_module_t *)module,
                                             (dt_dev_pixelpipe_iop_t *)piece, bufs, roi,
                                             &fpt->refinement);
 
-        // first see if we need to invert this shape -- except for a raster
-        // element whose source is gone, which renders zero and must stay zero
-        // (see the same guard in _group_get_mask_roi_flexi above)
+        // first see if we need to invert this shape, unless it is a raster
+        // element that renders 0 for want of a mask (see
+        // _group_get_mask_roi_flexi above)
         const int inverted = (state & DT_MASKS_STATE_INVERSE)
                              && !dt_masks_raster_is_unresolved(module, piece, sel);
 
-        // every shape applies its own operator, the bottom one included, as
-        // master's fold does: onto the empty accumulator, intersection and
-        // difference leave nothing. Migration turns such shapes into
-        // zero-opacity unions (_zero_empty_base_members in migrate_legacy.c)
+        // every shape applies its own operator, the bottom one included: onto
+        // the empty accumulator, intersection and difference leave nothing.
+        // Migration turns such shapes into zero-opacity unions
+        // (_zero_empty_base_members in migrate_legacy.c)
         if(state & DT_MASKS_STATE_UNION)
         {
           dt_masks_combine_union(buffer, bufs, npixels, op, inverted);
@@ -1607,7 +1534,6 @@ void dt_masks_group_duplicate_points(dt_develop_t *const dev,
   }
 }
 
-// The function table for groups.  This must be public, i.e. no "static" keyword.
 // a group renders a member group by recursing through the functions table,
 // which has no room for a depth, so a cyclic tree would recurse until the
 // stack is gone. Pipes render on threads of their own, hence the per-thread
@@ -1643,6 +1569,7 @@ int dt_masks_group_get_mask_roi(const dt_iop_module_t *const restrict module,
   return ok;
 }
 
+// The function table for groups.  This must be public, i.e. no "static" keyword.
 const dt_masks_functions_t dt_masks_functions_group = {
   .point_struct_size = sizeof(struct dt_masks_point_group_t),
   .sanitize_config = NULL,
@@ -1662,8 +1589,9 @@ const dt_masks_functions_t dt_masks_functions_group = {
   .mouse_scrolled = _group_events_mouse_scrolled,
   .button_pressed = _group_events_button_pressed,
   .button_released = _group_events_button_released,
-  // TODO:  .post_expose = _group_events_post_expose
+//TODO:  .post_expose = _group_events_post_expose
 };
+
 
 // clang-format off
 // modelines: These editor modelines have been set for all relevant files by tools/update_modelines.py

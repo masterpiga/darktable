@@ -44,10 +44,8 @@
  * *edited* mask back under the *pre-edit* history and the undo silently does
  * nothing to the mask while appearing to work on everything else.
  *
- * That is not hypothetical on this branch. The history-snapshot normalization
- * gap was exactly a per-item forms snapshot holding something other than what
- * the item's blend_params described, and two of the panel's worst bugs so far
- * were an undo duplicating a group and a blend_params read racing a replay.
+ * A history item's forms snapshot that holds something other than what its
+ * blend_params describe is the failure to look for.
  *
  * THE PROPERTY
  *

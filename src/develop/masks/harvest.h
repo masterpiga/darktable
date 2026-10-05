@@ -19,85 +19,51 @@
 #pragma once
 
 // Mask harvesting: export every mask configuration in a library to a JSON
-// file, so that migration to the flexi mask model can be verified against real
-// edits instead of only against ones we thought to invent.
+// file, so that the migration to flexi masks can be checked against real
+// edits, not only against invented ones.
 //
-// Run as `darktable --harvest-masks out.json`, honoring --library and
-// --configdir to pick which library to read.
+// `darktable --harvest-masks out.json` reads the library --library and
+// --configdir name. `darktable --harvest-masks-xmp DIR out.json` reads the XMP
+// sidecars under DIR instead, for photographers who keep their edits there and
+// treat the library as a rebuildable index: a library harvest would miss their
+// masks. Both write the same format and keep both promises below.
 //
-// Or as `darktable --harvest-masks-xmp DIR out.json`, which walks DIR
-// recursively and reads the sidecars instead. Not a convenience: plenty of
-// photographers keep their whole development history in the .xmp next to each
-// file and treat library.db as a rebuildable index, so a library-only harvest
-// sees none of their masks and the corpus silently over-represents people who
-// use darktable as a DAM. Both paths write the same format and hold to both
-// properties below -- the sidecar one parses the XML itself rather than going
-// through dt_exif_xmp_read(), precisely so that property 1 survives.
+// 1. It is strictly read-only on the user's library. A normal startup opens
+//    the library read-write, locks it, and may upgrade its schema, so
+//    harvesting does not use darktable's database handle at all: it runs
+//    before dt_database_init(), opens its own read-only connection, and exits
+//    without the rest of startup. The sidecar harvest parses the XML itself:
+//    dt_exif_xmp_read() needs the whole startup.
 //
-// TWO PROPERTIES THIS FILE IS RESPONSIBLE FOR
+// 2. Nothing in the output identifies the user, their files or their
+//    subjects: users are asked to send this file. It is plain JSON with every
+//    value in a named field, no base64 or blobs, so that anyone can read what
+//    it holds: numbers and module names. Free text hides in three places, all
+//    stripped:
 //
-// 1. It is strictly read-only on the user's library.
+//      - file names and film roll paths: never queried
+//      - masks_history.name, which the user can set to anything: dropped, the
+//        reader makes a name from the type
+//      - dt_masks_point_group_t.name, a group name inside the points blob,
+//        which is why the blobs are decoded rather than copied
 //
-//    This is not a matter of care while writing the SQL. A normal darktable
-//    startup opens the library read-write, takes a lock on it, and will
-//    silently upgrade its schema if it was made by an older version -- so
-//    merely pointing an ordinary run at someone's real library modifies it.
-//    Harvesting therefore does not use darktable's own database handle at all.
-//    It opens its own connection with SQLITE_OPEN_READONLY on a `file:...?
-//    mode=ro&immutable=0` URI, runs before dt_database_init() is ever reached,
-//    and exits without going near the rest of startup.
-//
-// 2. Nothing in the output identifies the user, their files, or their subjects.
-//
-//    We are asking strangers to send us this file, and "trust us" is not a
-//    reasonable thing to ask. So the format is plain JSON with every value
-//    decoded into named fields -- no base64, no opaque blobs -- specifically so
-//    that anyone can open it in a text editor and confirm for themselves what
-//    it does and does not contain. Everything in it is a number or a darktable
-//    module name.
-//
-//    Getting that right takes more than not selecting the filename column.
-//    Free text hides in three places, and all three are stripped here:
-//
-//      - `images.filename` / film roll paths, which leak names, places and
-//        folder structure. Never queried.
-//      - `masks_history.name`, e.g. "group `tone equalizer - eyes'". Usually
-//        auto-generated, but the user can rename a shape to anything at all.
-//        Dropped; the reader regenerates a canonical name from the type.
-//      - `dt_masks_point_group_t.name[128]`, a user-typed group name that
-//        lives *inside the points blob*. This one is the reason the format
-//        decodes blobs rather than shipping them: a base64 dump of a group's
-//        points would have carried it, and it would not have been visible to
-//        anyone auditing the file.
-//
-//    Image identity is reduced to width and height, which is all the verifier
-//    needs (masks are stored in normalized coordinates; the pixels underneath
-//    are irrelevant and are replaced by a generated probe -- see
-//    probe_image.h). Image ids are renumbered sequentially so they cannot be
-//    correlated with anything outside the file.
+//    An image is reduced to its width and height: masks use normalized
+//    coordinates, and the verifier renders them on a generated probe (see
+//    probe_image.h). Image ids are renumbered.
 
 #include <glib.h>
 
 G_BEGIN_DECLS
 
-/** Harvest every mask-bearing history entry in the library at `library_path`
-    into a JSON file at `output_path`.
-
-    Opens its own read-only connection; never writes to, locks, or upgrades the
-    library. Returns TRUE on success. Progress and a summary go to stdout, so
-    the user can see what was collected before deciding whether to share it. */
-/** Harvest from XMP sidecars instead of a library: walk `dir` recursively,
-    read every .xmp found and write the same JSON format.
-
-    For people who do not use darktable's database -- their whole development
-    history lives in the sidecars, so a library-only harvest would see none of
-    their masks and the corpus would over-represent DAM users. Parses the XMP
-    itself rather than going through dt_exif_xmp_read(), which would need the
-    whole of startup behind it and so would give up property 1 above. */
-gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path);
-
+/** harvest every history entry with a mask in the library at `library_path`
+    into a JSON file at `output_path`. It never writes to, locks or upgrades
+    the library. Progress and a summary go to stdout, so that the user can see
+    what was collected before deciding to share it. TRUE on success */
 gboolean dt_masks_harvest_library(const char *library_path,
                                   const char *output_path);
+
+/** the same from the XMP sidecars found under `dir`, recursively */
+gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path);
 
 G_END_DECLS
 

@@ -1150,11 +1150,9 @@ void dt_dev_configure(dt_dev_viewport_t *port)
   }
 
   port->border_size = tb;
-  // fixed border on every side. Deliberately NOT reduced by occlusion_left/right:
-  // the image is laid out for the whole canvas whether or not an overlay covers
-  // part of it, so showing and hiding the overlay never re-fits or moves it.
-  // The occlusion is accounted for in the pan clamp instead (_clamp_zoom_to_mask),
-  // which is what keeps the covered strip reachable.
+  // fixed border on every side. Not reduced by occlusion_left/right, so that
+  // showing or hiding an overlay never moves the image: the pan clamp
+  // (_clamp_zoom_to_mask) keeps the covered strip reachable instead
   const int32_t wd = port->orig_width - 2*tb;
   const int32_t ht = port->orig_height - 2*tb;
   if(port->width != wd || port->height != ht)
@@ -1174,11 +1172,8 @@ void dt_dev_set_occlusion(dt_dev_viewport_t *port,
 
   port->occlusion_left = left;
   port->occlusion_right = right;
-  // growing is immediate -- more of the canvas is covered right now, so more of
-  // it has to be reachable right now. Shrinking is not: see occlusion_hold_*,
-  // which the clamp lets down gently instead. Nothing else to do here; the
-  // image is laid out for the whole canvas either way, so neither the viewport
-  // dimensions nor the zoom need recomputing.
+  // the allowance grows at once, as the covered strip must be reachable now;
+  // the clamp shrinks it (see occlusion_hold_left). The layout stays as it is
   port->occlusion_hold_left = MAX(port->occlusion_hold_left, left);
   port->occlusion_hold_right = MAX(port->occlusion_hold_right, right);
 }
@@ -1639,14 +1634,11 @@ void dt_dev_add_masks_history_item(dt_develop_t *dev,
     if(fpt) target = GINT_TO_POINTER(fpt->formid);
   }
 
-  // editing a mask switches the mask on, the same way `enable` switches the
-  // module on in _dev_add_history_item_ext below: the blend mask panel's
-  // controls stay live with the mask off, so this is what turns it back on,
-  // wherever the edit came from -- the panel or the canvas. Safe to do for
-  // every caller of this function: replay, undo, style apply and history copy
-  // all go through dt_dev_add_masks_history_item_ext with enable FALSE and
-  // never reach here. Before the lock, because enabling commits a history item
-  // of its own and would otherwise deadlock on history_mutex.
+  // editing a mask, in the panel or on the canvas, switches the mask on, as
+  // `enable` switches the module on: the panel's controls stay live with the
+  // mask off. Replay, undo, style apply and history copy call
+  // dt_dev_add_masks_history_item_ext() directly. Before the lock: enabling
+  // commits a history item of its own, which takes history_mutex
   if(enable && dev->gui_attached)
     dt_iop_gui_blend_mask_enable(module ? module : dev->gui_module);
 
@@ -1748,11 +1740,9 @@ void dt_dev_reload_history_items(dt_develop_t *dev)
   // set the module list order
   dt_dev_reorder_gui_module_list(dev);
 
-  // dev->forms/history was just rewritten wholesale (this function is the
-  // sole entry point for undo/redo, jump to a history step, style paste,
-  // snapshot restore, compress history): the masks panel's GUI-only empty-
-  // group placeholders have no counterpart in what was just reloaded, so drop
-  // them before the panel next rebuilds (see dt_iop_gui_blend_forms_reloaded).
+  // the forms were just replaced: the masks panel's empty-group placeholders,
+  // which exist in the GUI only, have no counterpart in them any more (see
+  // dt_iop_gui_blend_forms_reloaded)
   for(GList *modules = dev->iop; modules; modules = g_list_next(modules))
     dt_iop_gui_blend_forms_reloaded((dt_iop_module_t *)modules->data);
 
@@ -1840,8 +1830,7 @@ void dt_dev_pop_history_items_ext(dt_develop_t *dev, const int32_t cnt)
 }
 
 // compress (or, with compress FALSE, truncate at history_end) the history
-// of the image being developed, from darkroom: the history panel's button
-// and the masks panel's "compress history and clean up unused shapes"
+// of the image being developed in darkroom
 void dt_dev_history_truncate(dt_develop_t *dev, const gboolean compress)
 {
   const dt_imgid_t imgid = dev->image_storage.id;
@@ -2642,14 +2631,10 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
   // clang-format on
 
   dev->history_end = 0;
-  // defensive: should already be NULL/drained by dt_masks_finish_flexi_migrations()
-  // at the end of the previous call, see its own comment and the field's
-  // comment in develop.h.
+  // both migration queues are drained by the previous call; a stale entry
+  // would act on the previously loaded image
   g_list_free_full(dev->pending_flexi_migrations, free);
   dev->pending_flexi_migrations = NULL;
-  // same defensiveness for the post-read normalization queue (see
-  // dt_masks_normalize_flexi_groups); a stale entry here would re-normalize a
-  // group belonging to the previously loaded image
   g_list_free(dev->pending_flexi_group_splits);
   dev->pending_flexi_group_splits = NULL;
 
@@ -2957,16 +2942,14 @@ void dt_dev_read_history_ext(dt_develop_t *dev,
 
   dt_ioppr_check_iop_order(dev, imgid, "dt_dev_read_history_no_image end");
 
-  // history_end is now final -- synthesize any classic->flexi masks queued
-  // during the loop above under the right row before the read below picks
-  // them up (see dt_masks_finish_flexi_migrations()'s own comment).
+  // history_end is final: create the forms of the queued mask migrations, for
+  // the read below to pick up
   dt_masks_finish_flexi_migrations(dev);
 
   dt_masks_read_masks_history(dev, imgid);
 
-  // after the read, not before: this adjusts groups that already exist in the
-  // database, and the read above replaces dev->forms wholesale (see the
-  // function's own comment, and dev->pending_flexi_group_splits in develop.h)
+  // after the read, which replaces dev->forms: this converts groups already in
+  // the database
   dt_masks_normalize_flexi_groups(dev);
 
   // FIXME : this probably needs to capture dev thread lock
@@ -3396,9 +3379,9 @@ _dev_mask_overlay_bounds(const dt_develop_t *dev, float *x0, float *y0, float *x
 //   - by any overlay point already outside the image (e.g. a node dragged past
 //     the edge), plus MASK_HANDLE_MARGIN so it isn't flush to the border.
 // boxw/boxh are the viewport extents in image units along each axis.
-// `occl0`/`occl1` are how much of the canvas is hidden behind an overlay on the
-// left and right, in the same normalized image units as boxw -- 0 unless the
-// flexi masks panel is showing (see dt_dev_viewport_t::occlusion_left).
+// `occl0`/`occl1` are how much of the canvas an overlay hides on the left and
+// right, in the units of boxw (see dt_dev_viewport_t::occlusion_left), and
+// `used0`/`used1` receive how much of that the clamped position still uses
 static void _clamp_zoom_to_mask(const dt_develop_t *dev,
                                 const float boxw,
                                 const float boxh,
@@ -3457,13 +3440,9 @@ static void _clamp_zoom_to_mask(const dt_develop_t *dev,
   const float halfw = 0.5f * boxw, halfh = 0.5f * boxh;
   const float homew = boxw >= 1.0f ? 0.0f : 0.5f - halfw;
   const float homeh = boxh >= 1.0f ? 0.0f : 0.5f - halfh;
-  // An overlay covers a strip of the canvas but the image is still laid out for
-  // all of it, so the plain bound stops with that strip's content stranded
-  // underneath. Letting the center travel one strip further on that side lets
-  // any of it be pulled out into the part that can actually be seen -- the
-  // image never moves when the overlay appears, and nothing becomes
-  // unreachable while it is there. Both are 0 with no overlay, and then these
-  // are exactly the bounds above.
+  // the image is laid out for the whole canvas, overlay or not, so the center
+  // may travel one covered strip further on that side: what lies under the
+  // overlay can be pulled out into view
   const float basex0 = (lox < -0.5f) ? lox : -homew;
   const float basex1 = (hix > 0.5f) ? hix : homew;
   const float cminx = basex0 - occl0;
@@ -3473,8 +3452,7 @@ static void _clamp_zoom_to_mask(const dt_develop_t *dev,
   *zoom_x = CLAMP(*zoom_x, cminx, cmaxx);
   *zoom_y = CLAMP(*zoom_y, cminy, cmaxy);
 
-  // how much of the allowance the settled position is still leaning on. Never
-  // more than it was, so this only ever gives allowance back.
+  // how much of the allowance the clamped position still uses
   *used0 = fmaxf(0.0f, basex0 - *zoom_x);
   *used1 = fmaxf(0.0f, *zoom_x - basex1);
 }
@@ -4464,17 +4442,10 @@ gboolean dt_dev_equal_chroma(const float *f, const double *d)
       && feqf(f[2], (float)d[2], 0.00001f);
 }
 
-// dev->chroma.temperature/adaptation are raw, UNOWNED dt_iop_module_t pointers,
-// written commit-side by temperature.c and channelmixerrgb.c and never
-// invalidated when the module list they point into is torn down. Dereferencing
-// one after that is a hard, reproducible SIGSEGV inside
-// dt_iop_set_module_trouble_message below, reached from try_enter (darkroom.c),
-// which resets chroma on every darkroom entry -- at which point dev->iop is the
-// *previous* session's list, or empty. dt_iop_cleanup_module now clears these
-// when it frees a module they name, but this cache is written from too many
-// places to trust that alone, so validate before dereferencing: a module that is
-// no longer in dev->iop is gone, whatever freed it. The walk is over ~50
-// modules, twice, on a view switch -- not a path where that matters.
+// dev->chroma.temperature/adaptation are raw module pointers that nothing owns.
+// dt_iop_cleanup_module clears the one it frees, but the cache is written from
+// too many places to rely on that alone: a module missing from dev->iop has
+// been freed, whatever freed it, and must not be dereferenced
 static gboolean _chroma_module_alive(const dt_develop_t *dev,
                                      const dt_iop_module_t *const module)
 {
@@ -4482,8 +4453,7 @@ static gboolean _chroma_module_alive(const dt_develop_t *dev,
   for(const GList *m = dev->iop; m; m = g_list_next(m))
     if(m->data == module) return TRUE;
 
-  // loud on purpose: reaching here means something left a dangling module in the
-  // chroma cache. It is contained now, but the write site is still worth finding.
+  // loud on purpose: some write site left a dangling module in the cache
   dt_print(DT_DEBUG_ALWAYS,
            "[chroma] stale module %p in dev->chroma (not in dev->iop) -- ignored",
            (const void *)module);

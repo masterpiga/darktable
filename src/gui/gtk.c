@@ -130,28 +130,21 @@ typedef struct dt_ui_t
   /* log msg and toast labels */
   GtkWidget *log_msg, *toast_msg;
 
-  /* flexi masks panel (see dt_ui_flexi_panel_* / develop/blend_gui.c) --
-     used only for the "separate panel" masks_panel_position choices. A
-     genuine sibling of the canvas: packed into centerrow (see
-     _init_main_table) alongside centergrid, so it always gets exactly the
-     canvas's own height, with the window's top/bottom bars above/below it
-     just like the canvas -- NOT another grid column beside LEFT/RIGHT.
-     Moved live between the two sides via gtk_box_reorder_child (see
-     dt_ui_flexi_panel_set_side). */
-  GtkWidget *flexi_panel_overlay;  // outer overlay (body + resize handle), packed into centerrow
+  /* flexi masks panel, the canvas position of masks_panel_position (see
+     dt_ui_flexi_panel_*): an overlay on the canvas, put on either side by its
+     halign (dt_ui_flexi_panel_set_side) */
+  GtkWidget *flexi_panel_overlay;  // outer box (body + resize handle), an overlay on the canvas
   GtkWidget *flexi_panel_body;     // vertical box: header + scroll (flexi_content)
   GtkWidget *flexi_frame;          // #iop-expander: header + content row, styled like a module
   GtkWidget *flexi_header;         // where blend_gui.c reparents flexi masks header into (sticky above scroll)
   GtkWidget *flexi_content;        // where blend_gui.c reparents flexi masks content into
   GtkWidget *flexi_handle;         // resize-handle drawing area, side toggled with the panel
   GtkWidget *flexi_content_row;    // horizontal box holding the scroll and, beside it, the handle
-  /* the collapsed panel's edge tab: a narrow full-height strip docked in
-     centerrow beside the canvas, one per side. Deliberately a real column and
-     not an overlay on the canvas -- an input-capturing strip over the image
-     edge would swallow the clicks that mask nodes at and beyond the image
-     border now need (see dt_masks_events_mouse_moved's off_image handling).
-     One is shown per docked side while the panel is collapsed; hovering one
-     opens the panel on that side. */
+  /* the edge strips: narrow full-height columns in centerrow, one each side
+     of the canvas. Columns, not overlays: a strip over the image edge would
+     take the clicks that mask nodes at and beyond the image border need (see
+     dt_masks_events_mouse_moved's off_image handling). Both show while there
+     is a panel, and a click toggles it on that side (_flexi_slivers_update) */
   GtkWidget *flexi_sliver[2];      // [0] = left of the canvas, [1] = right of it
   /* the sliver's reach. A 1px strip is too small to aim at, so approaching
      either edge of the canvas reveals a wide band over it -- visible, and
@@ -1611,19 +1604,15 @@ static gboolean _configure(GtkWidget *da,
   return dt_control_configure(da, event, user_data);
 }
 
-// Keep the center at least min_center_width wide across ALL three side columns.
+// keep the center at least min_center_width wide across all three side
+// columns when the window shrinks. _panel_set_side_panel_width only acts while
+// a handle is dragged, and a panel's width is a size request, which GTK honors
+// at the center's expense: the canvas would disappear.
 //
-// _panel_set_side_panel_width arbitrates only while a resize handle is being
-// dragged. Shrinking the WINDOW afterwards never re-ran it, and a panel's width
-// is a gtk_widget_set_size_request -- a hard minimum GTK honors at the center's
-// expense -- so widening a panel and then shrinking the window made the canvas
-// disappear entirely (user-reported).
-//
-// Shrinks the widest column first, never below min_panel_width, until the center
-// fits or every column is at its floor. Like _handle_panel_widths (the same
-// trade made when showing a panel would not fit), the shrink is permanent: the
-// panels do not grow back when the window is enlarged again. Losing panel width
-// is recoverable by dragging; losing the canvas is not.
+// Shrinks the widest column first, never below min_panel_width, until the
+// center fits or every column is at its floor. As in _handle_panel_widths,
+// the panels do not grow back: lost panel width can be dragged back, a lost
+// canvas cannot
 static void _enforce_center_width(void)
 {
   if(!g_atomic_int_get(&darktable.gui_running))
@@ -3615,13 +3604,11 @@ static void _panel_set_side_panel_width(GtkWidget *widget, const dt_ui_panel_t p
     max_w = app_window_w - used_w;
 
   const int min_w = darktable.gui->dpi_factor * dt_conf_get_int("min_panel_width");
-  // The window can be narrower than what its panels already occupy -- shrink it
-  // far enough and app_window_w - used_w goes NEGATIVE. CLAMP() with high < low
-  // then returns a nonsense width, which dt_ui_panel_set_size would both apply
-  // (tripping gtk_widget_set_size_request's 'width >= -1' assertion, once per
-  // motion event) and persist to conf. The ceiling must never fall below the
-  // floor; at that point the panels simply cannot all fit, and refusing to
-  // shrink past min_panel_width is the honest answer.
+  // the window can be narrower than its panels, making app_window_w - used_w
+  // negative, and CLAMP() with high < low returns a nonsense width, which
+  // dt_ui_panel_set_size would apply (failing gtk_widget_set_size_request's
+  // 'width >= -1' assertion) and save. So the ceiling never falls below the
+  // floor: no panel shrinks past min_panel_width
   max_w = MAX(max_w, min_w);
 
   const int target_w = (int)(panel_drag_start_size + delta_x);
@@ -3762,24 +3749,16 @@ static void _ui_init_panel_right(dt_ui_t *ui,
   gtk_widget_show_all(ui->panels[DT_UI_PANEL_RIGHT]);
 }
 
-// flexi masks panel (see dt_ui_flexi_panel_* in gtk.h, develop/blend_gui.c)
-// -- an overlay on the canvas (dt_ui_center_base), pinned to one side, with its
-// own resize-handle callbacks (not sharing _panel_handle_button_pressed/
-// _released's left/right/bottom dispatch) and its own conf-backed width
-// via dt_ui_panel_get_size/set_size (DT_UI_PANEL_FLEXI).
+// flexi masks panel (see dt_ui_flexi_panel_* in gtk.h): an overlay on the
+// canvas (dt_ui_center_base) on one side, with its own resize handle and its
+// own width (dt_ui_panel_get_size, DT_UI_PANEL_FLEXI).
 //
-// It floats over the image rather than taking a column beside it, so opening
-// and closing it never touches the viewport: the image keeps its exact size,
-// zoom and position, and the panel covers a strip of it instead. That is the
-// deliberate trade -- the alternative, giving the panel a column of its own,
-// re-fits the image every time the panel appears, and a control that moves the
-// picture you are judging every time you reach for it is worse than one that
-// covers its edge. For the same reason DT_UI_PANEL_FLEXI is NOT one of
+// An overlay, not a column, so that opening it leaves the image's size, zoom
+// and position alone: a column would re-fit the picture being judged each
+// time the panel opens. For the same reason it is not one of
 // _panel_set_side_panel_width's side_panels[]: it takes no width from the
-// center, so it must not be arbitrated against the panels that do.
-//
-// Only the two 1px hairlines (ui->flexi_sliver) are real columns in centerrow,
-// and they are there to mark the edge as live, not to hold the panel.
+// center. Only the two 1px hairlines (ui->flexi_sliver) are columns in
+// centerrow, marking the edge as live
 
 // centerrow's left-to-right order: the hairlines bracket the canvas, which
 // falls into place between them by elimination.
@@ -3876,7 +3855,7 @@ static void _flexi_header_pressed(GtkGestureSingle *gesture,
   dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, TRUE, TRUE);
 }
 
-// Set once the pointer has actually moved far enough for the press to be a
+// set once the pointer has actually moved far enough for the press to be a
 // resize rather than a click, so releasing without moving can mean "hide"
 // without stealing the drag (see _flexi_handle_released).
 static gboolean _flexi_handle_dragged = FALSE;
@@ -3932,13 +3911,10 @@ static void _flexi_handle_motion(GtkEventControllerMotion *controller,
                                  const gdouble y,
                                  GtkWidget *widget)
 {
-  // A drag lasts exactly as long as the button is held, so read that off the
-  // event rather than trusting the flag on its own. The flag is only cleared by
-  // the release handler, and a release that never reaches this widget (a grab
-  // taken elsewhere, the panel collapsing out from under the pointer) used to
-  // leave it set for good: the panel then resized on a bare hover, since this is
-  // the only condition the resize is under, and the cursor stayed stuck because
-  // _flexi_handle_crossing stands down while a drag is in progress.
+  // a drag lasts as long as the button is held, so read that off the event,
+  // not the flag alone: only the release clears the flag, and a release can
+  // miss this widget (a grab elsewhere, the panel folding under the pointer).
+  // The panel would then resize on a bare hover, with the cursor stuck
   if(darktable.gui->widgets.panel_handle_dragging
      && !(dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller)) & GDK_BUTTON1_MASK))
   {
@@ -3964,11 +3940,10 @@ static void _flexi_handle_motion(GtkEventControllerMotion *controller,
     // flexi panel that's its right edge (dragging right grows it), for the
     // right-side panel it's the left edge (dragging left grows it)
     const gdouble signed_delta = darktable.gui->ui->flexi_panel_right ? -delta_x : delta_x;
-    // share the left/right panels' width arbitration rather than clamping to
-    // min/max_panel_width alone: that ignored the window width, the other
-    // panels and min_center_width, so this handle could squeeze the canvas to
-    // nothing. Same drag-start convention (panel_drag_start_size, set by
-    // _flexi_handle_pressed), so it can be used as-is.
+    // the left and right panels' width arbitration, which also weighs the
+    // window width, the other panels and min_center_width, so that the canvas
+    // keeps its room. Same drag start (panel_drag_start_size, set by
+    // _flexi_handle_pressed)
     _panel_set_side_panel_width(widget, DT_UI_PANEL_FLEXI, signed_delta);
     gtk_widget_queue_resize(widget);
     // the panel just got wider or narrower, so it covers more or less canvas
@@ -3976,7 +3951,7 @@ static void _flexi_handle_motion(GtkEventControllerMotion *controller,
   }
 }
 
-// A GtkDrawingArea has no CSS gadget, so GTK3 never folds min-width into its
+// a GtkDrawingArea has no CSS gadget, so GTK3 never folds min-width into its
 // size request and gtk_widget_get_preferred_width reports 0 whatever the theme
 // says. Read the property off the style context instead, and let the caller
 // apply it by hand. `fallback` keeps a themeless widget usable rather than
@@ -4005,8 +3980,7 @@ static void _flexi_handle_crossing(GtkEventControllerMotion *controller,
 
   // leave the cursor alone during a real drag: it carries on outside the handle
   // until the button comes up. A flag set with no button down is stale (see
-  // _flexi_handle_motion), and honoring it here is what left the
-  // pointer stuck in "ew-resize" over the whole canvas.
+  // _flexi_handle_motion), and would leave "ew-resize" over the whole canvas
   if(darktable.gui->widgets.panel_handle_dragging)
   {
     if(dt_gui_get_current_event_state(GTK_EVENT_CONTROLLER(controller)) & GDK_BUTTON1_MASK)
@@ -4038,7 +4012,7 @@ static gboolean _flexi_handle_is_shown(void)
   return dt_conf_get_bool("plugins/darkroom/masks/show_panel_handle");
 }
 
-// The handle is both the resize grip and the panel's fold-away control (a
+// the handle is both the resize grip and the panel's fold-away control (a
 // click on it collapses, see _flexi_handle_released), so it says
 // so: an arrow pointing the way that fold sends the panel, drawn like the view's
 // own border expanders (_draw_borders) and like the canvas halo's. Opaque, at
@@ -4078,9 +4052,8 @@ static gboolean _flexi_handle_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
   // outwards, which is left for a panel docked left. Same convention as
   // _draw_borders -- the arrow shows where the panel is going.
   //
-  // Sized from the allocation, at half of it, so a clear margin is left on both
-  // sides: at nearly the full width the arrow ran right up to the handle's edge
-  // and read as spilling onto whatever sits next to it.
+  // half the allocation, so that a margin is left either side and the arrow
+  // does not seem to spill over the handle's edge
   const double s = width * 0.5;
   const double cx = width * 0.5, cy = height * 0.5;
   const double dir = ui->flexi_panel_right ? 1.0 : -1.0;
@@ -4095,18 +4068,16 @@ static gboolean _flexi_handle_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
 static void _ui_init_panel_flexi(dt_ui_t *ui,
                                  GtkWidget *container)
 {
-  // dtgtk_side_panel_new() (not a plain GtkBox) so its content's own
-  // natural width can't force the panel wider than the configured size --
-  // see dtgtk_side_panel_get_preferred_width, which clamps to
-  // dt_ui_panel_get_size for widgets named "left"/"right"/"flexi"; without
-  // this, wide content (e.g. gradient sliders) blew the panel width up and
-  // dragging the resize handle had no visible effect. The header is the
-  // module's own "blend mask" header, reparented into ui->flexi_header (see
-  // dt_iop_gui_blend_masks_panel_relocate).
+  // dtgtk_side_panel_new(), not a plain GtkBox, so that wide content
+  // (gradient sliders) cannot make the panel wider than its size, and the
+  // resize handle works: dtgtk_side_panel_get_preferred_width clamps to
+  // dt_ui_panel_get_size for widgets named "left", "right" or "flexi". The
+  // header is the module's "blend mask" header, reparented into
+  // ui->flexi_header (dt_iop_gui_blend_masks_panel_relocate)
   GtkWidget *widget = ui->flexi_panel_body = dtgtk_side_panel_new();
   gtk_widget_set_name(widget, "flexi");
 
-  // The header sits inside an event box so a click anywhere on it folds
+  // the header sits inside an event box so a click anywhere on it folds
   // the panel away, the way darktable's own module headers take their clicks
   // (see dtgtk_expander_get_header_event_box). The header is the panel's biggest
   // control-free surface, which makes it a far easier target than an icon.
@@ -4154,16 +4125,10 @@ static void _ui_init_panel_flexi(dt_ui_t *ui,
                    G_CALLBACK(_ui_init_panel_container_center_scroll_event), NULL);
 #endif
 
-  // the handle's row: the scrollable content, and the handle beside it. Beside
-  // the content rather than beside the whole panel, so the header keeps the full
-  // width and is not part of the grip -- the header has its own click (it
-  // folds the panel, see _flexi_header_pressed) and a resize strip
-  // running through it made the two fight over the same pixels. It also puts the
-  // handle's outer edge on the panel's own edge, which is where the header's
-  // edge is, so the two line up instead of the header being inset by the
-  // handle's width.
-  // No spacing: a gap let the image show through in a thin line, which read as a
-  // seam in the panel rather than as breathing room.
+  // the handle's row: the scrollable content and the handle beside it, not
+  // beside the whole panel, so that the header, which folds the panel on a
+  // click (_flexi_header_pressed), keeps the full width and is no part of the
+  // grip. No spacing: the image would show through the gap as a seam
   GtkWidget *content_row = ui->flexi_content_row = dt_gui_hbox();
   gtk_widget_set_vexpand(scroll, TRUE);
   dt_gui_box_add(content_row, dt_gui_expand(scroll));
@@ -4279,18 +4244,12 @@ static gboolean _flexi_sliver_draw(GtkWidget *w, cairo_t *cr, gpointer user_data
   gtk_render_background(ctx, cr, 0, 0, width, height);
   gtk_render_frame(ctx, cr, 0, 0, width, height);
 
-  // The halo is a control, so it says both what it opens and where that goes:
-  // the mask-panel icon above, the arrow below it.
-  //
-  // The icon is the same glyph as the darkroom toolbar's button, and carries the
-  // same meaning in its two forms -- filled when the focused module actually has
-  // a mask, outline-only when it does not -- so the band answers "is there
-  // anything in there" before it is opened. The arrow is the solid triangle the
-  // view's own panel expanders use (same construction as _draw_borders), and
-  // always points inwards: the band is only ever revealed while the panel is
-  // folded away (see _flexi_proximity_poll), so the click can only bring it out
-  // over the canvas. Only the wide band gets either; there is no room on the 1px
-  // hairline.
+  // the halo says what it opens and where: the mask-panel icon above an arrow.
+  // The icon is the darkroom toolbar button's, filled when the focused module
+  // has a mask and outlined when not. The arrow is the view's panel-expander
+  // triangle (as in _draw_borders), pointing inwards: a click brings the
+  // panel out from this edge (_flexi_proximity_poll). Not on the 1px
+  // hairline, which has no room
   dt_ui_t *ui = darktable.gui->ui;
   const gboolean is_halo = (w == ui->flexi_halo[0] || w == ui->flexi_halo[1]);
   if(is_halo && width > 1)
@@ -4385,10 +4344,7 @@ static void _flexi_sliver_hint(dt_ui_t *ui, const gboolean right)
     ? g_strdup_printf("%s (%s)", mname, iname)
     : g_strdup(mname);
 
-  // the hint bar rather than a GTK tooltip: the corner icon this replaced never
-  // managed to show one (query-tooltip fired with the right text and returned
-  // TRUE, yet no popup ever appeared), and a 5px strip is a poor tooltip anchor
-  // in any case
+  // the hint bar, not a GTK tooltip: a 5px strip is a poor tooltip anchor
   gchar *hint;
   const gboolean this_side_docked =
     !dt_ui_flexi_panel_is_collapsed(ui) && ui->flexi_panel_right == right;
@@ -4444,21 +4400,12 @@ static void _flexi_sliver_pressed(GtkGestureSingle *gesture,
     _flexi_sliver_activate(ui, right);
 }
 
-// How wide the revealed band is, and how close the pointer has to get to summon
-// it: the reveal distance is the band's own width, so the halo appears exactly
-// when the pointer is over where it would be -- never out from under the
-// pointer, and never a gap between "shown" and "hit".
-//
-// The width itself is CSS (#flexi-halo's min-width, and the narrower
-// .flexi-halo-docked over an expanded panel), so the band can be themed together
-// with the gradient it carries.
-//
-// Read straight off the style context, NOT through gtk_widget_get_preferred_width:
-// a GtkDrawingArea has no CSS gadget, so GTK3 never folds min-width into its size
-// request and the preferred width is 0 whatever the theme says. The value has to
-// be fetched here and applied as a size request by hand (see
-// _flexi_halo_sync_width). Falls back to a usable band if the theme supplies
-// nothing, since a 0-width halo is one that can never be summoned at all.
+// how wide the band is, which is also how near the pointer must come to
+// reveal it, so that it appears under the pointer, never away from it. From
+// the CSS (#flexi-halo's min-width, and .flexi-halo-docked over an open
+// panel), read off the style context as _flexi_css_min_width does, and
+// applied by _flexi_halo_sync_width. A fallback keeps a themeless band
+// reachable
 #define FLEXI_HALO_FALLBACK_WIDTH DT_PIXEL_APPLY_DPI(26)
 
 static int _flexi_halo_width(GtkWidget *halo)
@@ -4466,24 +4413,15 @@ static int _flexi_halo_width(GtkWidget *halo)
   return halo ? _flexi_css_min_width(halo, FLEXI_HALO_FALLBACK_WIDTH) : 0;
 }
 
-// Keep the panel's scrollbar off its resize handle.
-//
-// The handle is an overlay on the panel's canvas-facing edge, and a
-// GtkScrolledWindow puts its vertical scrollbar on the right by default -- so
-// for a left-docked panel the two land on the same strip, with the handle on
-// top. Every press meant for the scrollbar went to the handle instead: a drag
-// resized the panel and a click folded it away (see
-// _flexi_handle_released).
-//
-// Putting the scrollbar on the panel's *outer* edge keeps them apart whichever
-// side the panel is docked on, and leaves the handle a clear strip of its own.
+// keep the panel's scrollbar off its resize handle, on the canvas-facing
+// edge: on the panel's outer edge, whichever side it is docked on. Under the
+// handle, the scrollbar's presses would resize or fold the panel
+// (_flexi_handle_released)
 static void _flexi_sync_scrollbar_side(dt_ui_t *ui)
 {
   if(!ui || !ui->flexi_content) return;
-  // get_ancestor, not get_parent: flexi_content is a GtkBox, which is not
-  // GtkScrollable, so GtkScrolledWindow wraps it in a GtkViewport of its own.
-  // The parent is that viewport, and a GTK_IS_SCROLLED_WINDOW check on it fails
-  // silently -- which is exactly how this function spent a while doing nothing.
+  // get_ancestor, not get_parent: flexi_content is a GtkBox, not
+  // GtkScrollable, so its parent is a GtkViewport the scrolled window adds
   GtkWidget *scroll = gtk_widget_get_ancestor(ui->flexi_content, GTK_TYPE_SCROLLED_WINDOW);
   if(!GTK_IS_SCROLLED_WINDOW(scroll)) return;
   // TOP_RIGHT places the child at the top right, which puts the vertical
@@ -4494,16 +4432,12 @@ static void _flexi_sync_scrollbar_side(dt_ui_t *ui)
   _flexi_sync_header_scrollbar_pad(ui);
 }
 
-// Overlay scrolling is off for the whole application (see dt_gui_gtk_init), so
-// the panel's vertical scrollbar is not drawn over the rows: it takes real width
-// away from them, on the panel's outer edge (_flexi_sync_scrollbar_side). The
-// header is not inside the scroll, so nothing insets it by the same amount and
-// its caption ends up starting where the labels below it would have started had
-// there been no scrollbar. Pull the header's outer end in by exactly what the
-// scrollbar is taking right now: the policy is AUTOMATIC, so that is a width
-// which comes and goes with the content's height, and it cannot be a number in
-// the CSS. The panel's own insets stay there (see "handle and content padding"
-// in darktable.css); this is only the scrollbar's share on top of them.
+// overlay scrolling is off (dt_gui_gtk_init), so the scrollbar takes width
+// from the rows, on the panel's outer edge (_flexi_sync_scrollbar_side), but
+// not from the header, which is outside the scroll. Inset the header's outer
+// end by the scrollbar's current width, which comes and goes with the
+// content's height (policy AUTOMATIC), so it cannot be in the CSS. The
+// panel's own insets are there ("handle and content padding")
 static void _flexi_sync_header_scrollbar_pad(dt_ui_t *ui)
 {
   if(!ui || !ui->flexi_header || !ui->flexi_content) return;
@@ -4632,7 +4566,7 @@ static void _flexi_halo_motion(GtkEventControllerMotion *controller,
   }
 }
 
-// The wide band the hairline grows into on approach. An overlay child of the
+// the wide band the hairline grows into on approach. An overlay child of the
 // canvas, not a column: a column would push the image sideways every time the
 // pointer wandered near an edge. Carries the same handlers as the hairline, so
 // clicking it toggles the panel, exactly as on the 1px hairline.
@@ -4662,7 +4596,7 @@ static GtkWidget *_flexi_build_halo(dt_ui_t *ui, const gboolean right)
   return h;
 }
 
-// Reveal a halo when the pointer reaches its edge of the canvas, hide it again
+// reveal a halo when the pointer reaches its edge of the canvas, hide it again
 // when it leaves. Polled rather than event-driven: the band has to react to a
 // pointer that is not over it yet, which no crossing event on it can report.
 //
@@ -4688,7 +4622,7 @@ static gboolean _flexi_proximity_poll(gpointer user_data)
 
   gboolean near[2] = { FALSE, FALSE };
 
-  // Which edges are live depends on where the panel is.
+  // which edges are live depends on where the panel is.
   //
   // Folded away: both, and either one opens it on that side.
   //
@@ -4733,7 +4667,7 @@ static gboolean _flexi_proximity_poll(gpointer user_data)
   return G_SOURCE_CONTINUE;
 }
 
-// Tell the darkroom viewport how much of the canvas this panel is standing on,
+// tell the darkroom viewport how much of the canvas this panel is standing on,
 // so the image is laid out in what is left of it. The panel is an overlay, so
 // without this the viewport believes it has the full width: the image stays
 // centered under the panel, and panning stops at the canvas edge with the
@@ -4765,10 +4699,9 @@ static void _flexi_overlay_size_allocate(GtkWidget *w, GdkRectangle *a, gpointer
 }
 
 // the header's inset is set once the allocation is over, not during it: a
-// margin changed inside an allocation queues a resize GTK does not act on until
-// something else lays the panel out again, so the docked header kept its
-// toggle at the edge until the pointer first crossed it. The allocations the
-// outer child is picked from are only final afterwards, too
+// margin changed inside an allocation queues a resize GTK does not act on
+// until something else lays the panel out. The allocations the outer child is
+// picked from are only final afterwards, too
 static guint _flexi_header_pad_idle = 0;
 
 static gboolean _flexi_header_pad_idle_cb(gpointer data)
@@ -4957,16 +4890,10 @@ void dt_ui_flexi_panel_set_icon(dt_ui_t *ui, const gboolean active, const char *
   g_free(ui->flexi_mask_label);
   ui->flexi_mask_label = g_strdup(mask_type_label);
 
-  // Deliberately no visual state on the sliver itself. It was tinted for
-  // "a mask is in use" at first, but a permanently visible bar down the side of
-  // the canvas is exactly what the edge strip is meant not to be, and anyone
-  // with a mask would have had one always. The darkroom toolbox button carries
-  // that state instead, where a lit control is unremarkable.
-  //
-  // The halo is a different case and does show it, in the fill of the mask icon
-  // it draws (see _flexi_sliver_draw): it only exists while the pointer is at
-  // the edge, so it is not a permanent anything, and by then the user is asking
-  // the question it answers.
+  // no "mask in use" state on the sliver: it would be a permanent bar down
+  // the canvas for anyone with a mask. The darkroom toolbox button shows it,
+  // and the halo, which shows only at the pointer, in its icon's fill (see
+  // _flexi_sliver_draw)
   if(active_changed)
     for(int i = 0; i < 2; i++)
       if(ui->flexi_halo[i]) gtk_widget_queue_draw(ui->flexi_halo[i]);

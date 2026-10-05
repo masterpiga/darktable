@@ -24,53 +24,40 @@
 
 #include <float.h>
 
-/* A raster mask (another module's output mask) as a first-class drawn-mask
- * form.
+/* Another module's raster mask as an element of a group.
  *
- * A raster form (dt_masks_point_raster_t) references an upstream module's
- * output mask by (op, instance, id). Placing it in a module's mask group lets
- * the raster be composited as an element -- combined with shapes and
- * parametric channels by the usual operators (union/intersection/...), exactly
- * like any other element -- instead of being an exclusive whole-mask mode.
+ * A raster form (dt_masks_point_raster_t) names an earlier module's mask by
+ * operation, instance and id, so it combines with shapes and parametric
+ * channels under any operator, as every element does.
  *
- * This is purely additive: the module's built-in exclusive raster mode (mask
- * mode RASTER) and its UI are untouched, so existing edits render identically.
- * A raster form only ever exists in edits created after this feature.
+ * It renders through dt_dev_get_raster_mask(), which returns the source mask
+ * distorted to the requesting module's output roi. The group renders on the
+ * CPU in the OpenCL pipe too, so it works the same there.
  *
- * Rendering reuses the pipe's existing raster-mask fetch/distortion machinery
- * (dt_dev_get_raster_mask), which returns the source mask already distorted to
- * the requesting module's output roi. Because the group is rendered on the CPU
- * even in the OpenCL pipe, a raster element works identically on GPU.
- *
- * The dependency (so each source module stores its mask and the pipe orders
- * correctly) is registered by _reconcile_raster_form_users() in imageop.c, at
- * commit_params time -- so it also takes effect on edit reload, with no GUI
- * action. It is per-element: a module may hold several raster elements, each
- * naming a different upstream source. It is deliberately independent of
- * blend_params.raster_mask_*, which stays reserved for the exclusive whole-mask
- * RASTER mode; nothing writes those fields on behalf of a raster form, and
- * module->raster_mask.sink.source is therefore NOT this form's source. */
+ * _reconcile_raster_form_users() (imageop.c) registers each element's source,
+ * so that the source keeps its mask, at commit_params time, which covers a
+ * reload with no GUI. A module can hold several raster elements, each naming
+ * another source. The classic blend_params.raster_mask_* fields are not used:
+ * nothing writes them for a raster form, so module->raster_mask.sink.source is
+ * not this form's source. */
 
 static void _raster_set_form_name(dt_masks_form_t *const form, const size_t nb)
 {
-  // prefix must match _form_type_prefix / _kind_name(DT_MASKS_RASTER) in
-  // blend_gui.c so the mask-list row strips it cleanly from the display name
+  // the prefix must match _form_type_prefix and _kind_name in blend_gui.c,
+  // which strip it from the name the row shows
   snprintf(form->name, sizeof(form->name), "%s #%d", _("raster mask"), (int)nb);
 }
 
 static GSList *_raster_setup_mouse_actions(const dt_masks_form_t *const form)
 {
-  // no canvas interaction; configured from the side panel
+  // no canvas interaction: it is set up in the panel
   return NULL;
 }
 
-/* A raster form has no on-canvas geometry, but the group event/expose
- * dispatchers (src/develop/masks/group.c) call some vtable entries on every
- * group member without a per-function NULL check. We therefore provide explicit
- * no-op stubs rather than leaving those slots NULL, so a raster form can sit in
- * a shown group without crashing. The form is never the "closest" form
- * (get_distance returns a huge distance), so it is never picked for direct
- * interaction. Mirrors the parametric form (see parametric.c). */
+/* A raster form has no geometry, but the group's event and draw dispatchers
+ * (group.c) call some of these entries on every member without a NULL check,
+ * so they are no-op stubs, as in parametric.c. get_distance never makes it the
+ * closest form, so it is never picked on the canvas. */
 
 static void _raster_post_expose(cairo_t *const cr,
                                 const float zoom_scale,
@@ -153,28 +140,12 @@ dt_iop_module_t *dt_masks_raster_source(const dt_masks_form_t *form)
   return _raster_find_source(darktable.develop->iop, form->points->data);
 }
 
-/* An unresolvable raster element renders as all-zero, and reports success.
- *
- * The distinction matters more than it looks. Returning 0 means "this member
- * did not render", and _group_get_mask_roi_flexi() then does not count it --
- * so a group whose only member is an unresolvable raster comes out with
- * nb_members == 0, which trips the deliberate "no active mask element"
- * fallback in dt_develop_blend_process() and fills the mask with 1.0. The
- * module would apply at full strength across the whole image.
- *
- * That fallback is right for what it was written for (a group the user is
- * still building, where a yellow wall would hide the image they are placing
- * shapes on). It is wrong here: the classic renderer's raster branch fills
- * 0.0f when dt_dev_get_raster_mask() hands back NULL, so a raster mask whose
- * source is gone means the module contributes *nothing*. Rendering zero and
- * counting the member keeps that, and keeps it for the case migration cannot
- * see either -- a source module deleted after the fact, which resolves fine
- * today and not tomorrow.
- *
- * Found by replaying real edits: 5 in the harvested corpus carry mask mode
- * RASTER with an empty source (a source module removed at some point), and
- * every one of them flipped from "module does nothing" to "module applies
- * everywhere". */
+/* A raster element that cannot obtain a mask renders all zero and reports
+ * success. Do not return 0 here: the group would not count the member, and a
+ * group of nothing else would take the "no active mask element" fallback,
+ * which fills 1 and applies the module everywhere. Classic's raster branch
+ * fills 0 when dt_dev_get_raster_mask() returns NULL, so the module does
+ * nothing, whether the source was removed before migration or after. */
 static int _raster_unresolved(float *const buffer, const dt_iop_roi_t *const roi)
 {
   memset(buffer, 0, (size_t)roi->width * roi->height * sizeof(float));
@@ -190,10 +161,8 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
   const dt_iop_module_t *source = _raster_resolve_source(module, form->points->data);
   if(!source) return TRUE;
 
-  // Whether the source is on. Inside a pipe its piece is the authority --
-  // module->enabled is not maintained in an export pipe (a source that is on
-  // for the darkroom can read as off there, and vice versa), so a piece-less
-  // check would answer for the wrong pipe.
+  // whether the source is on. Inside a pipe its piece decides:
+  // module->enabled is not maintained in an export pipe
   gboolean enabled = source->enabled;
   const dt_develop_blend_params_t *sbp = source->blend_params;
   if(piece && piece->pipe)
@@ -217,10 +186,9 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
   }
   if(!enabled) return TRUE;
 
-  // ...and whether it publishes anything. An enabled module with no mask of its
-  // own and no IOP_FLAGS_WRITE_RASTER never puts a mask in the table, so this
-  // element has nothing to read however healthy the reference looks. Same test
-  // dt_dev_get_raster_mask() makes before it gives up (pixelpipe_hb.c).
+  // and whether it writes a mask: one with no mask of its own and no
+  // IOP_FLAGS_WRITE_RASTER never does, the test dt_dev_get_raster_mask()
+  // makes (pixelpipe_hb.c)
   const dt_develop_mask_mode_t mask_mode = sbp ? sbp->mask_mode : DEVELOP_MASK_DISABLED;
   const gboolean writes_masks = (mask_mode > DEVELOP_MASK_ENABLED)
                              || (source->flags() & IOP_FLAGS_WRITE_RASTER);
@@ -244,10 +212,9 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
     return _raster_unresolved(buffer, roi);
   }
 
-  // dt_dev_get_raster_mask returns the source mask already distorted to the
-  // requesting piece's output roi (== the group render roi here), or NULL if
-  // the mask is not (yet) available. free_mask tells us whether the buffer was
-  // freshly allocated (distorted) and must be released.
+  // the source mask distorted to the piece's output roi, the group's roi here,
+  // or NULL if it is not available. With free_mask set it was allocated for
+  // us and must be freed
   gboolean free_mask = FALSE;
   float *raster = dt_dev_get_raster_mask((dt_dev_pixelpipe_iop_t *)piece, source, p->id,
                                          module, &free_mask);
@@ -267,8 +234,8 @@ static int _raster_get_mask_roi(const dt_iop_module_t *const module,
   return 1;
 }
 
-// The function table for raster masks. Most geometric/mouse callbacks are
-// unused; the form is a pure pixel reference to another module's mask.
+// the function table for raster forms: most geometric and mouse callbacks are
+// unused, as the form only refers to another module's mask
 const dt_masks_functions_t dt_masks_functions_raster = {
   .point_struct_size = sizeof(struct dt_masks_point_raster_t),
   .sanitize_config = NULL,

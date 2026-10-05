@@ -901,10 +901,10 @@ void dtgtk_cairo_paint_masks_inverse(cairo_t *cr, const gint x, const gint y, co
 }
 
 // the group operator icons: a square (the bottom element) and a circle (the
-// one above it) overlapping diagonally, combined with the operator's own
-// formula (group.c _combine_masks_*) evaluated per device pixel, so each icon
-// is what the operator does. Smooth variants feather both shapes; opacities
-// are partial only where that is the point, to tell the unions apart
+// one above it) overlapping diagonally, combined per device pixel with the
+// operator's own formula (dt_masks_combine_* in group.c), so each icon shows
+// what the operator does. Smooth variants feather both shapes; opacities are
+// partial only where that tells the unions apart
 typedef enum _masks_op_icon_t
 {
   _MASKS_OP_ICON_UNION,
@@ -1052,31 +1052,19 @@ void dtgtk_cairo_paint_masks_panel(cairo_t *cr, const gint x, const gint y, cons
 {
   PREAMBLE(0.9, 1, 0, 0)
 
-  // A domino ("eye") mask: a band across the eyes with two holes, dipping to a
-  // point between them.
+  // a domino mask: a band across the eyes with two holes, dipping to a point
+  // between them. Designed for 16px, so check any change rasterized at 16px:
   //
-  // Every choice here is driven by the 16px case, checked by rasterising the
-  // glyph at 16/20/24/32px rather than judging it at editing scale:
+  // - a domino, not a face mask: a face is tall, and at 16px its features are
+  //   2px wide and blur; a domino is wide, and each eye hole stays 3px
+  // - flat, not rotated: a 3px hole off the pixel grid turns into a gray
+  //   blur, and for this aspect ratio a rotated mask fits shorter anyway
+  // - it fills the box: a deep band, scaled by 1/0.92 so its width meets the
+  //   edges
   //
-  // - Domino, not a theatrical face mask. At 16px the box is ~14px. A face is
-  //   TALL, so it stacks eyes above a mouth along its shortest budget and every
-  //   feature lands at ~2px, where the cutouts blur into a gray smear. A domino
-  //   is WIDE: it runs along the axis with the most pixels and separates the
-  //   two holes horizontally, so each stays ~3px and reads.
-  // - Drawn FLAT, deliberately. Rotating it to exploit the diagonal was tried
-  //   and is worse: an eye hole is only ~3px, so once its edges stop landing on
-  //   pixel boundaries it becomes a gray gradient with no dark core, and the
-  //   band's crisp horizontal edges turn into anti-aliased ramps. The rotated
-  //   forms read as a blob at 16px. Diagonal also BUYS nothing geometrically --
-  //   for this aspect ratio (0.92 x 0.67) the largest rotated fit is a shorter
-  //   mask than the flat one, not a longer one.
-  // - Prominence instead comes from filling the box: the band is deep, and the
-  //   whole glyph is scaled by 1/0.92 so its width meets the edges exactly.
-  //
-  // The two states share one contour; only the eyes differ (punched out when
-  // filled, single arcs when stroked -- a stroked outline closes up at 16px).
-  //
-  // Keyed on CPF_SPECIAL_FLAG rather than CPF_ACTIVE: see the note in paint.h.
+  // both states share the contour; the eyes are punched out when filled and
+  // single arcs when stroked, as a stroked outline closes up at 16px. Keyed
+  // on CPF_SPECIAL_FLAG, not CPF_ACTIVE (see paint.h)
   cairo_translate(cr, 0.5, 0.5);
   cairo_scale(cr, 1.087, 1.087);   // 1/0.92: the contour's own width
   cairo_translate(cr, -0.5, -0.5);

@@ -16,7 +16,7 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// The flexi masks panel's toolbar: the add buttons and a presets button, on
+// the flexi masks panel's toolbar: the add buttons and a presets button, on
 // one line when the panel is wide enough, and on two or three rows otherwise.
 //
 //   one line:   [ group | shapes | channels | import ] gap [presets]
@@ -32,11 +32,9 @@
 // the shape and channel runs are the widest things in it, so the two buttons
 // that would otherwise lengthen them go to a row of their own.
 //
-// This is a height-for-width container rather than a box whose children are
-// moved around from "size-allocate": the row count is decided inside GTK's
-// own measure and allocate passes, so nothing is reparented, shown, hidden or
-// resized while GTK is laying out; schemes that moved widgets around raced
-// that layout pass.
+// a height-for-width container, not a box rearranged from "size-allocate":
+// the row count is decided in GTK's measure and allocate passes, so nothing
+// is reparented, shown, hidden or resized during layout, which would race it
 
 #include "develop/blend_gui_internal.h"
 
@@ -284,7 +282,7 @@ static void _masks_toolbar_class_init(DtMasksToolbarClass *klass)
   cclass->remove = _tb_remove;
   cclass->child_type = _tb_child_type;
 
-  // styled like the box it replaced
+  // styled as a box
   gtk_widget_class_set_css_name(wclass, "box");
 }
 

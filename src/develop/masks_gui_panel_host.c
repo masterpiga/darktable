@@ -16,16 +16,13 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Where the flexi masks panel's content lives.
-//
-// bd->relocatable_box holds the whole blend/mask panel and can sit in one of
-// three homes, per "plugins/darkroom/blend/masks_panel_position": embedded in
-// the module's own expander (the default), inside the masks_flexi_host utility
-// lib, or inside the separate grid panel owned by gui/gtk.c
-// (dt_ui_flexi_panel_*). This file owns moving it between them -- the
-// relocate/release pair, the host lib's re-configure poke, and the section of
-// the blending options the user picks a position from -- and nothing else. It builds no
-// panel content of its own; blend_gui.c does that.
+// where the flexi masks panel's content lives. bd->relocatable_box holds the
+// whole blend and mask panel, in one of three homes per
+// "plugins/darkroom/blend/masks_panel_position": the module's own expander
+// (the default), the masks_flexi_host utility lib, or the canvas panel of
+// gui/gtk.c (dt_ui_flexi_panel_*). This file moves it between them (relocate
+// and release, the host lib's reconfigure, the position section of the
+// blending options) and builds no panel content: blend_gui.c does
 //
 // It needs one helper from blend_gui.c (dt_masks_gui_reparent_into) and
 // exports its entry points back, all declared in blend_gui_internal.h.
@@ -41,11 +38,10 @@
 #include "gui/gtk.h"
 #include "libs/lib.h"
 
-// The one place the position preference is read, so that the two retired
-// "separate panel, left/right" values are migrated in exactly one place rather
-// than understood in fifteen. Their side survives the migration as the panel's
-// current side, which is now a separate setting the panel updates itself
-// whenever the user pins it somewhere (see dt_ui_flexi_panel_set_collapsed).
+// the one place the position preference is read, so that the retired
+// "separate panel, left/right" values are migrated here alone. Their side
+// becomes the panel's side, a setting of its own, which a pin updates (see
+// dt_ui_flexi_panel_set_collapsed)
 int dt_masks_gui_panel_position(void)
 {
   const int pos = dt_conf_get_int("plugins/darkroom/blend/masks_panel_position");
@@ -107,20 +103,15 @@ static const char *_mask_mode_label(const uint32_t mask_mode)
   }
 }
 
-// One collapse state shared by all three positions ("the mask panel is folded
-// away"), so it carries over when the panel is moved between them, and so all
-// three draw the same line: a fold the *user* asked for is a preference and is
-// stored here, a fold the panel does to itself (no mask to show) is visual
-// only and never touches this key.
+// one fold state for all three positions, so that it carries over between
+// them: a fold the user asked for is stored here, one the panel does itself
+// (no mask to show) is not.
 //
-// The utility position needs the flag below to keep that line, because its
-// collapse goes through dt_lib_gui_set_expanded(), the generic lib API, which
-// persists to the lib's own "plugins/<view>/masks_flexi_host/expanded" key
-// unconditionally -- it has no persist=FALSE the way the separate panel's
-// dt_ui_flexi_panel_set_collapsed() does. So this file drives that expander
-// itself from the shared preference (see _masks_utility_apply_collapsed and
-// dt_iop_gui_blend_masks_panel_relocate), which makes the lib's own key a mirror rather than a
-// source of truth in this position.
+// dt_lib_gui_set_expanded(), which folds the utility lib, always saves the
+// lib's own "plugins/<view>/masks_flexi_host/expanded" key, with no
+// persist=FALSE as dt_ui_flexi_panel_set_collapsed() has. So this file drives
+// that expander from the shared preference (_masks_utility_apply_collapsed,
+// dt_iop_gui_blend_masks_panel_relocate), and the lib's key only mirrors it
 static gboolean _masks_panel_collapsed_pref(void)
 {
   return dt_conf_get_bool("plugins/darkroom/blend/masks_panel_collapsed");
@@ -166,7 +157,7 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   // "no mask" state uses, since both are reached with mask_active FALSE.
   gtk_widget_set_sensitive(btn, TRUE);
 
-  // Four states, on two independent channels, because the button answers two
+  // four states, on two independent channels, because the button answers two
   // separate questions and the user needs both at a glance:
   //
   //   does the module have a mask?  -> the icon itself: filled and at full
@@ -188,11 +179,9 @@ void dt_iop_gui_blend_masks_panel_sync_toolbox(void)
   const gboolean mask_active =
     usable && module->blend_params
     && module->blend_params->mask_mode != DEVELOP_MASK_DISABLED;
-  // the effective state, not the stored preference: the preference is only one
-  // of the inputs, and a collapsed module overrides it (see
-  // dt_masks_model_panel_state). Reading the preference here made the button draw
-  // itself checked while nothing was on screen, and the next click then "hid"
-  // an already hidden panel.
+  // the effective state, not the stored preference, which a collapsed module
+  // overrides (dt_masks_model_panel_state): the button would show checked with
+  // nothing on screen, and the next click "hide" a hidden panel
   const dt_masks_panel_state_t state =
     dt_masks_model_panel_state(dt_masks_gui_panel_position(), usable, usable,
                                module ? module->expanded : FALSE, mask_active,
@@ -315,7 +304,7 @@ static void _place_mask_lock(dt_iop_gui_blend_data_t *bd)
                         lock_pos < showmask_pos ? showmask_pos - 1 : showmask_pos);
 }
 
-// The header's reading order, in every position:
+// the header's reading order, in every position:
 //
 //   [expander] | caption | <space> | lock | overlay | edit | toggle
 //
@@ -358,7 +347,7 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
 
   if(mirrored)
   {
-    // separate panel right: no icon left of caption; expand/collapse arrow is at the far right
+    // canvas panel docked right: the arrow goes to the far right
     dt_gui_remove_class(pin, "flexi-pin-left");
     dt_gui_add_class(pin, "flexi-pin-right");
     dt_masks_gui_reparent_into(pin, bd->masks_right_cluster, FALSE, FALSE);
@@ -366,7 +355,7 @@ static void _masks_header_apply_side(dt_iop_gui_blend_data_t *bd,
   }
   else
   {
-    // standard / embedded / separate panel left: expander arrow is ahead of caption
+    // otherwise the arrow is ahead of the caption
     dt_gui_remove_class(pin, "flexi-pin-right");
     dt_gui_add_class(pin, "flexi-pin-left");
     dt_masks_gui_reparent_into(pin, bd->masks_blend_header, FALSE, FALSE);
@@ -509,7 +498,7 @@ void dt_iop_gui_blend_masks_panel_host_expanded(const gboolean expanded)
   dt_iop_gui_blend_masks_panel_sync_toolbox();
 }
 
-// The masking panel just folded away, or came back -- see the header comment
+// the masking panel just folded away, or came back -- see the header comment
 // on this function in blend.h for the contract; this is called from all three
 // positions' own collapse mechanisms.
 //
@@ -585,18 +574,12 @@ static gboolean _widgets_are_hosted(dt_iop_gui_blend_data_t *bd)
   return FALSE;
 }
 
-// Hand the panel back unconditionally, whatever this module's focus or
-// position says -- unlike relocate above, which would re-host a module that is
-// still focused. dt_iop_gui_cleanup_module calls this immediately before it
-// destroys the module's widget tree, and the ordering is the whole point: while
-// the panel is hosted, masks_blend_header and masks_panel_body are children of
-// the host, NOT of the module's expander, so destroying the expander leaves
-// them behind. dt_iop_gui_cleanup_blending runs after that destroy and cannot
-// undo it -- by then relocatable_box is freed and the release it would do is
-// skipped. Every darkroom leave then stranded one header/body pair in the
-// panel, with their signal handlers still bound to the module struct that is
-// freed moments later: hovering one of those rows called _row_crossing with a
-// dangling dt_iop_module_t and segfaulted.
+// hand the panel back whatever the module's focus or position, unlike
+// relocate, which re-hosts a focused module. dt_iop_gui_cleanup_module calls
+// it before destroying the module's widgets: hosted, masks_blend_header and
+// masks_panel_body are the host's children, not the expander's, and would
+// stay behind with handlers bound to the freed module. Too late in
+// dt_iop_gui_cleanup_blending, after the destroy
 void dt_iop_gui_blend_masks_panel_release(dt_iop_module_t *module)
 {
   if(!module || !module->blend_data) return;
@@ -630,9 +613,9 @@ dt_masks_panel_state_t dt_masks_model_panel_state(const int pos,
     }
     else if(!is_expanded)
     {
-      // module is collapsed: hide the separate panel so its controls aren't
-      // stranded alone on screen, but keep the corner icon visible so the user
-      // can still see mask status and click the canvas edge to show it
+      // module is collapsed: hide the panel, whose controls would be stranded
+      // on screen, but keep the edge strips (corner_icon_visible), through
+      // which a click shows it
       s.panel_collapsed = TRUE;
       s.corner_icon_visible = TRUE;
       s.corner_icon_active = mask_active;
@@ -832,10 +815,9 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
     // sets it before calling lose_focus on the outgoing module
     dt_iop_module_t *next = darktable.develop->gui_module;
     dt_iop_gui_blend_data_t *next_bd = next ? next->blend_data : NULL;
-    // no handing over on teardown: gui_module there is not a module taking
-    // focus but one on its way to being freed by the same loop, and re-showing
-    // the panel for it undoes the hide darkroom's leave() already did -- which
-    // left an empty flexi panel holding open a column of the lighttable
+    // no handing over on teardown: gui_module is then a module about to be
+    // freed, and showing the panel for it would undo darkroom's leave(), with
+    // an empty panel left over the lighttable
     const gboolean next_wants_host =
       handoff && next && next_bd && next_bd->masks_support;
     if(next_wants_host)
@@ -862,8 +844,8 @@ static void _masks_flexi_release_full(dt_iop_module_t *module, const gboolean ha
     }
     else
     {
-      // nothing is focused anymore (or the focused module has no masking):
-      // hide the panel and its corner icon entirely
+      // nothing is focused, or the focused module has no masking: hide the
+      // panel and its edge strips
       dt_ui_flexi_panel_set_icon(darktable.gui->ui, FALSE, NULL);
       dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
     }
@@ -875,7 +857,7 @@ void dt_masks_gui_flexi_release(dt_iop_module_t *module)
   _masks_flexi_release_full(module, TRUE);
 }
 
-// Guarantee the host shows exactly one module's panel.
+// guarantee the host shows exactly one module's panel.
 //
 // hosted_module is what normally does this: relocate releases it before
 // installing its own widgets. But it is a single pointer maintained by hand
@@ -909,8 +891,8 @@ static void _release_stray_hosted(dt_iop_module_t *keep)
 // (re)decide where this module's masking panel content should live, per
 // the current "plugins/darkroom/blend/masks_panel_position" preference:
 // embedded (default) keeps it inline; utility uses the masks_flexi_host lib
-// (DT_UI_CONTAINER_PANEL_LEFT_CENTER); the canvas position uses the extra
-// grid panel owned by gui/gtk.c (dt_ui_flexi_panel_*). Hosting only depends
+// (DT_UI_CONTAINER_PANEL_LEFT_CENTER); the canvas position uses the panel
+// of gui/gtk.c (dt_ui_flexi_panel_*). Hosting only depends
 // on the module being focused and masking-capable -- NOT on the current mask
 // mode, so the panel's controls stay reachable with the mask off, and whether
 // it shows follows the shared fold preference (see dt_masks_model_panel_state)
@@ -936,7 +918,7 @@ void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
     GtkBox *content_box = darktable.develop->proxy.masks_flexi_host.content_box;
     if(host && content_box) target = GTK_WIDGET(content_box);
   }
-  else if(state.want_hosted) // LEFT / RIGHT
+  else if(state.want_hosted) // canvas
   {
     target = dt_ui_flexi_panel_content(darktable.gui->ui);
     dt_ui_flexi_panel_set_side(darktable.gui->ui, dt_masks_gui_panel_side_right());
@@ -1011,9 +993,9 @@ void dt_iop_gui_blend_masks_panel_relocate(dt_iop_module_t *module)
     gtk_widget_show(GTK_WIDGET(bd->relocatable_box));
   }
 
-  // hosted: the host itself collapses (grid panel to its corner icon, utility
-  // lib to its expander header), so the body is never folded here -- undo any
-  // embedded fold the box is carrying over
+  // hosted: the host itself folds (the canvas panel to its edge strips, the
+  // utility lib to its header), so the body is never folded here: undo any
+  // embedded fold the box carries over
   if(bd->masks_panel_body)
     gtk_widget_set_visible(GTK_WIDGET(bd->masks_panel_body), TRUE);
   _masks_flexi_host_reconfigure();
@@ -1175,10 +1157,8 @@ static void _masks_panel_position_activate(GtkToggleButton *mi, dt_iop_module_t 
   // update the utility-mode host lib's own visibility for the new position
   _masks_flexi_host_reconfigure();
 
-  // leaving the separate-panel (left/right) mechanism entirely: force it
-  // fully hidden (not just emptied) rather than leaving an empty panel
-  // visible -- dt_iop_gui_blend_masks_panel_relocate()'s own release path only re-applies
-  // whatever visibility it already had, which isn't enough here
+  // leaving the canvas position: hide the canvas panel, not just empty it.
+  // dt_iop_gui_blend_masks_panel_relocate()'s release keeps its visibility
   if(pos != MASKS_PANEL_POS_CANVAS)
     dt_ui_flexi_panel_set_collapsed(darktable.gui->ui, TRUE, FALSE, FALSE);
 
@@ -1237,8 +1217,8 @@ void dt_masks_gui_add_panel_position_box(GtkWidget *box, dt_iop_module_t *module
   } items[] = {
     { MASKS_PANEL_POS_EMBEDDED, N_("embedded within each module (default)") },
     { MASKS_PANEL_POS_UTILITY, N_("utility module, left panel") },
-    // one entry, not one per side: which edge it opens on is no longer part of
-    // the choice, it is whichever edge the user last opened it on
+    // one entry, not one per side: it opens on the edge the user last opened
+    // it on
     { MASKS_PANEL_POS_CANVAS, N_("separate panel, beside the canvas") },
   };
 

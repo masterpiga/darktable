@@ -1392,10 +1392,10 @@ void dt_iop_gui_update_header(dt_iop_module_t *module)
   // set panel name to display correct multi-instance
   _iop_panel_name(module);
   dt_iop_gui_set_enable_button(module);
-  // only the focused module's panel is placed anywhere, and its title carries
-  // the instance name. Every module's header is updated, several times each
-  // on loading an image or the history, so relocating all of them was
-  // hundreds of calls for one that matters
+  // only the focused module's masks panel is placed anywhere, and its title
+  // carries the instance name. Every header is updated several times while an
+  // image or its history loads: relocating each would be hundreds of calls for
+  // the one that matters
   if(module == darktable.develop->gui_module)
     dt_iop_gui_blend_masks_panel_relocate(module);
 
@@ -2026,14 +2026,8 @@ void dt_iop_cleanup_module(dt_iop_module_t *module)
      && darktable.lib->proxy.colorpicker.picker_proxy->module == module)
     darktable.lib->proxy.colorpicker.picker_proxy = NULL;
 
-  // ... nor the chroma cache. dev->chroma.temperature/adaptation are raw module
-  // pointers written by temperature.c/channelmixerrgb.c commit_params and, until
-  // now, cleared only by dt_dev_reset_chroma. Leaving a freed module in them is a
-  // real crash, not a theoretical one: dt_dev_reset_chroma calls
-  // dt_dev_clear_chroma_troubles, which dereferences BOTH pointers before nulling
-  // them, and try_enter (darkroom.c) calls it on every darkroom entry -- so
-  // opening any image after leaving darkroom dereferenced the previous image's
-  // long-freed temperature module.
+  // nor the chroma cache: dt_dev_reset_chroma dereferences both pointers, and
+  // try_enter (darkroom.c) calls it on every darkroom entry
   if(module->dev)
   {
     if(module->dev->chroma.temperature == module) module->dev->chroma.temperature = NULL;
@@ -2089,17 +2083,12 @@ void dt_iop_advertise_rastermask(dt_iop_module_t *module, const int mask_mode)
   }
 }
 
-/* Whether `source` must be forced to re-run in THIS pipe so it actually writes
-   the raster mask `id` that a (possibly brand new) consumer depends on.
-
-   Registering a user never changes the source's own params/blend_params, so its
-   cacheline hash is unaffected and it could be served straight from cache
-   without ever storing the mask. The decision is deliberately per-pipe state --
-   has this pipe's source piece already stored a mask for this id? -- and not the
-   module-global "is this registration new" flag from the users hash table: GUI
-   code and history replay register a consumer in that shared table before any
-   pipe commits, so a global flag is already consumed by the time a real per-pipe
-   commit happens and would never fire. */
+/* make `source` re-run in this pipe when its piece has not stored the raster
+   mask `id` a consumer needs. Registering a user does not change the source's
+   params, so its cache line would be served without storing the mask. Decide
+   by the pipe's own state, not by whether the registration is new: GUI code
+   and history replay register consumers in the shared users table before any
+   pipe commits, so the registration is never new by then */
 static void _invalidate_raster_source_if_missing(dt_dev_pixelpipe_t *pipe,
                                                  dt_iop_module_t *source,
                                                  const dt_mask_id_t id)
@@ -2122,22 +2111,16 @@ static void _invalidate_raster_source_if_missing(dt_dev_pixelpipe_t *pipe,
     dt_dev_pixelpipe_cache_invalidate_later(pipe, source->iop_order, "blend new raster: ");
 }
 
-/* Register/unregister this module as a user of every raster-mask FORM element's
-   source in its mask group. This is the flexi group-composition path: a module
-   may hold several raster mask elements, each referencing a different upstream
-   module, and each source must therefore store its mask. It is independent of
-   the single legacy raster sink (blend_params.raster_mask_*), which stays
-   reserved for the exclusive whole-mask RASTER mode and is managed by
-   dt_iop_commit_blend_params itself (that source is skipped here). Runs at
-   commit so it also takes effect on edit reload without any GUI action.
+/* register this module as a user of the source of every raster element of its
+   mask, and unregister it from the others, so that each source keeps its mask.
+   A module can hold several raster elements, each reading another source. The
+   raster sink of classic raster mode (blend_params.raster_mask_*) is left to
+   dt_iop_commit_blend_params. Runs at commit, so a reload needs no GUI.
 
-   Note: raster_mask.source.users is keyed by consumer module -> mask id, so a
-   consumer can register a distinct source module per element (the common case,
-   every element uses BLEND_RASTER_ID), but not two different masks from the same
-   source module. */
-// When `pipe` is given, every source registered here is also checked against
-// that pipe's stored raster masks and forced to re-run if it has not written
-// the mask yet -- see _invalidate_raster_source_if_missing().
+   raster_mask.source.users maps a consumer to one mask id, so a consumer can
+   read several sources but not two masks of one source (every element reads
+   BLEND_RASTER_ID). With `pipe`, a source that has not stored its mask in that
+   pipe is made to re-run (_invalidate_raster_source_if_missing) */
 static void _reconcile_raster_form_users(dt_iop_module_t *module,
                                          const dt_develop_blend_params_t *bp,
                                          dt_dev_pixelpipe_t *pipe)
@@ -2149,13 +2132,13 @@ static void _reconcile_raster_form_users(dt_iop_module_t *module,
   {
     dt_iop_module_t *cand = iter->data;
     if(cand == module) continue;
-    // leave the legacy single-source (exclusive RASTER mode) registration alone
+    // leave the raster sink of classic raster mode alone
     if((bp->mask_mode & DEVELOP_MASK_RASTER)
        && dt_iop_module_is(cand, bp->raster_mask_source)
        && cand->multi_priority == bp->raster_mask_instance)
       continue;
 
-    // does any raster FORM element in this module's group use `cand` as source?
+    // does a raster element of this module's mask read `cand`?
     dt_mask_id_t want = INVALID_MASKID;
     if(grp)
     {
@@ -2164,12 +2147,8 @@ static void _reconcile_raster_form_users(dt_iop_module_t *module,
       if(rp) want = rp->id;
     }
 
-    // NB: `want` here is a raster-mask id (BLEND_RASTER_ID == 0 for every
-    // form, since a source only ever exports one raster slot), not a mask
-    // *form* id -- dt_is_valid_maskid(n) is (n > NO_MASKID) with NO_MASKID
-    // == 0 == BLEND_RASTER_ID, so it would reject the only value this ever
-    // takes. Compare against INVALID_MASKID (want's only other possible
-    // value, from the initializer above) instead.
+    // `want` is a raster mask id, BLEND_RASTER_ID (0), not a form id: do not
+    // test it with dt_is_valid_maskid(), which rejects 0
     if(want != INVALID_MASKID)
     {
       dt_iop_raster_users_lock(cand);
@@ -2211,10 +2190,8 @@ void dt_iop_commit_blend_params(dt_iop_module_t *module,
                                 const dt_develop_blend_params_t *blendop_params,
                                 dt_dev_pixelpipe_t *pipe)
 {
-  // flag the exact moment a module's live mask_id/mask_mode (as read by the
-  // flexi panel) get overwritten wholesale -- if this ever fires with the
-  // module currently holding a valid flexi mask_id and the incoming params
-  // don't, that is the "groups disappeared" corruption caught in the act.
+  // log a commit that replaces the module's mask_id or mask_mode: the panel
+  // loses the mask when a valid flexi mask_id is overwritten by mistake
   if(module->blend_params
      && dt_is_valid_maskid(module->blend_params->mask_id)
      && (blendop_params->mask_id != module->blend_params->mask_id
@@ -2246,10 +2223,10 @@ void dt_iop_commit_blend_params(dt_iop_module_t *module,
     return;
   }
 
-  // only a module in raster mode consumes the source it names: one that has
-  // left raster mode keeps the name, and registering it anyway had the pipe
-  // prune it again on every run (dt_dev_pixelpipe_prune_stale_raster_users),
-  // so each commit registered it as new and invalidated the source's cache
+  // only a module in raster mode consumes the source it names; one that left
+  // raster mode keeps the name. Registered, it would be pruned on every run
+  // (dt_dev_pixelpipe_prune_stale_raster_users), and every commit would
+  // register it again and invalidate the source's cache
   const gboolean raster_mode = blendop_params->mask_mode & DEVELOP_MASK_RASTER;
   for(GList *iter = raster_mode ? module->dev->iop : NULL; iter; iter = g_list_next(iter))
   {
@@ -2285,8 +2262,7 @@ void dt_iop_commit_blend_params(dt_iop_module_t *module,
         _invalidate_raster_source_if_missing(pipe, candidate,
                                              blendop_params->raster_mask_id);
 
-        // also register any raster mask FORM elements (independent of this
-        // single legacy sink), so multiple raster elements can coexist
+        // and the sources of the mask's raster elements
         _reconcile_raster_form_users(module, blendop_params, pipe);
         return;
       }
@@ -2311,8 +2287,8 @@ void dt_iop_commit_blend_params(dt_iop_module_t *module,
   module->raster_mask.sink.source = NULL;
   module->raster_mask.sink.id = INVALID_MASKID;
 
-  // register any raster mask FORM elements (flexi group composition); this is
-  // where the flexi path lands, since it does not set a legacy raster sink
+  // the sources of the mask's raster elements: a flexi mask gets here, as it
+  // has no raster sink
   _reconcile_raster_form_users(module, blendop_params, pipe);
 }
 
@@ -2511,8 +2487,8 @@ void dt_iop_commit_params(dt_iop_module_t *module,
 {
   memcpy(piece->blendop_data, blendop_params, sizeof(dt_develop_blend_params_t));
 
-  // copy the GUI-owned refinement bypass preview state into the piece, under
-  // the blend data's lock; the renderer reads only this copy
+  // copy the refinements previewed as off into the piece, under the blend
+  // data's lock: the renderer reads only this copy
   dt_masks_refine_bypass_commit(module, piece);
 
   /* We have to take blending parameters into account for the hash if
@@ -2529,13 +2505,10 @@ void dt_iop_commit_params(dt_iop_module_t *module,
         this case by having dt_iop_commit_blend_params() partly invalidate the cache
         to enforce a valid raster, but only when the raster mask is actually in use.
   */
-  // NB: the gate is `is_blending` alone and not also `mask_mode &
-  // DEVELOP_MASK_RASTER`: besides the legacy exclusive-raster sink, a raster
-  // source can now be referenced by a DT_MASKS_RASTER *form element* inside an
-  // ordinary drawn-mask group, where the RASTER bit is never set. Passing the
-  // pipe more widely is harmless -- dt_iop_commit_blend_params only invalidates
-  // when a raster source is genuinely referenced and its mask is missing from
-  // this pipe.
+  // the pipe goes along whenever the module blends, not only in raster mode: a
+  // raster element of the mask reads a source too, with no RASTER bit. It is
+  // harmless, as dt_iop_commit_blend_params only invalidates a source that is
+  // read and whose mask is missing from this pipe
   dt_iop_commit_blend_params(module, blendop_params, is_blending ? pipe : NULL);
 
 #ifdef HAVE_OPENCL
@@ -2584,9 +2557,8 @@ void dt_iop_commit_params(dt_iop_module_t *module,
         phash = dt_masks_group_hash(phash, grp);
       }
 
-      // the transient refinement bypass changes what the pipe renders without
-      // changing any parameter, so it has to enter the piece hash. Read from
-      // the snapshot taken above, not from blend_data.
+      // previewing a refinement as off changes the render but no parameter, so
+      // it enters the hash, from the snapshot above, not from blend_data
       const dt_hash_t bph = dt_masks_refine_bypass_hash(&piece->refine_bypass);
       phash = dt_hash(phash, &bph, sizeof(dt_hash_t));
     }
@@ -2602,11 +2574,8 @@ void dt_iop_gui_cleanup_module(dt_iop_module_t *module)
   module->widget_list = NULL;
   DT_CONTROL_SIGNAL_DISCONNECT_ALL(module, module->so->op);
   if(module->gui_cleanup) module->gui_cleanup(module);
-  // before the destroy below, not after: the flexi masks panel's header and
-  // body are parented in whichever host is showing them, not in this module's
-  // expander, so destroying the expander does not take them with it. The
-  // cleanup that follows is too late to help -- it runs once the widgets it
-  // would move are already freed.
+  // before the destroy below: while hosted, the masks panel is parented in its
+  // host, not in this module's expander, and would outlive it
   dt_iop_gui_blend_masks_panel_release(module);
   gtk_widget_destroy(module->expander ? module->expander : module->widget);
   // Do not leave borrowed GTK pointers behind while asynchronous signals can
@@ -2709,9 +2678,7 @@ static gboolean _gui_reset_callback(GtkButton *button,
     dt_iop_reload_defaults(module);
     _commit_reset_blend_params(module);
 
-    // the module's forms were rewritten out from under the flexi masks panel,
-    // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
-    // comment)
+    // the module's forms changed behind the masks panel
     dt_iop_gui_blend_forms_reloaded(module);
 
     /* reset ui to its defaults */
@@ -2756,9 +2723,7 @@ static void _gui_reset_clicked(GtkGestureSingle *gesture,
     dt_iop_reload_defaults(module);
     _commit_reset_blend_params(module);
 
-    // the module's forms were rewritten out from under the flexi masks panel,
-    // the situation dt_iop_gui_blend_forms_reloaded is for (see its own
-    // comment)
+    // the module's forms changed behind the masks panel
     dt_iop_gui_blend_forms_reloaded(module);
 
     /* reset ui to its defaults */
@@ -3690,9 +3655,8 @@ GtkWidget *dt_iop_gui_header_button(dt_iop_module_t *module,
         });
     gtk_widget_set_sensitive(button, !module->hide_enable_button);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(button), module->enabled);
-    // dedicated marker for the module's own on/off toggle, so darktable.css
-    // can target exactly this button instead of relying on it happening to
-    // be the first child of its header (see .dt_module_enable_btn there)
+    // marks the module's on/off toggle, so that darktable.css can style it
+    // (.dt_module_enable_btn) without relying on its place in the header
     dt_gui_add_class(button, "dt_module_enable_btn");
     gtk_box_pack_start(GTK_BOX(header), button, FALSE, FALSE, 0);
   }
@@ -4331,9 +4295,8 @@ gboolean dt_iop_is_raster_mask_stored(const dt_dev_pixelpipe_iop_t *piece, const
   if(dt_iop_is_raster_mask_used(piece->module, id)) return TRUE;
   // the users table is shared by every pipe, and another pipe's synch_all
   // takes a raster element's module out of it while it replays history from
-  // the defaults (_reconcile_raster_form_users). A source processing in the
-  // meantime dropped the mask its consumer was about to read, and the
-  // consumer's mask came out empty
+  // the defaults (_reconcile_raster_form_users): a source processing then
+  // would drop the mask its consumer is about to read
   return _pipe_has_raster_form_consumer(piece, id);
 }
 

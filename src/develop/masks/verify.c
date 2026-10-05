@@ -38,37 +38,17 @@
 #include <math.h>
 #include <stdio.h>
 
-// A migrated mask is expected to be *bit* identical in the ordinary case: the
-// migration is meant to re-express the same computation, not to approximate
-// it. But several paths legitimately reassociate float arithmetic -- an
-// opacity that used to multiply once at the end now multiplies per element,
-// for instance -- so an exact comparison would report noise as breakage.
-//
-// These thresholds separate the three answers worth distinguishing: identical
-// (nothing moved), equivalent (moved by less than the mask's own 8-bit
-// representable step, so nothing a user could see), and different.
-//
-// The shape of the test is darktable's own, taken from the integration suite's
-// `deltae`: a result fails when EITHER the worst pixel exceeds the tolerance OR
-// the mean over the whole frame exceeds a third of it
-// (`max_dE > MAX_DELTA_E or mean_dE > MAX_DELTA_E / 3`), with a much tighter
-// max deciding "identical". Two conditions rather than one, because a worst-
-// pixel figure on its own answers whether anything differs and nothing about
-// how much: one pixel landing on the far side of a threshold on a mask
-// boundary and half the frame being wrong both report 1.0. The mean is what
-// tells them apart -- it is the magnitude weighted by the area it covers -- and
-// `differing_pixels` in the per-edit rows says how much of the frame took part.
-//
-// Same structure, mask units instead of delta-E: a mask is 0..1 module
-// strength, so the tolerance is the 8-bit step it is stored and displayed at.
+// a migrated mask is meant to be the same computation, but some paths
+// reassociate float arithmetic (an opacity applied per element rather than
+// once), so an exact comparison would report noise. The answers are
+// identical, equivalent (within the 8-bit step a mask is shown at, invisible)
+// and different. As in the integration suite's deltae test, a result fails
+// when the worst pixel exceeds the tolerance or the mean over the frame
+// exceeds a third of it: the worst pixel alone cannot tell one boundary pixel
+// from half the frame
 #define VERIFY_EPS_IDENTICAL 1e-6f
 #define VERIFY_EPS_EQUIVALENT (1.0f / 255.0f)
 #define VERIFY_EPS_EQUIVALENT_MEAN (VERIFY_EPS_EQUIVALENT / 3.0f)
-
-// Replaying at full sensor resolution would spend most of the run in
-// rasterisation for no extra discrimination -- a difference in mask geometry
-// shows up at any resolution. The harvested aspect ratio is preserved, since
-// masks are stored normalized and a wrong aspect would distort every shape.
 
 typedef enum
 {
@@ -160,10 +140,9 @@ static void _obj_float_array(JsonObject *o, const char *k, float *out, const int
 // reconstruction
 // ---------------------------------------------------------------------------
 
-/** Rebuild one point of a form from its decoded JSON. Mirrors _emit_point() in
-    harvest.c field for field; the one field the harvest deliberately omits
-    (a group's user-typed name) is left zeroed, which is exactly what the
-    loader does for an edit that has none. */
+/** rebuild one point of a form from its JSON, field for field as
+    _emit_point() in harvest.c writes it. The group name the harvest leaves out
+    stays zero, as the loader leaves it for a group without one */
 static void _read_point(JsonObject *p, const int type, void *out)
 {
   if(type & DT_MASKS_CIRCLE)
@@ -238,17 +217,8 @@ static void _read_point(JsonObject *p, const int type, void *out)
   }
 }
 
-/** Load a harvest file, transparently decompressing a gzipped one.
-
-    --harvest-masks writes both FILE and FILE.gz and asks contributors to read
-    the first and send the second (it is ~12x smaller), so the file that
-    actually arrives is nearly always compressed. Requiring it to be unpacked
-    first put a manual step between receiving a contribution and checking it,
-    for no reason: the magic number says which it is.
-
-    Detected by content rather than by extension, so a .gz that was renamed on
-    the way through a file-sharing service, or a plain file that kept the
-    suffix, both still work. */
+/* detected by content rather than by extension, so that a renamed file
+   still loads */
 JsonParser *dt_masks_harvest_load(const char *path, GError **error)
 {
   JsonParser *parser = json_parser_new();
@@ -317,9 +287,6 @@ gchar *dt_masks_harvest_edit_key(JsonObject *edit)
   return key;
 }
 
-/** Rebuild the form list for one edit. Returns NULL if anything is
-    unreconstructable, so a malformed record is skipped rather than replayed as
-    something subtly different from what it recorded. */
 GList *dt_masks_harvest_read_forms(JsonArray *forms_arr)
 {
   GList *forms = NULL;
@@ -338,8 +305,8 @@ GList *dt_masks_harvest_read_forms(JsonArray *forms_arr)
     snprintf(form->name, sizeof(form->name), "form %d", form->formid);
     _obj_float_array(fo, "source", form->source, 3);
 
-    // harvests made before empty forms were emitted as such flag them as
-    // errors: a form with no points and no bytes is just empty
+    // an older harvest marks an empty form as an error: one with no points
+    // and no bytes is just empty
     const gboolean empty = dt_masks_harvest_obj_int(fo, "points_count", -1) == 0
                            && dt_masks_harvest_obj_int(fo, "points_blob_bytes", -1) == 0;
     if(json_object_has_member(fo, "points_error") && !empty)
@@ -363,9 +330,9 @@ GList *dt_masks_harvest_read_forms(JsonArray *forms_arr)
       }
     }
 
-    // Everything is replayed at the current masks version: the harvest already
-    // decoded each blob with the historic stride and the loader's zero-fill
-    // rules, so what we hold is the post-read state, not the on-disk one.
+    // replayed at the current masks version: the harvest decoded each blob
+    // with its version's stride and the loader's zero fill, so this is the
+    // state after loading, not the stored one
     form->version = dt_masks_version();
 
     forms = g_list_append(forms, form);
@@ -411,38 +378,21 @@ void dt_masks_harvest_read_blend_params(JsonObject *b, dt_develop_blend_params_t
 // ---------------------------------------------------------------------------
 
 
-/** The OpenCL device the GPU replays run on, locked once for the whole run
-    rather than per edit -- locking and releasing 2466 times would dominate the
-    runtime and tells us nothing extra. -1 when unavailable, in which case the
-    run reports CPU-only results and says so rather than silently narrowing. */
+/** the OpenCL device the GPU replays run on, locked once for the run: per
+    edit, locking would dominate the runtime. -1 without one, and the run then
+    says it reports CPU results only */
 static int _verify_devid = -1;
 
-/** The output of the module the mask is attached to: the probe at +1 EV.
-    Not decoration -- two things depend on the module having actually done
-    something, and until this existed it had not.
-
-    The blend computes `out = in * (1 - mask) + module_out * mask`
-    (blendif_*.c). Seeding `out` with a copy of the input, as this harness did,
-    makes the blend a no-op for every mask: the rendered image is the probe
-    whatever the mask says, so there is no image-level effect to measure at all.
-
-    And the parametric channels come in `_in`/`_out` pairs -- blendif evaluates
-    the second half against the module's output (see the DEVELOP_BLENDIF_*_out
-    reads in blendif_rgb_jzczhz.c). With output equal to input, every `_out`
-    channel was silently exercised as a duplicate of its `_in` counterpart, so
-    half the parametric channel space was never really tested.
-
-    +1 EV, i.e. a doubling, because exposure is the archetypal masked
-    adjustment and because in the scene-linear probe it is exactly `in * 2`:
-    the per-pixel effect size `|module_out - in|` is then the image value
-    itself -- non-zero everywhere except true black, and never larger than 1.
-    That last part matters for reading the numbers: since the image difference
-    is the mask difference scaled by that effect, the mask metric is an upper
-    bound on the image metric, which is why the verdict stays on the mask.
-
-    Deliberately not clipped: the pipeline is float and scene-linear values
-    above 1.0 are ordinary, and clipping would flatten the effect to zero over
-    the probe's whole upper half. */
+/** the output of the module the mask belongs to: the probe at +1 EV. The
+    blend computes `out = in * (1 - mask) + module_out * mask`, so with the
+    input as output every mask would render the same image; and blendif's
+    output channels read this output, and would only repeat the input
+    channels. In the linear probe +1 EV is `in * 2`, so the effect
+    `|module_out - in|` is the image value itself, nonzero but for black and at
+    most 1: the mask difference bounds the image difference, which is why the
+    verdict is on the mask. Not clipped: scene-linear values above 1 are
+    ordinary, and clipping would flatten the effect over the probe's upper
+    half */
 static float *_make_module_output(const float *const probe, const size_t npix)
 {
   float *m = dt_alloc_align_float(npix * 4);
@@ -458,8 +408,6 @@ static const float *_published_mask(replay_t *r)
                              GINT_TO_POINTER(BLEND_RASTER_ID));
 }
 
-/** Render the mask for the current blend_params/forms, into a caller-owned
-    copy. Returns NULL if the blend published nothing. */
 float *dt_masks_verify_render_mask(replay_t *r, float **image)
 {
   const size_t npix = (size_t)r->roi.width * r->roi.height;
@@ -470,20 +418,15 @@ float *dt_masks_verify_render_mask(replay_t *r, float **image)
   // _make_module_output)
   memcpy(r->out, r->modout, sizeof(float) * npix * 4);
 
-  // pipe->forms is what the drawn/flexi group lookup walks, and migration has
-  // may have added forms to dev->forms since the last render
+  // the group lookup walks pipe->forms, and migration may have added forms to
+  // dev->forms since the last render
   r->pipe.forms = r->dev.forms;
 
-  // Production wiring, not a shortcut around it. The classic raster branch
-  // does not read blend_params->raster_mask_source at all -- it follows
-  // module->raster_mask.sink.source, a resolved module pointer that only
-  // dt_iop_commit_blend_params() ever sets. Setting that pointer by hand here
-  // would have been the harness deciding what the pipe should have resolved;
-  // calling the real function instead means the classic side finds its source
-  // exactly as it does in a live pipe, and the flexi side gets its raster
-  // *form* elements registered by the same call (_reconcile_raster_form_users).
-  // Run for every edit, raster or not, so there is one wiring path rather than
-  // a special case that only the raster edits exercise.
+  // wired as in a live pipe: the classic raster branch reads
+  // module->raster_mask.sink.source, which only dt_iop_commit_blend_params()
+  // sets, and the same call registers the sources of the flexi raster
+  // elements (_reconcile_raster_form_users). Done for every edit, raster or
+  // not, so that there is one path
   dt_develop_blend_params_t committed = *r->module.blend_params;
   dt_iop_commit_blend_params(&r->module, &committed, &r->pipe);
 
@@ -497,8 +440,7 @@ float *dt_masks_verify_render_mask(replay_t *r, float **image)
   if(!copy) return NULL;
   memcpy(copy, m, sizeof(float) * npix);
 
-  // the blended image the mask actually produced, for the severity half of the
-  // comparison
+  // the blended image, to compare as well
   if(image)
   {
     *image = dt_alloc_align_float(npix * 4);
@@ -507,21 +449,10 @@ float *dt_masks_verify_render_mask(replay_t *r, float **image)
   return copy;
 }
 
-/** The same render, through dt_develop_blend_process_cl.
-
-    Not an optional extra. dt_develop_blend_process_cl is a *separate,
-    hand-maintained* implementation of the same branch structure -- its own
-    comments say so ("kept in sync by hand") -- and every mask number this tool
-    produced before this existed came from the CPU function alone. Most users
-    run OpenCL, so a migration verified only on the CPU is verified on the path
-    fewer people take. The one bug this immediately found (mode_parametric where
-    the CPU tests mode_drawn, see blend.c) had been sitting in a branch that
-    migration itself makes unreachable, so no amount of CPU replay would ever
-    have reached it.
-
-    The mask comes back the same way as on the CPU: the tail of the CL function
-    copies the finished mask off the device and publishes it through
-    dt_iop_piece_set_raster(), so nothing here re-implements the readback. */
+/** the same render through dt_develop_blend_process_cl(), a separate
+    implementation kept in step by hand, and the one most users run. It
+    publishes the finished mask through dt_iop_piece_set_raster(), as the CPU
+    one does */
 static float *_render_mask_cl(replay_t *r, float **image)
 {
   if(image) *image = NULL;
@@ -536,8 +467,8 @@ static float *_render_mask_cl(replay_t *r, float **image)
   cl_mem dev_out = dt_opencl_alloc_device(r->devid, w, h, sizeof(float) * 4);
   if(!dev_in || !dev_out) goto done;
 
-  // same starting state as the CPU render: output begins as a copy of the
-  // input, which is what a module that did nothing would have produced
+  // the same starting state as the CPU render: the output starts as the
+  // module's output (see _make_module_output)
   if(dt_opencl_write_host_to_image(r->devid, r->probe, dev_in, w, h, sizeof(float) * 4)
      != CL_SUCCESS) goto done;
   if(dt_opencl_write_host_to_image(r->devid, r->modout, dev_out, w, h, sizeof(float) * 4)
@@ -582,14 +513,9 @@ done:
 #endif
 }
 
-/** How two masks differ: the worst deviation, the mean over every pixel, and
-    how many pixels differ at all.
-
-    Max alone answers "is there a difference" and nothing about its size -- one
-    stray pixel and a wholly inverted mask both report 1.0. The mean and the
-    differing-pixel count are what separate those, so they are collected for the
-    GPU comparisons on the same footing as the CPU one rather than left to a
-    reader's imagination. */
+/** how two masks differ: the worst deviation, the mean over every pixel, and
+    how many pixels differ. The worst deviation alone cannot tell one stray
+    pixel from an inverted mask */
 typedef struct _diff_stats_t
 {
   double max;
@@ -612,19 +538,11 @@ static _diff_stats_t _diff_stats(const float *a, const float *b, const size_t n)
   return st;
 }
 
-/** The same three statistics over a rendered image rather than a mask.
-
-    RGB only: the fourth float of each pixel is not image content, and letting
-    it into a mean would dilute every number by a quarter.
-
-    This is the other half of what the integration suite measures. A mask
-    difference is the more sensitive signal -- it is the module's strength, so
-    it registers wherever the mask moved at all -- while what a user could
-    actually see is that difference scaled by how much the module changes the
-    pixel underneath. Both are reported, because either alone misleads: the
-    mask number alone cannot say whether anything visible happened, and the
-    image number alone hides a mask error in regions where this particular
-    synthetic effect happens to be small. */
+/** the same over a rendered image, RGB only: the fourth float is not image
+    content. A mask difference shows wherever the mask moved; an image
+    difference is what a user could see, the mask difference scaled by the
+    module's effect, and hides a mask error where that effect is small. Either
+    alone misleads, so both are reported */
 static _diff_stats_t _diff_stats_rgb(const float *a, const float *b, const size_t npix)
 {
   _diff_stats_t st = { 0.0, 0.0, 0 };
@@ -639,8 +557,8 @@ static _diff_stats_t _diff_stats_rgb(const float *a, const float *b, const size_
       sum += d;
     }
     if(worst_ch > st.max) st.max = worst_ch;
-    // one pixel, counted once, if any of its channels moved -- the same rule
-    // count-diff-pixels applies in the integration suite
+    // a pixel counts once if any of its channels moved, as in the integration
+    // suite's count-diff-pixels
     if(worst_ch > VERIFY_EPS_IDENTICAL) st.differing++;
   }
   st.mean = npix ? sum / (double)(npix * 3) : 0.0;
@@ -653,9 +571,8 @@ double dt_masks_verify_max_abs_diff(const float *a, const float *b, const size_t
   return _diff_stats(a, b, n).max;
 }
 
-/** is this mask the same value everywhere? A uniform mask makes the comparison
-    vacuous -- it would match another uniform mask regardless of what migration
-    did to the configuration that produced it. */
+/** is this mask the same value everywhere? Then the comparison proves
+    nothing: it matches another uniform mask whatever migration did */
 static gboolean _is_uniform(const float *m, const size_t n)
 {
   if(n == 0) return TRUE;
@@ -693,16 +610,11 @@ void dt_masks_verify_replay_cleanup(replay_t *r)
   memset(r, 0, sizeof(*r));
 }
 
-/** The mask the upstream module is pretending to have produced.
-
-    Deliberately not flat and not derived from the probe: a raster mask is an
-    *input* to everything under test here, so it wants shape of its own --
-    enough variation that an inversion, an opacity, a blur or a tone curve each
-    leave a distinguishable trace, and enough of the range actually reached
-    (exact 0 and exact 1 both occur) that a polarity error cannot hide in the
-    interior. The smooth radial falloff paired with the probe's own hard edges
-    is also what gives the guided-filter feathering something real to work
-    with -- it needs a mask that disagrees with the image. */
+/** the mask the stand-in source module has written. Not flat and not taken
+    from the probe: it varies enough for an inversion, an opacity, a blur or a
+    tone curve to leave a trace, reaches exactly 0 and 1 so that a polarity
+    error shows, and its smooth falloff disagrees with the probe's hard edges,
+    which guided-filter feathering needs */
 static float *_synthetic_raster_mask(const int w, const int h)
 {
   float *m = dt_alloc_align_float((size_t)w * h);
@@ -717,9 +629,8 @@ static float *_synthetic_raster_mask(const int w, const int h)
     {
       const float dx = ((float)x - cx) * norm;
       const float dy = ((float)y - cy) * norm;
-      // radial soft disc, saturating to exactly 1 near the center and exactly
-      // 0 in the corners; the diagonal term breaks the symmetry so a
-      // transpose-style error cannot pass
+      // a soft disc, exactly 1 near the center and 0 in the corners; the
+      // diagonal term breaks the symmetry, so that a transposition shows
       const float rad = sqrtf(dx * dx + dy * dy) * 1.6f;
       const float diag = 0.15f * (((float)x / (float)MAX(1, w - 1))
                                   - ((float)y / (float)MAX(1, h - 1)));
@@ -730,22 +641,14 @@ static float *_synthetic_raster_mask(const int w, const int h)
   return m;
 }
 
-/** Give the replay the upstream piece a raster edit reads from.
-
-    Both the classic raster branch of dt_develop_blend_process() and the flexi
-    DT_MASKS_RASTER form (masks/raster.c) resolve their mask through the same
+/** give the replay the source piece a raster edit reads from. The classic
+    raster branch and the flexi raster element both fetch through
     dt_dev_get_raster_mask(), which walks pipe->nodes for the source piece and
-    dev->iop for the source module. With neither populated it returns NULL on
-    both sides, and the comparison degenerates to "two empty masks match" --
-    which is why these edits used to be skipped outright rather than counted.
-
-    Standing up the source for real is what makes the 123 raster edits
-    testable, and it is honest to do it this way: the fetch itself is shared
-    code exercised identically by both sides, so what the comparison actually
-    isolates is the part that does differ -- classic applying opacity and
-    raster_mask_invert inline versus the flexi group compositing the same
-    raster as an element -- with the global refinements running downstream of
-    both. Returns a skip reason, or NULL on success. */
+    dev->iop for the source module: without them both sides get no mask and
+    match on nothing. The fetch is shared, so the comparison isolates what
+    differs: classic's inline opacity and raster_mask_invert against the flexi
+    group combining the raster as an element. NULL on success, else a skip
+    reason */
 static const char *_attach_raster_source(replay_t *r,
                                          const dt_develop_blend_params_t *bp)
 {
@@ -758,18 +661,14 @@ static const char *_attach_raster_source(replay_t *r,
   r->source_module.dev = &r->dev;
   r->source_module.multi_priority = bp->raster_mask_instance;
 
-  // The source has to sit strictly earlier in the pipe or dt_dev_get_raster_mask
-  // refuses the fetch outright (and pops a dt_control_log about it). In the
-  // edit this came from it necessarily did -- darktable would not have let the
-  // user pick it otherwise -- so pinning it just below the target reproduces
-  // the real arrangement rather than inventing a favorable one. Asking the
-  // order list would not do: the harvested instance number often has no entry,
-  // and a source and target of the same op differ only by instance.
+  // the source must come earlier in the pipe, or dt_dev_get_raster_mask()
+  // refuses the fetch; in the edit it did. The order list cannot place it: a
+  // harvested instance often has no entry, and a source of the target's
+  // operation differs from it by instance only
   r->source_module.iop_order = r->module.iop_order - 1.0;
 
-  // dt_dev_get_raster_mask discards (and deletes) masks from a source that is
-  // disabled or does not write raster masks, so the stand-in has to look like
-  // a module that genuinely published one.
+  // dt_dev_get_raster_mask() deletes the masks of a source that is disabled
+  // or writes none, so the stand-in must look like one that writes masks
   if(r->source_module.blend_params)
     r->source_module.blend_params->mask_mode =
       DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK;
@@ -802,18 +701,11 @@ static const char *_attach_raster_source(replay_t *r,
   return NULL;
 }
 
-/** Stand up the minimum a blend needs: a real module instance for the
-    harvested operation, a dev holding the forms, and a pipe/piece pair
-    carrying the blend params.
-
-    The module has to be a genuine instance rather than a hand-filled struct.
-    dt_develop_blend_process() calls through it -- self->flags() at minimum,
-    and the blend colorspace is decided by the module's own
-    blend_colorspace() -- so a stub would either crash (it did) or, worse,
-    silently replay every edit in the wrong color space. Loading the module
-    the edit actually names is also what makes the replay faithful: an edit on
-    a Lab module and one on a scene-referred RGB module take different paths
-    through the blendif code. */
+/** the least a blend needs: an instance of the harvested module, a dev
+    holding the forms, and a pipe and piece carrying the blend params. A real
+    instance, not a filled-in struct: dt_develop_blend_process() calls its
+    flags() and blend_colorspace(), and a Lab module and a scene-referred RGB
+    one take different paths through the blendif code */
 const char *dt_masks_verify_replay_init(replay_t *r,
                              const char *operation,
                              const dt_develop_blend_params_t *bp,
@@ -832,41 +724,21 @@ const char *dt_masks_verify_replay_init(replay_t *r,
 
   r->dev.forms = forms;
 
-  /* darktable.develop has to be this dev while the replay renders.
-
-     Not a convenience: dt_masks_group_hash() (masks.c) resolves each member's
-     child form with dt_masks_get_from_id(darktable.develop, ...), and hashes
-     the member's state, opacity, group opacity and refinement only if it finds
-     one. In a headless run darktable.develop is NULL, so it finds nothing --
-     the hash then covers the group's type, formid, version and source and
-     NOTHING ELSE, and blend.c keys its drawn-mask cache on it (piece->
-     drawn_mask_cache, blend.c:955). Every render after the first therefore
-     hits the cache and returns the first render's mask, whatever the group has
-     been changed to since.
-
-     That is silent and it passes: two renders of a stale buffer compare equal,
-     so a check that changes a control between renders reports "no difference"
-     for the best possible reason and the worst possible one at once. Pointing
-     the global at this dev is what a live darktable has, so the hash covers what
-     it is supposed to cover and the cache behaves as it does in production.
-     Restored on cleanup rather than left set. */
+  /* darktable.develop must be this dev while the replay renders:
+     dt_masks_group_hash() resolves members through it, and hashes a member's
+     state, opacity and refinement only when it finds the member's form.
+     Headless it is NULL, so the hash would not follow the mask, blend.c's
+     drawn-mask cache would serve the first render's mask to every later one,
+     and a check comparing two renders would pass on nothing. Restored on
+     cleanup */
   r->saved_develop = darktable.develop;
   darktable.develop = &r->dev;
 
-  /* ... and it needs a form_gui, for a narrower but equally fatal reason.
-
-     A shape's modify_property() -- the entry point behind every geometry
-     slider, and what --persist-masks and --undo-masks drive to move a
-     shape -- reads the canvas editing state. brush.c dereferences
-     `darktable.develop->form_gui` unguarded, so a NULL one segfaults on the
-     first brush a corpus contains; path.c and object.c read it too, guarded.
-
-     Zeroed, with point_selected = -1. That is not a placeholder, it is the
-     state the panel is in when a slider is dragged with the shape merely
-     selected: `creation` false, so the sliders edit the existing points rather
-     than the defaults for the next shape, and no node singled out, so the
-     change applies to the whole shape. Any other setting would make these
-     checks sweep an editing mode the panel is not in. */
+  /* and a form_gui: a shape's modify_property(), behind every geometry
+     slider, reads the canvas editing state, and brush.c does so without a
+     NULL check. Zeroed with nothing selected, it is the panel's state while a
+     slider is dragged on a selected shape: the sliders edit its points, not
+     the defaults of the next shape, and act on the whole shape */
   memset(&r->form_gui, 0, sizeof(r->form_gui));
   r->form_gui.point_selected = -1;
   r->form_gui.point_edited = -1;
@@ -875,14 +747,9 @@ const char *dt_masks_verify_replay_init(replay_t *r,
   r->form_gui.group_selected = -1;
   r->dev.form_gui = &r->form_gui;
 
-  // The mask dispatchers in masks.c take dev->history_mutex when they mutate
-  // dev->forms (they race the pixelpipe's deep-copy read otherwise), and
-  // migration goes through them. A zeroed dt_develop_t has an uninitialized
-  // mutex, which aborts on first lock rather than failing quietly.
-  //
-  // It has to be RECURSIVE, exactly as dt_dev_init() creates it (develop.c):
-  // these call paths do re-enter, so a default mutex does not abort -- it
-  // deadlocks, which looks like the verifier hanging rather than like a bug.
+  // masks.c takes dev->history_mutex to change dev->forms, and migration goes
+  // through it. It must be recursive, as dt_dev_init() makes it: these paths
+  // re-enter, and a plain mutex would deadlock
   dt_pthread_recursive_mutex_init(&r->dev.history_mutex);
   r->dev_mutex_ready = TRUE;
 
@@ -906,13 +773,12 @@ const char *dt_masks_verify_replay_init(replay_t *r,
 
   r->pipe.forms = forms;
   r->pipe.type = DT_DEV_PIXELPIPE_EXPORT; // never the focused GUI pipe
-  // the *full* image dimensions: mask geometry is stored normalized against
-  // these, so they must be the original size even though we rasterise smaller
+  // the full image size: masks are normalized against it, even though the
+  // replay renders smaller
   r->pipe.iwidth = full_width;
   r->pipe.iheight = full_height;
-  // makes dt_develop_blend_process() publish its finished mask instead of
-  // discarding it -- this is how the mask is recovered without touching the
-  // blend code itself
+  // makes dt_develop_blend_process() publish its finished mask, which is how
+  // the mask is read without touching the blend code
   r->pipe.store_all_raster_masks = TRUE;
 
   r->piece.pipe = &r->pipe;
@@ -920,31 +786,19 @@ const char *dt_masks_verify_replay_init(replay_t *r,
   r->piece.blendop_data = r->module.blend_params;
   r->piece.colors = 4;
   r->piece.enabled = TRUE;
-  // Must be 1.0, not left zeroed. Radius-style parameters are converted to
-  // pixels as `roi_out->scale / piece->iscale` (see the feathering call sites
-  // in blend.c), so a zero iscale divides by zero and asks the guided filter
-  // for an effectively infinite window -- which does not crash, it just runs
-  // forever, and reads exactly like a deadlock.
+  // not 0: radii are converted to pixels as `roi_out->scale / piece->iscale`
+  // (blend.c), and a zero iscale asks the guided filter for an infinite window,
+  // which runs forever
   r->piece.iscale = 1.0f;
   r->piece.raster_masks =
     g_hash_table_new_full(g_direct_hash, g_direct_equal, NULL, dt_free_align_ptr);
 
-  // Color management, without which the whole comparison is quietly hollow.
-  //
-  // The per-channel branch of every blendif_*_make_mask() calls
-  // dt_develop_blendif_init_masking_profile() and, if it cannot get a profile,
-  // *returns leaving the mask untouched*. On a pipe with no profile that means
-  // parametric masks are never evaluated at all -- and, worse, the two sides
-  // fail asymmetrically: classic still carries DEVELOP_MASK_CONDITIONAL and so
-  // enters that branch and bails, while a migrated edit has had CONDITIONAL
-  // folded away, takes the early "not conditional" path instead, and applies
-  // global opacity. The result is a clean, entirely spurious "the migration
-  // changed this mask" on every parametric edit -- which is exactly what the
-  // first runs reported.
-  //
-  // So the dev needs an iop-order list (the profile lookup asks where this
-  // module sits relative to colorin/colorout) and the pipe needs real profile
-  // info. Linear Rec2020 is darktable's own default working space.
+  // color management: make_mask() leaves the mask untouched when it gets no
+  // profile, so parametric masks would not be evaluated, and the two sides
+  // would differ, classic through its CONDITIONAL branch, migrated without it.
+  // The profile lookup needs an iop order list, to place the module against
+  // colorin and colorout, and the pipe needs profiles: linear Rec2020, the
+  // default working space
   r->dev.iop_order_list = darktable.iop_order_list;
   r->module.iop_order =
     dt_ioppr_get_iop_order(r->dev.iop_order_list, r->module.op, r->module.multi_priority);
@@ -954,27 +808,13 @@ const char *dt_masks_verify_replay_init(replay_t *r,
   dt_ioppr_set_pipe_output_profile_info(&r->dev, &r->pipe,
                                         DT_COLORSPACE_LIN_REC2020, "", DT_INTENT_PERCEPTUAL);
 
-  // The INPUT profile matters too, and for a reason worth spelling out: with a
-  // scene-referred blend colorspace, dt_develop_blendif_init_masking_profile()
-  // asks dt_ioppr_get_pipe_current_profile_info(), which picks input / work /
-  // output by comparing this module's iop_order against colorin's and
-  // colorout's. Those two lookups fail on this replay's order list -- the
-  // "cannot get iop-order for colorin instance 0" line -- so both come back
-  // INT_MAX, every module compares as "before colorin", and the *input*
-  // profile is the one actually consulted.
-  //
-  // Leaving it unset made the profile lookup fail, and the two blend paths
-  // then diverge in a way that quietly hollowed out the GPU comparison: the
-  // CPU's make_mask returns early for a non-conditional mask, before it ever
-  // needs a profile, and keeps the drawn mask -- while the OpenCL kernel tests
-  // `use_work_profile == 0` in its first line and returns *without writing the
-  // mask at all*, leaving zeros. Both sides of a GPU comparison then came out
-  // zero and agreed, which is a pass that proves nothing.
-  // Set on the pipe directly rather than through
-  // dt_ioppr_set_pipe_input_profile_info(): that setter consults the image
-  // cache for the dev's imgid to reconcile the EXIF colorspace, and this
-  // replay has no image behind it, so it dereferences a NULL image and
-  // crashes. The list entry is all the profile lookup above actually needs.
+  // the input profile too: on this replay's order list colorin and colorout
+  // have no order ("cannot get iop-order for colorin instance 0"), so every
+  // module counts as before colorin and the input profile is the one read.
+  // Without it the OpenCL kernel writes no mask at all, and a GPU comparison
+  // of two empty masks passes on nothing. Set directly, not through
+  // dt_ioppr_set_pipe_input_profile_info(), which reads the image cache and
+  // crashes with no image behind the replay
   r->pipe.input_profile_info =
     dt_ioppr_add_profile_info_to_list(&r->dev, DT_COLORSPACE_LIN_REC2020, "",
                                       DT_INTENT_PERCEPTUAL);
@@ -986,9 +826,9 @@ const char *dt_masks_verify_replay_init(replay_t *r,
   // the downscale actually applied, so radii shrink with the raster
   r->roi.scale = full_width > 0 ? (float)width / (float)full_width : 1.0f;
 
-  // the raster fetch reads these off the target piece, both to decide whether
-  // an intermediate module would have to distort the mask (equal rois: none
-  // does) and to check the mask it hands back matches the requested size
+  // the raster fetch reads these off the target piece, to decide whether a
+  // module in between distorts the mask (equal rois: none does) and to check
+  // the size of the mask it returns
   r->piece.processed_roi_in = r->roi;
   r->piece.processed_roi_out = r->roi;
 
@@ -1061,32 +901,18 @@ typedef struct
   int image_differing_pixels;
   double gpu_image_max_diff, gpu_image_mean_diff;
   int gpu_image_differing_pixels;
-  // CPU-vs-GPU disagreement, measured on *both* sides of the migration.
-  //
-  // The after-value alone would be unreadable. The two blend implementations
-  // are not bit-identical to begin with -- different math, different order,
-  // the GPU running some steps in kernels the CPU does in scalar code -- so
-  // some CPU/GPU gap is expected on any edit, migrated or not. What would be a
-  // real defect is migration *widening* that gap. Recording the classic gap as
-  // a baseline is what makes the migrated gap interpretable instead of just
-  // alarming.
+  // the CPU and GPU disagreement on both sides of the migration. The two
+  // blend implementations differ slightly on any edit, so only migration
+  // widening the gap is a defect, and the classic gap is the baseline
   double dev_diff_before;
   double dev_diff_after;
 
-  /* The migrated gap again, with the mask post-processing switched off --
-     measured only for the few edits where the gap widened past the threshold,
-     which is what makes the extra pair of renders affordable.
-     `nopost_ran` says whether the number means anything.
-
-     A widened gap has two possible authors and the two numbers above cannot
-     tell them apart. Either migration made the migrated pipeline itself
-     inconsistent across CPU and OpenCL -- a real defect -- or a stage that runs
-     *after* the mask, identically on both sides of the migration, diverges
-     between CPU and OpenCL and merely got handed a slightly different input.
-     Feathering is the one that matters: it is a guided filter with separate CPU
-     and OpenCL implementations, and it amplifies. Re-rendering without it
-     answers the question by measurement: if the gap survives, migration owns
-     it; if it collapses to nothing, the post-processing does. */
+  /* the migrated gap again with the mask refinement off, measured only where
+     the gap widened past the threshold; `nopost_ran` says whether it was. A
+     wider gap comes from migration, or from a stage after the mask, the same
+     on both sides, that differs between CPU and OpenCL and got a slightly
+     different input: above all feathering, a guided filter that amplifies.
+     If the gap survives without it, migration owns it */
   gboolean nopost_ran;
   double dev_diff_after_nopost;
 
@@ -1103,8 +929,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
   dt_develop_blend_params_t bp;
   dt_masks_harvest_read_blend_params(bo, &bp);
 
-  // Already-migrated edits have nothing to prove: case 8's FLEXI guard makes
-  // migration a no-op, so both renders would be the same call.
+  // an edit already flexi has nothing to prove: migration leaves it alone
   if(bp.mask_mode & DEVELOP_MASK_FLEXI)
   {
     rep->skip_reason = "already flexi";
@@ -1162,8 +987,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 
   rep->inert = _is_uniform(before, npix);
 
-  // the same classic edit on the GPU, before anything is migrated: this is the
-  // baseline the post-migration CPU/GPU gap gets judged against
+  // the classic edit on the GPU: the baseline of the CPU and GPU gap
   float *before_cl = _render_mask_cl(&r, &before_cl_img);
 
   // --- migrate ----------------------------------------------------------
@@ -1188,12 +1012,11 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
 
   float *after_cl = _render_mask_cl(&r, &after_cl_img);
 
-  // Only meaningful when *both* GPU renders succeeded. If one side rendered
-  // and the other did not, that asymmetry is itself worth reporting rather
-  // than being averaged into a number, so it is counted as an error below.
+  // the GPU comparison needs both renders; one without the other is counted
+  // as an error below
   if(before_cl && after_cl && (darktable.unmuted & DT_DEBUG_MASKS))
   {
-    // temporary triage dump
+    // with -d masks, the range of all four masks
     float mn[4], mx[4]; double sm[4];
     const float *bufs[4] = { before, after, before_cl, after_cl };
     const char *nm[4] = { "cpu_classic", "cpu_flexi ", "gpu_classic", "gpu_flexi " };
@@ -1229,13 +1052,10 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
     rep->dev_diff_before = dt_masks_verify_max_abs_diff(before, before_cl, npix);
     rep->dev_diff_after = dt_masks_verify_max_abs_diff(after, after_cl, npix);
 
-    // Only when the gap actually widened: re-render the migrated pair with the
-    // mask post-processing off, to find out whether migration or a shared
-    // downstream stage owns the widening (see dev_diff_after_nopost). Migration
-    // leaves these fields alone -- feathering and friends stay in blend_params
-    // for a migrated edit exactly as they were -- so zeroing them here disables
-    // the same stages on both sides, and dt_masks_verify_render_mask commits the params afresh
-    // on every call.
+    // the gap widened: render the migrated pair again with the refinement
+    // off (see dev_diff_after_nopost). Migration leaves these fields as they
+    // are, so zeroing them turns off the same stages on both sides, and every
+    // render commits the params again
     if(rep->dev_diff_after - rep->dev_diff_before > VERIFY_EPS_EQUIVALENT)
     {
       dt_develop_blend_params_t *const p = r.module.blend_params;
@@ -1307,30 +1127,18 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
            g_list_length(forms), g_list_length(r.dev.forms));
   }
 
-  // The verdict is the worst of what was actually measured. Two facts have to
-  // clear the bar, not one:
-  //
-  //  - migration preserved the mask on the CPU (max_d), and
-  //  - migration did not *widen* the CPU/GPU gap. Judged against this edit's
-  //    own classic baseline rather than against zero, because the two blend
-  //    implementations already disagree slightly on unmigrated edits and
-  //    calling that a migration failure would be wrong. A little headroom
-  //    (one more 8-bit step) keeps ordinary kernel noise from being reported
-  //    as a regression.
-  //
-  // Classic on the GPU against migrated on the GPU (gpu_max_diff) is reported
-  // but judges nothing: classic's own OpenCL blend diverges from its CPU one,
-  // by up to 0.97 on real edits, and a migrated mask that agrees with the CPU
-  // then differs from it. The widening test above already catches a GPU
-  // result that migration made worse.
+  // the verdict needs both: migration kept the mask on the CPU (max_d), and
+  // did not widen the CPU and GPU gap past this edit's classic gap by more
+  // than one 8-bit step, which absorbs kernel noise. Classic against migrated
+  // on the GPU (gpu_max_diff) is only reported: classic's OpenCL blend can
+  // differ from its CPU one by up to 0.97, and a migrated mask agreeing with
+  // the CPU then differs from it
   double verdict_d = max_d;
   const double verdict_mean = c.mean;
   if(rep->gpu_ran)
   {
-    // The widening is a max-vs-max quantity: it compares two worst-pixel gaps,
-    // so there is no mean that belongs with it. It therefore only ever raises
-    // the max side of the test, and is left out of the mean side rather than
-    // paired with a number measuring something else.
+    // the widening compares two worst-pixel gaps and has no mean: it only
+    // raises the max side of the test
     const double widened = rep->dev_diff_after - rep->dev_diff_before;
     if(widened > VERIFY_EPS_EQUIVALENT) verdict_d = MAX(verdict_d, widened);
   }
@@ -1342,8 +1150,7 @@ static void _verify_edit(JsonObject *edit, edit_report_t *rep)
           && verdict_mean <= VERIFY_EPS_EQUIVALENT_MEAN) rep->result = VERIFY_EQUIVALENT;
   else rep->result = VERIFY_DIFFERENT;
 
-  // one GPU render succeeding while the other failed is a real asymmetry --
-  // exactly the shape the NO_MASKS bug had -- so it must not pass quietly
+  // one GPU render without the other is an asymmetry: it must not pass
   if(_verify_devid >= 0 && !rep->gpu_ran && (before_cl || after_cl))
   {
     rep->result = VERIFY_ERROR;
@@ -1385,28 +1192,17 @@ gboolean dt_masks_verify_harvest_section(const char *json_path, FILE *rf)
   setvbuf(stdout, NULL, _IOLBF, 0);
 
 #ifdef _OPENMP
-  // Single-threaded, deliberately, and not for safety -- for reproducibility.
-  //
-  // Several stages of the blend reduce over pixels in parallel, so the order
-  // of float additions depends on thread scheduling and the mask comes out
-  // differing in the last bits from one run to the next. Measured across two
-  // full 2466-edit runs, 4 edits changed verdict between them purely from
-  // that: three by less than 0.004, but one by 0.1, which is far above any
-  // threshold worth setting and looked exactly like a real migration bug.
-  // Forced to one thread, all four are identical and stable across repeated
-  // runs.
-  //
-  // A verifier whose answer moves between runs cannot be used to investigate
-  // anything, so the cost (a slower pass) buys the only property that makes
-  // the output actionable. This is also why the tolerance below stays tight:
-  // with the nondeterminism removed there is no float noise left to absorb.
+  // one thread, so that results reproduce: the blend reduces over pixels in
+  // parallel, so the order of float additions, and with it a mask, varies
+  // between runs, on some edits by 0.1, which looks like a migration bug. A
+  // verdict that moves between runs cannot be investigated, and without that
+  // noise the tolerance can stay tight
   omp_set_num_threads(1);
 #endif
 
 #ifdef HAVE_OPENCL
-  // One device for the whole run. DT_DEV_PIXELPIPE_EXPORT matches the pipe
-  // type the replay declares, so the device priority preferences resolve the
-  // same way an export would.
+  // one device for the run, picked as for an export, the pipe type the replay
+  // declares
   if(darktable.opencl && darktable.opencl->inited)
     _verify_devid = dt_opencl_lock_device(DT_DEV_PIXELPIPE_EXPORT);
   if(_verify_devid >= 0)

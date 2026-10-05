@@ -32,21 +32,16 @@
 // structurally blind to a whole class of failure: state that is correct in
 // memory and is then lost, duplicated, or misread on the way to and from disk.
 //
-// That gap is not hypothetical here. Two of the three migration outcomes only
-// exist after a write:
+// Two of the three migration outcomes only exist after a write:
 //
 //  - Parametric and raster migrations synthesize *new* forms, which have no
 //    masks_history rows of their own. They are written under history_end - 1
 //    by dt_masks_finish_flexi_migrations(), and if that write is wrong the
-//    form simply vanishes on the next load -- while the in-memory replay keeps
-//    passing.
-//  - The run-boundary normalization (dt_masks_normalize_flexi_groups()) is
-//    deliberately NOT written back: it re-derives on every load from the
-//    module's classic blend_params. Once the user edits the image, though, the
-//    save writes the *normalized* forms and the blend_params become flexi --
-//    so the next load takes a completely different path (migration no-ops,
-//    the markers must already be in the stored form). Whether those two paths
-//    agree is exactly what nothing so far has checked.
+//    form vanishes on the next load, while the in-memory replay passes.
+//  - The group markers dt_masks_normalize_flexi_groups() derives are written
+//    back with the migrated blend_params, which are then flexi, so the next
+//    load takes another path: migration does nothing and the markers must
+//    come from storage. This checks that the two paths agree.
 //
 // WHAT IT COMPARES
 //

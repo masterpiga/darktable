@@ -226,9 +226,8 @@ static void test_solo_edit_toggles_off(void **state)
 // solo-edit as a mode: what the selection alone decides
 // ---------------------------------------------------------------------------
 //
-// Solo-edit is no longer a per-element action but a mode that follows the
-// panel selection, so the question "which shape should be isolated right now"
-// is answered from the selection instead of from a click. That answer is
+// solo edit is a mode that follows the panel selection, so which shape it
+// isolates is answered from the selection, not from a click. That answer is
 // dt_masks_model_soloedit_target, and it is the one place that can decide to stand
 // down -- everything below is a case where it must.
 

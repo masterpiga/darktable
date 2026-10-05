@@ -56,7 +56,7 @@ add_cmocka_test(test_flexi_ui_coverage
 
 # Which raster-mask consumers the pipe considers live: the one mask decision
 # made across modules, and the only one whose inputs differ between the
-# darkroom and export pipes. See the file header for both regressions.
+# darkroom and export pipes. See the file header for the two ways it fails.
 add_cmocka_test(test_flexi_raster_prune
                 SOURCES test_flexi_raster_prune.c flexi_fixture.c
                 LINK_LIBRARIES lib_darktable cmocka)

@@ -4282,18 +4282,11 @@ static inline void _clear_pipecache(dt_dev_pixelpipe_t *pipe)
 
 void leave(dt_view_t *self)
 {
-  // ask any pipe still mid-run (e.g. a late-scaling HQ reprocess at full
-  // resolution, which can legitimately take many seconds on a mask-heavy
-  // image) to abort at its next checkpoint instead of running to completion.
-  // Must happen before ANYTHING else below: dt_image_update_final_size (via
-  // dt_dev_pixelpipe_get_dimensions) blocks on full.pipe->busy_mutex -- a
-  // separate lock from full.pipe->mutex, held by an in-flight run's worker
-  // thread for the same reason -- and that call happens well before this
-  // function's own later dev->full.pipe->mutex locks (see below). Asking for
-  // shutdown only there was too late to help the busy_mutex wait; asking
-  // here gives an in-flight run the most possible time to actually notice
-  // and bail before either blocking wait is reached. Same pattern
-  // _darkroom_ui_second_window_cleanup already uses for the very same reason.
+  // ask a running pipe (a full-resolution reprocess can take seconds on a
+  // mask-heavy image) to abort at its next checkpoint. First of all:
+  // dt_image_update_final_size, via dt_dev_pixelpipe_get_dimensions, waits
+  // on full.pipe->busy_mutex, which the running worker holds, before the
+  // full.pipe->mutex locks below. As in _darkroom_ui_second_window_cleanup
   {
     dt_develop_t *dev0 = self->data;
     dt_dev_pixelpipe_set_shutdown(dev0->preview_pipe, DT_DEV_PIXELPIPE_STOP_NODES);
@@ -4634,9 +4627,9 @@ void mouse_moved(dt_view_t *self,
       // dragging a mask handle past the edge scrolls the canvas after it. What
       // counts as the edge is where the canvas stops being *visible*: an
       // overlay panel standing on one side of it (the masks panel) covers a
-      // strip that the pointer can still travel over, and without this the
-      // drag went dead there -- no scrolling, and the handle out of sight
-      // under the panel. Both are 0 with nothing covering the canvas.
+      // strip that the pointer can still travel over, where the drag would
+      // neither scroll nor show the handle. Both are 0 with nothing covering
+      // the canvas
       const int32_t ol = dev->full.occlusion_left;
       const int32_t orr = dev->full.occlusion_right;
       const float dx = MIN(0, x - bs - ol) + MAX(0, x - dev->full.width  - bs + orr);

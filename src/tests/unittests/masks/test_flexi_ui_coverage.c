@@ -103,26 +103,27 @@ static const struct
   { DT_MASKS_STATE_OP_INVERT,       TRUE,  "blend_gui.c:_group_toggle_output_invert" },
 
   // per element
-  { DT_MASKS_STATE_DISABLE,         TRUE,  "blend_gui.c:6570 (enable/disable)" },
-  { DT_MASKS_STATE_HIDDEN,          TRUE,  "blend_gui.c:4988 (hide)" },
-  { DT_MASKS_STATE_INVERSE,         TRUE,  "blend_gui.c:10102 (invert shape)" },
+  { DT_MASKS_STATE_DISABLE,         TRUE,  "blend_gui.c:_toggle_element_disable" },
+  { DT_MASKS_STATE_HIDDEN,          TRUE,  "blend_gui.c:dt_masks_model_toggle_solo_form (solo)" },
+  { DT_MASKS_STATE_INVERSE,         TRUE,  "blend_gui.c:_invert_element" },
 
   /* Exempt: neither the flexi fold (masks/group.c) nor blend.c reads these,
      so no setting of them can change a rendered flexi mask.
 
      SHOW is canvas visibility -- whether the shape is drawn on screen while
      editing. The fold's skip test is
-     `state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)` (group.c:1414,
-     and the flexi fold at group.c:1229/1242); SHOW appears in neither.
+     `state & (DT_MASKS_STATE_HIDDEN | DT_MASKS_STATE_DISABLE)` (group.c's
+     _group_get_mask_roi and _group_get_mask_roi_flexi); SHOW appears in
+     neither.
 
-     USE is set once when a member is created (blend_gui.c:7756) and never
-     cleared by any control.
+     USE is set once when a member is created (masks.c
+     dt_masks_group_insert_point) and never cleared by any control.
 
      UNION is a classic member operator. New members and markers carry it
      from creation (masks.c dt_masks_group_insert_point, dt_masks_marker_new),
      and the flexi fold reads no classic operator. */
-  { DT_MASKS_STATE_SHOW,            FALSE, "blend_gui.c:5028, canvas only" },
-  { DT_MASKS_STATE_USE,             FALSE, "blend_gui.c:7756, set at creation" },
+  { DT_MASKS_STATE_SHOW,            FALSE, "masks.c, set at creation, canvas only" },
+  { DT_MASKS_STATE_USE,             FALSE, "masks.c, set at creation" },
   { DT_MASKS_STATE_UNION,           FALSE, "masks.c, set at creation" },
 };
 
@@ -203,18 +204,18 @@ static void test_exempt_bits_are_not_quietly_swept(void **state)
   }
 }
 
-/* The non-state fields the panel writes: per-shape opacity (blend_gui.c:3926),
-   group opacity (10187) and refinement (3523/3533/3540/14714). `name` is
-   deliberately absent -- it is a label the renderer never reads. */
+/* the non-state fields the panel writes: per-shape opacity
+   (_props_row_apply), group opacity (_group_opacity_changed) and refinement
+   (_refine_commit_nonglobal). `name` is absent: the renderer never reads it */
 static void test_every_panel_written_field_is_swept(void **state)
 {
   int covered = 0;
   gboolean op, gop, ref;
   _poke_coverage(&covered, &op, &gop, &ref);
 
-  assert_true(op);   // blend_gui.c:3926
-  assert_true(gop);  // blend_gui.c:10187
-  assert_true(ref);  // blend_gui.c:3523
+  assert_true(op);
+  assert_true(gop);
+  assert_true(ref);
 }
 
 /* The tripwire.
@@ -233,7 +234,7 @@ static void test_the_struct_has_not_grown(void **state)
   //
   // preset_note is render-irrelevant, like name: it keys the panel's preset
   // notes, and outside the GUI only the history reader's size check
-  // (masks.c:2359) looks at it
+  // (dt_masks_read_masks_history) looks at it
   assert_int_equal(sizeof(dt_masks_point_group_t),
                    sizeof(dt_mask_id_t) * 2
                    + sizeof(int)

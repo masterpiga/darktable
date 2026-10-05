@@ -179,12 +179,9 @@ static void _show_console_notice(void)
 }
 #endif
 
-/* Report path for a harvest FILE: FILE + `suffix`, with a trailing ".gz"
-   dropped first. The file that arrives from a contributor is the compressed
-   one (see --harvest-masks), and naming its report "x.json.gz.check.json"
-   would then differ from the report for the same corpus unpacked -- which
-   matters because tools/masks_migration_confidence.py finds reports by that
-   exact name. */
+/* the report path for a harvest FILE: FILE + `suffix`, without a trailing
+   ".gz", so that a compressed harvest and the same one unpacked get the same
+   report name */
 static gchar *_masks_report_path(const char *input, const char *suffix)
 {
   const size_t len = strlen(input);
@@ -1883,8 +1880,8 @@ int dt_init(int argc,
 
   if(harvest_masks_xmp_dir)
   {
-    // Same position and the same reason as --harvest-masks below: this runs
-    // before anything opens or locks a database, and it only ever reads.
+    // here for the reason --harvest-masks below is: before anything opens or
+    // locks a database
     const gboolean ok =
       dt_masks_harvest_xmp_dir(harvest_masks_xmp_dir, harvest_masks_output);
     exit(ok ? 0 : 1);
@@ -1892,20 +1889,10 @@ int dt_init(int argc,
 
   if(harvest_masks_output)
   {
-    // Harvest and exit, here rather than anywhere later.
-    //
-    // The position is the point: everything below this line moves towards
-    // opening the library read-write -- dt_database_init() takes a lock on it
-    // and will upgrade its schema in place if it was written by an older
-    // darktable. Someone running this against their real library to help us
-    // test must not have that library touched, so the harvest happens before
-    // any of that exists, opens its own read-only connection, and returns
-    // without ever reaching startup.
-    //
-    // It also runs before the flexi test-mode block just below, which
-    // rewrites --library to point at a scratch copy. That copy is seeded once
-    // and then diverges, so harvesting after it would silently read a stale
-    // snapshot of the user's edits rather than their current ones.
+    // harvest and exit here, before dt_database_init() locks the library and
+    // may upgrade its schema: the user's library must not be touched (see
+    // harvest.h). Also before the flexi test-mode block below, which points
+    // --library at a scratch copy that diverges from the user's edits
     gchar *library = NULL;
     if(dbfilename_from_command)
       library = g_strdup(dbfilename_from_command);
@@ -2574,17 +2561,9 @@ int dt_init(int argc,
 
   if(verify_masks_input)
   {
-    // Positioned here on purpose, and unlike --harvest-masks this one cannot
-    // run early: replaying a mask means running the real blend, which needs
-    // the color profiles (dt_colorspaces_init, above) and a genuine module
-    // instance from the iop registry (dt_iop_load_modules_so, just above) --
-    // a hand-built module struct crashes in dt_develop_blend_process, which
-    // calls through its function pointers.
-    //
-    // It is equally deliberate that this sits *before* the GUI is brought up:
-    // nothing about comparing two mask buffers needs a window, and requiring
-    // one would make the verifier unusable exactly where it is most useful,
-    // on a headless machine or in CI.
+    // here: the replay runs the real blend, which needs the color profiles
+    // (dt_colorspaces_init) and real module instances (dt_iop_load_modules_so)
+    // above, but no window, so that it runs headless and in CI
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(verify_masks_input, ".report.json");
     const gboolean ok = dt_masks_verify_harvest(verify_masks_input, report);
@@ -2594,13 +2573,10 @@ int dt_init(int argc,
 
   if(roundtrip_masks_input)
   {
-    // Same placement rationale as --verify-masks above (needs the iop registry,
-    // does not need a GUI), with one extra requirement: this one drives the
-    // real history reader and writer, so it needs a working library database
-    // as well. That is the whole point -- it exists to test the trip through
-    // the database that the in-memory verifier cannot see -- so run it against
-    // a throwaway one, `--library :memory:`, and never a real catalog: it
-    // creates and repeatedly wipes a scratch image id.
+    // here for the reason --verify-masks is, and it drives the real history
+    // reader and writer too, so it needs a library: a throwaway one,
+    // `--library :memory:`, never a real one, as it creates and wipes a
+    // scratch image
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(roundtrip_masks_input, ".roundtrip.json");
     const gboolean ok = dt_masks_roundtrip_harvest(roundtrip_masks_input, report);
@@ -2610,9 +2586,7 @@ int dt_init(int argc,
 
   if(styleapply_masks_input)
   {
-    // Same placement and same database requirement as --roundtrip-masks above:
-    // it drives the real history reader and writer against a scratch image, so
-    // it needs `--library :memory:` and never a real catalog.
+    // as --roundtrip-masks: `--library :memory:`, never a real library
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(styleapply_masks_input, ".styleapply.json");
     const gboolean ok = dt_masks_styleapply_harvest(styleapply_masks_input, report);
@@ -2622,10 +2596,9 @@ int dt_init(int argc,
 
   if(persist_masks_input)
   {
-    // Renders through the real blend like --verify-masks, AND drives the real
-    // history reader and writer like --roundtrip-masks, so it needs both what
-    // those need: the color profiles and the iop registry, and a scratch
-    // database. `--library :memory:`, never a real catalog.
+    // renders as --verify-masks does, and drives the history reader and
+    // writer as --roundtrip-masks does: `--library :memory:`, never a real
+    // library
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(persist_masks_input, ".persist.json");
     const gboolean ok = dt_masks_persist_harvest(persist_masks_input, report);
@@ -2635,9 +2608,7 @@ int dt_init(int argc,
 
   if(undo_masks_input)
   {
-    // Same needs as --persist-masks: it renders through the real blend and
-    // drives the real history reader and writer against a scratch image, so it
-    // wants `--library :memory:` and never a real catalog.
+    // as --persist-masks: `--library :memory:`, never a real library
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(undo_masks_input, ".undo.json");
     const gboolean ok = dt_masks_undo_harvest(undo_masks_input, report);
@@ -2647,19 +2618,16 @@ int dt_init(int argc,
 
   if(lock_masks)
   {
-    // drives the real history reader and writer, paste and styles against two
-    // scratch images: `--library :memory:` only, never a real catalog
+    // drives the history reader and writer, paste and styles against two
+    // scratch images: `--library :memory:`, never a real library
     dt_splash_screen_destroy();
     exit(dt_masks_lock_check() ? 0 : 1);
   }
 
   if(check_masks_input)
   {
-    // All three checks in one run, so a contributor's harvest takes one command
-    // and yields one file. Same placement and same database requirement as the
-    // individual flags above: it drives the real history reader and writer
-    // against a scratch image, so it needs `--library :memory:` and never a
-    // real catalog.
+    // --roundtrip-masks, --verify-masks and --styleapply-masks in one run and
+    // one report: `--library :memory:`, never a real library
     dt_splash_screen_destroy();
     gchar *report = _masks_report_path(check_masks_input, ".check.json");
     const gboolean ok = dt_masks_check_harvest(check_masks_input, report);

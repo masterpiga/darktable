@@ -2980,8 +2980,8 @@ gboolean dt_exif_get_dimensions(const char *path, int *width, int *height)
   }
   catch(const std::exception &)
   {
-    // an unreadable or unrecognised file is not an error worth reporting here:
-    // the caller has a documented fallback and says how often it was used
+    // an unreadable or unrecognized file is not worth reporting here: the
+    // caller has a fallback and says how often it used it
     return FALSE;
   }
 }

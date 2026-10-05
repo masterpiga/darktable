@@ -108,13 +108,8 @@ struct _GtkDarktableGradientSlider
   gboolean is_resettable;
   gboolean do_reset;
   gboolean is_entered;
-  // forces one marker's hover highlight on regardless of actual pointer
-  // position/drag state (-1 = no override) -- for a caller-driven editor
-  // (e.g. blend_gui.c's precise-value popup) that opens away from the
-  // pointer, so the marker being edited stays visibly picked out on the
-  // slider the whole time that editor is open, not just while the mouse is
-  // actually over/dragging it. See the "pinned" check in
-  // _gradient_slider_draw.
+  // a marker kept highlighted whatever the pointer does (-1: none), for an
+  // editor opened away from the pointer to show which marker it edits
   gint pinned;
   gint markers_type;
   // css-driven geometry, cached because reading it back costs a full
@@ -182,12 +177,9 @@ void dtgtk_gradient_slider_multivalue_set_stop(GtkDarktableGradientSlider *gslid
 gdouble dtgtk_gradient_slider_multivalue_get_value(GtkDarktableGradientSlider *gslider, gint position);
 void dtgtk_gradient_slider_multivalue_get_values(GtkDarktableGradientSlider *gslider, gdouble *values);
 void dtgtk_gradient_slider_multivalue_set_value(GtkDarktableGradientSlider *gslider, gdouble value, gint position);
-/** same as above, but for FREE_MARKERS sliders: pushes the adjacent marker
- *  along instead of leaving position[] out of order when value crosses it --
- *  the same "drag past a neighbor and take it with you" behavior a mouse
- *  drag already gets via the private _slider_move(). Used by callers that set
- *  a marker's value programmatically (e.g. a precise-entry popup) and need it
- *  to behave exactly like a drag, not a raw clamped set. */
+/** the same for a FREE_MARKERS slider, but moving a marker past its neighbor
+ *  pushes the neighbor along, as a drag does, instead of leaving the markers
+ *  out of order: for code that sets a value the way a drag would */
 void dtgtk_gradient_slider_multivalue_set_value_pushing(GtkDarktableGradientSlider *gslider, gdouble value, gint position);
 void dtgtk_gradient_slider_multivalue_set_values(GtkDarktableGradientSlider *gslider, gdouble *values);
 gboolean dtgtk_gradient_slider_multivalue_is_dragging(GtkDarktableGradientSlider *gslider);

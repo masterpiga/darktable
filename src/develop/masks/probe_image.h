@@ -18,79 +18,39 @@
 
 #pragma once
 
-// A synthetic "probe" image for replaying harvested masks.
+// a generated "probe" image to replay harvested masks on (see verify.h). The
+// user's photo is never collected, and an image that leaves a mask empty would
+// make the check vacuous: a parametric mask selecting the brightest tenth is
+// empty on a dark picture, and equal to any other empty mask.
 //
-// The mask-migration verifier (see harvest.c) needs an image to render
-// harvested masks against. It cannot use the user's own photo -- we
-// deliberately never collect those -- and it must not use an image that makes
-// masks vacuous. A parametric mask that selects, say, the top decile of
-// luminance produces an all-zero mask on a picture that never gets that
-// bright, and an all-zero mask compares equal to another all-zero mask no
-// matter how badly the migration mangled it. Every such case is a test that
-// silently passes.
+// Its coverage is set from the code and the color spaces, not from real edits,
+// which would tune it to someone's habits and leave other users' ranges
+// unverified: every channel blendif offers, over every value it can take.
+// Covering the linear RGB cube densely covers every derived channel at once,
+// through the pipeline's own color math. test_probe_image.c sweeps the cube to
+// learn each channel's range, and holds the probe to it.
 //
-// So the probe is generated, not shipped -- and the standard it is held to is
-// deliberately not "whatever some library of real edits happens to use".
+// Beyond color it needs:
 //
-// That distinction matters more than it first appears. It is tempting to
-// profile a large collection of real masks, see which channels they select on
-// and how far the sliders travel, and build a probe that covers exactly that.
-// The result would be a probe tuned to one person's habits: someone who never
-// selects on hue, or never raises a boost factor, generates evidence that
-// looks like proof those ranges do not need covering. The next user's library
-// then quietly falls outside what was ever verified, and the failure mode is
-// the silent one again -- vacuous passes, not visible errors.
+//   - hard edges at several scales and texture at every wavelet octave:
+//     feathering and detail masks read the image's structure, and are no-ops
+//     on a smooth one
+//   - even coverage everywhere, as a shape can sit anywhere: each tile sweeps
+//     a full 2D slice of the cube, and neighboring tiles walk the other axes
+//     on low-discrepancy sequences
 //
-// The bar is therefore set from the code and the color space rather than from
-// anyone's data: cover every channel blendif offers, across every value that
-// channel can physically take.
-//
-// Rather than trying to hit each derived channel directly in its own
-// perceptual space, the probe covers the linear-RGB cube densely: hue, chroma,
-// luminance and the per-channel values are all functions of RGB, so covering
-// the cube covers all of them at once, using the pipeline's own color math
-// rather than a reimplementation of it here. What counts as adequate coverage
-// is derived the same way: test_probe_image.c sweeps the cube to discover what
-// each channel can actually take, and holds the probe to that.
-//
-// Two further properties do not follow from color coverage, and are required
-// separately:
-//
-//   - guided-filter feathering and detail masks both read structure out of the
-//     guide image, so on a smooth image they degenerate towards no-ops and
-//     their comparisons pass vacuously however wrong the migration was. The
-//     probe therefore carries hard edges at several scales, and texture at
-//     every octave a wavelet decomposition can look at.
-//
-//   - drawn masks sit at arbitrary normalized positions, so coverage has to be
-//     spatially homogeneous: it is not enough for the image as a whole to span
-//     the cube if the region under some particular ellipse is flat. The probe
-//     is tiled so that each individual tile already sweeps a full 2D slice of
-//     the cube, and neighboring tiles walk the remaining axes on
-//     low-discrepancy sequences, so any local window of a few tiles is close
-//     to full coverage of the diffuse range.
-//
-// The image is scene-referred linear RGB, and deliberately contains values
-// above 1.0 (a per-tile exposure ladder), because the working space is
-// scene-referred and blendif boost factors reach up there.
-//
-// Generation is fully deterministic -- integer hash noise, no rand() -- so the
-// same size always yields the same probe on every machine. That is what makes
-// a verification run reproducible, and what lets a harvested file collected on
-// one machine be replayed on another.
-//
-// The claim that this probe is actually adequate is not taken on faith: it is
-// measured, per channel, by test_probe_image.c in the masks unit-test suite.
+// It is scene-referred linear RGB with values above 1 (a per-tile exposure
+// ladder), as blendif boost factors reach there. It is deterministic (integer
+// hash noise), so a harvest replays the same on every machine.
 
 #include <glib.h>
 #include <stddef.h>
 
 G_BEGIN_DECLS
 
-/** Allocate and fill the probe image: `width` * `height` pixels, 4 floats each
-    (RGBx, linear scene-referred; the 4th channel is set to 0), deterministic
-    for a given size; free with dt_free_align(). Returns NULL
-    on allocation failure or non-positive dimensions. */
+/** allocate and fill the probe image: `width` * `height` pixels of 4 floats
+    (linear scene-referred RGB, the 4th 0), the same for a given size. Free it
+    with dt_free_align(). NULL if allocation fails or a size is not positive */
 float *dt_masks_probe_new(const int width, const int height);
 
 G_END_DECLS

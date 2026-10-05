@@ -49,12 +49,8 @@ typedef enum dt_masks_type_t
   DT_MASKS_ELLIPSE = 1 << 5,
   DT_MASKS_BRUSH = 1 << 6,
   DT_MASKS_NON_CLONE = 1 << 7,
-  // always defined, even without HAVE_AI: generic type-bitmask code (switch
-  // statements over every dt_masks_type_t, `form->type & (DT_MASKS_GROUP |
-  // DT_MASKS_OBJECT)` checks in masks.c, ...) references this unconditionally
-  // -- only object.c (the code that can ever actually create a form of this
-  // type) is itself gated on HAVE_AI, so without AI support this bit simply
-  // never appears on any real form.
+  // defined without HAVE_AI too, as code over every form type tests it. Only
+  // object.c, which creates such forms, is built with AI alone
   DT_MASKS_OBJECT = 1 << 8,
   DT_MASKS_PARAMETRIC = 1 << 9,  // a parametric (blendif) mask as a first-class form
   DT_MASKS_RASTER = 1 << 10,     // a raster mask (another module's output) as a first-class form
@@ -81,14 +77,14 @@ typedef enum dt_masks_state_t
   // _group_get_mask_roi_flexi in group.c.
   //   screen: the soft union a + b - ab, smoothing feathered overlaps
   DT_MASKS_STATE_SCREEN = 1 << 9,
-  // a classic member's operator, like the ones above: multiply into the mask
-  // (dest *= mask). Migration gives it to the parametric channels it builds
-  // and folds them into a WITHIN_MULTIPLY group
+  // a classic member's operator, like UNION to SUM: multiply into the mask
+  // (dest *= mask). A classic multi-channel parametric mask is this product
+  // of its channels
   DT_MASKS_STATE_MULTIPLY = 1 << 10,
   //   intersect: min
   DT_MASKS_STATE_ISECT = 1 << 12,
   // bypass (on a group's marker): the group contributes nothing, as if it were
-  // not there. A modifier, so its operator stays as it was
+  // not there. A modifier: the group keeps its operator
   DT_MASKS_STATE_OP_DISABLE = 1 << 14,
   DT_MASKS_STATE_OP_BYPASS = DT_MASKS_STATE_OP_DISABLE,
   //   multiply: the true per-pixel product. Not ISECT's min(): the two agree
@@ -142,15 +138,11 @@ typedef enum dt_masks_state_t
                         | DT_MASKS_STATE_WITHIN_EXCLUSION
 } dt_masks_state_t;
 
-// One `state` word carries independent roles, so their bit sets must never
-// overlap:
-//   - a classic member's operator, and a group's bypass/invert (DT_MASKS_STATE_OP)
-//   - a flexi group's operator                 (DT_MASKS_STATE_WITHIN)
-//   - per-element flags (USE/SHOW/INVERSE/HIDDEN/DISABLE)
-// A collision would not fail loudly; it would read as some unrelated feature
-// silently switching itself on. And every one of these bits is SERIALIZED (in
-// masks blobs and XMP), so a clashing value can never simply be reassigned to
-// fix it -- the migration would have to be written instead. Hence compile-time.
+// one `state` word carries independent roles, a classic member's operator
+// and a group's bypass/invert (DT_MASKS_STATE_OP), a flexi group's operator
+// (DT_MASKS_STATE_WITHIN) and the per-element flags. Their bits must never
+// overlap: a collision switches on an unrelated feature, and bits stored in
+// blobs and XMP cannot be reassigned later
 _Static_assert((DT_MASKS_STATE_OP & DT_MASKS_STATE_WITHIN) == 0,
                "classic operator bits overlap the flexi group operator bits");
 _Static_assert((DT_MASKS_STATE_OP_COMBINE
@@ -161,17 +153,15 @@ _Static_assert((DT_MASKS_STATE_GROUP_MARKER
                 & (DT_MASKS_STATE_OP | DT_MASKS_STATE_WITHIN)) == 0,
                "the group marker bit overlaps a group setting a marker carries");
 
-// A classic member's effective operator. A member carrying no combine bit at
-// all is what classic's dt_masks_group_add_form() gives a group's *first*
-// shape; in that position it means "union onto what is not there yet".
-// Migration converts classic lists with it (dt_masks_group_mark_classic_runs)
+// a classic member's effective operator. dt_masks_group_add_form() gives a
+// group's first shape no combine bit, which there means union onto nothing
 static inline dt_masks_state_t dt_masks_eff_group_op(const int state)
 {
   // cast: masks.h is included from C++ too (common/exif.cc), where the masked
   // int does not convert back to the enum on its own
   const dt_masks_state_t op = (dt_masks_state_t)(state & DT_MASKS_STATE_OP);
-  // what is missing is a *combining* operator, so that is what decides. Bypass
-  // and invert-output are modifiers layered on one, never a substitute for it
+  // only a combining bit counts: bypass and invert output modify an operator
+  // and never stand in for one
   return (op & DT_MASKS_STATE_OP_COMBINE)
              ? op
              : (dt_masks_state_t)(op | DT_MASKS_STATE_UNION);
@@ -335,6 +325,9 @@ typedef enum dt_masks_refine_scope_t
   DT_MASKS_REFINE_GROUP = 2,    // on a group's marker; applied once to the composited group mask
 } dt_masks_refine_scope_t;
 
+/** an optional mask refinement (since masks v7). The fields mirror the
+    refinement controls of dt_develop_blend_params_t, which refine the
+    module's finished mask */
 typedef struct dt_masks_refinement_t
 {
   int32_t enabled;            // dt_masks_refine_scope_t; 0 = none (default)
@@ -646,16 +639,16 @@ typedef struct dt_masks_form_gui_t
   dt_mask_id_t formid;
   dt_hash_t pipe_hash;
 
-  // in-module mask panel <-> canvas feedback (flexi mode; set by blend_gui.c).
-  // panel_hover_formids: shapes to highlight on the canvas because their list row
-  //   (a single shape) or cluster header (every member) is hovered. NULL = none.
-  // panel_selected_formid: the persistent click selection mirrored from the panel.
-  //   Drawn highlighted on the canvas when nothing is being hovered.
-  // canvas_hover_formid: the shape currently under the cursor on the canvas; used
-  //   to drive (and de-dup) the reverse "highlight the matching list row" sync.
-  // solo_formids: shapes to keep highlighted on the canvas regardless of hover,
-  //   because they are soloed or solo-edited in the panel (see
-  //   _sync_solo_canvas_highlight in blend_gui.c). NULL = none.
+  // masks panel and canvas feedback, set by blend_gui.c:
+  // panel_hover_formids: shapes highlighted on the canvas because their row,
+  //   or the header of a cluster holding them, is hovered. NULL = none
+  // panel_selected_formid: the panel's selection, highlighted on the canvas
+  //   while nothing is hovered
+  // canvas_hover_formid: the shape under the cursor, whose row the panel
+  //   highlights; kept to skip repeated updates
+  // solo_formids: shapes soloed or solo-edited in the panel, highlighted
+  //   whatever is hovered (_sync_solo_canvas_highlight in blend_gui.c).
+  //   NULL = none
   GList *panel_hover_formids;
   dt_mask_id_t panel_selected_formid;
   dt_mask_id_t canvas_hover_formid;
@@ -688,21 +681,16 @@ extern const dt_masks_functions_t dt_masks_functions_raster;
 /** the darkroom module a raster form reads its mask from, or NULL when it is
     gone. Resolved by operation and instance, as the form stores them */
 struct dt_iop_module_t *dt_masks_raster_source(const dt_masks_form_t *form);
-/** can this raster form still obtain a mask? TRUE (unresolved) when the source
-    module was removed, was never named, is switched off, or writes no raster
-    mask at all -- every structural reason dt_dev_get_raster_mask() hands back
-    NULL and _raster_get_mask_roi() renders all-zero. Callers outside the
-    renderer use it to keep a member that can contribute nothing from being
-    treated as if it could: the group fold skips its inversion, and the panel
-    badges the row. Returns FALSE for anything that is not a raster form.
+/** TRUE when this raster form cannot obtain a mask, so it renders all zero:
+    its source module is gone, unnamed, switched off, or writes no raster mask.
+    The group fold then skips its inversion, and the panel badges its row.
+    FALSE for anything that is not a raster form.
 
-    `piece` may be NULL outside a pipe (the panel). Inside one, pass it: the
-    source's *piece* owns the enabled state, module->enabled is not maintained
-    in an export pipe.
+    `piece` may be NULL outside a pipe (the panel). Inside one, pass it: in an
+    export pipe only the source's piece knows whether it is on.
 
-    Deliberately not included: a mask that is merely absent from the source's
-    hash table this pass. That is transient -- it resolves on the next render --
-    and badging it would make the marker flicker. */
+    A mask merely missing from the source's table this pass does not count:
+    the next render brings it, and a badge would flicker */
 gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
                                        const dt_dev_pixelpipe_iop_t *piece,
                                        const dt_masks_form_t *form);
@@ -710,16 +698,14 @@ gboolean dt_masks_raster_is_unresolved(const dt_iop_module_t *module,
 extern const dt_masks_functions_t dt_masks_functions_object;
 /** check if AI object mask model is downloaded and AI is enabled */
 gboolean dt_masks_object_available(void);
-/** apply a smoothing/cleanup delta to the active AI-object creation session
-    (the pending, not-yet-committed preview) -- called from the flexi panel's
-    pending-row sliders. No-op if no such session is active. */
+/** apply a smoothing or cleanup change to the AI object being created, from
+    the panel's pending-row sliders. Does nothing if none is being created */
 void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
                                               const float old_val,
                                               const float new_val);
-/** read the active AI-object creation session's current smoothing/cleanup and
-    edge refinement, for initial population of the pending-row controls and
-    re-sync after a canvas scroll-wheel change. Any output may be NULL. Returns
-    FALSE (leaving outputs untouched) if no session is active. */
+/** the smoothing, cleanup and edge refinement of the AI object being created,
+    for the pending-row controls to show. Any output may be NULL. FALSE, with
+    the outputs untouched, if none is being created */
 gboolean dt_masks_object_creation_get_preview_params(float *smoothing,
                                                      int *cleanup,
                                                      gboolean *refine);
@@ -815,49 +801,31 @@ int dt_masks_legacy_params(dt_develop_t *dev,
  *   void *new_params,             const int new_version);
  */
 
-/** convert a pre-flexi module's classic mask_mode (drawn/parametric/raster,
-    including the drawn+parametric combination) in-place into the flexi
-    representation: DEVELOP_MASK_MASK is reused verbatim (same mask_id, no
-    form changes); DEVELOP_MASK_CONDITIONAL/RASTER synthesize a new
-    DT_MASKS_PARAMETRIC/DT_MASKS_RASTER form; DEVELOP_MASK_MASK_CONDITIONAL
-    synthesizes a wrapper group stacking the existing drawn group under a new
-    parametric element via DT_MASKS_STATE_MULTIPLY. Called from
-    dt_develop_blend_legacy_params_ext() as the old_version==14 step (see
-    src/develop/masks/migrate_legacy.c for the full case-by-case recipe).
+/** convert a module's classic mask_mode in place into a flexi mask (see
+    migrate_legacy.c). Called from dt_develop_blend_legacy_params_ext().
 
-    `history_num`: the exact main.history row this bp will be written back
-    under, or a negative value when there is none (style/preset conversion) --
-    see the comment on dt_develop_blend_legacy_params_ext() in blend.h for why
-    this matters. When >= 0 and a new form actually needs synthesizing
-    (CONDITIONAL/RASTER/combined -- plain DEVELOP_MASK_MASK never does), the
-    work is deferred onto dev->pending_flexi_migrations rather than done here:
-    mask_mode is flipped to FLEXI immediately, but mask_id is only assigned
-    once dt_masks_finish_flexi_migrations() actually creates the form, since
-    only that later point knows the *final* history_end each new
-    main.masks_history row must be written under (see that function's own
-    comment, and the field's comment in develop.h).
+    `history_num` is the main.history row `bp` will be written back under, or
+    negative when there is none (style and preset conversion). With one, a
+    conversion that creates forms is deferred to
+    dt_masks_finish_flexi_migrations(), which knows the history position the
+    forms must be written under: mask_mode turns flexi at once, mask_id then.
 
-    It cannot fail: migration is one way, with no classic fallback. */
+    It cannot fail: migration is one way. */
 void dt_masks_migrate_classic_to_flexi(struct dt_iop_module_t *module,
                                        struct dt_develop_blend_params_t *bp,
                                        const int history_num);
 
-/** synthesizes the forms for every migration
-    dt_masks_migrate_classic_to_flexi() deferred (see dev->pending_flexi_migrations
-    in develop.h), writing each one into main.masks_history under
-    dev->history_end - 1 -- the row dt_masks_read_masks_history() (called right
-    after this, see dt_dev_read_history_ext() in develop.c) will treat as
-    "current", i.e. the one that ends up in dev->forms/pipe->forms. Must be
-    called after dev->history_end has been corrected from the DB and before
-    dt_masks_read_masks_history() runs; a no-op if nothing is pending. */
+/** create the forms of every migration dt_masks_migrate_classic_to_flexi()
+    deferred, writing them under the masks_history position
+    dt_masks_read_masks_history() reads as current. Call it once
+    dev->history_end is read from the database and before
+    dt_masks_read_masks_history() */
 void dt_masks_finish_flexi_migrations(dt_develop_t *dev);
 
-/** Apply the flexi run-boundary normalization to every classic drawn group a
-    migration reused (dev->pending_flexi_group_splits), and drain the list.
-
-    Must be called AFTER dt_masks_read_masks_history(), which replaces
-    dev->forms wholesale -- unlike dt_masks_finish_flexi_migrations(), which
-    must run before it. Writes nothing to the database. */
+/** convert to flexi groups every classic group a migration kept
+    (dev->pending_flexi_group_splits), in the live tree and every history
+    snapshot, for the caller to write back. Call it after
+    dt_masks_read_masks_history(), which replaces dev->forms */
 void dt_masks_normalize_flexi_groups(dt_develop_t *dev);
 
 /** we create a completely new form. */
@@ -959,14 +927,11 @@ void dt_masks_gui_form_save_creation(dt_develop_t *dev,
                                      struct dt_iop_module_t *module,
                                      dt_masks_form_t *form,
                                      dt_masks_form_gui_t *gui);
-// the "attach an already-registered form to the module's mask group" half of
-// dt_masks_gui_form_save_creation, factored out so any finalize path that
-// builds/names/registers its own form (e.g. the AI-mask object.c finalizers)
-// can still land it exactly where the flexi panel's insert hint
-// (bd->insert_after_fid, see _recompute_insert_hint in blend_gui.c) says the
-// next element should go,
-// instead of always appending to the module's group -- one code path for
-// "where does a new element land", regardless of what created the element.
+// add a registered form to the module's mask group where the panel's insert
+// hint says the next element goes (_recompute_insert_hint in blend_gui.c).
+// dt_masks_gui_form_save_creation() ends with it, and code that registers its
+// own forms (object.c) calls it, so a new element lands in the same place
+// whatever created it
 void dt_masks_group_insert_member(dt_develop_t *dev,
                                   struct dt_iop_module_t *module,
                                   dt_masks_form_t *form,
@@ -975,16 +940,15 @@ void dt_masks_group_insert_member(dt_develop_t *dev,
     mask. Records no history */
 dt_masks_form_t *dt_masks_module_group_create(dt_develop_t *dev,
                                               struct dt_iop_module_t *module);
-/** the same placement, recording no history and touching no selection: for a
-    caller adding several elements and committing once. Returns the new point */
+/** dt_masks_group_insert_member()'s placement, recording no history and
+    touching no selection: for a caller adding several elements and committing
+    once. Returns the new point */
 dt_masks_point_group_t *dt_masks_group_insert_point(dt_develop_t *dev,
                                                     struct dt_iop_module_t *module,
                                                     dt_masks_form_t *form);
-// assigns `form` the next free "<type label> #<n>" name, exactly like a
-// freshly-created shape/channel gets from dt_masks_gui_form_save_creation
-// (which now calls this too) -- used directly by callers that build forms
-// without going through the rest of that function's GUI-creation-state and
-// history-item side effects (see migrate_legacy.c)
+// give `form` the next free "<type label> #<n>" name, as
+// dt_masks_gui_form_save_creation() names a new shape, for code that creates
+// forms without the GUI (migrate_legacy.c)
 void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form);
 /** Solo: clear `bits` on the members named by `formids` and set them on every
  * other member of `grp`. A nested group holding a named point keeps its own
@@ -1064,8 +1028,8 @@ void dt_masks_set_edit_mode(struct dt_iop_module_t *module,
 void dt_masks_set_edit_mode_single_form(struct dt_iop_module_t *module,
                                         const dt_mask_id_t formid,
                                         const dt_masks_edit_mode_t value);
-// restrict canvas editing to the given set of forms (solo-edit): only their
-// outlines/handles are editable, while the full mask still computes/composites.
+// restrict canvas editing to `formids` (solo edit): only their outlines and
+// handles can be edited, while the whole mask still renders
 void dt_masks_set_edit_mode_forms(struct dt_iop_module_t *module,
                                   GList *formids,
                                   const dt_masks_edit_mode_t value);

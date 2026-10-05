@@ -16,29 +16,17 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Host lib for the flexi masks panel's relocatable content, "utility
-// module" position only (masks_panel_position == MASKS_PANEL_POS_UTILITY,
-// see develop/masks_gui_panel_host.c). Docked at
-// DT_UI_CONTAINER_PANEL_LEFT_CENTER like any ordinary lib -- always
-// visible while registered, and collapsed through its own expander like any
-// other lib (see expanded_state below, which ties on-canvas mask editing to
-// that, as the other two positions do to their own collapse controls).
+// the host lib of the flexi masks panel in the "utility module" position
+// (MASKS_PANEL_POS_UTILITY, see develop/masks_gui_panel_host.c), in
+// DT_UI_CONTAINER_PANEL_LEFT_CENTER and folded by its own expander (see
+// expanded_state, which ties on-canvas mask editing to it). The canvas
+// position does not use it: that is a grid column of src/gui/gtk.c
+// (dt_ui_flexi_panel_*).
 //
-// The canvas position does NOT use this lib at all -- it is a genuine extra
-// grid column owned by src/gui/gtk.c (dt_ui_flexi_panel_*), a real
-// independent panel rather than more content stacked inside the existing
-// left/right panels. See dt_iop_gui_blend_masks_panel_relocate in
-// develop/masks_gui_panel_host.c for how the two mechanisms are picked
-// between.
-//
-// This lib is deliberately kept dt_lib-visible (dt_lib_is_visible) at all
-// times: src/views/view.c only calls
-// dt_lib_gui_get_expander() (which builds and packs self->expander) for
-// libs that are visible *at view-enter time* -- a lib hidden via
-// dt_lib_set_visible() never gets its expander built/packed at all until
-// the view is re-entered, which would make switching away from "embedded"
-// live impossible. So "embedded" (this lib unused) is a plain
-// gtk_widget_hide() of self->expander instead.
+// The lib stays visible to dt_lib_is_visible: view.c builds the expander
+// (dt_lib_gui_get_expander) only for libs visible when the view is entered,
+// so a hidden lib could not take the panel until the next view change. In
+// the other positions self->expander is hidden with gtk_widget_hide()
 
 #include "control/conf.h"
 #include "control/signal.h"
@@ -95,10 +83,8 @@ GtkWidget *gui_tool_box(dt_lib_module_t *self)
   return GTK_WIDGET(d->actions_box);
 }
 
-// shows/hides self->expander depending on whether masks_panel_position is
-// currently "utility" -- see file comment for why this is a plain
-// gtk_widget_hide/show rather than dt_lib_set_visible. Must only run once
-// self->expander exists (see view_enter below); cheap to call repeatedly.
+// show self->expander only in the "utility" position, by gtk_widget_show and
+// hide (see the file comment). Only once self->expander exists (view_enter)
 static void _reconfigure(dt_lib_module_t *self)
 {
   if(!self->expander) return;
@@ -125,24 +111,12 @@ void expanded_state(dt_lib_module_t *self, const gboolean expanded)
   dt_iop_gui_blend_masks_panel_host_expanded(expanded);
 }
 
-/* A mask row's warning badge can depend on state that lives outside the mask
- * list showing it: a raster element goes inert the moment its source module is
- * switched off, no longer carries a mask, or is removed. None of that touches
- * this module's own forms, so nothing in the panel's usual update paths fires
- * and the badge would keep saying whatever it said when the list was built.
- *
- * A history change is the signal every one of those arrives as (toggling a
- * module off adds a history item, as does deleting one), so re-evaluate the
- * badges then. The sweep is over the whole pipeline rather than the focused
- * module: the badge is a property of the *reader* of the raster mask, which is
- * a different module from the one the user just touched. Refreshing a module
- * with no mask list built returns immediately, so this costs a null check per
- * module.
- *
- * This lib is the hook's home because it is the panel's host and has a
- * darkroom-scoped lifecycle to hang connect/disconnect on -- the sweep itself
- * is not specific to the utility position and runs whatever position the panel
- * is in. */
+/* a raster element's badge depends on its source module, which can be
+ * switched off, stop masking or be removed without touching this module's
+ * forms. Each of those adds a history item, so the badges of every module are
+ * refreshed on a history change: the badge belongs to the reader of the mask,
+ * not to the module touched. A module with no list returns at once. Here for
+ * the lib's darkroom-scoped lifecycle; it runs in every panel position */
 static void _history_change_callback(gpointer instance, gpointer user_data)
 {
   if(!darktable.develop) return;
@@ -221,13 +195,10 @@ void view_enter(dt_lib_module_t *self,
   if(self->reset_button)
     gtk_widget_set_visible(self->reset_button, FALSE);
 
-  // this lib has no presets or preferences of its own, so lib.c's default
-  // header hamburger has nothing to open. It used to be repurposed to the
-  // masking options menu, but no other panel position shows an icon for those
-  // any more -- they open on a right-click of the mask on/off toggle, which is
-  // in this header too (see _blendop_mask_enable_toggled). Hide it rather than
-  // leave one position with a control the others dropped. no_show_all because
-  // the expander header is shown with gtk_widget_show_all on every view enter.
+  // the lib has no presets or preferences, so lib.c's header hamburger has
+  // nothing to open; the masking options open on a right-click of the on/off
+  // toggle in this header (_blendop_mask_enable_toggled). no_show_all: the
+  // header gets a gtk_widget_show_all on every view enter
   if(self->presets_button)
   {
     gtk_widget_set_no_show_all(self->presets_button, TRUE);

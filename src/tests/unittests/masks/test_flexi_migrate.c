@@ -608,7 +608,7 @@ static void test_a_duplicate_union_reference_is_dropped(void **state)
 }
 
 // ... but only where it provably renders nothing. The first visible member
-// composites as a plain copy whatever its operator (group.c:867-870), so with
+// composites as a plain copy whatever its operator (_group_get_mask), so with
 // a sibling that is not a union, dropping a reference could promote another
 // member out of its own operator: the whole group then keeps what it has
 static void test_a_duplicate_is_kept_when_a_sibling_is_not_a_union(void **state)
@@ -1033,9 +1033,8 @@ static void test_parametric_in_raw_colorspace_is_degenerate(void **state)
 // case 8: already flexi
 // ---------------------------------------------------------------------------
 
-// edits created under the POC, before the version bump shipped, are nominally
-// still at the old blend version but already carry FLEXI -- they must pass
-// through untouched rather than being migrated a second time
+// an edit at the old blend version that already carries FLEXI must pass
+// through untouched, not be migrated a second time
 static void test_already_flexi_passes_through(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI);
@@ -1306,13 +1305,10 @@ static void test_every_combine_value_lands_in_a_valid_state(void **state)
 // involved.
 //
 // Migration moves that parametric config into a form inside a flexi group, and
-// the group is exactly what the gate used to refuse to render. The mask
-// collapsed to a flat opacity, silently: structurally the migration was
-// perfect, and every one of the 200 tests here passed. It took replaying real
-// edits (--verify-masks) to see it, on 24 of 2466, every one retouch in
-// parametric-only mode.
-//
-// This pins the distinction cheaply so it cannot come back without a failure.
+// that group must render even on a NO_MASKS module, or the mask collapses to
+// a flat opacity while the migration looks structurally perfect. Only
+// replaying real edits (--verify-masks) shows it otherwise, as on retouch in
+// parametric-only mode. This pins the distinction.
 // ---------------------------------------------------------------------------
 
 static int _flags_no_masks(void)
@@ -1355,7 +1351,7 @@ static void test_ordinary_module_always_renders_its_group(void **state)
                                         DEVELOP_MASK_ENABLED | DEVELOP_MASK_FLEXI));
 }
 
-/** The end-to-end shape of the bug: a parametric-only edit on a NO_MASKS
+/** end to end: a parametric-only edit on a NO_MASKS
     module migrates to a flexi group, and that group must be renderable --
     otherwise the parametric mask it now lives in is unreachable. */
 static void test_parametric_on_no_masks_module_stays_renderable(void **state)
@@ -1841,9 +1837,8 @@ static void test_a_group_nested_twice_dissolves_twice(void **state)
 
 // A whole GROUP referenced twice under unions contributes the same shapes
 // twice, and max(a, a) = a just the same: the second reference goes, and the
-// wrapper group left holding nothing goes with it. Dissolving it instead gave
-// a list showing every shape of it twice -- corpus edit 3320, which reached
-// the panel as four rows for two shapes.
+// wrapper group left holding nothing goes with it. Dissolved instead, the
+// list would show each of its shapes twice
 static void test_a_group_referenced_twice_is_pruned(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
@@ -1873,8 +1868,8 @@ static void test_a_group_referenced_twice_is_pruned(void **state)
 }
 
 // A group that is not a union list is one term of its parent's maximum, so it
-// does not stop the parent's own repeats from going: corpus edit 6400 kept a
-// shape listed twice at the top level only because a sibling group held a hole
+// does not stop the parent's own repeats from going, though a sibling group
+// holds a hole
 static void test_a_duplicate_beside_a_hole_group_is_dropped(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
@@ -1894,8 +1889,7 @@ static void test_a_duplicate_beside_a_hole_group_is_dropped(void **state)
 // A faded nested group dissolves into a group of its own carrying the fade,
 // one per member. Where each of those folds as a plain maximum and joins by
 // union, they are one union with the fade multiplied into the members:
-// g * max(o * x) = max(g * o * x). Corpus edit 6803 showed as a column of
-// one-shape unions at 36%
+// g * max(o * x) = max(g * o * x), and not a column of one-shape unions
 static void test_faded_union_groups_merge_into_one(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);
@@ -1948,7 +1942,7 @@ static void test_an_inverted_union_group_is_not_merged(void **state)
 }
 
 // a shape held alone next to a sum group that already holds it adds nothing:
-// max(x, min(1, x + y)) is min(1, x + y). Corpus edit 17473 (link_06)
+// max(x, min(1, x + y)) is min(1, x + y)
 static void test_a_shape_absorbed_by_a_sum_group_is_dropped(void **state)
 {
   _classic(DEVELOP_MASK_ENABLED | DEVELOP_MASK_MASK);

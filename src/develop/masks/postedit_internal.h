@@ -124,11 +124,10 @@ typedef enum
   STEP_GEOM,       // edit the SHAPE the member refers to (geom_t in `k`)
 } step_kind_t;
 
-/* `k` carries the poke for STEP_POKE and the geom_t for STEP_GEOM -- the two
+/* `k` carries the poke for STEP_POKE and the geom_t for STEP_GEOM: the two
    never appear in the same step, and a second field would have to be spelled
-   out in every sequence initializer just to say "unused". STEP_POKE is 0 so
-   the sequences written before the other kinds existed keep their two-field
-   initializers. */
+   out in every sequence initializer. STEP_POKE is 0, so that a poke step
+   needs only two fields */
 typedef struct { poke_t k; scope_t s; step_kind_t kind; } step_t;
 
 #define GEOM_STEP(g, sc) { (poke_t)(g), (sc), STEP_GEOM }

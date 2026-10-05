@@ -26,21 +26,13 @@
 //
 // WHY THIS CHECK EXISTS
 //
-// Migration used to be persisted by halves. Reading a classic edit upgraded
-// blend_params to mask_mode = FLEXI and that reached the database on every
-// open, but the run-boundary markers dt_masks_normalize_flexi_groups() derives
-// did not: they live on dev->forms, a deep copy, while the writer walks each
-// history item's own snapshot. Migration only runs while the stored
-// blendop_version is old, so the second load found a current-version flexi
-// edit, normalized nothing, and rendered the mask wrong -- permanently, and
-// without the user ever editing anything. Opening or exporting was enough.
-//
-// Not one of the other checks could see it. --verify-masks and
-// --styleapply-masks both work in memory, on a single migration; they never
-// ask the database anything. --roundtrip-masks does save and reload, but it
-// compares *stored state*, so it can only catch a field that changes across
-// the trip -- and it is checked against an invariant written by hand, which
-// covers the run boundaries and nothing else.
+// migration writes the group markers dt_masks_normalize_flexi_groups() derives
+// back to storage (_sync_forms_to_history() in migrate_legacy.c): a later load
+// finds a current-version flexi edit and normalizes nothing, so a marker that
+// was not stored renders the mask wrong from then on. --verify-masks and
+// --styleapply-masks work in memory and never ask the database; --roundtrip-
+// masks compares stored state against a hand-written invariant that covers
+// the group boundaries alone.
 //
 // So the property here is about pixels, and needs no notion of what the mask
 // ought to be:
@@ -49,12 +41,9 @@
 //         render(en(...e1(G))) == render(en(...(save/reload)...e1(G)))
 //
 // A save and a reload between two edits is something the user can do at any
-// moment and darktable gives no indication of; if it changes the mask, some
-// part of the mask's meaning is not being stored. That is exactly the bug
-// above, stated without reference to migration at all -- which is the point,
-// because the fix for it moved the markers into storage, so from now on they
-// are *read* rather than re-derived and their idempotency stops being
-// exercised on every load.
+// moment without being told; if it changes the mask, some part of the mask's
+// meaning is not stored. Stored markers are read rather than derived again,
+// so this also covers what a load no longer recomputes.
 //
 // WHAT IS SWEPT
 //
@@ -88,19 +77,16 @@
 //
 // WHAT IT CATCHES, MEASURED
 //
-// Reinstating the half-persisted migration (skipping _sync_forms_to_history()
-// in migrate_legacy.c) makes it fail on 9 of the 22 swept edits of the
-// migration_failures corpus, 169 of 528 sequences, with 21 of the 24 sequences
-// firing on at least one edit.
+// With _sync_forms_to_history() in migrate_legacy.c skipped, it fails on 9 of
+// the 22 swept edits of the migration_failures corpus, 169 of 528 sequences,
+// with 21 of the 24 sequences firing on at least one edit.
 //
 // The three that never fire are the three built on a bypass:
 // single:group-bypass, modifier:bypass-then-within and
-// modifier:bypass-then-opacity. That is not a gap to close but a fact about
-// the control: a bypassed group contributes nothing whichever way the members
-// were partitioned, so no partition disagreement can show through one. They
-// are kept because a bypass that failed to survive a save at all would show up
-// against the un-poked baseline, which is a different failure and one nothing
-// else here would see.
+// modifier:bypass-then-opacity. A bypassed group contributes nothing however
+// its members are partitioned, so no partition disagreement shows through
+// one. They stay because a bypass that did not survive a save at all shows
+// against the un-poked baseline, which nothing else here would see.
 //
 // CPU ONLY: group folding happens on the CPU for the GPU path too, so the
 // OpenCL blend consumes a mask the CPU built, and a GPU replay would exercise

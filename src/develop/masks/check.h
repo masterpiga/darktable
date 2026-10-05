@@ -18,43 +18,37 @@
 
 #pragma once
 
-// One command for the whole migration check.
+// one command for the whole migration check.
 //
-// --roundtrip-masks, --verify-masks and --styleapply-masks each answer a
-// different question about the same harvest file (see their own headers for
-// why none of the three subsumes the others). Run separately they are three
-// invocations producing three report files, and a verdict that lives partly in
-// each and partly in the terminal output -- which is exactly the shape that
-// makes a contributor's run hard to act on once the terminal is gone.
-//
-// `--check-masks harvest.json` runs all three against one file and writes a
-// single self-contained FILE.check.json:
+// --roundtrip-masks, --verify-masks, --styleapply-masks, --persist-masks and
+// --undo-masks each answer a different question about the same harvest file
+// (see their own headers). `--check-masks harvest.json` runs them all
+// against one file and writes a single self-contained FILE.check.json, so
+// that a contributor's run can be acted on without its terminal output:
 //
 //   { "source": ..., "darktable_version": ...,
 //     "roundtrip":  { "edits": [...], "summary": {...} },
 //     "verify":     { "edits": [...], "summary": {...} },
 //     "styleapply": { "edits": [...], "summary": {...} },
-//     "summary":    { "passed": bool, per-tool pass flags } }
+//     "persist":    { "edits": [...], "summary": {...} },
+//     "undo":       { "edits": [...], "summary": {...} },
+//     "summary":    { "passed": bool, per-tool flags } }
 //
-// Order is deliberate: roundtrip first because it is the cheapest and names
-// the field that broke, verify second because it is the expensive pixel-level
-// pass, styleapply last. All three always run -- an early failure must not
-// hide what the other two would have found, since a contributor's file may not
-// come back a second time.
+// Cheapest first: roundtrip names the field that broke, the others render.
+// All always run: an early failure must not hide what the others would find,
+// since a contributor's file may not come back a second time.
 //
-// Like --roundtrip-masks and --styleapply-masks it drives the real history
-// writer against a scratch image id, so it needs `--library :memory:` and must
-// never be pointed at a real catalog.
+// It drives the real history writer against a scratch image id, so it needs
+// `--library :memory:` and must never be pointed at a real catalog.
 
 #include <glib.h>
 
 G_BEGIN_DECLS
 
-/** Run the round-trip, verification and style-application checks over the
-    harvest file at `json_path`, writing one combined report to `report_path`
-    (may be NULL).
+/** run all five checks over the harvest file at `json_path`, writing one
+    combined report to `report_path` (may be NULL).
 
-    Returns TRUE only if all three passed. */
+    Returns TRUE only if all passed. */
 gboolean dt_masks_check_harvest(const char *json_path, const char *report_path);
 
 G_END_DECLS

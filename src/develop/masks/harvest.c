@@ -41,12 +41,10 @@
 // ---------------------------------------------------------------------------
 // JSON emission
 //
-// Hand-rolled rather than pulled from a library, because the output has a
-// property no generic serializer can be asked to guarantee: every value in it
-// must be one we deliberately decided to include. Writing the fields out by
-// hand means a field can only appear here if someone typed its name, which is
-// the point -- a reflective serializer over the structs would happily emit the
-// user-typed group name this format exists to leave out.
+// written by hand rather than with a library: every value in the output must
+// be one someone chose to include, so a field appears only if its name is
+// typed here. A serializer reflecting over the structs would emit the group
+// name this format leaves out
 // ---------------------------------------------------------------------------
 
 typedef struct
@@ -280,22 +278,11 @@ static void _emit_point(json_t *j,
 // ---------------------------------------------------------------------------
 // coverage tally
 //
-// A harvest file is worth collecting in proportion to what it contains that we
-// have not seen before, and that is not visible by eye in 42MB of JSON. So the
-// scan tallies the configurations that are *rare* -- the ones a synthetic
-// fixture has to stand in for today because no real edit exercises them.
-//
-// The inverted and inclusive mask-combine modes are the specific reason this
-// exists. Between them they select the XOR-folding and constant-collapse
-// branches of the migration, and in the library this was first developed
-// against, INV appears zero times and INCL eight. That is not a quirk of one
-// library so much as of the settings themselves -- almost nobody changes them
-// -- but "almost nobody" is not nobody, and a contributor who does use them
-// holds the only real test data for those branches in existence.
-//
-// Reporting the tally on stdout means such a contributor is told their file is
-// unusual, and reporting it in the JSON means an incoming file can be triaged
-// on its rare-case counts without parsing all of it.
+// the rare configurations a file holds, which synthetic fixtures otherwise
+// stand in for: on stdout, so that a contributor learns the file is unusual,
+// and in the JSON, so that a file can be sorted by them without parsing it
+// all. Above all the inverted and inclusive combine modes, which take the
+// migration's XOR and constant branches and which almost nobody sets
 // ---------------------------------------------------------------------------
 
 #define HARVEST_MAX_VERSION 24
@@ -430,24 +417,12 @@ static int _emit_forms(json_t *j,
                        harvest_stats_t *st)
 {
   sqlite3_stmt *stmt;
-  // Every form *visible* at this history position, not just the ones written
-  // at it.
-  //
-  // masks_history stores a row when a form is created or changed, under the
-  // history entry that changed it. A later entry that merely references an
-  // existing mask writes no row of its own, so selecting `num = ?2` returns
-  // nothing for it -- and the edit then replays with a dangling mask_id and no
-  // geometry, which renders as the "no form" fallback instead of as the user's
-  // actual mask.
-  //
-  // That is what dt_masks_read_masks_history() does too (it reads every row
-  // with num < history_end and lets later rows for the same formid win), and
-  // getting it wrong here produced 22 spurious "the migration changed this
-  // mask" results whose real cause was that half the geometry was missing.
-  //
-  // SQLite's documented bare-column behavior applies: with MAX(num) in the
-  // select list, the other columns come from the row that supplied the
-  // maximum, which is exactly the latest version of each form.
+  // every form visible at this history position, not only those written at
+  // it: a form has a row where it was created or changed, and a later entry
+  // that only refers to a mask writes none. As dt_masks_read_masks_history()
+  // does, read every row up to `num` and let the latest per form win. With
+  // MAX(num) selected, SQLite takes the other columns from the row holding
+  // the maximum
   const char *q = "SELECT formid, form, version, points, points_count, source,"
                   "       MAX(num)"
                   " FROM masks_history WHERE imgid = ?1 AND num <= ?2"
@@ -518,18 +493,11 @@ static void _emit_blend_params(json_t *j, const dt_develop_blend_params_t *b)
 // the harvest
 // ---------------------------------------------------------------------------
 
-/** Write a gzip copy of `src_path` at `dst_path`.
-
-    The point is that both files exist afterwards. The person who ran this is
-    being asked to send us the result, and being asked to read it first -- so
-    the readable JSON stays, and the compressed copy is the one to upload. It
-    is a large ratio for this data (a 143 MB harvest goes to about 12 MB), which
-    is the difference between "attach it to a forum post" and "find a file
-    host".
-
-    Streamed rather than read into memory: these files run to hundreds of MB.
-    Failure is not fatal to the harvest -- the JSON is already safely written,
-    so the caller reports it and carries on. */
+/** write a gzip copy of `src_path` at `dst_path`. Both stay: the person who
+    ran this is asked to read the JSON and to send the copy, which this data
+    compresses to about a tenth, small enough to attach to a forum post.
+    Streamed, as these files run to hundreds of MB. Failing is not fatal: the
+    JSON is complete, and the caller reports it */
 static gboolean _gzip_file(const char *src_path,
                            const char *dst_path,
                            GError **err)
@@ -579,14 +547,9 @@ static goffset _file_size(const char *path)
   return size;
 }
 
-/** The "coverage" section: what is in this corpus that we may not have seen
-    before. Its own function because both harvest drivers emit it identically,
-    and an incoming file is triaged on these counts without reading the rest. */
+/** the "coverage" section (see harvest_stats_t), the same for both harvests */
 static void _emit_coverage(json_t *j, const harvest_stats_t *st)
 {
-  // What is in here that we may not have seen before. Kept as its own section
-  // so an incoming file can be triaged on these counts without reading the
-  // whole of it.
   _j_open(j, "coverage", '{');
   _j_open(j, "mask_combine", '{');
   _j_int(j, "inverted", st->combine_inv);
@@ -622,13 +585,10 @@ static void _emit_coverage(json_t *j, const harvest_stats_t *st)
 
 }
 
-/** Write a gzipped copy beside the harvest and say so. Shared by both drivers:
-    the person sending the file should not need a second tool to compress it,
-    notably on Windows. */
+/** write a gzip copy beside the harvest and say so, so that the person sending
+    it needs no other tool to compress it, notably on Windows */
 static void _report_and_gzip(const char *output_path)
 {
-  // and a compressed copy alongside it, so sharing the result does not need a
-  // second tool the person may not have (notably on Windows)
   gchar *gz_path = g_strconcat(output_path, ".gz", NULL);
   GError *gz_err = NULL;
   const gboolean gz_ok = _gzip_file(output_path, gz_path, &gz_err);
@@ -665,24 +625,15 @@ static void _report_and_gzip(const char *output_path)
 // harvesting from XMP sidecars
 // ---------------------------------------------------------------------------
 
-/* Not everyone uses darktable's library. A photographer who imports, edits and
-   moves on keeps their whole development history in the .xmp next to each
-   file, and library.db is a scratch index they would happily delete -- so a
-   harvest that can only read library.db cannot see their masks at all, and the
-   corpus quietly over-represents people who use the DAM.
+/* The sidecar is parsed here rather than by dt_exif_xmp_read(), which writes
+   into darktable's database and so needs the whole startup the harvest avoids
+   (see harvest.h). A sidecar is XML with darktable's hex or gz blobs in it,
+   readable with no database, no exiv2 and no lock: GMarkupParser for the XML,
+   dt_exif_xmp_decode() for the blobs.
 
-   The sidecar is parsed here rather than handed to dt_exif_xmp_read(), which
-   would be the obvious reuse. That function writes into darktable's own
-   database and therefore needs the whole of startup behind it, which is exactly
-   what --harvest-masks refuses to do (see this file's header: the harvest runs
-   before dt_database_init() so that pointing it at someone's real setup cannot
-   modify anything). A sidecar is XML with darktable's own hex/gz blobs in it,
-   both of which can be read with no database, no exiv2 and no lock: GMarkupParser
-   for the XML, dt_exif_xmp_decode() for the blobs.
-
-   Only the attributes named below are read. A sidecar also carries the original
-   filename, GPS coordinates, timestamps and ratings; none of them are looked
-   at, and the output is the same fields the library harvest produces. */
+   Only the attributes named below are read. A sidecar also holds the file
+   name, GPS coordinates, timestamps and ratings: none is read, and the output
+   has the fields the library harvest writes. */
 
 static gint _int_cmp(gconstpointer a, gconstpointer b)
 {
@@ -868,11 +819,9 @@ static gchar *_image_for_sidecar(const char *xmp_path)
   gchar *stripped = g_strndup(xmp_path, len - 4);   // drop ".xmp"
   if(g_file_test(stripped, G_FILE_TEST_IS_REGULAR)) return stripped;
 
-  /* A duplicate's sidecar carries darktable's index before the extension --
-     `TLK_0591_04.CR3.xmp` is the fourth duplicate of `TLK_0591.CR3`, and every
-     duplicate points at that same image. 40 of the 1,579 sidecars in the
-     library this was developed against are of this form, so without it their
-     masks would all fall back to a nominal canvas. */
+  /* a duplicate's sidecar has darktable's index before the extension:
+     `TLK_0591_04.CR3.xmp` is a duplicate of `TLK_0591.CR3`, and belongs to
+     that image. Without this its masks would fall back to a nominal canvas */
   gchar *dot = strrchr(stripped, '.');
   if(dot && dot != stripped)
   {
@@ -973,13 +922,10 @@ gboolean dt_masks_harvest_xmp_dir(const char *dir, const char *output_path)
     return FALSE;
   }
 
-  /* exiv2 talks to stderr on its own otherwise -- a CR3 whose maker note it
-     dislikes prints "Error: Directory Canon ... considered invalid", which is
-     harmless (the dimensions still come back) but reads like a failure to
-     someone running this on their own photos to help us. dt_exif_init()
-     installs darktable's handler, which prefixes and routes those properly.
-     Safe to call here: it registers namespaces and a log handler, and touches
-     nothing on disk. */
+  /* without darktable's log handler, exiv2 prints harmless complaints such as
+     "Error: Directory Canon ... considered invalid" to stderr, which read like
+     a failure. dt_exif_init() only registers namespaces and the handler, and
+     touches nothing on disk */
   dt_exif_init();
 
   GList *files = NULL;
@@ -1186,9 +1132,8 @@ gboolean dt_masks_harvest_library(const char *library_path,
 {
   sqlite3 *db = NULL;
 
-  // Read-only, and belt-and-braces about it: the URI says mode=ro and the open
-  // flags say SQLITE_OPEN_READONLY. Either alone would do; both together mean
-  // a future edit cannot quietly drop the guarantee by touching one of them.
+  // read-only twice over: the URI says mode=ro and the flags
+  // SQLITE_OPEN_READONLY, so that changing one alone cannot drop the promise
   gchar *uri = g_strdup_printf("file:%s?mode=ro", library_path);
   const int rc = sqlite3_open_v2(uri, &db,
                                  SQLITE_OPEN_READONLY | SQLITE_OPEN_URI, NULL);
@@ -1274,12 +1219,10 @@ gboolean dt_masks_harvest_library(const char *library_path,
       counted_this_image = FALSE;
     }
 
-    // Only entries whose blob is the size this build's struct expects can be
-    // decoded field by field. An older, shorter blendop version would need
-    // dt_develop_blend_legacy_params to interpret, which needs a module and a
-    // pipe -- out of scope for a read-only scan. Those are counted and
-    // reported rather than silently dropped, so a library full of them is
-    // visible as such instead of looking like a library with no masks.
+    // only a blob of this build's size can be decoded field by field: an older
+    // one needs dt_develop_blend_legacy_params(), which needs a module. They
+    // are counted and reported, so that a library of them does not look like
+    // one without masks
     if(!bp || bp_bytes != (int)sizeof(dt_develop_blend_params_t))
     {
       skipped_size++;
@@ -1289,8 +1232,7 @@ gboolean dt_masks_harvest_library(const char *library_path,
     dt_develop_blend_params_t blend;
     memcpy(&blend, bp, sizeof(blend));
 
-    // No mask of any kind -> nothing for the migration to do, nothing to
-    // verify. Uniform-opacity blends are not interesting here.
+    // without a mask there is nothing to migrate or verify
     const uint32_t interesting = DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL
                                | DEVELOP_MASK_RASTER | DEVELOP_MASK_FLEXI;
     if(!(blend.mask_mode & interesting))
@@ -1378,9 +1320,8 @@ gboolean dt_masks_harvest_library(const char *library_path,
 
   _report_and_gzip(output_path);
 
-  // Say plainly when a library holds one of the configurations we have no real
-  // test data for, so the person who ran it knows their file is worth sending
-  // even if the totals look unremarkable.
+  // say when a library holds configurations real edits rarely have, so that
+  // the person who ran this knows the file is worth sending
   if(st.combine_inv || st.combine_incl)
   {
     printf("[harvest]\n[harvest] This library contains rarely-used mask combine modes:\n");

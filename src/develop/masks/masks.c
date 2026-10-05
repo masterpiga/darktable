@@ -457,13 +457,9 @@ void dt_masks_assign_unique_name(dt_develop_t *dev, dt_masks_form_t *form)
   } while(exist);
 }
 
-// the opacity a freshly added shape starts at. Parametric/raster channels
-// have no on-canvas "set opacity" gesture, so remembering a shape's last
-// opacity for them would be surprising -- always start those fully opaque.
-// For drawn shapes, the "sticky opacity" option (the blending options, on the
-// mask on/off toggle's right-click) controls whether the last-used opacity (see
-// dt_masks_form_change_opacity) is carried over, or every new shape starts
-// fully opaque instead.
+// the opacity a new element starts at. Parametric and raster elements start
+// opaque, as no canvas gesture sets theirs. A shape takes the remembered shape
+// opacity, which goes back to 1 after each shape unless opacity is sticky
 static float _new_shape_default_opacity(const dt_masks_type_t type)
 {
   if(type & (DT_MASKS_PARAMETRIC | DT_MASKS_RASTER)) return 1.0f;
@@ -1419,11 +1415,10 @@ static gboolean _splices_into(const dt_masks_point_group_t *ref,
 }
 
 // replace every nested group converted here by its own members wherever
-// _splices_into allows, deepest first. A classic group's members are copied:
-// its form stays as it was, since another module's mask can still name it, as
-// a classic group dissolved by migration always has. A group the conversion
-// made has no other reference, so its members move and it leaves `forms`,
-// where the masks manager would still list it
+// _splices_into allows, deepest first. A classic group's members are copied
+// and its form stays as it was, since another module's mask can still name
+// it. A group the conversion made has no other reference, so its members move
+// and it leaves `forms`
 static gboolean _splice_nested(GList **forms,
                                dt_masks_form_t *grp,
                                GHashTable *made,
@@ -1611,8 +1606,8 @@ static int _live_refs(GList *forms, const dt_mask_id_t fid, GHashTable *classic,
   return n;
 }
 
-// the marker of `g` when it is g's only one and heads its list: a nested group
-// in the Q7 model, a single group with a within-group operator
+// the marker of `g` when it is g's only one and heads its list: a flexi group
+// folding all its members with one operator
 static dt_masks_point_group_t *_sole_marker(const dt_masks_form_t *g)
 {
   if(!g->points || !dt_masks_point_is_marker(g->points->data)) return NULL;
@@ -1812,9 +1807,8 @@ static gboolean _is_growing_group(const dt_masks_point_group_t *mk)
 /* In a group folding by union, a shape adds nothing when a nested group beside
  * it holds it at least as strongly and folds to no less than it:
  * `max(o1 * x, r * g * fold(.., o2 * x, ..))` is the second term whenever
- * r * g * o2 >= o1, r being the reference's opacity and g the group's. Corpus
- * edit 17473 (panel case link_06) holds `x u {x, sum y}`, which is
- * `min(1, x + y)`: the lone x goes. */
+ * r * g * o2 >= o1, r being the reference's opacity and g the group's. In
+ * `x u {x, sum y}`, which is `min(1, x + y)`, the lone x goes. */
 static gboolean _drop_absorbed_members(GList *forms, dt_masks_form_t *grp)
 {
   const dt_masks_point_group_t *mk = _sole_marker(grp);
@@ -2921,10 +2915,8 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
 {
   const dt_masks_form_t *old = darktable.develop->form_visible;
 
-  // the module whose flexi-panel pending-row placeholder (see
-  // dt_masks_gui_build_list's pending-row synthesis in blend_gui.c) is on screen
-  // right now. Captured before dt_masks_clear_form_gui() below wipes both
-  // creation and creation_module.
+  // the module whose panel shows a pending row for the shape being created,
+  // read before dt_masks_clear_form_gui() clears creation and creation_module
   dt_iop_module_t *const was_creating =
     (darktable.develop->form_gui && darktable.develop->form_gui->creation)
       ? darktable.develop->form_gui->creation_module
@@ -2942,11 +2934,9 @@ void dt_masks_change_form_gui(dt_masks_form_t *newform)
   if(newform && newform->type != DT_MASKS_GROUP)
     darktable.develop->form_gui->creation = TRUE;
 
-  // creation just ended, or moved to another module: drop the pending row the
-  // old owner is still showing. The shape modules' right-click-cancel handlers
-  // refresh the panel themselves, but abandoning creation any other way (a
-  // click outside the canvas, focusing another module) reaches none of them and
-  // used to leave the placeholder behind with nothing to dismiss it.
+  // creation ended, or moved to another module: drop the old owner's pending
+  // row. Only a right-click cancel refreshes the panel by itself, not a click
+  // outside the canvas or focusing another module
   if(was_creating
      && (!darktable.develop->form_gui->creation
          || darktable.develop->form_gui->creation_module != was_creating))
@@ -3266,11 +3256,9 @@ void dt_masks_form_remove(dt_iop_module_t *module,
 {
   if(!form) return;
   const dt_mask_id_t id = form->formid;
-  // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
-  // in masks/object.c) is a valid parent too: canvas node-editing routes a
-  // whole-shape delete here with `grp` resolved from the flattened scratch
-  // group's own parentid (see dt_masks_group_ungroup), which for a bundle
-  // child is the bundle's own formid, not the module's real top group.
+  // an AI object is a parent too: a delete on the canvas takes `grp` from the
+  // edit group's parentid (dt_masks_group_ungroup), which for one of the
+  // object's paths is the object
   if(grp && !(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))) return;
 
   if(!(form->type & (DT_MASKS_CLONE|DT_MASKS_NON_CLONE))
@@ -3431,10 +3419,8 @@ float dt_masks_form_change_opacity(dt_iop_module_t *module,
 {
   if(!form) return 0;
   dt_masks_form_t *grp = dt_masks_get_from_id(darktable.develop, parentid);
-  // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
-  // in masks/object.c) is a valid parent too: ctrl+scroll on a bundle child
-  // resolves `parentid` to the bundle's own formid (see dt_masks_group_ungroup's
-  // flattening), not the module's real top group.
+  // an AI object is a parent too: ctrl+scroll on one of its paths passes the
+  // object as `parentid` (see dt_masks_group_ungroup)
   if(!grp || !(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))) return 0;
 
   // we first need to test if the opacity can be set to the form
@@ -3447,12 +3433,10 @@ float dt_masks_form_change_opacity(dt_iop_module_t *module,
     dt_masks_point_group_t *fpt = fpts->data;
     if(fpt->formid == id)
     {
-      // 0, not the 0.05 floor this used to carry (upstream c646d7e959): that
-      // clamp existed because a 0% shape was silently indistinguishable from a
-      // live one, and the on-canvas toast below plus the mask panel's
-      // low-opacity warning badge now say so out loud. The default opacity for
-      // *new* shapes is still floored (see dt_masks_events_mouse_scrolled) --
-      // there, a forgotten 0 makes every shape drawn afterwards invisible.
+      // down to 0: the toast below and the panel's low-opacity badge tell a
+      // shape at 0 apart. The opacity of new shapes keeps a floor
+      // (dt_masks_events_mouse_scrolled), as a forgotten 0 there would make
+      // every shape drawn afterwards invisible
       const float opacity = CLAMP(fpt->opacity + amount, 0.0f, 1.0f);
       if(opacity != fpt->opacity)
       {
@@ -3579,11 +3563,8 @@ static void _isolate_state(GList *forms,
                                ? NULL
                                : dt_masks_get_from_id_ext(forms, pt->formid);
     if(child == grp || (child && !(child->type & DT_MASKS_GROUP))) child = NULL;
-    // formids == NULL is the "solo off" case: nothing is singled out any more,
-    // so the bits come off everywhere. Note this is NOT the same as treating
-    // every point as a non-member, which would set the bits everywhere and
-    // hide the entire group instead. A nested group that is kept whole is
-    // cleared the same way, from an earlier solo inside it.
+    // without formids ("solo off") the bits come off everywhere. A nested
+    // group kept whole is cleared all the way down, of an earlier solo inside it
     if(!formids || _id_in_list(formids, pt->formid))
     {
       pt->state &= ~bits;
@@ -3612,16 +3593,9 @@ static void _ungroup(dt_masks_form_t *dest_grp,
                      const int depth)
 {
   if(!grp || !dest_grp || depth > DT_MASKS_NESTING_MAX) return;
-  // a committed, multi-path AI-mask bundle (DT_MASKS_OBJECT, see
-  // _register_vectorized_forms in masks/object.c) is recursed into exactly
-  // like a real nested DT_MASKS_GROUP below: its own children get flattened
-  // into dest_grp individually, so the canvas's on-screen node-editing (which
-  // always operates on this flattened scratch copy, see dt_masks_set_edit_mode)
-  // can drag each sub-path's own points directly, delegating to that child's
-  // own event handlers (path.c) with zero changes needed there -- the actual
-  // mask math (module->blend_params->mask_id's real, unflattened group) is
-  // untouched by this, so the panel's own coordinated feather/size/rotation
-  // controls for the bundle keep working exactly as before.
+  // an AI object is flattened like a nested group: canvas editing works on
+  // this flattened copy (dt_masks_set_edit_mode), so each path's points are
+  // edited by path.c's own handlers. The mask itself is not changed
   if(!(grp->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
      || !(dest_grp->type & DT_MASKS_GROUP))
     return;
@@ -3676,16 +3650,9 @@ static dt_hash_t _group_hash(dt_hash_t hash,
 
   for(const GList *forms = form->points; forms; forms = g_list_next(forms))
   {
-    // a committed AI-mask bundle (DT_MASKS_OBJECT, see _register_vectorized_forms
-    // in masks/object.c) has a ->points list structurally identical to a
-    // group's (dt_masks_point_group_t referencing real child forms) -- it
-    // must recurse the same way, or a child's own geometry (e.g. a canvas
-    // node drag, see masks/masks.c's dt_masks_group_ungroup flattening) never
-    // reaches this hash: the else branch below would hash only the bundle's
-    // own point-group entries (formid/state/opacity), which a node drag never
-    // touches, leaving blend.c's drawn-mask cache keyed on a stale hash that
-    // never changes -- the edit becomes invisible until something else (e.g.
-    // undo, which bypasses that cache) forces a full reprocess.
+    // an AI object's points are group points, so it recurses like a group:
+    // otherwise moving one of its paths' nodes would not change the hash, and
+    // blend.c's drawn-mask cache would keep showing the old mask
     if(form->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
     {
       const dt_masks_point_group_t *grpt = forms->data;
@@ -3704,16 +3671,10 @@ static dt_hash_t _group_hash(dt_hash_t hash,
         // state & opacity
         hash = dt_hash(hash, &grpt->state, sizeof(int));
         hash = dt_hash(hash, &grpt->opacity, sizeof(float));
-        // group-level opacity (masks v7) multiplies the group's finished
-        // sub-mask in the group renderer (see _group_get_mask_roi_flexi in
-        // group.c), so it is a rendering input exactly as the per-shape
-        // opacity above is. Left out, dragging the group opacity slider
-        // produced no visible change until some unrelated edit forced a
-        // reprocess. Pre-v7 blobs load at 1.0, so neutral for old edits.
+        // the group opacity and the refinement are rendering inputs, as the
+        // opacity above is: every field the group renderer reads must be
+        // hashed, or the cache keeps showing the old mask
         hash = dt_hash(hash, &grpt->group_opacity, sizeof(float));
-        // per-shape/per-group refinement (masks v7) is a rendering input consumed
-        // by the group renderer, so it must feed the pixelpipe cache hash too;
-        // zero-filled for legacy blobs, so this is neutral for old edits.
         hash = dt_hash(hash, &grpt->refinement, sizeof(dt_masks_refinement_t));
         hash = _group_hash(hash, f, forms_list, depth + 1);
       }
@@ -4379,11 +4340,10 @@ void dt_masks_calculate_source_pos_value(const dt_masks_form_gui_t *gui,
   *py = y;
 }
 
-// shapes are drawn in the guide overlay's color, over a neutral edge that
-// contrasts with it: white round a dark color (red, blue, magenta), black round
-// a light one. Guides use the color's own dark shade instead, which is black at
-// full contrast and vanishes over a dark picture. One of the two tones stays
-// visible whatever is underneath.
+// shapes are drawn in the overlay color over a neutral edge, white round a dark
+// color and black round a light one, so one of the two stays visible whatever
+// is underneath. Not the color's own dark shade, as guides use: that is black
+// at full contrast and vanishes over a dark picture
 static void _masks_set_line_color(cairo_t *cr, const double alpha)
 {
   dt_draw_set_color_overlay(cr, TRUE, alpha);
@@ -4396,7 +4356,7 @@ static void _masks_set_edge_color(cairo_t *cr, const double alpha)
                             + 0.7152 * darktable.gui->overlay_green
                             + 0.0722 * darktable.gui->overlay_blue);
   const double edge = lum < 0.5 ? 1.0 : 0.0;
-  // the contrast slider keeps its meaning: how far the two tones stand apart
+  // the overlay contrast setting sets how far the two tones stand apart
   cairo_set_source_rgba(cr, edge, edge, edge,
                         alpha * (0.4 + 0.5 * darktable.gui->overlay_contrast));
 }
@@ -4640,7 +4600,7 @@ void dt_masks_line_stroke(cairo_t *cr,
   cairo_set_line_width(cr, line_width + 2.0 * edge_width);
   cairo_stroke_preserve(cr);
 
-  // then the line itself, in the overlay color
+  // then the line itself, in the overlay color (the edge tone for a source)
   cairo_set_line_width(cr, line_width);
 
   if(restricted && !border)

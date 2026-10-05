@@ -18,18 +18,12 @@
 
 #pragma once
 
-// The replay harness, shared between the harvest checks that render.
-//
-// verify.c owns it: it builds a dt_develop_t, an iop module, a pixelpipe and
-// one piece around a harvested edit, over the generated probe image, and
-// renders the mask through the real dt_develop_blend_process(). persist.c and
-// undo.c need exactly the same thing -- the checks differ in what they do to
-// the mask between renders, not in how they render it.
-//
-// Everything here was file-static in verify.c and is declared only because a
-// second caller now lives in another translation unit. Nothing outside
-// src/develop/masks/ may use it: it exists for the --harvest-masks tooling,
-// not for the pipeline.
+// the replay harness of the harvest checks that render: it builds a
+// dt_develop_t, a module, a pixelpipe and a piece around a harvested edit,
+// over the probe image, and renders the mask through
+// dt_develop_blend_process(). Checks differ in what they do to the mask
+// between renders, not in how they render it. For the harvest tools in
+// src/develop/masks/ only, never the pipeline
 
 #include "develop/blend.h"
 #include "develop/imageop.h"
@@ -40,10 +34,9 @@
 
 G_BEGIN_DECLS
 
-// masks are stored normalized, so the replay renders at a bounded size rather
-// than the edit's own: 512 on the long edge keeps every shape's proportions
-// and every parametric channel's behavior while making a few thousand
-// renders affordable
+// masks are normalized, so the replay renders at a bounded size, which keeps
+// every shape's proportions and every channel's behavior while keeping
+// thousands of renders affordable
 #define VERIFY_MAX_EDGE 512
 
 typedef struct
@@ -56,11 +49,10 @@ typedef struct
   gboolean dev_mutex_ready;
   dt_iop_roi_t roi;
   float *probe;
-  // What the module under test "produced": the probe with a synthetic effect
-  // applied (see _make_module_output). The blend mixes this with `probe`
-  // according to the mask, so it is both what makes the rendered image respond
-  // to the mask at all and what gives the blendif `_out` channels something of
-  // their own to select on.
+  // the module's output: the probe with a synthetic effect applied
+  // (_make_module_output). The blend mixes it with `probe` by the mask, so
+  // the image responds to the mask, and the blendif output channels have
+  // something of their own to select on
   float *modout;
   float *out;
 
@@ -70,12 +62,12 @@ typedef struct
   dt_dev_pixelpipe_iop_t source_piece;
   gboolean source_loaded;
 
-  // OpenCL device to replay the GPU blend on, or -1 when this build/run has
-  // no usable device (the CPU comparison still stands on its own)
+  // the OpenCL device to replay the GPU blend on, or -1 without one (the CPU
+  // comparison stands on its own)
   int devid;
 
-  // whatever darktable.develop pointed at before this replay claimed it, put
-  // back on cleanup -- see dt_masks_verify_replay_init
+  // darktable.develop before the replay took it over, restored on cleanup
+  // (see dt_masks_verify_replay_init)
   dt_develop_t *saved_develop;
 
   // the canvas editing state a shape's modify_property() reads; dev.form_gui
@@ -83,8 +75,8 @@ typedef struct
   dt_masks_form_gui_t form_gui;
 } replay_t;
 
-/** Build a replay around one harvested edit. Returns NULL on success, or a
-    static string naming what could not be set up. */
+/** build a replay around one harvested edit. NULL on success, else a static
+    string naming what could not be set up */
 const char *dt_masks_verify_replay_init(replay_t *r,
                                         const char *operation,
                                         const dt_develop_blend_params_t *bp,
@@ -94,9 +86,9 @@ const char *dt_masks_verify_replay_init(replay_t *r,
                                         const int width,
                                         const int height);
 
-/** Render the mask for the current blend_params/forms, into a caller-owned
-    copy. Returns NULL if the blend published nothing. `image` (may be NULL)
-    receives the rendered RGBA image the same way. */
+/** render the mask of the current blend params and forms into a copy the
+    caller owns; NULL if the blend published nothing. `image`, which may be
+    NULL, receives the rendered RGBA image the same way */
 float *dt_masks_verify_render_mask(replay_t *r, float **image);
 
 /** free everything the replay allocated */

@@ -41,9 +41,9 @@ gboolean dt_masks_check_harvest(const char *json_path, const char *report_path)
     fprintf(rf, "{\n  \"source\": \"%s\",\n  \"darktable_version\": \"%s\",\n",
             json_path, darktable_package_version);
 
-  // All five run unconditionally. A contributor's harvest may be the only one
-  // we ever get from that library, so stopping at the first failure would throw
-  // away the other answers about the same corpus.
+  // all five run unconditionally: a contributor's harvest may be the only one
+  // from that library, and stopping at the first failure would throw away the
+  // other answers about it
   if(rf) fputs("  \"roundtrip\": {", rf);
   const gboolean rt = dt_masks_roundtrip_harvest_section(json_path, rf);
   if(rf) fputs("\n  },\n", rf);

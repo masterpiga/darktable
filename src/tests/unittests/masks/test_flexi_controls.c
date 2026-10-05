@@ -142,9 +142,8 @@ static void test_popup_stays_within_the_panel(void **state)
 }
 
 // the placement is in root coordinates throughout, so a second monitor is just
-// a large x offset -- the popup must follow the panel onto it rather than
-// staying on the primary display, which is what the old window-relative
-// arithmetic did
+// a large x offset: the popup must follow the panel onto it, not stay on the
+// primary display, as window-relative arithmetic would make it
 static void test_popup_follows_the_panel_onto_a_second_monitor(void **state)
 {
   dt_masks_whisker_geom_t g = _geom();

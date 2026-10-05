@@ -23,31 +23,18 @@
 
 #include <float.h>
 
-/* A parametric (blendif) mask as a first-class drawn-mask form.
+/* A parametric (blendif) mask as an element of a group.
  *
- * A parametric form carries its own copy of the blendif channel configuration
- * (dt_masks_point_parametric_t), so several independent parametric masks can
- * live in one module's mask group and be combined with the usual operators
- * (union/intersection/difference/sum/exclusion/inverse), exactly like shapes.
- *
- * This is purely additive: the module's single built-in parametric mask and
- * its UI are untouched, so existing edits render identically. A parametric
- * form only ever exists in edits created after this feature.
- *
- * Rendering reuses the existing per-colorspace make_mask functions, passing
- * this form's blendif config to them as an explicit argument. Those functions
- * read the module's input/output image, which is exposed to the group renderer
- * through the transient blend_refine_* context on piece (set in
- * dt_develop_blend_process). In the OpenCL pipe the images live on the device
- * and are not exposed here, so the parametric mask falls back to fully opaque
- * (mask = 1) on GPU -- a known limitation shared with per-shape feathering. */
+ * The form carries its own blendif settings (dt_masks_point_parametric_t), so
+ * a mask can hold several, combined with any operator, as shapes are. It
+ * renders through the blend colorspace's make_mask function, against the
+ * module's input and output images, which dt_develop_blend_process() lends the
+ * group renderer through the piece's blend_refine_* context (read back from
+ * the device in the OpenCL pipe). */
 
-// localized channel label for a single-channel form ("Lightness", "chroma", ...),
-// or a generic fallback for the legacy multi-channel form (no single-channel
-// binding, so it has no one channel to name itself after). Exported (see
-// blend.h) so the mask-list rename UI (blend_gui.c) can recompute this same
-// prefix from the form's type every time, rather than parsing it out of
-// form->name -- that keeps the prefix stable across repeated renames.
+// the localized label of a parametric form: its channel's name, or a generic
+// one for a multi-channel form. The panel's rename takes the name's prefix
+// from here rather than parsing form->name, so that the prefix stays stable
 const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form)
 {
   const dt_masks_point_parametric_t *p = form->points ? form->points->data : NULL;
@@ -63,22 +50,14 @@ const char *dt_masks_parametric_type_label(const dt_masks_form_t *const form)
   return _("parametric");
 }
 
-// true iff `sel` is a single-channel parametric form still sitting at its
-// full/base range ({0,0,1,1} per channel). The group fold skips such an
-// element and the panel badges it as a no-op, both from this test, so a row
-// is badged exactly when it does not render. A legacy multi-channel form
-// (single == 0) has too many independent ranges to summarize as one badge, so
-// it is never flagged here.
-// `p->channel` indexes the colorspace's channel[] array, NOT the
-// blendif_parameters slot directly: that slot is
-// channels[p->channel].param_channels[in_out], the same indirection
-// blend_gui.c's _blendif_scale goes through. Both input and
-// output sub-ranges are checked: per dt_masks_point_parametric_t's own field
-// comment, a non-empty output range still refines the mask even while its
-// slider is hidden, so it must count too, not just whichever one the UI
-// happens to show. Inverted polarity is excluded outright: a full range
-// selects everything, but its complement selects nothing, which is a very
-// different (and not currently detected/badged) kind of "wrong", not a no-op.
+// TRUE when `sel` is a single-channel form whose input and output ranges are
+// both full ({0, 0, 1, 1}), so it restricts nothing. The group fold does not
+// count such an element and the panel badges it, both from this test. Both
+// ranges count: the output range refines the mask even while its slider is
+// hidden. A multi-channel form has too many ranges to summarize, and an
+// inverted one at its full range selects nothing, which is no no-op: neither
+// is flagged. `p->channel` indexes the colorspace's channel table, not
+// blendif_parameters (see _blendif_scale in blend_gui.c)
 gboolean dt_masks_parametric_is_noop(const dt_masks_form_t *const sel)
 {
   if(!sel || !(sel->type & DT_MASKS_PARAMETRIC) || !sel->points) return FALSE;
@@ -112,25 +91,22 @@ gboolean dt_masks_parametric_sanitize(dt_masks_form_t *const form)
 
 static void _parametric_set_form_name(dt_masks_form_t *const form, const size_t nb)
 {
-  // a single-channel form's name leads with its channel -- "parametric" in
-  // front of that is redundant, unlike the legacy multi-channel form
+  // a single-channel form's name leads with its channel, without "parametric"
+  // in front, which only a multi-channel form needs
   snprintf(form->name, sizeof(form->name), "%s #%d", dt_masks_parametric_type_label(form),
            (int)nb);
 }
 
 static GSList *_parametric_setup_mouse_actions(const dt_masks_form_t *const form)
 {
-  // no canvas interaction; configured from the side panel
+  // no canvas interaction: it is set up in the panel
   return NULL;
 }
 
-/* A parametric form has no on-canvas geometry, but the group event/expose
- * dispatchers (src/develop/masks/group.c) call some vtable entries on every
- * group member without a per-function NULL check. We therefore provide explicit
- * no-op stubs rather than leaving those slots NULL, so a parametric form can
- * sit in a shown group without crashing. The form is never the "closest" form
- * (get_distance returns a huge distance), so it is never picked for direct
- * interaction. */
+/* A parametric form has no geometry, but the group's event and draw
+ * dispatchers (group.c) call some of these entries on every member without a
+ * NULL check, so they are no-op stubs. get_distance never makes it the closest
+ * form, so it is never picked on the canvas. */
 
 static void _parametric_post_expose(cairo_t *const cr,
                                     const float zoom_scale,
@@ -210,43 +186,23 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
     return 1;
   }
 
-  // Evaluate this form's own blendif config, at full opacity (the group
-  // compositor applies the form opacity later). It is built as a scratch copy
-  // of the piece's params so everything the form does not itself define
-  // (blend_cst above all) keeps the module's value, and handed to the make_mask
-  // functions as an explicit argument.
-  //
-  // This used to be installed onto the piece instead -- pointing
-  // piece->blendop_data at this stack local for the duration of the call and
-  // restoring it afterwards -- because make_mask read its config off the piece.
-  // Nothing reads blendop_data concurrently on the path this runs on, so it
-  // worked, but it left a shared pipe struct momentarily pointing into a stack
-  // frame, and it stayed correct only as long as nobody ever added an early
-  // return between the two assignments.
-  //
-  // The const cast below is now only to match the piece parameter these
-  // functions share with the classic blend path (blend.c passes a non-const
-  // piece); nothing here mutates the piece any more. Making that parameter
-  // const would have to go through dt_develop_blendif_init_masking_profile too.
+  // evaluate the form's own blendif settings at full opacity (the group applies
+  // the form's opacity), on a copy of the piece's params, so that what the
+  // form does not define, blend_cst above all, is the module's. The copy goes
+  // to make_mask as an argument: do not point piece->blendop_data at it, the
+  // piece is shared. The cast only matches make_mask's non-const piece, which
+  // blend.c needs; nothing here changes the piece
   dt_dev_pixelpipe_iop_t *const pc = (dt_dev_pixelpipe_iop_t *)piece;
   const dt_develop_blend_params_t *const saved = piece->blendop_data;
   if(!saved) return 1;
 
-  // A form stores the channel layout of the colorspace it was authored in
-  // (p->colorspace), but can only be evaluated against the module's current one:
-  // that is what the pixel data handed to make_mask is in. The interactive
-  // switch that would create a mismatch removes the parametric forms first,
-  // after asking (see _blendif_change_blend_colorspace, blend_gui.c), but one
-  // can still arrive from
-  // disk: an edit whose stored blend_cst is DEVELOP_BLEND_CS_NONE has its
-  // colorspace resolved at load time from the *workflow preference*, not from
-  // the file (dt_iop_commit_blend_params, imageop.c -- upstream behavior, also
-  // in master). Such an edit renders differently on a display-referred and a
-  // scene-referred machine, with nothing in the UI saying so.
-  //
-  // Diagnostic only, deliberately: the mask is still computed as before. Making
-  // this case render differently would change existing edits on a path that has
-  // not been shown to be reachable, which is a worse trade than a log line.
+  // a form keeps the channel layout of the colorspace it was made in, but is
+  // evaluated in the module's, which the pixels are in. Switching it in the
+  // panel removes the parametric forms first (_blendif_change_blend_colorspace
+  // in blend_gui.c), but an edit stored with DEVELOP_BLEND_CS_NONE takes its
+  // colorspace from the workflow preference when loaded
+  // (dt_iop_commit_blend_params). This only logs: rendering such an edit
+  // differently would change edits on a path not shown to be reachable
   if(p->colorspace != (uint32_t)saved->blend_cst)
     dt_print(DT_DEBUG_MASKS,
              "[masks] parametric form %d: colorspace mismatch (form %u, module %d)"
@@ -270,10 +226,9 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   memcpy(tmp.blendif_boost_factors, p->blendif_boost_factors,
          sizeof(tmp.blendif_boost_factors));
   tmp.opacity = 100.0f;
-  // the blendif make_mask functions short-circuit to a uniform mask unless the
-  // blend mode advertises a parametric mask. A parametric *form* is evaluated
-  // while the module is in flexi/drawn mode (no CONDITIONAL bit), so force the
-  // bit on for this scratch copy; otherwise every form would render as opaque.
+  // make_mask renders a uniform mask unless mask_mode has a parametric mask,
+  // which a flexi mask_mode has not: without the bit, every form would render
+  // opaque
   tmp.mask_mode = DEVELOP_MASK_ENABLED | DEVELOP_MASK_CONDITIONAL;
 
   const dt_iop_roi_t *const rin =
@@ -304,8 +259,8 @@ static int _parametric_get_mask_roi(const dt_iop_module_t *const module,
   return 1;
 }
 
-// The function table for parametric masks. Most geometric/mouse callbacks are
-// unused; the form is evaluated purely from pixel values.
+// the function table for parametric forms: most geometric and mouse callbacks
+// are unused, as the form is evaluated from pixel values alone
 const dt_masks_functions_t dt_masks_functions_parametric = {
   .point_struct_size = sizeof(struct dt_masks_point_parametric_t),
   .sanitize_config = NULL,

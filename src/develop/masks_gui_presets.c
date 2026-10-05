@@ -16,7 +16,7 @@
     along with darktable.  If not, see <http://www.gnu.org/licenses/>.
 */
 
-// Group-layout presets for the flexi masks panel: capture a mask's group
+// group-layout presets for the flexi masks panel: capture a mask's group
 // skeleton, store it in the presets database under a fake operation name, and
 // apply it back onto a module; and the built-in layouts, read from JSON, with
 // their per-group notes and the default layout a mask starts with. It shares
@@ -37,25 +37,21 @@
 #include <sqlite3.h>
 
 // ---- group-layout presets --------------------------------------------------
-// A "layout" is the skeleton of a flexi mask: the mask's own group and the
+// a "layout" is the skeleton of a flexi mask: the mask's own group and the
 // groups nested in it, each with its within-group operator, name and opacity
 // -- nothing else: no shapes, no channel or raster elements. Captured and
 // applied as an array of _flexi_layout_node_t in pre-order, the mask's own
 // group first and every group's nested groups bottom-up after it, each naming
 // its holder by index.
 //
-// Presets are stored in the regular presets database table (reusing its schema
-// and INSERT/DELETE machinery directly) under a fixed, fake operation name that
-// no real image operation will ever register -- so they are global, shared by
-// every module's flexi panel, rather than scoped to one iop like ordinary
-// module presets. The higher-level preset GUI/apply helpers in gui/presets.c
-// are not reusable here: they apply a preset by overwriting a module's whole
-// params blob, which is not what a group-layout preset means (it never touches
-// mask elements, let alone the rest of a module's parameters).
+// stored in the presets table under a fake operation name no module
+// registers, so that they are shared by every module's panel. Not through
+// gui/presets.c, which applies a preset by overwriting a module's params; a
+// layout touches only the mask's groups
 #define FLEXI_GROUP_PRESET_OP "flexi_mask_groups"
-// v1-v3 stored a flat list of groups joined by between-group operators, which
-// masks no longer have (masks_revamp_nested_groups.md, Q8): those are not
-// listed any more. v4 stores the tree.
+// v4 stores the tree. Earlier versions, flat lists of groups joined by
+// between-group operators (see masks_revamp_nested_groups.md, Q8), are not
+// listed
 #define FLEXI_GROUP_PRESET_VERSION 4
 
 // one group of a layout. Written to the database verbatim, as one blob of
@@ -210,8 +206,7 @@ static GList *_flexi_preset_list_load(void)
 {
   GList *out = NULL;
   sqlite3_stmt *stmt;
-  // only the tree format: older presets describe a mask shape masks no longer
-  // have, and stay in the database unlisted
+  // only the tree format: older presets stay in the database unlisted
   DT_DEBUG_SQLITE3_PREPARE_V2(dt_database_get(darktable.db),
                               "SELECT name, op_params FROM data.presets"
                               " WHERE operation = ?1 AND writeprotect = 0"
@@ -321,7 +316,7 @@ static void _flexi_preset_apply_confirmed(dt_iop_module_t *module,
 
 
 // ---- built-in layouts ------------------------------------------------------
-// Listed above the user's own presets, and their names are reserved so a user
+// listed above the user's own presets, and their names are reserved so a user
 // preset cannot shadow one. Read from masks_group_presets.json: the copy in
 // the user's config directory when there is one, which is how they are
 // iterated on without a rebuild, else the installed one. The file is read
@@ -357,8 +352,8 @@ static struct
 } _builtins;
 
 // an operator is named as the menu names it, untranslated (see _within_modes
-// in blend_gui.c). The older keys after them predate those names, and still
-// load so that preset files written with them keep working
+// in blend_gui.c). The other keys after them also load, for preset files
+// that use them
 static const struct
 {
   const char *name;
@@ -398,7 +393,7 @@ static const gchar *_json_string(JsonObject *o, const char *member)
            : NULL;
 }
 
-// A group can be another preset, inserted whole: {"preset": "<id>"}, with any
+// a group can be another preset, inserted whole: {"preset": "<id>"}, with any
 // member it sets itself ("name", "operator", "notes", "groups"...) taking the
 // place of that preset's own. It resolves to a chain of objects, the group as
 // written first, then the mask of each preset it names in turn, and each

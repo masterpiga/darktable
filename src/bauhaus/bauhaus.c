@@ -628,15 +628,10 @@ static void _window_motion_handle(GtkWidget *widget,
   const gint ex = root_x - allocation.x;
   const gint ey = root_y - allocation.y;
 
-  // a popup opened via dt_bauhaus_widget_show_popup() at a caller-chosen
-  // position rather than right where the mouse already was (see
-  // _param_row_slider_precise_open in blend_gui.c) can legitimately start
-  // this handler with the pointer more than a normal popup's tolerance away
-  // -- the reject-on-stray-pointer safety net below, and the "hover without
-  // holding a button also drags the value" convenience further down, both
-  // assume the popup opened at the pointer, so for a widget opting out of
-  // that (tagged "dt-bauhaus-static-popup") neither applies: the value only
-  // changes on an actual button-drag/scroll/typed entry, never bare hover.
+  // a popup tagged "dt-bauhaus-static-popup" opened where its caller placed
+  // it (dt_bauhaus_widget_set_popup_position), not at the pointer, which may
+  // start far from it: it is not rejected for a straying pointer, and hover
+  // alone does not change its value, only a drag, a scroll or typing
   const gboolean static_popup =
     g_object_get_data(G_OBJECT(w), "dt-bauhaus-static-popup") != NULL;
 
@@ -695,14 +690,8 @@ static void _window_motion_handle(GtkWidget *widget,
       _slider_set_normalized(w, pop->oldpos + mouse_off);
     else if(static_popup)
     {
-      // a static popup never lets bare hover touch the widget's own value
-      // (see the static_popup comment above) -- but a caller that opted into
-      // this popup style may still want to know what value the pointer is
-      // currently over, to preview it elsewhere without committing anything.
-      // Used by flexi's parametric-mask precise-entry popup (see
-      // _param_row_slider_precise_open in blend_gui.c) to preview a hovered
-      // node position on the row's own range slider before the user commits
-      // to it by actually dragging.
+      // hover leaves a static popup's value alone, but reports the value
+      // under the pointer to the caller's hook, to preview it elsewhere
       dt_bauhaus_static_hover_preview_t hover_preview =
         g_object_get_data(G_OBJECT(w), "dt-bauhaus-static-hover-preview");
       if(hover_preview)
@@ -738,11 +727,11 @@ static void _window_motion_handle(GtkWidget *widget,
 // GTK3's controller variant regressed silently once before: a gtk4-prep
 // sweep (b91b228482) moved this from the raw signal (added for exactly this
 // quirk by f098290bdf) to a controller along with everything else elsewhere
-// in the file, breaking dragging inside this specific popup (e.g. the
-// precise-entry popover flexi opens via dt_bauhaus_widget_show_popup(), see
-// _param_row_slider_precise_open in blend_gui.c) without anyone noticing,
-// since regular in-place widgets don't hit this window type at all. Keep the
-// GTK3 branch on the raw signal.
+// in the file, breaking dragging inside this specific popup (e.g. a
+// right-click precise-numeric-entry popup opened via
+// dt_bauhaus_widget_show_popup()) without anyone noticing, since regular
+// in-place widgets don't hit this window type at all. Keep the GTK3 branch
+// on the raw signal.
 #if GTK_CHECK_VERSION(4, 0, 0)
 static void _window_motion_handler(GtkEventControllerMotion *controller,
                                     gdouble x,
@@ -2334,12 +2323,9 @@ static void _draw_indicator(dt_bauhaus_widget_t *w,
   const float border_width = bh->border_width;
   const float size = bh->marker_size;
   const float htM = bh->baseline_size - border_width;
-  // a labeled slider always reserves a text line above the baseline; one
-  // with its label suppressed (content_height > 0, see the flexi group
-  // header's own opacity slider in blend_gui.c) has nothing there any more,
-  // so center the baseline/indicator in the height it actually has instead
-  // of leaving it pinned under a now-blank label row. content_height <= 0
-  // (every other caller, including the popup) keeps the original placement.
+  // a slider reserves a text line above its baseline for its label. With the
+  // label hidden and a height given (content_height > 0), the baseline is
+  // centered in that height instead. The popup passes -1
   const float htm = (!w->show_label && content_height > 0.0f)
     ? (content_height - htM) / 2.0f
     : bh->line_height + INNER_PADDING;
@@ -2536,9 +2522,7 @@ static void _draw_baseline(dt_bauhaus_widget_t *w,
   // thickness of baseline
   const float htM = bh->baseline_size - bh->border_width;
 
-  // pos of baseline -- see _draw_indicator's own content_height comment for
-  // why this centers instead of using the fixed label-row offset when the
-  // label is hidden
+  // pos of baseline, centered when the label is hidden (see _draw_indicator)
   const float htm = (!w->show_label && content_height > 0.0f)
     ? (content_height - htM) / 2.0f
     : bh->line_height + INNER_PADDING;
@@ -3074,28 +3058,18 @@ static gboolean _widget_draw(GtkWidget *widget,
       if(gtk_widget_is_sensitive(widget))
       {
         cairo_save(cr);
-        // the indicator shape is wider than the 1px baseline it marks a
-        // position on, so it normally overhangs this rectangle right at
-        // pos 0.0/1.0 and gets sliced in half by this very clip -- widen it
-        // by this widget's own left/right margin (0 for a plain bauhaus
-        // slider, so no change there; a few px for one that reserves side
-        // margin specifically for this, e.g. .mask-inline-opacity in
-        // darktable.css) so the marker has room to draw in full at the
-        // extremes without the track itself (drawn separately, unaffected
-        // by this clip) appearing to extend past it.
+        // the indicator is wider than the baseline and overhangs this clip at
+        // 0 and 1: widen the clip by the widget's side margins, which a
+        // slider can reserve for this, so that the indicator draws whole at
+        // the ends while the baseline does not grow
         cairo_rectangle(cr, -w->margin.left, 0, w3 + w->margin.left + w->margin.right,
                         h3 + INNER_PADDING);
         cairo_clip(cr);
         _draw_indicator(w, w->slider.pos, cr, w3, *fg_color, *bg_color, h3);
         cairo_restore(cr);
 
-        // unlike the combobox/toggle cases above, this text draw used to run
-        // unconditionally regardless of w->show_label -- dt_bauhaus_widget_hide_label
-        // had no effect at all on a slider (every existing caller only ever
-        // targets a combobox, where it does work, so nothing relies on that
-        // no-op). Gate it here too, so a slider that wants to show only its
-        // bare indicator (see the flexi group header's own opacity slider in
-        // blend_gui.c) actually can.
+        // as for the combobox and the toggle above, a hidden label hides the
+        // value too, so that a slider can show its indicator alone
         if(w->show_label)
         {
           // TODO: merge that text with combo
@@ -3242,12 +3216,9 @@ static void _widget_get_preferred_width(GtkWidget *widget,
 
   *natural_width = _natural_width(widget, FALSE)
                    + w->margin.left + w->margin.right + w->padding.left + w->padding.right;
-  // this used to be left unset, so gtk_widget_get_preferred_size() on a bauhaus
-  // widget returned stack garbage. Explicitly 0 rather than *natural_width:
-  // every panel that hosts sliders (not just flexi masks) sizes off this, and a
-  // real minimum equal to natural (each slider's full numeric-label width)
-  // stopped every such panel from being shrunk below that sum. 0 keeps the
-  // lenient behavior the garbage value happened to give
+  // gtk_widget_get_preferred_size() reads it. 0 rather than the natural width,
+  // so that a panel of sliders can still shrink below the sum of their full
+  // label widths
   *minimum_width = 0;
 }
 
@@ -3436,16 +3407,10 @@ static void _popup_show(GtkWidget *widget)
   p->height += pop->padding.top + pop->padding.bottom;
   pop->offcut = 0;
 
-  // a caller that pinned this popup (dt_bauhaus_widget_set_popup_position)
-  // replaces everything worked out above. Its rectangle is in root
-  // coordinates, so convert it into the same space the rest of pop->position
-  // lives in: relative to `top`, the window _window_position anchors against
-  // via gdk_window_move_to_rect below.
-  //
-  // Stolen, not read: the pin applies to this one opening only. A pin left
-  // standing would be reused by whatever else opens the same widget's popup
-  // later -- a shortcut bound to the slider, say -- placing it wherever the
-  // widget happened to be the last time a caller positioned it by hand.
+  // a position the caller pinned (dt_bauhaus_widget_set_popup_position)
+  // replaces all of the above, converted from root coordinates to `top`'s,
+  // which _window_position anchors against. Stolen, not read: the pin is for
+  // this opening only, not for a later one, by a shortcut say
   GdkRectangle *pinned =
     g_object_steal_data(G_OBJECT(widget), "dt-bauhaus-popup-position");
   if(pinned)
@@ -3927,12 +3892,9 @@ static gboolean _slider_value_change_dragging(gpointer data)
   return G_SOURCE_REMOVE;
 }
 
-// the real (min..max, exactly what dt_bauhaus_slider_get() returns) value a
-// normalized [0,1] popup position maps to, quantized to the slider's own
-// display precision -- pulled out of _slider_set_normalized so a caller can
-// ask "what would this position set the slider to" without actually setting
-// it (see the static-popup hover-preview hook in _window_motion_handle,
-// which previews a value without committing it).
+// the value, as dt_bauhaus_slider_get() returns it, that a normalized popup
+// position sets, rounded to the slider's display precision, so that the
+// static popup's hover preview can report it without setting it
 static float _slider_normalized_to_value(const dt_bauhaus_slider_data_t *d, float pos)
 {
   float rpos = CLAMP(pos, 0.0f, 1.0f);

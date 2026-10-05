@@ -27,15 +27,14 @@
 // ---------------------------------------------------------------------------
 // deterministic integer hash noise
 //
-// Everything random-looking in the probe comes from here. It has to be an
-// integer hash rather than rand(): the probe must come out bit-identical on
-// every machine, or a harvested file collected by one user cannot be replayed
-// by another, and a verification failure could never be reproduced.
+// everything random-looking in the probe comes from here: an integer hash,
+// not rand(), so that the probe is the same on every machine and a
+// verification failure reproduces anywhere
 // ---------------------------------------------------------------------------
 
 static inline uint32_t _hash_u32(uint32_t x)
 {
-  // finaliser from MurmurHash3; good avalanche, no state, no libc
+  // the finalizer of MurmurHash3: good avalanche, no state, no libc
   x ^= x >> 16;
   x *= 0x85ebca6bu;
   x ^= x >> 13;
@@ -78,10 +77,9 @@ static inline float _value_noise(const float x, const float y, const uint32_t se
 }
 
 /** fractional Brownian motion: `octaves` doublings of frequency, halvings of
-    amplitude. Returns roughly [0,1], mean ~0.5. This is what gives the detail
-    mask (which is a wavelet decomposition) something to find at every scale it
-    looks at -- a single-frequency noise would light up one wavelet band and
-    leave the rest flat. */
+    amplitude, roughly in [0, 1] with a mean near 0.5. It gives the detail mask,
+    a wavelet decomposition, something at every scale it looks at, where noise
+    of one frequency would fill one band only */
 static inline float _fbm(const float x,
                          const float y,
                          const int octaves,
@@ -103,10 +101,9 @@ static inline float _fbm(const float x,
 // ---------------------------------------------------------------------------
 // low-discrepancy sequences
 //
-// Used to walk the third color axis (blue) and the exposure ladder across
-// tiles. A low-discrepancy sequence rather than a hash because we want the
-// *first few* tiles a small mask covers to already be well spread, which is
-// exactly the property these have and a hash does not.
+// to walk blue and the exposure ladder across tiles: unlike a hash, a
+// low-discrepancy sequence spreads well over the first few tiles already,
+// which is all a small mask covers
 // ---------------------------------------------------------------------------
 
 /** van der Corput radical inverse in base 2 */
@@ -137,20 +134,13 @@ static inline float _radical_inverse_3(uint32_t n)
 // the probe
 // ---------------------------------------------------------------------------
 
-/** Tile edge in pixels.
-
-    This is the probe's main tuning knob, and it trades off the two coverage
-    properties against each other. Each tile sweeps red and green internally,
-    so a larger tile resolves that sweep more finely; but blue and exposure
-    only change *between* tiles, so a larger tile means a small drawn mask
-    sees fewer distinct slices of the color cube.
-
-    16px is chosen from the measured failure of the second property: at 48px a
-    window one eighth of the image across spans barely two tiles, and the
-    local-coverage test measured Jz reaching only 6 of 32 bins there. At 16px
-    the same window spans about seven tiles each way, and the per-pixel noise
-    is more than enough to fill in a 16-step sweep. Clamped for small images so
-    the tiling never degenerates to a single tile. */
+/** the tile edge in pixels, which trades the two kinds of coverage against
+    each other: a tile sweeps red and green, finer when larger, but blue and
+    exposure change between tiles only, so a small shape sees fewer slices of
+    the cube when tiles are larger. At 16 a window an eighth of the image wide
+    spans about seven tiles each way (the local coverage test needs that), and
+    the noise fills in a 16-step sweep. Clamped for small images, so that there
+    is always more than one tile */
 static inline int _tile_size(const int width, const int height)
 {
   const int smaller = MIN(width, height);
@@ -166,9 +156,8 @@ static void _generate(float *const buf, const int width, const int height)
   const int tile = _tile_size(width, height);
   const int ntx = (width + tile - 1) / tile;
 
-  // noise lattice density: fixed in *image* fractions rather than pixels, so
-  // that the same structure appears at every probe size and a mask harvested
-  // against one size behaves comparably at another.
+  // the noise lattice is fixed in fractions of the image, not in pixels, so
+  // that a probe of any size has the same structure
   const float nscale = 24.0f;
 
   DT_OMP_FOR()
@@ -184,53 +173,27 @@ static void _generate(float *const buf, const int width, const int height)
 
       const uint32_t n = (uint32_t)(ty * ntx + tx);
 
-      // Base layer: each tile sweeps a full (R,G) slice of the linear-RGB
-      // cube, and the slice's blue level walks a base-2 radical inverse
-      // across tiles. So one tile alone already spans all of red and all of
-      // green, and a handful of neighboring tiles span blue too.
+      // the base: each tile sweeps a full red and green slice of the linear
+      // RGB cube, at a blue level walking a base-2 radical inverse across
+      // tiles, so a few neighboring tiles span blue too
       float rgb[3] = { u, v, _radical_inverse_2(n + 1u) };
 
-      // Texture, at every scale the detail mask can look at. Different seed
-      // per channel, so the noise moves through color space rather than only
-      // along the neutral axis -- otherwise it would add luminance coverage
-      // but no hue coverage.
+      // texture at every scale the detail mask looks at, seeded per channel
+      // so that it moves through hue too, not only along the neutral axis
       const float nx = (float)x / (float)width * nscale;
       const float ny = (float)y / (float)height * nscale;
       for(int c = 0; c < 3; c++)
         rgb[c] += 0.18f * (_fbm(nx, ny, 5, 0x51ed270bu + (uint32_t)c * 0x9e3779b9u) - 0.5f);
 
-      // Hard edges, in two families.
-      //
-      // The tile grid itself already provides a regular one: R and G both
-      // jump from 1 back to 0 at every tile boundary. That is a strong,
-      // perfectly sharp edge lattice -- but it is a single scale, perfectly
-      // periodic, and strictly axis-aligned, which is about as unlike
-      // photographic structure as an edge can be. Guided filtering is
-      // sensitive to edge orientation and spacing, so a probe carrying only
-      // that lattice would exercise one degenerate case and call it edge
-      // coverage.
-      //
-      // The second family is therefore deliberately unlike the first in all
-      // three respects: the cell sizes are chosen coprime to the tile size so
-      // the cells never line up with tile boundaries, each cell is offset from
-      // the origin, and each is split by a half-plane at a hashed angle rather
-      // than along an axis. That yields sharp steps at arbitrary orientations
-      // and arbitrary positions.
-      //
-      // The alignment point is not hypothetical: the first version of this
-      // used cell = tile * (2 << level), which made every cell boundary land
-      // exactly on a tile boundary, so the whole family added no edge the
-      // lattice did not already have.
-      // Four levels rather than two, because the balance matters and was
-      // measured wrong at two: the tile lattice puts an axis-aligned step
-      // every `tile` pixels in both directions, which is a far denser
-      // population than a handful of cell boundaries can offset. The
-      // orientation test found the diagonal bins holding a sixth of the share
-      // they needed. Four families of finer cells bring off-axis edges up to
-      // the same order as the lattice's.
-      //
-      // The per-family factors are correspondingly gentler, since up to four
-      // of them now multiply on the same pixel.
+      // hard edges. The tile grid already has some, where red and green jump
+      // back to 0, but of one scale, periodic and axis-aligned, and guided
+      // filtering is sensitive to edge orientation and spacing. So these cells
+      // differ in all three: their sizes are coprime to the tile size, so that
+      // their borders never meet the tiles' (do not make them multiples of
+      // it), they are offset from the origin, and each is split along a
+      // hashed angle. Four levels, so that off-axis edges are about as common
+      // as the grid's axis-aligned ones, each factor gentle, as up to four
+      // multiply on one pixel
       static const int _cell_bias[4] = { 5, 7, 11, 13 };
       for(int level = 0; level < 4; level++)
       {
@@ -250,17 +213,11 @@ static void _generate(float *const buf, const int width, const int height)
         }
       }
 
-      // Saturation ladder.
-      //
-      // The base sweep is a rectangular walk of the RGB cube, so it reaches
-      // the cube's corners only at exact tile corners, and the additive noise
-      // above pulls even those back towards neutral. The most saturated
-      // colors the color space can express are therefore never produced,
-      // and the coverage test measured exactly that: the top bins of Cz were
-      // unreachable. This pushes a quarter of the tiles away from their own
-      // mean, towards (and past) the gamut boundary; the clamp to zero at the
-      // end of the loop is what makes an out-of-gamut push land on the
-      // boundary rather than outside it.
+      // a saturation ladder: the base reaches the cube's corners only at
+      // tile corners, where the noise pulls them back to neutral, so the most
+      // saturated colors would be missing. A quarter of the tiles are pushed
+      // away from their mean, to and past the gamut boundary; the clamp at
+      // the end of the loop puts a push past it on the boundary
       const float s2 = _radical_inverse_2(n * 3u + 7u); // decorrelated from blue
       if(s2 > 0.75f)
       {
@@ -269,18 +226,11 @@ static void _generate(float *const buf, const int width, const int height)
         for(int c = 0; c < 3; c++) rgb[c] = mean + k * (rgb[c] - mean);
       }
 
-      // Exposure ladder, spanning [-6, +2] EV over half the tiles.
-      //
-      // Upwards because the working space is scene-referred: boost factors let
-      // a blendif slider address values well above 1.0, and a probe clipped
-      // there would make every such selection vacuous.
-      //
-      // Downwards because the base layer cannot get dark on its own. Red and
-      // green sweep independently and blue walks its own sequence, so a truly
-      // dark pixel needs all three near zero at once -- which happens only at
-      // a tile corner, and even there the additive noise lifts it back up. The
-      // deep shadows were measured missing: the coverage test found the bottom
-      // bin of LAB L unreachable until this ladder was extended below zero EV.
+      // an exposure ladder over [-6, +2] EV on half the tiles. Up, because
+      // boost factors let a blendif slider select values well above 1 in the
+      // scene-referred working space; down, because the base is dark only
+      // where all three channels are near 0, at a tile corner, where the noise
+      // lifts it again
       const float e3 = _radical_inverse_3(n + 1u);
       if(e3 > 0.5f)
       {

@@ -431,11 +431,10 @@ header button,
   color: @button_fg;
 }
 
-/* iop on/off button -- targeted by its own dedicated class (set in
-   dt_iop_gui_header_button) rather than ":first-child", which used to match
-   any other icon-only transparent-background button that merely happened to
-   be packed first in its own container (e.g. a per-row color picker in the
-   flexi masks editor), dimming it like a disabled control by accident */
+/* iop on/off button, by its own class (set in dt_iop_gui_header_button):
+   ":first-child" would also match any icon-only transparent button packed
+   first in its container (a per-row color picker in the flexi masks editor)
+   and dim it like a disabled control */
 .dt_module_enable_btn
 {
   color: shade(@disabled_fg_color, 0.9);
@@ -672,11 +671,10 @@ dialog .sidebar row:selected:hover label,
   padding: 1px;
 }
 
-/* the collapse arrow keeps its pill background only in the dedicated panel,
-   where it has to stand apart from the mask controls beside it. Embedded, it
-   is the leading icon of a module header row and has to read like one: no
-   fill of its own (the pill is invisible against the lighter mask-enabled
-   header but not against the disabled one), same box as the buttons around it */
+/* embedded, the collapse arrow is the leading icon of a module header row and
+   reads like one: no fill of its own (a pill shows against the disabled
+   header but not against the lighter mask-enabled one), and the same box as
+   the buttons around it */
 #blending-tabs.blending-tabs-embedded #flexi-inline-collapse
 {
   background-color: transparent;
@@ -689,8 +687,7 @@ dialog .sidebar row:selected:hover label,
   background-color: alpha(@fg_color, 0.18);
 }
 
-/* the "blend mask" caption: a small gap after the collapse arrow is all it
-   needs in the dedicated panel */
+/* the "blend mask" caption, a small gap after what leads it */
 #blending-tabs-caption
 {
   margin-left: 0.3em;
@@ -857,10 +854,7 @@ dialog .sidebar row:selected:hover label,
 }
 
 /* ----------------------------------------------------------------------------
-   Flexi mask panel (drawn/parametric group composition list). These style the
-   group headers, the per-element rows, the operator chips and the elements-area
-   guidance message. Previously injected from blend_gui.c; kept here so themes can
-   override them.
+   flexi mask panel: in CSS, so that themes can override it.
    ----------------------------------------------------------------------------*/
 
 /* the panel's shades, one per state. Each header and the rail hanging from
@@ -985,9 +979,9 @@ dialog .sidebar row:selected:hover label,
 /* "selected" wash, grayscale only: no accent color, just a lighter shade of
    the panel itself, so it reads as "highlighted" rather than "colored".
    Applied to the whole group block when a group is selected (see
-   _apply_group_selection / "header-widget" in _build_masks_list, which points
-   at the group's full body, not just its header) and to a single row when a
-   canvas-clicked shape is mirrored into the list (dt_iop_gui_masks_select_form). */
+   _apply_group_selection, and "header-widget" in dt_masks_gui_build_list,
+   the group's full body) and to a single row when a canvas-clicked shape is
+   mirrored into the list (dt_iop_gui_masks_select_form). */
 .mask-list-row-selected
 {
   background-image: linear-gradient(to bottom, rgba(255, 255, 255, 0.20), rgba(255, 255, 255, 0.10));
@@ -1025,8 +1019,8 @@ dialog .sidebar row:selected:hover label,
    group can carry both classes at once (the mask's own group is selected by
    default and implied whenever it holds the selection), and at equal
    specificity the later rule wins. The other way round, the implied shade
-   overrode the selected one on the card while the header kept the selected
-   gradient, so the two disagreed. */
+   would override the selected one on the card while the header kept the
+   selected gradient. */
 .mask-group-block.mask-list-row-implied > box > * > .mask-group-header
 {
   background-color: @mask_implied;
@@ -1100,10 +1094,10 @@ dialog .sidebar row:selected:hover label,
   border-bottom: 2px solid transparent;
 }
 
-/* the block's content stops short of its bottom edge by the line's width: its
-   last element reaches down to it and painted over the line below the group,
-   which then read as the line below that element. The header's own top margin
-   already keeps the top edge clear */
+/* the block's content stops short of its bottom edge by the line's width,
+   or its last element would paint over the line below the group, which
+   would then read as the line below that element. The header's own top
+   margin keeps the top edge clear */
 .mask-group-block > box
 {
   margin-bottom: 2px;
@@ -1217,8 +1211,9 @@ dialog .sidebar row:selected:hover label,
   opacity: 1.0;
 }
 
-/* group headers (#mask-group-header-row), empty groups' included: the same resting shade as an element's, and the same rail color in
-   outline-color (see .mask-element-header) */
+/* group headers (#mask-group-header-row), empty groups' included: the same
+   resting shade as an element's, and the same rail color in outline-color
+   (see .mask-element-header) */
 .mask-panel-row.mask-group-header
 {
   background-color: @mask_rest;
@@ -1278,13 +1273,11 @@ dialog .sidebar row:selected:hover label,
   outline-color: @mask_selected;
 }
 
-/* the solo wash on a soloed group's own header (see _build_masks_list, which
-   adds .mask-list-row-solo to the header row itself). The plain
-   .mask-panel-row.mask-list-row-solo rule shares its two-class specificity
-   with the resting background rule, which is declared later and so swallowed
-   it entirely, leaving a soloed group header indistinguishable from any
-   other. The row's own id outranks any class-only selector, so this does not
-   come down to declaration order. */
+/* the solo wash on a soloed group's own header (dt_masks_gui_build_list adds
+   .mask-list-row-solo to the header row itself). The plain
+   .mask-panel-row.mask-list-row-solo rule ties with the resting background
+   rule, declared later, which would win; the row's id outranks any
+   class-only selector, so this does not depend on declaration order. */
 #mask-group-header-row.mask-list-row-solo
 {
   background-color: rgba(255, 255, 255, 0.14);
@@ -1504,18 +1497,18 @@ dialog .sidebar row:selected:hover label,
   margin-top: 0.14em;
 }
 
-/* the opacity slider leading a parametric row's expanded controls. Sits above the channel sliders rather than below
-   them, so its breathing room goes underneath */
+/* the opacity slider leading a parametric row's expanded controls. Above
+   the channel sliders, so its breathing room goes underneath */
 .mask-param-opacity-box
 {
   margin-bottom: 0.14em;
 }
 
 /* every slider in the list ends its bar about where the bypass-eye column
-   starts (.mask-param-bypass-slot, see _param_slider_fit_eye). The inset is the slider's own margin, not its box's:
-   a bauhaus slider draws into its margin, so the marker at 1.0 overhangs the
-   bar's end there. Inset by its box instead, the widget ended at the bar and
-   cut the marker in half */
+   starts (.mask-param-bypass-slot, see _param_slider_fit_eye). The inset is
+   the slider's own margin, not its box's: a bauhaus slider draws into its
+   margin, so the marker at 1.0 overhangs the bar's end there. Inset by its
+   box, the widget would end at the bar and cut the marker in half */
 .masks-list .mask-props-row-editor .dt_bauhaus,
 .masks-list .mask-group-opacity-editor .dt_bauhaus,
 .masks-list .mask-boost-factor-box .dt_bauhaus,
@@ -1599,8 +1592,8 @@ dialog .sidebar row:selected:hover label,
    slider's card runs flush under the whole header, inset by the rail's width
    more to keep the 8px, and round the corner the rail would otherwise have
    run past. Scoped under .masks-list so it outranks a user.css rule on
-   .masks-list .mask-group-elements that sets the rail's width: a tie went to
-   user.css, and the notch came back */
+   .masks-list .mask-group-elements that sets the rail's width, which would
+   win a tie */
 .masks-list .mask-group-elements.mask-group-slider-only
 {
   border-left-width: 0;
@@ -1774,8 +1767,8 @@ button.mask-enable-toggle:checked
 }
 
 /* the side margins are the room its marker draws in at either end (see the
-   indicator clip in bauhaus.c): without them the marker was cut in half at
-   0% and 100%. The same 6px the mask panel's sliders keep */
+   indicator clip in bauhaus.c), or the marker is cut in half at 0% and 100%.
+   The same 6px the mask panel's sliders keep */
 .dt_bauhaus.blend-main-opacity-slider
 {
   margin: 0 6px;
@@ -2056,18 +2049,12 @@ button.mask-channel-eye
   padding-left: 4px;
 }
 
-/* "add parametric channel" buttons (the flexi "g R G B Jz Cz hz" row): flat, no
-   frame ever. Two states fight the plain ".mask-channel-add-btn" class rule and
-   both need an explicit, equal-or-higher-specificity override to lose:
-   - the whole row is insensitive (see gtk_widget_set_sensitive on
-     masks_param_channels_box) whenever no group is selected, and the theme's
-     "button:disabled" rule (border: 0.07em solid ...) outranks a single class
-     selector -- this is the "border appears only when nothing is selected"
-     symptom.
-   - the buttons grab focus on hover (see _preview_on_hover_enter), and
-     "button:focus" is likewise more specific than the plain class.
-   Repeat the override on ":disabled"/":focus"/":hover"/":active" so it wins in
-   every state. */
+/* "add parametric channel" buttons (the flexi "g R G B Jz Cz hz" row): flat,
+   never framed. Two states outrank the plain class rule: "button:disabled"
+   (border: 0.07em solid ...), as the row is insensitive with no group
+   selected (masks_param_channels_box), and "button:focus", as the buttons
+   take focus on hover (_preview_on_hover_enter). So the override is repeated
+   on :disabled, :focus, :hover and :active. */
 .mask-channel-add-btn,
 .mask-channel-add-btn:disabled,
 .mask-channel-add-btn:focus,
@@ -2542,12 +2529,11 @@ notebook tabs,
 }
 
 /* the module group selector keeps its own, larger metrics: it is a view-level
-   control, not one of the icon rows inside a module, and it must stay separate
-   from the rule above -- sharing it once dropped these buttons to the blending
-   tabs' 1.35em, and the added min-height also outranked "#modules-tabs .toggle"
-   (equal specificity, declared earlier), shrinking them in both directions.
-   min-width is here so the row stays usable when the panel is really narrow;
-   height deliberately stays with the .toggle rule above. */
+   control, not one of the icon rows inside a module. Keep it out of the rule
+   above: it would take the blending tabs' 1.35em, and that rule's min-height
+   would also outrank "#modules-tabs .toggle" (equal specificity, declared
+   earlier). min-width keeps the row usable in a narrow panel; the height
+   stays with the .toggle rule above. */
 #modules-tabs .dt_module_btn
 {
   border-radius: 0;
@@ -3147,52 +3133,40 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   margin: 0.14em 0.28em;
 }
 
-/* flexi masks panel: #flexi itself has no background-color while docked.
-   #left/#right have none either: both rely on the "box, box *" reset (above)
-   making them transparent, so the ambient grid's own @bg_color paint (from
-   the universal "*" rule) shows through untouched.
-
-   That reveal has a precondition: something opaque behind it. True while the
-   panel is a column in the grid; false while it floats over the canvas during
-   an overlay on the canvas (see _ui_init_panel_flexi in gui/gtk.c), where the only
-   thing behind it is the image -- so the transparency that normally goes
-   unnoticed made the whole panel read as semi-transparent. The floating state,
-   and only it, therefore paints its own background. */
+/* flexi masks panel: an overlay on the canvas (see _ui_init_panel_flexi in
+   gui/gtk.c), so the only thing behind it is the image. #left and #right
+   are transparent too ("box, box *" above), and the grid's @bg_color shows
+   through them; the floating panel has nothing opaque behind it, so it
+   paints its own background. */
 #flexi.flexi-floating
 {
   background-color: @bg_color;
 }
 
 /* the panel is framed as a module (#iop-expander, see _ui_init_panel_flexi),
-   so its body takes a module's card color, as .dt_plugin_ui gives every module
-   in #left/#right. Left bare, it showed the panel's own lighter @bg_color and
-   stood out from the modules beside it. The one box child of the frame is the
-   row holding the scrolled content and the resize handle; the header sits in
-   an event box and keeps its own color */
+   so its body takes a module's card color, as .dt_plugin_ui gives every
+   module in #left/#right, rather than its own lighter @bg_color. The one box
+   child of the frame is the row holding the scrolled content and the resize
+   handle; the header sits in an event box and keeps its own color */
 #flexi > #iop-expander > box
 {
   background-color: @plugin_bg_color;
 }
 
-/* #bauhaus-slider always paints a flat @plugin_bg_color background (see that
-   rule above) -- fine inside a normal module, which sits on a card tuned to
-   roughly match, but the dedicated flexi masks panel (#flexi, see the
-   comment above) shows the raw ambient background instead, by design, so
-   the slider's hardcoded fill stands out against it as a visibly different
-   shade (measured @plugin_bg_color is exactly shade(@darkroom_bg_color,
-   0.95) in this theme -- a real, consistent ~6/255 gap, not a rounding
-   artifact). Made transparent here instead, so it blends with whatever
-   background actually surrounds it in this one context. */
+/* #bauhaus-slider paints a flat @plugin_bg_color background (see that rule
+   above), which matches a module's card but not the flexi panel's ground
+   (@plugin_bg_color is shade(@darkroom_bg_color, 0.95) in this theme, a
+   visible 6/255 apart). Transparent here, so that it takes the ground
+   around it. */
 #flexi #bauhaus-slider
 {
   background-color: transparent;
 }
 
-/* inline collapse button prepended to the mode-select row when hosted in
-   the separate flexi masks panel -- deliberately NOT styled like the
-   .dt_module_btn mode toggles next to it (no frame/checked state) so it
-   doesn't read as one more mask type; a lighter pill background (rather
-   than a thin separator line) is what actually sets it apart at a glance */
+/* the panel-collapse arrow of the "blend mask" header, not styled like the
+   .dt_module_btn toggles beside it so that it does not read as a mask
+   control: a light pill sets it apart (embedded, see
+   #blending-tabs.blending-tabs-embedded #flexi-inline-collapse) */
 #flexi-inline-collapse
 {
   margin: 0;
@@ -3220,31 +3194,29 @@ border-bottom: 0.07em solid alpha(@selected_bg_color, 0.75);
   background-color: alpha(@fg_color, 0.22);
 }
 
-/* The way in and out of the flexi masks panel, in two parts (see
-   ui->flexi_sliver / ui->flexi_halo in gui/gtk.c).
+/* the way in and out of the flexi masks panel, in two parts (see
+   ui->flexi_sliver and ui->flexi_halo in gui/gtk.c).
 
    #flexi-sliver is the resting state: a 1px hairline column just outside each
-   end of the canvas, present the whole time a mask panel is available. It is
-   barely there on purpose -- a tinted bar running the full height of the canvas
-   is a permanent distraction next to the picture being judged, whatever the
-   tint. All it has to do is mark the edge as live.
+   end of the canvas, present while a mask panel is available. Barely there on
+   purpose: a tinted bar the height of the canvas would distract from the
+   picture being judged. It only marks the edge as live.
 
    #flexi-halo is what it grows into. When the pointer comes within a band's
-   width of either edge, that band is revealed over the canvas and is clickable
-   for as long as it shows, so the target is ~26px even though the footprint is
-   1px. It fades towards the middle of the canvas rather than ending in a hard
-   line, which keeps it reading as a glow on the edge instead of a new panel.
+   width of either edge, that band is revealed over the canvas and clickable
+   while it shows, so the target is about 26px for a 1px footprint. It fades
+   towards the middle of the canvas, so it reads as a glow on the edge, not a
+   new panel.
 
    Both are painted by _flexi_sliver_draw's gtk_render_background, since a
    GtkDrawingArea renders nothing on its own.
 
-   The band's width lives here rather than as a size request in C, so a theme can
-   size it with the gradient it carries: _flexi_halo_width reads it back through
-   the widget's preferred width, and the proximity test that summons the band
-   uses that same number, so the two can never drift apart. Keep min-width
-   comfortably above a fingertip -- it is a hit target, and the arrow drawn in it
-   is scaled from the width it is given. */
-/* The darkroom toolbar's mask-panel button carries two independent answers (see
+   The band's width lives here, so that a theme can size it with its
+   gradient: _flexi_halo_width reads it off the style context, and the
+   proximity test that reveals the band uses the same number. Keep min-width
+   well above a fingertip: it is a hit target, and the arrow drawn in it is
+   scaled from it. */
+/* the darkroom toolbar's mask-panel button carries two independent answers (see
    dt_iop_gui_blend_masks_panel_sync_toolbox): the icon says whether the module
    has a mask, the box around it says whether that mask's panel is on screen.
 
@@ -3614,7 +3586,7 @@ treeview *:checked:not(check),
 
 /* a checked check button that has gone insensitive: the rule above paints the
    indicator at full contrast whatever the state, so an option grayed out
-   because it depends on another one still read as live and clickable */
+   because it depends on another one would still read as live */
 checkbutton check:checked:disabled
 {
   background-color: alpha(@field_selected_bg, 0.4);

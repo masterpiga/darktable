@@ -18,15 +18,12 @@
 
 #pragma once
 
-// Internal seam between the flexi masks panel's translation units: blend_gui.c,
-// masks_gui_presets.c, masks_gui_toolbar.c and masks_gui_panel_host.c. Nothing
-// here is public API; blend.h remains the place for anything an IOP or the
-// pipe may call.
+// the seam between the flexi masks panel's files: blend_gui.c,
+// masks_gui_presets.c, masks_gui_toolbar.c and masks_gui_panel_host.c. Not
+// public API: what an IOP or the pipe calls goes in blend.h.
 //
-// Keep this small. A symbol lands here only because its definition and one of
-// its callers live in different files, the caller being another panel file or
-// the panel's model test suite; if that stops being true, it goes back to
-// static.
+// Keep it small: a symbol is here only while a caller in another panel file,
+// or in the panel's model tests, needs it; otherwise it is static
 
 #include "develop/blend.h"
 #include "develop/masks.h"
@@ -80,19 +77,12 @@ void dt_masks_gui_refresh_canvas_edit(dt_iop_module_t *module);
 // (src/tests/unittests/masks/test_flexi_model.c)
 // ---------------------------------------------------------------------------
 //
-// These are the flexi panel's *group model*: pure functions over a group's
-// points list, with no GTK and no widget state between them. A flexi list is
-// a sequence of groups, each its marker followed by its members up to the next
-// marker (see DT_MASKS_STATE_GROUP_MARKER). Everything the panel does to the
-// mask structure -- every drag/drop, every group added, merged or deleted --
-// is ultimately expressed as a call into these, which is what makes the
-// panel's behavior testable at all without a display.
-//
-// They are declared here for the same reason as everything else in this file:
-// a caller lives in a different translation unit. That the caller is a test
-// rather than another panel file makes no difference to the seam -- but it
-// does mean these carry a stability expectation the rest of this header does
-// not, since the tests are the regression net for the panel's behavior.
+// the panel's group model: functions over a group's points list, without GTK
+// or widget state. A flexi list is a sequence of groups, each its marker
+// followed by its members up to the next marker (see
+// DT_MASKS_STATE_GROUP_MARKER). Every change the panel makes to the mask's
+// structure goes through these, so that it can be tested without a display.
+// Keep them stable: the model tests depend on them
 
 /** every group's marker id, bottom-up. Caller frees the list. */
 GList *dt_masks_model_group_markers(dt_masks_form_t *grp);
@@ -134,11 +124,10 @@ GList *dt_masks_model_delete_group(dt_masks_form_t *grp, const dt_mask_id_t cid)
     which the caller frees */
 GList *dt_masks_model_empty_group(dt_masks_form_t *grp, const dt_mask_id_t cid);
 
-// Gesture semantics, split out from their GTK handlers so the handler and the
-// test drive identical code. These mutate the mask structure and the panel's
-// selection state; they never touch history, the pipe or the widget tree --
-// the handler commits afterwards. See dt_masks_model_drop_element_onto_element's own
-// comment in blend_gui.c for the pattern each of these follows.
+// what the gestures do, apart from their GTK handlers so that the tests run
+// the same code. They change the mask structure and the panel's selection,
+// not history, the pipe or the widgets: the handler commits (see
+// dt_masks_model_drop_element_onto_element in blend_gui.c)
 
 /** move element `src` into `dst`'s group, landing above or below it */
 gboolean dt_masks_model_drop_element_onto_element(dt_iop_module_t *module,
@@ -216,9 +205,8 @@ typedef enum dt_masks_solo_canvas_t
   DT_MASKS_SOLO_CANVAS_ONE,      // narrow editing to bd->soloedit_formid
 } dt_masks_solo_canvas_t;
 
-/* Solo, group-solo and solo-edit are mutually exclusive, and at most one
-   element OR one group is ever soloed. These three enforce that between them:
-   each cancels the other two on the way in. */
+/* solo, group solo and solo edit exclude each other, and at most one element
+   or one group is soloed: each of these three cancels the other two */
 dt_masks_solo_canvas_t dt_masks_model_toggle_solo_form(dt_iop_module_t *module,
                                                        dt_masks_form_t *grp,
                                                        const dt_mask_id_t id);
@@ -394,9 +382,6 @@ gchar *dt_masks_gui_form_display_name(const dt_masks_form_t *form);
 /** rename from the row's entry, which edits the part after the type prefix;
     an empty name sets a raster element to follow its source. TRUE if changed */
 gboolean dt_masks_model_rename_form(dt_masks_form_t *form, const char *txt);
-/** raster elements still named "<prefix> <source name>" from before names
-    followed the source are set to follow it */
-void dt_masks_model_raster_names_follow_sources(dt_masks_form_t *grp);
 /** a shared element: another module's mask uses it too. Never a raster one */
 gboolean dt_masks_model_form_is_linked(const dt_masks_form_t *form);
 /** point the refinement scope at what the panel selection names: the

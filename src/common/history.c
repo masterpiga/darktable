@@ -577,22 +577,15 @@ gboolean dt_history_merge_module_into_history(dt_develop_t *dev_dest,
       }
     }
 
-    /* The masks variant is what snapshots dev_dest->forms into the history
-       item, and only an item carrying that snapshot writes any forms in
-       dt_dev_write_history_ext(). The `nbf` test above covers forms copied
-       from a source *image* -- but a style has no source image (styles pass
-       dev_src == NULL, so nbf stays 0), and since flexi masks a style can
-       still end up owning a form: dt_masks_migrate_classic_to_flexi() runs on
-       the style's classic blend_params in dt_styles_apply_style_item(), and
-       for a parametric or raster mask it synthesizes a form into
-       dev_dest->forms. Taking the plain branch there wrote the module's
-       mask_id with no form behind it, so the mask was gone on the next load.
-
-       So also take the masks branch whenever the module's own mask_id
-       actually resolves in dev_dest->forms. That is strictly additive -- it
-       can only turn a lost mask into a saved one -- and it deliberately keys
-       off the destination's forms rather than the source's, because the form
-       in question may have been created here rather than copied. */
+    /* only the masks variant snapshots dev_dest->forms into the item, and
+       only such an item writes forms (dt_dev_write_history_ext()). `nbf`
+       counts forms copied from a source image, and a style has none
+       (dev_src == NULL); yet dt_styles_apply_style_item() migrates a style's
+       blend_params (dt_masks_migrate_classic_to_flexi()), which synthesizes a
+       form for a parametric or raster mask. So the masks variant is also
+       taken when the module's mask_id resolves in dev_dest->forms, or the
+       mask would be lost on the next load: the destination's forms, as the
+       form may have been made here */
     const gboolean module_owns_a_form =
       (module->flags() & IOP_FLAGS_SUPPORTS_BLENDING)
       && module->blend_params

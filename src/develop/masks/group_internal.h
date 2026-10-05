@@ -18,23 +18,16 @@
 
 #pragma once
 
-// Internal seam for the group compositor (masks/group.c).
+// the mask operators of the group compositor (masks/group.c), the arithmetic
+// behind every operator the panel offers. Declared here so that the compositor
+// tests can check them on small buffers with known values: the design relies
+// on what they guarantee, such as which operators are order-independent, that
+// an empty group is the identity of its operator (so that an empty intersect
+// group does not blank the mask), and that opacity and inversion compose the
+// same way for every operator.
 //
-// These are the mask operators themselves -- the arithmetic behind every
-// operator name the panel shows. They were file-static; they are declared here
-// so the compositor test suite (src/tests/unittests/masks/test_flexi_compose.c)
-// can pin their semantics directly, on small buffers with known values, instead
-// of only inferring them from rendered images.
-//
-// That matters because these functions define behavior the rest of the design
-// leans on and states as fact: that a group's members combine order-
-// independently (which is what lets a group be an unordered bag of shapes),
-// that an empty group is the identity for its operator (which is what stops an
-// empty intersect group blanking the whole mask), and that opacity and invert
-// compose the same way for every operator.
-//
-// Not public API: no IOP or pipe code should reach for these. Everything
-// outside group.c composites through dt_masks_group_render_roi().
+// Not public API: everything outside group.c composites through
+// dt_masks_group_render_roi()
 
 #include <glib.h>
 #include <stddef.h>

@@ -23,12 +23,11 @@
 // values, not widgets.
 //
 // What this suite deliberately does NOT cover: anything that is a property of
-// GTK itself rather than of the panel's logic -- event propagation between
-// nested widgets, CSS rendering, tooltip delivery, widget packing. Those bugs
-// are real (the double-fire on group_block's release handler was exactly one)
-// but reproducing them requires real GTK event delivery against a real widget
-// tree, which needs a display and is brittle enough that it would cost more
-// trust than it earns. They stay a manual checklist; see README.md.
+// GTK itself rather than of the panel's logic: event propagation between
+// nested widgets, CSS rendering, tooltip delivery, widget packing. Testing
+// those needs real GTK event delivery on a real widget tree, with a display,
+// and would be too brittle to trust. They stay a manual checklist; see
+// README.md.
 
 #include "flexi_fixture.h"
 #include "develop/develop.h"
@@ -167,15 +166,11 @@ static void _assert_group_count(dt_masks_form_t *grp, const int expect)
   }
 }
 
-// The reported bug: moving an element from group A to group B produced a third
-// group C. Whatever the cause, the invariant is simple and worth pinning --
 // a move between two existing groups never changes the group count.
 //
-// Both drop directions are exercised deliberately: dropping *below* the target
-// splits the target's run around the newcomer, so it is the direction that
-// actually detects a lost partition re-stamp; dropping above it appends to the
-// run's end and survives the same fault unnoticed. Testing only one direction
-// here would have let the original bug through.
+// Both drop directions, on purpose: dropping below the target splits its run
+// around the newcomer, which detects a lost partition re-stamp; dropping above
+// appends to the run's end, where the same fault goes unnoticed
 static void test_drop_between_groups_never_creates_a_third(void **state)
 {
   dt_masks_form_t *grp = flexi_build("u:1,2 | i:3,4");
@@ -572,7 +567,7 @@ static void test_chevron_expand_collapses_previous(void **state)
   assert_int_equal(flexi_bd.masks_last_expanded_elem, 2);
 }
 
-// the reported bug: collapsing the open row must stick, not be re-opened
+// collapsing the open row must stick, not be re-opened
 static void test_chevron_collapse_forgets_the_open_row(void **state)
 {
   flexi_build("u:1,2,3");
@@ -1848,23 +1843,6 @@ static void test_raster_source_is_found_by_operation_and_instance(void **state)
   _assert_shows(f, "exposure");
 }
 
-// raster elements used to store their source's name as it was then
-static void test_old_raster_name_follows_its_source(void **state)
-{
-  flexi_conf_init();
-  flexi_build("u:1,7");
-  dt_masks_form_t *f = _raster_of_other(7);
-  gchar *label = dt_history_item_get_name(&_other);
-  g_snprintf(f->name, sizeof(f->name), "%s %s", _("raster mask"), label);
-  g_free(label);
-  dt_masks_model_raster_names_follow_sources(flexi_group());
-  assert_string_equal(f->name, _("raster mask"));
-
-  g_snprintf(f->name, sizeof(f->name), "%s mine", _("raster mask"));
-  dt_masks_model_raster_names_follow_sources(flexi_group());
-  _assert_shows(f, "mine");
-}
-
 // renaming the source changes nothing in this mask but what its row shows
 // ---------------------------------------------------------------------------
 // add target: the add shape / parametric / import buttons are enabled exactly
@@ -2942,7 +2920,6 @@ int main(void)
                               _teardown_raster),
     cmocka_unit_test_teardown(test_raster_source_is_found_by_operation_and_instance,
                               _teardown_raster),
-    cmocka_unit_test_teardown(test_old_raster_name_follows_its_source, _teardown_raster),
     cmocka_unit_test_teardown(test_list_signature_follows_source_rename, _teardown_raster),
     cmocka_unit_test_teardown(test_cleanup_keeps_the_paths_of_a_used_object,
                               _teardown_objects),

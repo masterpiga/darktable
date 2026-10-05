@@ -137,11 +137,9 @@ static gchar *_describe_mask(dt_develop_t *dev,
            opacity forced to 0 when that constant is transparent) rather than
            to a form that would compute the same constant per pixel.
 
-       This distinction cost a false positive: requiring the FLEXI bit here
-       reported all 46 parametric-only edits in the corpus as lost masks, when
-       what they had actually done was migrate correctly. What makes a mask
-       lost is a mask_mode that says a form is in play and a mask_id that does
-       not find one -- checked below, not here. */
+       So the FLEXI bit is not required here: all parametric-only edits would
+       read as lost. A lost mask is a mask_mode that says a form is in play
+       and a mask_id that finds none, which is checked below. */
     const uint32_t needs_form =
       DEVELOP_MASK_MASK | DEVELOP_MASK_CONDITIONAL | DEVELOP_MASK_RASTER;
     if(resolved) *resolved = !(bp->mask_mode & needs_form);
@@ -255,11 +253,10 @@ static void _settle(const _host_t *host, gchar **host_desc)
     user-facing "append" mode: _styles_apply_to_image_ext() passes append=FALSE
     to both of the calls above unconditionally, so a style always *replaces*
     what is on the image; the instance count comes from the style itself, i.e.
-    from an image that had the module twice when the style was captured. (This
-    matters, and cost a wrong first attempt: forcing append=TRUE instead makes
-    dt_ioppr_update_for_style_items() allocate instance 1 while
-    dt_history_merge_module_into_history() still replaces instance 0, so the
-    result lands somewhere the caller is not looking.)
+    from an image that had the module twice when the style was captured. Do
+    not force append=TRUE: dt_ioppr_update_for_style_items() would allocate
+    instance 1 while dt_history_merge_module_into_history() still replaces
+    instance 0, and the result would land where the caller does not look.
 
     Returns FALSE if the style could not be applied at all; on success reports
     through `landed` which instances the items ended up at, since that is where
@@ -476,15 +473,14 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
     const int mp = (int)dt_masks_harvest_obj_int(edit, "multi_priority", 0);
     const int n_items = mp > 0 ? 2 : 1;
 
-    // A style never carries drawn geometry: masks_history is per image, and
-    // data.db's style_items has no forms column -- dt_styles_create_from_image()
-    // copies history rows only. So a classic style whose mask_mode has
-    // DEVELOP_MASK_MASK arrives with a mask_id that resolves to nothing, on
-    // this branch and on master alike. That is not a migration regression, and
-    // these edits are counted separately so the headline number is not dominated
-    // by a pre-existing property of styles. They are still checked: whatever
-    // migration decides to do with an unresolvable drawn mask, the result must
-    // not claim a form that is not there.
+    // a style never carries drawn geometry: masks_history is per image, and
+    // data.db's style_items has no forms column (dt_styles_create_from_image()
+    // copies history rows only). So a classic style whose mask_mode has
+    // DEVELOP_MASK_MASK arrives with a mask_id that resolves to nothing,
+    // migration or not. These edits are counted separately, so that the
+    // headline number is not about styles. They are still checked: whatever
+    // migration does with an unresolvable drawn mask, the result must not
+    // claim a form that is not there.
     if(bp.mask_mode & DEVELOP_MASK_MASK) drawn_in_style++;
 
     gchar *key = dt_masks_harvest_edit_key(edit);
@@ -584,15 +580,13 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
       if(!k_same_id) id_preserved = FALSE;
     }
 
-    /* A drawn-ONLY style is the one case where a dangling mask is the correct,
-       pre-existing outcome rather than a regression, and it is recognized
-       precisely rather than by mask_mode alone: migration reuses the classic
-       mask_id verbatim for drawn-only (see _dispatch()), so the mask_id that
-       comes back must be the very same id the style was saved with -- an id
-       that names a form belonging to the image the style was created from, and
-       that no style has ever carried. Master behaves identically here. If the
-       id had *changed*, migration would have synthesized something and lost
-       it, which is a real failure, so the equality is part of the test. */
+    /* a drawn-only style is the one case where a dangling mask is the
+       correct outcome, as it is without migration, and it is recognized by
+       the id: migration reuses the classic mask_id verbatim for drawn-only
+       (see _dispatch()), so the id that comes back must be the one the style
+       was saved with, naming a form of the image the style was made from. A
+       changed id means migration synthesized something and lost it, which is
+       a real failure */
     const gboolean drawn_only =
       (bp.mask_mode & DEVELOP_MASK_MASK)
       && !(bp.mask_mode & (DEVELOP_MASK_CONDITIONAL | DEVELOP_MASK_RASTER));
@@ -617,11 +611,8 @@ gboolean dt_masks_styleapply_harvest_section(const char *json_path,
        masks compare equal no matter what migration did. Named separately so it
        cannot be read as an ordinary dangling mask. */
     /* `verdict` is prose for a human reading the report; `outcome` is the
-       stable slug tools aggregate on. Both, because the two audiences want
-       different things and collapsing them means one of them loses: an
-       aggregator matching on the prose breaks silently the moment the wording
-       is improved (which is exactly how 584 known-good rows were once counted
-       as failures). */
+       stable slug tools aggregate on, so that a change of wording cannot
+       silently change what an aggregator counts */
     const char *verdict;
     const char *outcome;
     if(vanished)

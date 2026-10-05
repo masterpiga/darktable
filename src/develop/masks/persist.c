@@ -519,18 +519,11 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
   setvbuf(stdout, NULL, _IOLBF, 0);
 
 #ifdef _OPENMP
-  /* Single-threaded for the same reason as verify.c: a
-     reduction whose float addition order depends on thread scheduling makes
-     the last bits of the mask move between runs, and this compares at 1e-6.
-
-     Not optional here, and it was missing at first. Inside --check-masks the
-     sections ahead of this one had already set it, so the figures were stable
-     and the omission invisible; run on its own, the live count wandered
-     between 353 and 370 over three runs of identical input. The verdict
-     (0 disagreed) was never affected -- the two arms run the same code over
-     the same data and stay bit-identical -- but the liveness count is what
-     says the sweep was not vacuous, so an unstable one makes the pass
-     unreadable. */
+  /* single-threaded for the same reason as verify.c: a reduction whose float
+     addition order depends on thread scheduling moves the last bits of the
+     mask between runs, and this compares at 1e-6. The verdict would hold, as
+     both arms run the same code, but the liveness count, which says the sweep
+     was not vacuous, would not be stable. Set here, whatever ran before */
   omp_set_num_threads(1);
 #endif
 
@@ -574,9 +567,8 @@ gboolean dt_masks_persist_harvest_section(const char *json_path, FILE *rf)
      still counted and reported. */
   GHashTable *seen = g_hash_table_new_full(g_str_hash, g_str_equal, g_free, g_free);
   // `distinct` counts every edit actually replayed, skips included; `swept`
-  // only the ones that got as far as a comparison. Printing `total - distinct`
-  // as the repeat count mixed the two and went negative as soon as a corpus
-  // skipped more than it swept (zisoft: "11 (229 distinct, -218 repeats)").
+  // only the ones that got as far as a comparison. The repeat count is
+  // `total - distinct`, not computed from `swept`, which can be smaller
   int distinct = 0, swept_distinct = 0;
 
   int total = 0, identical = 0, different = 0, skipped = 0, errors = 0;

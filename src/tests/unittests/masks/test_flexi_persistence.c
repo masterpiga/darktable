@@ -249,10 +249,10 @@ static gboolean _cleanup_has(GList *forms, const dt_mask_id_t id)
   return dt_masks_get_from_id_ext(forms, id) != NULL;
 }
 
-// the report: a module's mask was removed, so only its earlier, replaced
-// history item still names the group. The newer snapshot must lose it all,
-// the older one keeps what that item used, for going back in history. Neither
-// item is a mask_manager one, which the old cleanup skipped entirely.
+// a module's mask was removed, so only its earlier, replaced history item
+// still names the group. The newer snapshot must lose it all, the older one
+// keeps what that item used, for going back in history. Neither item is a
+// mask_manager one, so the cleanup must not depend on that
 static void test_cleanup_drops_shapes_only_replaced_steps_use(void **state)
 {
   flexi_build("u:1");

@@ -410,8 +410,8 @@ scenario("C4_union_1channel_group_invert", DEVELOP_MASK_MASK_CONDITIONAL,
           blendif=_c4_blendif, blendif_parameters=_c4_params,
           draw=(None, False, DT_MASKS_STATE_UNION, False))
 
-# D: previously fail-closed, now-migratable "no resolvable drawn content"
-# combinations -- these translate to a real classic formula (not always the
+# D: "no resolvable drawn content" combinations, which translate to a real
+# classic formula (not always the
 # degenerate "always zero" case D1 alone would suggest), see the derivation
 # in the E-series below for the cases D-alone's naive treatment gets wrong.
 _d1_blendif, _d1_params = channel_curve([CH_RED_in])
@@ -495,8 +495,8 @@ scenario("E6_nocontent_incl_only_opaque", DEVELOP_MASK_MASK_CONDITIONAL,
 # RGB-scene colorspace active at once (DEVELOP_BLENDIF_RGB_MASK's full
 # channel set: GRAY/RED/GREEN/BLUE in+out, plus Jz/Cz/hz in+out) -- the one
 # combination that reaches DT_COND_REAL despite INCL (no channel is left
-# untouched for INCL's polarity-XOR to flag as canceling), previously
-# fail-closed. Classic's formula there is 1-(1-d)*temp (INV=0, F1) or
+# untouched for INCL's polarity-XOR to flag as canceling). Classic's formula
+# there is 1-(1-d)*temp (INV=0, F1) or
 # (1-d)*temp (INV=1, F2) -- see the DT_COND_REAL/INCL derivation in
 # migrate_legacy.c's _migrate_drawn_and_parametric().
 # must match DEVELOP_BLENDIF_RGB_MASK (src/develop/blend.h) exactly: bits
@@ -516,17 +516,15 @@ scenario("F2_content_incl_allchannels_inv", DEVELOP_MASK_MASK_CONDITIONAL,
           draw=(None, False, DT_MASKS_STATE_UNION, False))
 
 # G: bare DEVELOP_MASK_ENABLED (classic "uniform", no MASK/CONDITIONAL/
-# RASTER bit at all) -- migration deliberately never touched this before
-# Phase 0.5 (it already rendered identically to an empty flexi group), but
-# now normalizes it to ENABLED|FLEXI explicitly so no raw classic value is
-# ever left in blend_params. Passing mask_mode=0 to scenario() below yields
+# RASTER bit at all), which renders as an empty flexi group: migration
+# normalizes it to ENABLED|FLEXI, so that no raw classic value is left in
+# blend_params. Passing mask_mode=0 to scenario() below yields
 # exactly DEVELOP_MASK_ENABLED once ORed with it in main().
 scenario("G1_bare_uniform", 0)
 
 # H: per-shape opacity + refinement (dt_masks_point_group_t.opacity/
-# .refinement) on the drawn circle, as the classic mask manager's per-shape
-# panel used to set (see src/libs/masks.c, deleted; still readable via git
-# history). Migration reuses the drawn group's own points verbatim (see
+# .refinement) on the drawn circle, as a classic edit carries them.
+# Migration reuses the drawn group's own points verbatim (see
 # _migrate_drawn_and_parametric's "MASKS_POS moves onto the wrapper entry"
 # comment), so these must survive completely unchanged -- both drawn-only
 # (no rebuild at all involved) and drawn+parametric (the group gets a new
@@ -625,9 +623,8 @@ def build_operator_chain_scenarios():
 #
 # NOTE on --verify-masks: this series is deliberately NOT classic-authorable.
 # DT_MASKS_REFINE_GROUP is a flexi concept, and the whole per-shape refinement
-# block is this branch's own masks v7 (upstream master is still at v6, with no
-# refinement field at all), so no released darktable ever wrote scope=2 and no
-# real classic edit can carry it. The classic fold reads the field as a plain
+# block arrived with masks v7 (v6 has no refinement field at all), so no
+# classic edit can carry scope=2. The classic fold reads the field as a plain
 # bool (`if(fpt->refinement.enabled)` in masks/group.c), applying group-scope
 # refinement per element, while the flexi fold applies it once per group -- so
 # harvesting these XMPs and running --verify-masks over them reports J5, J6 and
@@ -635,11 +632,10 @@ def build_operator_chain_scenarios():
 # cannot produce, not a migration defect; the A-I and K series are ordinary
 # classic configurations and do verify clean.
 #
-# J2 vs J3 covers a bug this branch already fixed once: group-scope refinement
-# is stored broadcast, so the renderer used to read the run head's copy
-# unconditionally and apply it group-wide, which both leaked the head's own
-# ELEMENT refinement over its whole group and dropped every non-head member's.
-# They must differ, and neither may equal J4.
+# J2 vs J3: group-scope refinement is stored broadcast, so a renderer that
+# read the run head's copy unconditionally and applied it group-wide would
+# leak the head's ELEMENT refinement over its whole group and drop every
+# other member's. They must differ, and neither may equal J4.
 # ---------------------------------------------------------------------------
 _J_BLUR = 9.0        # gaussian blur radius on the mask
 _J_CONTRAST = 0.35   # mask contrast, to make the blur's effect easier to see
@@ -666,10 +662,9 @@ def build_refinement_scenarios():
         # group + global stacked. NB: element and group scope cannot coexist on
         # one run -- setting group scope broadcasts one refinement onto every
         # member, overwriting their element ones, so a mixed run is not a state
-        # the GUI can produce. An earlier version of this case marked the head
-        # ELEMENT and the tail GROUP, which rendered as neither: group scope is
-        # read off the run head, so the tail's marking was simply inert and the
-        # case silently tested nothing.
+        # the GUI can produce. Marking the head ELEMENT and the tail GROUP
+        # would test nothing: group scope is read off the run head, so the
+        # tail's marking would be inert.
         ("J6_refine_group_and_global", DT_MASKS_REFINE_GROUP,
          DT_MASKS_REFINE_GROUP,
          dict(blur_radius=_J_BLUR, contrast=_J_CONTRAST)),
@@ -885,7 +880,7 @@ def build_raster_scenarios():
 
     # K2C: the same control for the inverted case, and the more valuable of the
     # two -- the consumer owns the geometry and inverts it the classic drawn
-    # way (DEVELOP_COMBINE_MASKS_POS, see blend.c:921). K2 arrives at the same
+    # way (DEVELOP_COMBINE_MASKS_POS, see dt_develop_blend_process). K2 arrives at the same
     # picture by a completely different route: raster_mask_invert becomes
     # DT_MASKS_STATE_INVERSE on the synthesized element. run.sh asserts
     # K2 == K2C, which is what catches an inversion applied at the wrong level

@@ -30,23 +30,21 @@
 //
 // This is the only mask decision in the tree that is made ACROSS modules, and
 // the only one whose inputs differ between the darkroom pipe and the export
-// pipe. Both properties make it hard to test any other way, and it has been
-// wrong twice:
+// pipe. Both make it hard to test any other way, and it can go wrong two
+// ways:
 //
-//   - it judged consumers from module->enabled, which tracks the darkroom GUI
-//     and is unmaintained in the export pipe, so a live export consumer's mask
-//     was dropped (regression 0167-raster-mask). piece->enabled is the
+//   - judging consumers from module->enabled, which tracks the darkroom GUI
+//     and is unmaintained in the export pipe, drops a live export consumer's
+//     mask (integration test 0167-raster-mask). piece->enabled is the
 //     authority, and only in this pipe.
-//   - it knew only the exclusive raster sink (blend_params.mask_mode &
-//     DEVELOP_MASK_RASTER, raster_mask.sink.source). A flexi DT_MASKS_RASTER
-//     form element is a group MEMBER: mask_mode is MASK/FLEXI, sink.source is
-//     unset, and the legacy test cannot see it, so it pruned a perfectly live
-//     consumer.
+//   - knowing only the exclusive raster sink (blend_params.mask_mode &
+//     DEVELOP_MASK_RASTER, raster_mask.sink.source) prunes a live flexi
+//     consumer: a DT_MASKS_RASTER form element is a group member, mask_mode
+//     is MASK/FLEXI and sink.source is unset.
 //
 // Two shapes of consumer times several ways to be stale is a matrix, and the
-// cells are only interesting together -- fixing one by breaking another is
-// exactly how both regressions happened. So it is swept as a matrix here
-// rather than sampled.
+// cells are only interesting together: fixing one can break another. So it is
+// swept as a matrix here rather than sampled.
 //
 // The pipe is built by hand rather than driven through synch_all(), which
 // would mean standing up a history stack to reach a decision that reads none
@@ -288,7 +286,7 @@ static void test_a_disabled_piece_is_dropped(void **state)
   _bench_cleanup();
 }
 
-/* THE EXPORT CELL, and the one that regressed.
+/* THE EXPORT CELL.
 
    In the export pipe module->enabled and module->blend_params track the
    darkroom UI and are stale by construction; piece->enabled and

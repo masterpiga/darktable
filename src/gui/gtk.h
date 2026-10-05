@@ -390,9 +390,8 @@ typedef enum dt_ui_panel_t
   DT_UI_PANEL_RIGHT,
   /* bottom panel */
   DT_UI_PANEL_BOTTOM,
-  /* flexi masks panel: a genuine extra column beside left/right, used only
-     for the "separate panel" masks_panel_position choices (see
-     dt_ui_flexi_panel_* below and develop/blend_gui.c) */
+  /* flexi masks panel: an overlay on the canvas, for the canvas position of
+     masks_panel_position (see dt_ui_flexi_panel_* below) */
   DT_UI_PANEL_FLEXI,
 
   DT_UI_PANEL_SIZE
@@ -463,7 +462,7 @@ GtkWidget *dt_ui_snapshot(const struct dt_ui_t *ui);
 GtkWidget *dt_ui_main_window(const struct dt_ui_t *ui);
 /** \brief get the thumb table */
 struct dt_thumbtable_t *dt_ui_thumbtable(const struct dt_ui_t *ui);
-/** \brief flexi masks panel: header container for sticky header in dedicated panel */
+/** \brief flexi masks panel: the container of its header, above the scroll */
 GtkWidget *dt_ui_flexi_panel_header(struct dt_ui_t *ui);
 /** \brief flexi masks panel: box to reparent flexi masks content into
     (see develop/blend_gui.c, plugins/darkroom/blend/masks_panel_position) */
@@ -475,32 +474,28 @@ void dt_ui_flexi_panel_set_active(struct dt_ui_t *ui, const gboolean active);
 /** \brief move the flexi masks panel to the left (FALSE) or right (TRUE)
     side of the main window, live (no view reopen needed) */
 void dt_ui_flexi_panel_set_side(struct dt_ui_t *ui, const gboolean right);
-/** \brief show/hide the flexi masks panel. When collapsed and has_content
-    is TRUE, a small corner overlay icon is shown instead (click to
-    re-expand); when has_content is FALSE neither the panel nor the icon
-    is shown. persist controls whether this collapsed state is written to
-    "plugins/darkroom/blend/masks_panel_collapsed" -- TRUE only for a
-    genuine user action (clicking collapse/the corner icon), FALSE for
-    transient/automatic visibility changes (reapplying the stored
-    preference, hiding on view-leave, auto-collapsing because the mask is
-    off) that must not clobber what the user actually chose. */
+/** \brief show or hide the flexi masks panel. With has_content, the edge
+    strips show either way, and a click on them toggles the panel; without,
+    neither shows. persist writes the state to
+    "plugins/darkroom/blend/masks_panel_collapsed": TRUE only for a user
+    action (a fold or an edge-strip click), FALSE for automatic changes
+    (applying the stored preference, hiding on view leave), which must not
+    overwrite what the user chose. */
 void dt_ui_flexi_panel_set_collapsed(struct dt_ui_t *ui,
                                      const gboolean collapsed,
                                      const gboolean has_content,
                                      const gboolean persist);
 gboolean dt_ui_flexi_panel_is_collapsed(struct dt_ui_t *ui);
-/** \brief which edge the panel is currently on. This is the live side, which a
-    peek can differ from the stored one (a peek opens on whichever sliver was
-    hovered) -- anything mirroring the panel's own chrome has to follow this,
-    not the preference. */
+/** \brief which edge the panel is on now, which can differ from the stored
+    preference: anything mirroring the panel's own chrome follows this */
 gboolean dt_ui_flexi_panel_is_right(struct dt_ui_t *ui);
 /** \brief re-read "plugins/darkroom/masks/show_panel_handle" and resize/repaint
     the panel's resize-and-collapse handle to match, so the option applies
     without a view reopen */
 void dt_ui_flexi_panel_update_handle(struct dt_ui_t *ui);
-/** \brief drive the collapsed panel's edge sliver's highlighted (mask
-    active) vs dimmed (no mask) visual state, and its hint's mask-type
-    label (may be NULL) */
+/** \brief whether the hosted module's mask is in use, which the edge halo's
+    icon shows, and the mask-type label of the edge strips' hint (may be
+    NULL) */
 void dt_ui_flexi_panel_set_icon(struct dt_ui_t *ui, const gboolean active,
                                 const char *mask_type_label);
 /** \brief get the log message widget */

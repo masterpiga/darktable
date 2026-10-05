@@ -560,9 +560,8 @@ void dt_dev_pixelpipe_create_nodes(dt_dev_pixelpipe_t *pipe,
   dt_pthread_mutex_unlock(&pipe->busy_mutex);
 }
 
-// TRUE if any form in the blend mask group carries a non-zero per-shape
-// detail threshold (flexi scoped refinement, masks v7). Such refinements need
-// the scharr/detail buffer even when the global bp->details is neutral.
+// does an element or group of the mask refine with a detail threshold? It
+// needs the detail buffer even when bp->details is 0
 static gboolean _group_wants_details(dt_develop_t *dev,
                                      const dt_masks_form_t *grp,
                                      const int depth)
@@ -702,20 +701,14 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
       if(piece->enabled && piece->blendop_data)
       {
         const dt_develop_blend_params_t *const bp = piece->blendop_data;
-        // details-threshold refinement (bp->details) applies even in plain
-        // "uniformly" mode (mask_mode == DEVELOP_MASK_ENABLED, no mask type
-        // bit at all -- see the matching fix in dt_develop_blend_process's
-        // own `uniform` branch, which now honors it instead of silently
-        // ignoring it). Only mask_mode == DEVELOP_MASK_DISABLED (blending
-        // off entirely) has nothing that could ever need the detail buffer.
+        // the details threshold applies to a uniform blend too
+        // (dt_develop_blend_process); only a disabled mask needs no detail
+        // buffer
         const gboolean valid_mask = bp->mask_mode >= DEVELOP_MASK_ENABLED;
 
-        // The detail/scharr buffer is requested when the global refinement
-        // carries a detail threshold, but also when any per-shape refinement
-        // (flexi scoped refinement, masks v7) does: those store their detail
-        // threshold in the form's pt->refinement, not in bp->details. Without
-        // this the scharr buffer is never produced and the per-shape pass hits
-        // "detail mask blending error".
+        // the detail buffer is needed for the whole mask's threshold, and for
+        // an element's or group's, kept in its own refinement. Without it the
+        // element's pass fails with "detail mask blending error"
         if(valid_mask
            && pipe->want_detail_mask == FALSE
            && (!feqf(bp->details, 0.0f, 1e-6)
@@ -738,23 +731,18 @@ static void _dev_pixelpipe_synch(dt_dev_pixelpipe_t *pipe,
   }
 }
 
-/* TRUE if the consumer's mask group contains a DT_MASKS_RASTER form element
-   referencing `source` (op + instance).
+/* does the consumer's mask hold a raster element reading `source`?
 
-   A flexi raster element is a group member, not the module's exclusive raster
-   sink: it leaves blend_params.raster_mask_* untouched and its mask_mode is
-   MASK/FLEXI, never RASTER. The legacy `consumes` test in
-   dt_dev_pixelpipe_prune_stale_raster_users therefore cannot see it, and would prune a
-   perfectly live consumer -- after which the source stops storing its mask and
-   the element silently contributes nothing.
+   A raster element is a group member, not the module's raster sink: it leaves
+   blend_params.raster_mask_* alone, and its mask_mode is flexi, never RASTER.
+   Without this test a live consumer would be pruned, and the source would stop
+   keeping its mask.
 
-   `mask_id` must come from the consumer's piece->blendop_data (authoritative in
-   every pipe), but the forms themselves are resolved through dev->forms rather
-   than pipe->forms: the pipe's snapshot is only refreshed later, inside
-   dt_dev_pixelpipe_process(), so at prune time it is the previous run's copy
-   (or NULL on the first run). dev->forms is per-dev and correct in the export
-   pipe too -- unlike module->enabled/blend_params, which track the darkroom GUI
-   and must never be consulted here. */
+   `mask_id` comes from the consumer's piece->blendop_data, right in every
+   pipe, but the forms from dev->forms, not pipe->forms: the pipe's copy is
+   refreshed later, in dt_dev_pixelpipe_process(), and is the previous run's
+   here. dev->forms is right in the export pipe too, unlike module->enabled and
+   module->blend_params, which follow the darkroom and must not be read here */
 static gboolean _raster_form_consumes(dt_develop_t *dev,
                                       const dt_mask_id_t mask_id,
                                       const dt_iop_module_t *source)
@@ -828,8 +816,7 @@ void dt_dev_pixelpipe_prune_stale_raster_users(dt_dev_pixelpipe_t *pipe,
     const dt_develop_blend_params_t *bp = sink_piece->blendop_data;
     const gboolean points_back = bp && dt_iop_module_is(module, bp->raster_mask_source)
                                  && module->multi_priority == bp->raster_mask_instance;
-    // ...either as the exclusive whole-mask raster sink, or as a raster FORM
-    // element inside its mask group (which the legacy test cannot see).
+    // as the module's raster sink, or through a raster element of its mask
     const gboolean consumes =
       sink_piece->enabled && bp
       && ((points_back && (bp->mask_mode & DEVELOP_MASK_RASTER))
@@ -908,7 +895,6 @@ void dt_dev_pixelpipe_synch_all(dt_dev_pixelpipe_t *pipe, dt_develop_t *dev)
 
   pipe->want_detail_mask = FALSE;
 
-  /* go through all history items and adjust params */
   GList *history = dev->history;
   for(int k = 0; k < dev->history_end && history; k++)
   {
@@ -3978,10 +3964,9 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
   float *raster_mask = NULL;
   dt_iop_roi_t *final_roi = &piece->processed_roi_out;
 
-  // the source piece's own blend params, never the module's: another pipe's
-  // synch_all commits every module's defaults while it replays history, and a
-  // source judged from the module in that window read as writing no mask,
-  // which deleted the one it had stored and emptied its consumers' masks
+  // judge the source by its piece: the module's blend params are rewritten
+  // with the defaults while another pipe replays history, and a source read
+  // as not writing loses its stored mask here
   const dt_develop_blend_params_t *const sbp = source_piece->blendop_data;
   const dt_develop_mask_mode_t maskmode =
     source_piece->enabled && sbp ? sbp->mask_mode : DEVELOP_MASK_DISABLED;
@@ -4027,10 +4012,9 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
       // search backward from target for a valid cached raster mask
       GList *start_iter = NULL;
       const float *start_data = NULL;
-      // allocated length of start_data, tracked alongside it so the final copy
-      // can be checked against the buffer it reads from rather than trusting
-      // final_roi. stays 0 while start_data is the source mask, which is never
-      // copied out.
+      // the length of start_data, for the final copy to check against rather
+      // than trust final_roi. 0 while start_data is the source mask, which is
+      // never copied out
       size_t start_floats = 0;
 
       // find target position so we can walk backward
@@ -4148,11 +4132,9 @@ float *dt_dev_get_raster_mask(dt_dev_pixelpipe_iop_t *piece,
       {
         const size_t num_floats = (size_t)final_roi->width * final_roi->height;
 
-        /* final_roi and inmask are set together at every assignment above, so
-           this should hold. it has not always: a crash report showed this copy
-           reading past the end of a correctly sized mask buffer. read out of
-           bounds rather than trusting the invariant, and leave a log line
-           naming both sizes if it is ever violated again.
+        /* final_roi and inmask are set together above, so this should hold.
+           Check it anyway rather than read past the end of the buffer, and log
+           both sizes if it ever fails
         */
         if(num_floats > inmask_floats)
         {

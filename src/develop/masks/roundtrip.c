@@ -60,18 +60,14 @@ static gchar *_snapshot(dt_develop_t *dev)
 {
   GString *s = g_string_new(NULL);
 
-  // dev->history, not dev->iop. dt_dev_read_history_ext() fills the history
-  // stack; a module's own blend_params are only updated when that stack is
-  // *popped* onto it, which needs pipes this test has no reason to build.
-  // Snapshotting dev->iop instead produced an empty module list for every
-  // edit -- and two empty lists compare equal, so the whole comparison passed
-  // vacuously. The history item is also the thing dt_dev_write_history_ext()
-  // actually writes back, which makes it the right object to compare anyway.
-  // Only the LAST history item, not every one. Simulating the user's edit
-  // appends an item, so comparing whole stacks would report that append as a
-  // round-trip difference -- and the appended item is the point, not an
-  // artifact. The last item is the effective state, which is what a reload has
-  // to reproduce.
+  // dev->history, not dev->iop: dt_dev_read_history_ext() fills the history
+  // stack, and a module's blend_params change only when the stack is popped
+  // onto it, which needs pipes. dev->iop would give two empty module lists,
+  // which compare equal whatever migration did. The history item is also what
+  // dt_dev_write_history_ext() writes back.
+  // Only the last history item: simulating the user's edit appends one, which
+  // a comparison of whole stacks would report. The last item is the effective
+  // state a reload has to reproduce.
   GList *last = g_list_last(dev->history);
   for(GList *m = last; m; m = NULL)
   {
@@ -128,12 +124,9 @@ static gchar *_snapshot(dt_develop_t *dev)
     union group (#21905). Checking it on both loads means a normalization that
     failed to run is caught even when it fails identically twice.
 
-    This used to also require every non-union group to hold one member, since
-    classic applies a non-union operator once per member. Migration now
-    dissolves nested groups, and a subtracted
-    group of several shapes becomes one difference group of several members,
-    exactly. That is indistinguishable here from a run that was wrongly left
-    merged, so that case is left to --verify-masks, which renders both.
+    A difference group of several members is indistinguishable here from a
+    run wrongly left merged, so that case is left to --verify-masks, which
+    renders both.
 
     Returns a description of the first violation, or NULL. */
 static gchar *_check_group_runs(dt_develop_t *dev,
@@ -177,14 +170,11 @@ static gchar *_check_group_runs(dt_develop_t *dev,
 
 static gchar *_check_run_invariant(dt_develop_t *dev)
 {
-  // Walked from each module's own mask_id rather than over dev->forms at
-  // large, and that distinction is not pedantry -- checking every form was the
-  // first thing tried and it reported a violation on a group no module
-  // references. dev->forms is per *image*, and every masks_history row is a
-  // full cumulative snapshot (see migrate_legacy.c's header), so it routinely
-  // carries groups belonging to other modules and groups orphaned by earlier
-  // edits. Those never render, migration never touches them, and holding them
-  // to a rendering invariant is meaningless.
+  // walked from each module's own mask_id, not over dev->forms: dev->forms is
+  // per image, and every masks_history row is a full cumulative snapshot (see
+  // migrate_legacy.c's header), so it carries groups of other modules and
+  // groups orphaned by earlier edits. Those never render, migration does not
+  // touch them, and a rendering invariant means nothing for them
   GList *last = g_list_last(dev->history);
   for(GList *m = last; m; m = NULL)
   {
@@ -211,20 +201,18 @@ static gchar *_load_and_snapshot(const gboolean write_back, gchar **violation)
 
   if(write_back)
   {
-    // Simulate the user opening the image and touching the mask, because that
-    // -- not the load -- is what writes.
+    // simulate the user opening the image and touching the mask, which, not
+    // the load, is what writes.
     //
-    // _dev_write_history_item() persists a history item's OWN forms snapshot
-    // (dt_dev_history_item_t.forms), and a freshly-read stack has none: only
-    // _dev_add_history_item_ext() fills it, by deep-copying the live
-    // dev->forms. Calling dt_dev_write_history_ext() straight after a read
-    // therefore wipes masks_history and writes nothing back, which is what the
-    // first version of this test did -- it reported the normalization as lost
-    // when really it had never been offered for saving.
+    // _dev_write_history_item() stores a history item's own forms snapshot
+    // (dt_dev_history_item_t.forms), and a freshly read stack has none: only
+    // _dev_add_history_item_ext() fills it, by deep-copying dev->forms. A
+    // dt_dev_write_history_ext() straight after a read wipes masks_history and
+    // writes nothing, which looks like the normalization being lost.
     //
-    // The real sequence is: pop the stack onto the modules (so they carry the
-    // migrated blend_params), then add a history item, which snapshots
-    // dev->forms *after* dt_masks_normalize_flexi_groups() has run on it.
+    // So: pop the stack onto the modules (they then carry the migrated
+    // blend_params), then add a history item, which snapshots dev->forms after
+    // dt_masks_normalize_flexi_groups() has run on it.
     dt_dev_pop_history_items_ext(&dev, dev.history_end);
 
     for(GList *m = dev.iop; m; m = g_list_next(m))
@@ -276,20 +264,14 @@ static gchar *_first_difference(const char *a, const char *b)
   return out ? out : g_strdup("(no line-level difference found)");
 }
 
-/* A harvested edit this tool cannot round-trip. Recorded rather than silently
+/* a harvested edit this tool cannot round-trip. Recorded rather than silently
    dropped, so the report accounts for every index in the harvest.
 
-   A plain block, NOT the usual do{...}while(0): `continue` binds to the
-   nearest enclosing loop, and do/while(0) IS one, so wrapped in the idiom it
-   would leave the do-while and fall through into the very code the skip
-   exists to avoid. That is not theoretical -- it shipped, and every skipped
-   edit was then also judged, so reports carried two rows per skipped index
-   and three of dudo's stale mask ids were charged to migration as lost masks.
-
-   The cost of the plain block is that the macro must never be followed by an
-   `else` (the trailing `;` at each call site would orphan it). No call site
-   has one, and a skip is by nature the end of an iteration, so there is
-   nothing for an `else` to do here. */
+   A plain block, not the usual do{...}while(0): `continue` binds to the
+   nearest enclosing loop, and do/while(0) is one, so the skip would fall
+   through into the code it exists to avoid, and a skipped edit would be
+   judged too. So the macro must never be followed by an `else`; a skip ends
+   an iteration, so there is nothing for an `else` to do. */
 #define ROUNDTRIP_SKIP(why)                                                     \
   {                                                                             \
     skipped++;                                                                  \
@@ -422,14 +404,12 @@ gboolean dt_masks_roundtrip_harvest_section(const char *json_path, FILE *rf)
     // stored forms have to carry what load #1 derived in memory
     gchar *snap2 = _load_and_snapshot(FALSE, &v2);
 
-    /* A guard against passing vacuously, not a statistic.
-       dt_dev_read_history_ext() drops a history row whose (operation,
-       multi_priority) has no iop-order entry, without saying so -- and two
-       snapshots of a dev with no modules in it compare equal no matter what
-       migration did. That is precisely how multi-instance edits used to be
-       "tested" here. If this count is ever non-zero the run proves nothing
-       about those edits, so it is reported next to the pass count rather than
-       left for someone to notice. */
+    /* a guard against passing vacuously, not a statistic.
+       dt_dev_read_history_ext() silently drops a history row whose
+       (operation, multi_priority) has no iop-order entry, and two snapshots of
+       a dev with no modules compare equal whatever migration did. A non-zero
+       count means the run proves nothing about those edits, so it is
+       reported next to the pass count */
     if(snap1 && !strstr(snap1, "module ")) no_module++;
 
     gchar *diff = NULL;

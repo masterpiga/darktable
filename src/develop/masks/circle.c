@@ -224,13 +224,10 @@ static int _circle_events_button_pressed(dt_iop_module_t *module,
 
     if(gui->edit_mode == DT_MASKS_EDIT_FULL)
     {
-      // gpt is only ever refreshed by a redraw (dt_masks_gui_form_create, from
-      // the post_expose path); if geometry or the view changed since the last
-      // one without a redraw landing before this click, the cached corner
-      // below is stale and hands the drag a wrong anchor -- jumping the shape
-      // away on the first drag tick. Force a fresh recompute right before
-      // reading it (cheap: one shape, not the whole pipe). gpt itself stays
-      // the same struct/pointer across the call.
+      // gpt is only refreshed by a redraw (dt_masks_gui_form_create, from
+      // post_expose). If the shape or the view changed since, its corner is
+      // stale and the drag would jump the shape away, so it is refreshed
+      // here, for one shape only. gpt stays the same struct
       dt_masks_gui_form_create(form, gui, index, module);
       if(!gpt->points || gpt->points_count == 0) return 0;
 

@@ -1049,8 +1049,8 @@ _register_vectorized_forms(dt_iop_module_t *module,
 
   dt_develop_t *dev = darktable.develop;
 
-  // a single connected region (the common case) needs no bundling at all:
-  // register it and hand it back directly, exactly like a hand-drawn shape.
+  // one connected region, the common case, needs no object: its path is
+  // registered like a hand-drawn shape
   if(nbform == 1)
   {
     dt_masks_form_t *f = forms->data;
@@ -1064,9 +1064,9 @@ _register_vectorized_forms(dt_iop_module_t *module,
     return f;
   }
 
-  // multiple paths (e.g. an outer boundary + one or more holes): bundle them
-  // as one coordinated DT_MASKS_OBJECT unit -- see _object_bundle_modify_property
-  // for how feather/size/rotation stay coordinated across the bundle.
+  // several paths, an outline and its holes, make one AI object, whose
+  // feather, size and rotation act on all of them
+  // (_object_bundle_modify_property)
 
   // register all path forms so they exist in dev->forms, each named once the
   // ones before it are there, so every path gets its own number
@@ -1080,10 +1080,9 @@ _register_vectorized_forms(dt_iop_module_t *module,
   dt_masks_form_t *bundle = dt_masks_create(DT_MASKS_OBJECT);
   _name_uniquely(dev, bundle, TRUE);
 
-  // add each path as a member of the bundle by hand: dt_masks_group_add_form
-  // gates its first argument on DT_MASKS_GROUP, deliberately, so a shape
-  // can't be dragged into an AI bundle through the normal "add to group" UI.
-  // Holes get difference mode.
+  // the paths join the object by hand: dt_masks_group_add_form() only takes a
+  // group, so that no shape can be added to an AI object in the panel. Holes
+  // are differences
   GList *s = signs;
   for(GList *l = forms; l; l = g_list_next(l), s = s ? g_list_next(s) : NULL)
   {
@@ -1100,9 +1099,9 @@ _register_vectorized_forms(dt_iop_module_t *module,
     bundle->points = g_list_append(bundle->points, grpt);
   }
 
-  // register the bundle (history item added by caller after blend mask
-  // assignment), then head it with its group's marker, whose id must not
-  // collide with the bundle's own
+  // register the object (the caller adds the history item once the mask is
+  // assigned), then give it its marker, whose id must differ from the
+  // object's own
   dev->forms = g_list_append(dev->forms, bundle);
   dt_masks_object_ensure_marker(dev->forms, bundle);
 
@@ -1320,13 +1319,8 @@ static int _object_events_button_pressed(dt_iop_module_t *module,
     else if(gui->guipoints_count > 0)
       new_grp = _finalize_mask(module, form, gui);
 
-    // add the new group to the module's blend mask group, through the exact
-    // same path an ordinary hand-drawn shape uses (dt_masks_group_insert_member,
-    // factored out of dt_masks_gui_form_save_creation) so the panel's flexi
-    // insert-hint targeting (selected group / selected empty group -- see
-    // _recompute_insert_hint in blend_gui.c) is honored here too, instead of
-    // this finalizer always appending to the module's top-level group
-    // regardless of what the user had selected in the panel.
+    // into the module's mask where the panel's insert hint says, as a
+    // hand-drawn shape goes (dt_masks_group_insert_member)
     if(new_grp)
     {
       dt_develop_t *dev = darktable.develop;
@@ -1873,12 +1867,10 @@ static void _object_set_form_name(dt_masks_form_t *const form,
   snprintf(form->name, sizeof(form->name), _("AI object #%d"), (int)nb);
 }
 
-// coordinated feather/size/rotation across a multi-path AI-mask bundle
-// (a committed DT_MASKS_OBJECT whose ->points is a GList of
-// dt_masks_point_group_t, exactly like a group, referencing independently
-// registered DT_MASKS_PATH children -- see _register_vectorized_forms).
-// Only reached outside interactive creation (gui->creation == FALSE); the
-// switch statement above this in _object_modify_property owns that case.
+// feather, size and rotation of a committed AI object, acting on all of its
+// paths. Its points are group points referring to the paths
+// (_register_vectorized_forms). _object_modify_property handles the object
+// being created
 static void _object_bundle_modify_property(dt_masks_form_t *const form,
                                            const dt_masks_property_t prop,
                                            const float old_val,
@@ -1893,9 +1885,8 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
   switch(prop)
   {
   case DT_MASKS_PROPERTY_FEATHER:
-    // pure per-child delegation: a hole path's own border already softens
-    // on the geometrically-correct side, same as any single subtract
-    // shape today, so no sign-awareness is needed here.
+    // each path on its own: a hole's border softens on the right side, as
+    // any subtracted shape's does
     for(GList *l = form->points; l; l = g_list_next(l))
     {
       const dt_masks_point_group_t *pt = l->data;
@@ -1909,10 +1900,8 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
   case DT_MASKS_PROPERTY_SIZE:
   case DT_MASKS_PROPERTY_ROTATION:
   {
-    // one shared center for the whole bundle: the arithmetic mean of every
-    // child's own corner points, pooled -- good enough for the concentric
-    // shapes an AI segmentation produces (outer boundary + hole), avoids a
-    // pooled-polygon shoelace calculation.
+    // the object's center: the mean of all its paths' corner points, close
+    // enough for the nested outline and holes a segmentation produces
     double cx = 0.0, cy = 0.0;
     int npts = 0;
     for(GList *l = form->points; l; l = g_list_next(l))
@@ -1932,10 +1921,8 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
     cx /= npts;
     cy /= npts;
 
-    // a genuine geometry change invalidates every child's own shrink/grow
-    // baseline (see _object_bundle_resize below) -- its points are about
-    // to be mutated directly here, bypassing path.c's own property-change
-    // cases, which normally do this invalidation themselves.
+    // the paths' points change here, not in path.c, so their shrink and grow
+    // baselines (_object_bundle_resize) are dropped here too
     const gboolean geom_changed = (new_val != old_val);
     if(geom_changed)
       for(GList *l = form->points; l; l = g_list_next(l))
@@ -1946,18 +1933,11 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
 
     if(prop == DT_MASKS_PROPERTY_SIZE)
     {
-      // an approximate linear "size" measure for the whole bundle: sum of
-      // each child's own polygon area (shoelace, the same formula
-      // _path_modify_property's own SIZE case uses), sqrt'd into a linear
-      // scale. Needed for two things _path_modify_property's case also
-      // does with its own per-path surf: (1) clamp the ratio so the
-      // bundle can't be scaled to nothing or blown up unboundedly, and
-      // (2) report a genuine non-zero absolute reading back through *sum
-      // -- SIZE is a *relative* property (_blend_masks_properties), so
-      // blend_gui.c's _props_row_apply multiplies the slider's soft range
-      // by sum/count; reporting new_val (0 at rest, like ROTATION's own
-      // absolute-dial convention) instead collapses that range to zero,
-      // leaving the slider with no visible label or handle.
+      // a linear size of the object: the square root of its paths' areas
+      // (shoelace, as in _path_modify_property). As for a path, it bounds
+      // the ratio and is reported through *sum: SIZE is relative
+      // (_blend_masks_properties), so _props_row_apply scales the slider's
+      // range by sum/count, and 0 would leave it no range at all
       double area_sum = 0.0;
       for(GList *l = form->points; l; l = g_list_next(l))
       {
@@ -1980,9 +1960,8 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
       const float r0 =
         (surf > 0.0f) ? fminf(fmaxf(ratio, 0.001f / surf), 2.0f / surf) : ratio;
 
-      // positive (union) children scale by `r0`; hole (difference)
-      // children scale by `1/r0` -- shrinking the bundle (ratio < 1)
-      // shrinks the outer boundary and grows the hole.
+      // the outline scales by `r0` and the holes by `1 / r0`: shrinking the
+      // object shrinks its outline and grows its holes
       for(GList *l = form->points; l; l = g_list_next(l))
       {
         const dt_masks_point_group_t *pt = l->data;
@@ -2018,28 +1997,12 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
     }
     else // DT_MASKS_PROPERTY_ROTATION
     {
-      // rotate every child about the one shared bundle center. Done
-      // directly in form (backtransformed, normalized) space -- unlike a
-      // standalone path's own ROTATION case (dt_masks_rotate_ctrl_points),
-      // which pivots in on-screen space using the interactive display
-      // buffer (gui->points), not available here since Phase 1 does not
-      // extend the on-canvas dispatcher to DT_MASKS_OBJECT (see Phase 2) --
-      // but a corner's x and y are each normalized by a *different* image
-      // dimension (see _register_vectorized_forms: corner[0]/iwidth,
-      // corner[1]/iheight), so that normalized space is not isotropic: a
-      // plain rotation matrix applied directly there shears the shape once
-      // converted back to real pixels (observed live: rotating skewed the
-      // outer boundary and every hole). Convert to actual image-pixel
-      // space first, rotate rigidly there, then convert back -- the same
-      // fix SIZE's scaling does not need, since a uniform per-axis scale
-      // commutes with the (also per-axis) normalization and stays diagonal.
-      // matching path.c's own ROTATION case: report the dial value and
-      // count this property as applicable unconditionally (below), even
-      // on the rare call where the image size isn't available yet (e.g.
-      // a populate-time probe before the preview pipe has ever run) --
-      // only the geometry transform itself is skipped in that case,
-      // exactly as path.c's own case silently skips its gpt-based
-      // transform but still falls through to the same two lines.
+      // rotate every path about the object's center, in image pixels: a
+      // corner's x and y are normalized by the width and the height, so a
+      // rotation in normalized space would shear the shape. Scaling needs no
+      // such step, as it commutes with the normalization. Without an image
+      // size yet (a probe before the preview pipe ran) only the rotation is
+      // skipped: the value is still reported, as path.c does
       float dwidth, dheight, iwidth, iheight;
       dt_masks_get_image_size(&dwidth, &dheight, &iwidth, &iheight);
       if(iwidth > 0.0f && iheight > 0.0f && new_val != old_val)
@@ -2080,14 +2043,10 @@ static void _object_bundle_modify_property(dt_masks_form_t *const form,
   }
 }
 
-// grow/shrink (outset/inset) a bundle by delegating the same signed amount to
-// every child's own resize() (path.c's per-formid baseline+result cache,
-// entirely self-contained -- no bundle-specific state needed), sign-flipped
-// for hole (difference) children so the whole bundle grows/shrinks as one
-// coherent unit: shrinking insets the outer boundary and *also* insets the
-// hole (growing the visible ring), matching the SIZE slider's own polarity
-// convention above. A percent amount already scales relative to each child's
-// own size, so no extra normalization is needed there.
+// grow or shrink an object by resizing each path by the same amount, negated
+// for a hole, so that shrinking insets the outline and grows the holes, as
+// SIZE does above. path.c keeps each path's baseline, and a percentage is
+// already relative to each path's size
 static gboolean _object_bundle_resize(dt_masks_form_t *const form,
                                       const int amount,
                                       const gboolean use_percent)
@@ -2104,10 +2063,8 @@ static gboolean _object_bundle_resize(dt_masks_form_t *const form,
   return any_ok;
 }
 
-// report the bundle's current grow/shrink reading: the first union (outer)
-// child's own offset, since every child is driven by the same signed amount
-// (see _object_bundle_resize above), so any one of them reflects the whole
-// bundle.
+// the object's grow or shrink amount: the first outline path's, as every path
+// is resized by the same amount (_object_bundle_resize)
 static gboolean _object_bundle_resize_get(dt_masks_form_t *const form,
                                           const gboolean use_percent,
                                           float *amount)
@@ -2170,16 +2127,12 @@ static void _object_modify_property(dt_masks_form_t *const form,
 
   if(!gui || !gui->creation)
   {
-    // not an interactive SAM-click session: this is a committed, multi-path
-    // AI-mask bundle (see _register_vectorized_forms) being edited from the
-    // masks panel.
+    // a committed object edited in the panel, not one being created
     _object_bundle_modify_property(form, prop, old_val, new_val, sum, count, min, max);
     return;
   }
 
-  // always increment *count - the framework hides the slider when
-  // count==0 (the gtk_widget_set_visible in the mask manager this branch
-  // removed, src/libs/masks.c -- provenance only, the file is gone)
+  // always increment *count: the panel hides a property whose count is 0
   switch(prop)
   {
     case DT_MASKS_PROPERTY_SIZE:
@@ -2247,13 +2200,10 @@ static void _object_modify_property(dt_masks_form_t *const form,
   }
 }
 
-// applies a smoothing/cleanup delta to the active creation session's preview
-// -- called from the flexi panel's pending-row sliders (see
-// _make_pending_shape_row in blend_gui.c), which are built directly against
-// a NOT-yet-committed dt_masks_form_t (never a member of grp->points), so
-// they cannot go through the normal committed-row _props_row_apply path.
-// _object_modify_property's creation branch (above) never dereferences its
-// `form` argument, only `gui`/`_get_data(gui)`, so passing NULL here is safe.
+// the panel's pending-row sliders (_make_pending_shape_row in blend_gui.c)
+// edit an object no group holds yet, so they cannot use _props_row_apply. The
+// creation branch of _object_modify_property reads only gui, so `form` can be
+// NULL
 void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
                                              const float old_val,
                                              const float new_val)
@@ -2268,10 +2218,8 @@ void dt_masks_object_creation_apply_property(const dt_masks_property_t prop,
   dt_control_queue_redraw_center();
 }
 
-// reads the active creation session's current smoothing/cleanup and edge
-// refinement -- used to populate the pending-row controls on (re)build, and to
-// re-sync them after a canvas scroll-wheel adjustment
-// (_object_events_mouse_scrolled). Any output may be NULL.
+// for the pending-row controls, when built and after a canvas scroll changed
+// the values (_object_events_mouse_scrolled). Any output may be NULL
 gboolean dt_masks_object_creation_get_preview_params(float *smoothing,
                                                      int *cleanup,
                                                      gboolean *refine)
@@ -2288,13 +2236,9 @@ gboolean dt_masks_object_creation_get_preview_params(float *smoothing,
 
 // the function table for object masks
 const dt_masks_functions_t dt_masks_functions_object = {
-  // a committed, multi-path AI-mask bundle's ->points is a GList of
-  // dt_masks_point_group_t, exactly like a group's (see
-  // _register_vectorized_forms) -- dt_masks_point_object_t is otherwise
-  // unused anywhere (only ever referenced by its own declaration), so this
-  // is safe to repurpose. The interactive SAM-click session (gui->creation)
-  // never populates form->points at all, so this size is never consulted
-  // for that transient state.
+  // a committed object's points are group points (_register_vectorized_forms).
+  // dt_masks_point_object_t is unused, and an object being created has no
+  // points
   .point_struct_size = sizeof(struct dt_masks_point_group_t),
   .sanitize_config = NULL,
   .setup_mouse_actions = _object_setup_mouse_actions,

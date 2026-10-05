@@ -304,15 +304,13 @@ static void _refine_with_detail_mask(dt_iop_module_t *self,
 }
 
 // ---------------------------------------------------------------------------
-// refinement bypass: pipe-local snapshot of a GUI-only preview toggle.
+// refinement bypass: the pipe's snapshot of a preview toggle of the GUI.
 //
-// The live set lives in the module's blend_data and is mutated on the GTK
-// thread, while the renderer runs on pixelpipe workers. It is copied into the
-// piece by dt_masks_refine_bypass_commit() below, from commit_params, which
-// runs on a pipe worker too (dev-doc/GUI_Threading.md): the copy reads the set
-// under bd->lock, which the GTK side holds to change it. Never serialized: a
-// module without a GUI snapshots as empty, so export/CLI/thumbnail renders are
-// unaffected.
+// The set lives in blend_data and changes on the GTK thread, under bd->lock.
+// dt_masks_refine_bypass_commit() copies it into the piece under that lock,
+// from commit_params on a pipe worker (dev-doc/GUI_Threading.md). It is never
+// stored: without a GUI the snapshot is empty, so export, CLI and thumbnails
+// are unaffected
 
 // binary search over the sorted key array
 gboolean dt_masks_refine_bypass_lookup(const dt_dev_refine_bypass_t *const bypass,
@@ -366,9 +364,8 @@ static void _refine_bypass_collect(GHashTable *const set,
     const dt_masks_point_group_t *const pt = l->data;
     const guint32 ek = dt_masks_refine_key_element(pt->formid);
     const guint32 gk = dt_masks_refine_key_group(pt->formid);
-    // a group is keyed by its marker, so only markers ever match the group
-    // key -- testing every member costs one lookup and needs no run boundary
-    // logic here
+    // a group is keyed by its marker, so only a marker matches a group key;
+    // testing every point costs one lookup and needs no other logic
     if(g_hash_table_lookup(set, GUINT_TO_POINTER(ek))) g_array_append_val(out, ek);
     if(g_hash_table_lookup(set, GUINT_TO_POINTER(gk))) g_array_append_val(out, gk);
     if(dt_masks_point_is_marker(pt)) continue;
@@ -386,14 +383,11 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   dt_iop_gui_blend_data_t *const bd = module ? module->blend_data : NULL;
   if(!bd) return;
 
-  // Read the params being committed (already memcpy'd into the piece by our
-  // caller), NEVER module->blend_params. dt_dev_pixelpipe_synch_all commits
-  // every piece's *defaults* first and only then replays history, and
-  // dt_iop_commit_blend_params -- which is what writes module->blend_params --
-  // runs after this function. So during a replay module->blend_params still
-  // holds the defaults: mask_mode without the FLEXI bit and mask_id
-  // NO_MASKID, which silently emptied every snapshot and made the bypass
-  // toggle do nothing at all.
+  // read the params being committed, which the caller copied into the piece,
+  // never module->blend_params: dt_dev_pixelpipe_synch_all commits the
+  // defaults before replaying history, and dt_iop_commit_blend_params writes
+  // module->blend_params after this runs. During a replay they hold the
+  // defaults, without FLEXI and with no mask_id, so the snapshot would be empty
   const dt_develop_blend_params_t *const bp = piece->blendop_data;
   if(!bp || !(bp->mask_mode & DEVELOP_MASK_FLEXI)) return;
 
@@ -404,9 +398,8 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
   GHashTable *const set = bd->masks_refine_bypassed;
   if(set && (table_size = g_hash_table_size(set)))
   {
-    // Query the keys this mask can use rather than copying the whole table: it
-    // holds entries for what the user bypassed in any mask. A group's key is
-    // its marker's id, which the walk below meets like a member's.
+    // look up the keys this mask can use rather than copying the table, which
+    // holds what the user bypassed in any mask
     dt_masks_form_t *const grp =
       dt_masks_get_from_id(darktable.develop, bp->mask_id);
     if(g_hash_table_lookup(set, GUINT_TO_POINTER(DT_MASKS_REFINE_KEY_GLOBAL)))
@@ -432,8 +425,7 @@ void dt_masks_refine_bypass_commit(const dt_iop_module_t *const module,
            module->op, n, table_size, bp->mask_id);
 }
 
-// flexi-only, transient: the GUI can temporarily bypass the whole-mask (global)
-// refinement pass.
+// is the refinement of the whole flexi mask previewed as off?
 static gboolean _flexi_global_refine_bypassed(const dt_dev_pixelpipe_iop_t *const piece,
                                               const dt_develop_blend_params_t *const bp)
 {
@@ -442,15 +434,12 @@ static gboolean _flexi_global_refine_bypassed(const dt_dev_pixelpipe_iop_t *cons
                                        DT_MASKS_REFINE_KEY_GLOBAL);
 }
 
-// Does rendering this drawn/flexi mask group need the host-side guide images
-// (the in/out pixel buffers)? Two consumers need them inside the CPU group
-// renderer: (a) parametric-as-form members, whose blendif is evaluated against
-// the guide image, and (b) per-shape/per-group guided-filter feathering. On the
-// OpenCL pipe the guides live on the device, so when this returns TRUE the
-// caller must read them back to host before rendering; otherwise a parametric
-// form would render fully opaque and per-shape feathering would be skipped.
-// Returns FALSE for the common case (plain drawn shapes, no per-shape feather),
-// preserving the no-readback fast path.
+// does rendering this group need the module's input and output images? A
+// parametric member evaluates its channels against them, and the guided-filter
+// feathering of a member or group uses them as guide. In the OpenCL pipe they
+// live on the device, and are then read back to the host; without them a
+// parametric member renders opaque and feathering is skipped. Plain shapes
+// keep the fast path without the readback
 static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
                                          const dt_dev_pixelpipe_iop_t *const piece,
                                          const int depth)
@@ -469,8 +458,7 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
     if(!f) continue;
     // a parametric form evaluates blendif against the guide image
     if(f->type & DT_MASKS_PARAMETRIC) return TRUE;
-    // recurse into nested groups and AI objects, which fold their members
-    // through the same renderer (see _group_raster_sources_hash below)
+    // nested groups and AI objects render their members the same way
     if((f->type & (DT_MASKS_GROUP | DT_MASKS_OBJECT))
        && _group_needs_host_guides(f, piece, depth + 1))
       return TRUE;
@@ -478,10 +466,9 @@ static gboolean _group_needs_host_guides(const dt_masks_form_t *const form,
   return FALSE;
 }
 
-// what the raster members of a mask group read: each source's mask as the pipe
-// produced it, so the pipe's cumulative hash up to that source. The group's own
-// hash only holds the reference (source op, instance, mask id), and a key
-// without this served the mask cached before the source's own mask changed
+// what the raster members of a group read: each source's mask as the pipe made
+// it, so the pipe's hash up to that source. The group's own hash only holds
+// the reference, and would not change when the source's mask does
 static dt_hash_t _group_raster_sources_hash(dt_hash_t hash,
                                             const dt_masks_form_t *const form,
                                             dt_dev_pixelpipe_iop_t *const piece,
@@ -520,27 +507,15 @@ static dt_hash_t _group_raster_sources_hash(dt_hash_t hash,
 
 /* May the blend render `mask_id`'s group as this module's blend mask?
 
-   IOP_FLAGS_NO_MASKS (retouch, spots) means the module consumes drawn forms
-   itself, inside process() -- see the matching note in pixelpipe_hb.c. So the
-   blend must not also render the forms behind mask_id: it would paint the
-   module's own retouch shapes as a blend mask.
+   An IOP_FLAGS_NO_MASKS module (retouch, spots) uses its drawn forms itself in
+   process() (see pixelpipe_hb.c), so the blend must not render its classic
+   drawn mask: it would paint the module's own shapes as a mask.
 
-   That reasoning is about *drawn* masks, and testing the flag alone made it
-   apply to flexi groups too, which is wrong and silently destructive. Such a
-   module can still carry a parametric blend mask -- classic evaluates it in
-   make_mask() at the end, with no group involved -- but once that mask is
-   migrated, the parametric config lives in a form inside a flexi group, and
-   the group is exactly what this gate refuses to render. The mask collapsed to
-   a flat opacity: 24 of the 2466 real edits replayed by --verify-masks, every
-   single one of them retouch in parametric-only mode, and nothing structural
-   about the migration was wrong.
-
-   A flexi group is never the module's own shapes. It is created by the flexi
-   panel or by migration, under its own new formid, and for a NO_MASKS module
-   it can only hold non-drawn elements anyway: the panel refuses drawn shapes
-   there (bd->masks_support, blend_gui.c) and migration only ever synthesizes
-   parametric/raster forms for a module that was never allowed a drawn mask in
-   the first place. So flexi groups render; classic drawn masks stay blocked. */
+   A flexi group is never those shapes. In such a module it holds parametric
+   and raster elements only: the panel offers no shapes there
+   (bd->masks_support in blend_gui.c), and migration adds none. Do not test the
+   flag alone: a parametric mask of such a module lives in a flexi group once
+   migrated, and would collapse to a flat opacity. */
 gboolean dt_blend_may_render_group(dt_iop_module_t *self,
                                    const dt_develop_mask_mode_t mask_mode)
 {
@@ -709,9 +684,9 @@ static void _develop_blend_process_mask_tone_curve(float *const restrict mask,
   }
 }
 
-// run one guided-filter feathering pass on a single shape's mask, choosing
-// the input or output image as guide and cropping it to the mask roi when the
-// pipe in/out rois differ. Guides come from the transient context on piece.
+// one guided-filter feathering pass on an element's mask, guided by the input
+// or the output image from the piece's blend_refine_* context, cropped to the
+// mask's roi when the input roi differs
 static void _feather_form_mask(dt_dev_pixelpipe_iop_t *piece,
                                float *const mask,
                                const dt_iop_roi_t *const roi,
@@ -762,11 +737,9 @@ void dt_develop_blend_refine_form_mask(dt_iop_module_t *self,
                                        const dt_iop_roi_t *const roi,
                                        const dt_masks_refinement_t *const r)
 {
-  // Optional per-shape refinement, applied to one form's raw [0,1] mask buffer
-  // before the group compositor multiplies in the form opacity. Mirrors the
-  // global refinement pass (detail -> feather/blur ordering -> tone curve) but
-  // scoped to this shape; the global pass still runs afterwards on the
-  // composited group mask. opacity is 1.0 here (form opacity is applied later).
+  // refine one element's raw [0, 1] mask before the group applies its opacity,
+  // in the order of the whole-mask refinement (details, feathering and blur,
+  // tone curve), which still runs on the finished mask
   if(!r || !r->enabled) return;
 
   const size_t buffsize = (size_t)roi->width * roi->height;
@@ -881,15 +854,8 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
     const dt_hash_t bph = dt_masks_refine_bypass_hash(&piece->refine_bypass);
     mkey = dt_hash(mkey, &bph, sizeof(dt_hash_t));
     mkey = dt_hash(mkey, roi_out, sizeof(dt_iop_roi_t));
-    // mask_mode belongs in the key because it selects *which renderer runs*:
-    // dt_masks_group_get_mask_roi() dispatches to the flexi fold when
-    // DEVELOP_MASK_FLEXI is set and to the classic sequential fold when it
-    // is not, for the same form. Keying only on the form means a mask
-    // rendered under one mode is served back under the other -- so a
-    // module that flips between them (migration, a preset or copied
-    // history applied to a live module) silently reuses the wrong
-    // renderer's output. A cache key has to cover everything the result
-    // depends on, and the choice of algorithm is the largest such thing.
+    // mask_mode picks the fold, flexi or classic, for the same form: a cache
+    // key must cover everything the result depends on
     mkey = dt_hash(mkey, &d->mask_mode, sizeof(d->mask_mode));
     mkey = _group_raster_sources_hash(mkey, form, piece, 0);
   }
@@ -934,7 +900,7 @@ static gboolean _render_drawn_mask_cached(dt_iop_module_t *self,
   }
   else if(mc->data)
   {
-    // group now needs host guides: drop the stale (guide-independent) entry
+    // the group needs the images now: drop the entry cached without them
     dt_dev_pixelpipe_clear_mask_cache(piece->pipe, mc);
   }
 
@@ -953,7 +919,7 @@ void dt_develop_blend_process(dt_iop_module_t *self,
   const dt_develop_mask_mode_t mask_mode = d->mask_mode;
 
   const gboolean raster = mask_mode & DEVELOP_MASK_RASTER;
-  // flexi mask reuses the drawn-group renderer, so treat it as a drawn mask here
+  // a flexi mask renders through the drawn group renderer
   const gboolean mode_drawn = mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_FLEXI);
   const gboolean mode_parametric = mask_mode & DEVELOP_MASK_CONDITIONAL;
 
@@ -988,13 +954,9 @@ void dt_develop_blend_process(dt_iop_module_t *self,
 
   const gboolean valid_request = dt_iop_has_focus(self) && (piece->pipe == self->dev->full.pipe);
 
-  // does user want us to display a specific channel? Details-threshold
-  // refinement (d->details) carves a real, non-uniform mask out of image
-  // detail even with no drawn/parametric/raster mask engaged at all -- so a
-  // module with just that refinement active still has something genuine to
-  // show on the overlay, same as mode_parametric/mode_drawn (see the
-  // matching fix in the `uniform` branch below, which actually applies the
-  // refinement in that case instead of silently ignoring it).
+  // does user want us to display a specific channel? The details threshold
+  // carves a mask out of the image's detail even with no drawn, parametric or
+  // raster mask, so it has something to show too
   const dt_dev_pixelpipe_display_mask_t request_mask_display =
       valid_request && (mode_parametric || mode_drawn || d->details != 0.0f)
         ? self->request_mask_display
@@ -1015,8 +977,8 @@ void dt_develop_blend_process(dt_iop_module_t *self,
                                  && (mask_mode & ~DEVELOP_MASK_ENABLED);
   const gboolean uniform = mask_mode == DEVELOP_MASK_ENABLED || suppress_mask;
 
-  // obtaining the list of mask operations to perform. A transient flexi bypass of
-  // the whole-mask refinement skips the post-operations and the detail refine.
+  // obtaining the list of mask operations to perform. Previewing the whole
+  // mask's refinement as off skips them and the details threshold
   const gboolean global_refine_bypass = _flexi_global_refine_bypassed(piece, d);
   _develop_mask_post_processing post_operations[3];
   const size_t post_operations_size =
@@ -1038,26 +1000,19 @@ void dt_develop_blend_process(dt_iop_module_t *self,
 
   float *const restrict mask = _mask;
 
-  // set below whenever `mask` was filled as a uniform "everything is masked"
-  // fallback because there is nothing active to actually compute a mask from
-  // (an empty/all-bypassed flexi group, or a drawn-mask module with no form
-  // at all yet) -- gates the mask-display overlay further down: showing that
-  // fallback as the usual yellow tint would just paint the entire canvas
-  // opaque, which is not informative and makes it hard to see where to place
-  // a new shape or picker.
+  // `mask` was filled uniformly because nothing active computes one (an empty
+  // or bypassed flexi group, or a drawn mask with no form yet). Its overlay
+  // would paint the whole canvas and hide where to place a shape or a picker,
+  // so it is not shown
   gboolean mask_is_uniform_fallback = FALSE;
 
   if(uniform)
   {
     // blend uniformly (no drawn or parametric mask)
     dt_iop_image_fill(mask, opacity, owidth, oheight, 1); // mask[k] = value;
-    // details-threshold refinement still carves real, non-uniform detail out
-    // of this otherwise-flat mask even with no drawn/parametric/raster mask
-    // active -- skipped only for suppress_mask, which must show the truly
-    // unrefined result. Matches the raster/mode_drawn branches below, which
-    // already apply this; this uniform branch had silently ignored
-    // d->details entirely, making the "details threshold" slider a no-op
-    // whenever no other mask type was engaged.
+    // the details threshold carves the image's detail out of the flat mask,
+    // as in the raster and drawn branches below; not for suppress_mask, which
+    // shows the unrefined result
     if(!suppress_mask)
       _refine_with_detail_mask(self, piece, mask, roi_in, roi_out,
                                global_refine_bypass ? 0.0f : d->details);
@@ -1111,23 +1066,16 @@ void dt_develop_blend_process(dt_iop_module_t *self,
     // get the drawn mask if there is one
     dt_masks_form_t *form = dt_masks_get_from_id_ext(piece->pipe->forms, d->mask_id);
 
-    // we blend with a drawn and/or parametric mask.
-    // NB: form->points, not just form. A mask group can legitimately be empty
-    // now that emptying a flexi group no longer deletes the group form itself
-    // (see _detach_group_members in blend_gui.c), and dt_masks_group_render_roi()
-    // returns 0 for a member-less group *without writing `mask`* -- form_ok only
-    // gates the cache and the log line, so falling through here would blend
-    // against an uninitialized buffer. An empty group contributes nothing, which
-    // is exactly the "no form" case handled below. A classic mask still renders
-    // an existing empty group, as master does: the classic fold clears the mask,
-    // so it comes out empty rather than full (see _drawn_content_t in
-    // migrate_legacy.c)
+    // we blend with a drawn and/or parametric mask. An empty flexi group, which
+    // emptying it in the panel leaves behind (_detach_group_members in
+    // blend_gui.c), renders nothing and leaves `mask` unwritten, so it takes
+    // the "no form" branch below. A classic group renders even when empty: the
+    // classic fold clears the mask (see _drawn_content_t in migrate_legacy.c)
     if(form && (form->points || !(mask_mode & DEVELOP_MASK_FLEXI)) && mode_drawn
        && dt_blend_may_render_group(self, mask_mode))
     {
-      // expose the in/out images as feathering guides for optional per-shape
-      // refinement inside the group renderer (only consumed when a shape has
-      // refinement enabled; harmless otherwise).
+      // the input and output images, for the group renderer's parametric
+      // members and feathering
       piece->blend_refine_guide_in = (const float *)ivoid;
       piece->blend_refine_guide_out = (const float *)ovoid;
       piece->blend_refine_roi_in = roi_in;
@@ -1162,16 +1110,10 @@ void dt_develop_blend_process(dt_iop_module_t *self,
       dt_iop_image_fill(mask, fill, owidth, oheight, 1); //mask[k] = fill;
     }
 
-    // true exactly when the mode_drawn/flexi realm (the first two branches
-    // above) had nothing active to actually render and fell back to a
-    // uniform, non-inverted mask -- computed once here, after the fact,
-    // rather than duplicated inside each branch above, so it stays correct
-    // regardless of which specific branch ends up doing the fill.
-    // ... but only when nothing is going to make the buffer non-uniform
-    // afterwards: _refine_with_detail_mask below still multiplies this flat
-    // fill by real per-pixel detail data whenever d->details is active, at
-    // which point the result is genuinely informative and must not be
-    // suppressed as if it were still the flat "everything/nothing" fallback.
+    // the drawn branches above had nothing active to render and filled a
+    // uniform, uninverted mask; decided here once rather than in each branch.
+    // Not when the details threshold below carves detail into it, which makes
+    // it worth showing
     mask_is_uniform_fallback =
       mode_drawn && dt_blend_may_render_group(self, mask_mode) && !form_ok && !inverted
       && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
@@ -1307,13 +1249,9 @@ void dt_develop_blend_process(dt_iop_module_t *self,
       break;
   }
 
-  // register if _this_ module should expose mask or display channel -- unless
-  // the mask itself is only the uniform "nothing active" fallback (see
-  // mask_is_uniform_fallback above): showing that as the usual yellow tint
-  // would just paint the entire canvas opaque, hiding the image instead of
-  // showing anything useful. The module still applies to the whole image
-  // (that fallback is correct and unchanged), only its on-canvas
-  // visualization is skipped.
+  // register if _this_ module should expose mask or display channel, unless
+  // the mask is only the uniform fallback (mask_is_uniform_fallback): the
+  // module still applies everywhere, only its overlay is skipped
   if(request_mask_display
      & (DT_DEV_PIXELPIPE_DISPLAY_MASK | DT_DEV_PIXELPIPE_DISPLAY_CHANNEL)
      && !mask_is_uniform_fallback)
@@ -1467,22 +1405,16 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
   const gboolean valid_request = dt_iop_has_focus(self) && (piece->pipe == self->dev->full.pipe);
 
   const gboolean raster = mask_mode & DEVELOP_MASK_RASTER;
-  // flexi mask reuses the drawn-group renderer, so treat it as a drawn mask here
+  // a flexi mask renders through the drawn group renderer
   const gboolean mode_drawn = mask_mode & (DEVELOP_MASK_MASK | DEVELOP_MASK_FLEXI);
   const gboolean mode_parametric = mask_mode & DEVELOP_MASK_CONDITIONAL;
 
-  // set below whenever `mask` was filled as a uniform "everything is masked"
-  // fallback because there is nothing active to actually compute a mask from
-  // -- see the identical flag (and its own comment) in dt_develop_blend_process.
+  // see the same flag in dt_develop_blend_process
   gboolean mask_is_uniform_fallback = FALSE;
 
-  // does user want us to display a specific channel? Details-threshold
-  // refinement (d->details) carves a real, non-uniform mask out of image
-  // detail even with no drawn/parametric/raster mask engaged at all -- so a
-  // module with just that refinement active still has something genuine to
-  // show on the overlay, same as mode_parametric/mode_drawn (see the
-  // matching fix in the `uniform` branch below, which actually applies the
-  // refinement in that case instead of silently ignoring it).
+  // does user want us to display a specific channel? The details threshold
+  // carves a mask out of the image's detail even with no drawn, parametric or
+  // raster mask, so it has something to show too
   const dt_dev_pixelpipe_display_mask_t request_mask_display =
       valid_request && (mode_parametric || mode_drawn || d->details != 0.0f)
         ? self->request_mask_display
@@ -1504,8 +1436,8 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
 
   const gboolean uniform = mask_mode == DEVELOP_MASK_ENABLED || suppress_mask;
 
-  // obtaining the list of mask operations to perform (transient flexi bypass of
-  // the whole-mask refinement skips the post-operations and the detail refine)
+  // obtaining the list of mask operations to perform. Previewing the whole
+  // mask's refinement as off skips them and the details threshold
   const gboolean global_refine_bypass = _flexi_global_refine_bypassed(piece, d);
   _develop_mask_post_processing post_operations[3];
   const size_t post_operations_size =
@@ -1615,14 +1547,10 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
 
   if(uniform)
   {
-    // details-threshold refinement still carves real, non-uniform detail out
-    // of this otherwise-flat mask even with no drawn/parametric/raster mask
-    // active (see the matching fix in dt_develop_blend_process's own
-    // `uniform` branch) -- skipped only for suppress_mask, which must show
-    // the truly unrefined result, and for the common opacity-only case (no
-    // details set) which keeps the fast GPU-only fill kernel below. The
-    // refinement itself has no GPU kernel path, so this builds the mask on
-    // the host (same as the raster branch just below) and uploads it.
+    // the details threshold, as in dt_develop_blend_process; not for
+    // suppress_mask. It has no GPU kernel, so the mask is built on the host
+    // and uploaded, as in the raster branch below. Without it the fill kernel
+    // does the job on the GPU
     if(!suppress_mask && !global_refine_bypass && d->details != 0.0f)
     {
       dt_iop_image_fill(mask, opacity, owidth, oheight, 1);
@@ -1695,28 +1623,15 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     // get the drawn mask if there is one
     dt_masks_form_t *form = dt_masks_get_from_id_ext(piece->pipe->forms, d->mask_id);
 
-    // we blend with a drawn and/or parametric mask.
-    // NB: form->points, not just form. A mask group can legitimately be empty
-    // now that emptying a flexi group no longer deletes the group form itself
-    // (see _detach_group_members in blend_gui.c), and dt_masks_group_render_roi()
-    // returns 0 for a member-less group *without writing `mask`* -- form_ok only
-    // gates the cache and the log line, so falling through here would blend
-    // against an uninitialized buffer. An empty group contributes nothing, which
-    // is exactly the "no form" case handled below. A classic mask still renders
-    // an existing empty group, as master does: the classic fold clears the mask,
-    // so it comes out empty rather than full (see _drawn_content_t in
-    // migrate_legacy.c)
+    // we blend with a drawn and/or parametric mask. An empty flexi group takes
+    // the "no form" branch below, as in dt_develop_blend_process
     if(form && (form->points || !(mask_mode & DEVELOP_MASK_FLEXI)) && mode_drawn
        && dt_blend_may_render_group(self, mask_mode))
     {
-      // The mask group is rendered on the CPU even in the OpenCL pipe, so
-      // per-shape detail/blur/contrast/brightness refinement still applies here.
-      // The feathering guide images and parametric-form blendif evaluation need
-      // the in/out pixel buffers, which live on the device in this pipe. When the
-      // group actually needs them (parametric-as-form members, or per-shape
-      // guided-filter feathering) read them back to host so the CPU renderer
-      // produces the same result as the CPU pipe; otherwise keep the no-readback
-      // fast path (guides left NULL, harmless for plain drawn shapes).
+      // the group renders on the CPU in this pipe too. Its parametric members
+      // and feathering need the input and output images, which live on the
+      // device: they are read back when the group needs them
+      // (_group_needs_host_guides)
       float *guide_in = NULL;
       float *guide_out = NULL;
       if(_group_needs_host_guides(form, piece, 0))
@@ -1770,20 +1685,10 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
         dt_iop_image_invert(mask, 1.0f, owidth, oheight, 1); //mask[k] = 1.0f - mask[k]
       }
     }
-    // mode_drawn, matching the CPU path (dt_develop_blend_process) and this
-    // branch's own comment. It read mode_parametric, which was already
-    // inconsistent with the CPU and is actively wrong after the flexi
-    // migration: migration always clears DEVELOP_MASK_CONDITIONAL, so
-    // mode_parametric is FALSE for *every* migrated edit and this branch
-    // became unreachable -- a flexi group that renders nothing (an empty
-    // group, or one whose only member is a still-full-range parametric
-    // channel) then fell through to the INCL fill below. Where the CPU fills
-    // `inverted ? 0 : 1`, the GPU filled 1.0, so a migrated edit carrying
-    // DEVELOP_COMBINE_MASKS_POS applied to nothing on the CPU and to the
-    // whole image on the GPU.
-    //
-    // NOT covered by the --verify-masks corpus, which replays the CPU path
-    // only: reasoned from the two branches and the comment, not measured.
+    // mode_drawn, as in dt_develop_blend_process: a flexi mask has no
+    // CONDITIONAL bit, and a flexi group that renders nothing must get the
+    // CPU's `inverted ? 0 : 1` here, not the INCL fill below. The masks
+    // verification tools replay the CPU path only
     else if(mode_drawn && dt_blend_may_render_group(self, mask_mode))
     {
       // no form defined but drawn mask active
@@ -1798,9 +1703,7 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
       dt_iop_image_fill(mask, fill, owidth, oheight, 1); //mask[k] = fill;
     }
 
-    // see the identical computation (and its own comment) in
-    // dt_develop_blend_process -- kept in sync by hand since this is a
-    // separate OpenCL implementation of the same branch structure.
+    // as in dt_develop_blend_process: keep the two in step
     mask_is_uniform_fallback =
       mode_drawn && dt_blend_may_render_group(self, mask_mode) && !form_ok && !inverted
       && (global_refine_bypass || feqf(d->details, 0.0f, 1e-6f));
@@ -1999,9 +1902,8 @@ gboolean dt_develop_blend_process_cl(dt_iop_module_t *self,
     }
   }
 
-  // register if _this_ module should expose mask or display channel -- unless
-  // the mask itself is only the uniform "nothing active" fallback (see
-  // mask_is_uniform_fallback above and its twin in dt_develop_blend_process)
+  // register if _this_ module should expose mask or display channel, unless
+  // the mask is only the uniform fallback (see dt_develop_blend_process)
   if(request_mask_display
      & (DT_DEV_PIXELPIPE_DISPLAY_MASK | DT_DEV_PIXELPIPE_DISPLAY_CHANNEL)
      && !mask_is_uniform_fallback)
@@ -2272,9 +2174,8 @@ static void _fix_raster_blend(dt_develop_blend_params_t *n)
   }
 }
 
-/** update blendop params layout to current version -- pure struct-version
-    conversion, unaware of flexi. dt_develop_blend_legacy_params_ext() below
-    runs the classic-to-flexi mask migration once this succeeds. */
+/** update the blendop params layout to the current version.
+    dt_develop_blend_legacy_params_ext() below then migrates the mask */
 static gboolean _develop_blend_legacy_params_convert(dt_iop_module_t *module,
                                                       const void *const old_params,
                                                       const int old_version,
@@ -2874,11 +2775,9 @@ gboolean dt_develop_blend_legacy_params_ext(dt_iop_module_t *module,
                                                                 new_params, new_version, length);
   if(failed) return TRUE;
 
-  // the layout conversion above always targets the current version (every
-  // branch checks new_version == DEVELOP_BLEND_VERSION), so on success we
-  // always have fully current-layout data in new_params, possibly still
-  // carrying a classic (pre-flexi) mask_mode -- migrate it now, uniformly,
-  // regardless of which version branch produced it. Migration cannot fail.
+  // every conversion goes to the current version, so new_params has the
+  // current layout, maybe with a classic mask_mode, whatever version it came
+  // from. Migration cannot fail
   dt_develop_blend_params_t *n = new_params;
   dt_masks_migrate_classic_to_flexi(module, n, history_num);
   // every conversion is from a version older than the lock, whose reserved

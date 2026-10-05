@@ -199,38 +199,22 @@ void dt_bauhaus_widget_set_show_extended_label(GtkWidget *widget,
 // button press (which a gesture-based widget cannot handle cleanly)
 void dt_bauhaus_widget_show_popup(GtkWidget *widget);
 
-// pin the *next* popup this widget opens to a caller-chosen rectangle instead
-// of letting it place itself around the pointer. `rect` is in root (screen)
-// coordinates and describes the popup window itself, not an anchor to align
-// against: the popup takes that exact position and size, only sliding
-// horizontally if the monitor cannot fit it. The pin is consumed by that one
-// opening, so call this immediately before dt_bauhaus_widget_show_popup();
-// every other way of opening the widget's popup is unaffected. Pass NULL to
-// drop a pin that has not been consumed yet.
-//
-// Root coordinates rather than window-relative ones because the caller
-// generally has no way of knowing which GdkWindow the popup will end up
-// anchored to -- a widget inside a GtkPopover has that popover, not the main
-// window, as its toplevel. Getting that wrong is invisible on a single
-// monitor with the main window at the screen origin, and lands the popup on
-// the wrong display everywhere else.
+// place the next popup this widget opens at `rect` rather than around the
+// pointer. `rect` is the popup window itself, in root coordinates, as the
+// caller cannot know which window the popup anchors to (a popover's widget
+// has the popover as toplevel); it only slides sideways to fit the monitor.
+// The next opening consumes it, so call this right before
+// dt_bauhaus_widget_show_popup(). NULL drops a pin not consumed yet
 void dt_bauhaus_widget_set_popup_position(GtkWidget *widget,
                                           const GdkRectangle *rect);
 
-// hover-preview hook for a "dt-bauhaus-static-popup" slider (a popup opened
-// away from the pointer via dt_bauhaus_widget_show_popup(), which therefore
-// opts out of the normal "hover alone drags the value" popup behavior --
-// see the static_popup comment in bauhaus.c's _window_motion_handle). Set it
-// with g_object_set_data(G_OBJECT(widget), "dt-bauhaus-static-hover-preview",
-// hook) and, if the hook needs its own user_data, also
-// g_object_set_data(G_OBJECT(widget), "dt-bauhaus-static-hover-preview-data",
-// data). Called on every pointer motion over such a popup while no button is
-// held, with the real (min..max, exactly what dt_bauhaus_slider_get() would
-// return) value the pointer is currently over -- the slider's own value is
-// left untouched; it is purely informational, for a caller that wants to
-// preview a hovered position elsewhere (e.g. on another widget) without
-// committing to it until the user actually drags or the caller decides the
-// hover has settled.
+// hover preview of a slider tagged "dt-bauhaus-static-popup", whose popup
+// opens away from the pointer, so that hover alone does not change its value
+// (see _window_motion_handle in bauhaus.c). Set it as the widget's
+// "dt-bauhaus-static-hover-preview" data, its user_data as
+// "dt-bauhaus-static-hover-preview-data". It is called on each pointer motion
+// over the popup with no button held, with the value under the pointer as
+// dt_bauhaus_slider_get() would return it; the slider's value is not changed
 typedef void (*dt_bauhaus_static_hover_preview_t)(GtkWidget *widget,
                                                   float value,
                                                   gpointer user_data);
