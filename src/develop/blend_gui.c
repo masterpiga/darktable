@@ -7554,41 +7554,44 @@ static void _paint_param_output(cairo_t *cr,
 }
 
 // a group's operator: how it folds its own members together, in list order
-// (masks_revamp_nested_groups.md, Q8). The names are families first: the three
-// unions and the two overlaps agree on solid shapes and differ only in how
-// partial opacities combine. Order matches the menu. `short_name`, the
-// family, names a group that has no name of its own. `formula` ends the
-// tooltip: the fold of the mask so far `a` with the next member `b` (group.c
-// dt_masks_combine_*). It is not translated: a formula reads the same in every
-// language
+// (masks_revamp_nested_groups.md, Q8). Each name is the operation, then its
+// family: the three unions and the two intersections agree on solid shapes
+// and differ only in how partial opacities combine. Order matches the menu.
+// `short_name`, the family, names a group that has no name of its own.
+// `formula` ends the tooltip: the fold of the mask so far `a` with the next
+// member `b` (group.c dt_masks_combine_*). It is not translated: a formula
+// reads the same in every language
 static const struct
 {
-  dt_masks_state_t bit; // 0 = union (strongest) (no within bit)
+  dt_masks_state_t bit; // 0 = maximum (no within bit)
   DTGTKCairoPaintIconFunc paint;
   const char *name;
   const char *short_name;
   const char *tooltip;
   const char *formula;
 } _within_modes[] = {
-  { 0, dtgtk_cairo_paint_masks_union, N_("union (strongest)"), N_("union"),
+  { 0, dtgtk_cairo_paint_masks_union, N_("maximum (union)"), N_("union"),
     N_("everything any element covers: where elements overlap, the stronger one wins"),
     "max(a, b)" },
-  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_masks_union_smooth, N_("union (smooth)"), N_("union"),
-    N_("like union (strongest), but overlapping feathered edges merge smoothly, "
+  { DT_MASKS_STATE_SCREEN, dtgtk_cairo_paint_masks_union_smooth,
+    N_("screen (smooth union)"), N_("union"),
+    N_("like maximum (union), but overlapping feathered edges merge smoothly, "
        "without a seam"),
     "a + b - ab" },
-  { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("union (added)"), N_("union"),
-    N_("like union (strongest), but opacities add up where elements overlap, "
+  { DT_MASKS_STATE_WITHIN_SUM, dtgtk_cairo_paint_masks_sum, N_("sum (union)"), N_("union"),
+    N_("like maximum (union), but opacities add up where elements overlap, "
        "clipped at full opacity"),
     "min(1, a + b)" },
-  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection, N_("overlap (weakest)"), N_("overlap"),
+  { DT_MASKS_STATE_ISECT, dtgtk_cairo_paint_masks_intersection,
+    N_("minimum (intersection)"), N_("intersection"),
     N_("only the area every element covers: the weaker one wins"),
     "min(a, b)" },
-  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply, N_("overlap (smooth)"), N_("overlap"),
-    N_("like overlap (weakest), but feathered edges fade together smoothly: "
+  { DT_MASKS_STATE_WITHIN_MULTIPLY, dtgtk_cairo_paint_masks_multiply,
+    N_("product (intersection)"), N_("intersection"),
+    N_("like minimum (intersection), but feathered edges fade together smoothly: "
        "strong only where every element is"),
     "a * b" },
-  { DT_MASKS_STATE_WITHIN_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("subtraction"), N_("subtraction"),
+  { DT_MASKS_STATE_WITHIN_DIFFERENCE, dtgtk_cairo_paint_masks_difference, N_("difference"), N_("difference"),
     N_("the bottom element, minus every element above it"),
     "a * (1 - b)" },
   { DT_MASKS_STATE_WITHIN_EXCLUSION, dtgtk_cairo_paint_masks_exclusion, N_("exclusion"), N_("exclusion"),
@@ -9781,14 +9784,14 @@ static GtkWidget *_element_hover_box(GtkWidget *child, dt_iop_module_t *module, 
 // a group is named, and numbered, after how it combines its own members: a
 // nested group has no between-group operator, and a top-level one is named
 // the same way so the two read alike. By operator family, as its default name
-// is (see _within_short_name): the unions share one series and the overlaps
-// another, or a smooth and a strongest union would both show "union-1"
+// is (see _within_short_name): the unions share one series and the
+// intersections another, or maximum and screen would both show "union-1"
 int dt_masks_gui_within_index_for_state(const int state)
 {
   if(state & (DT_MASKS_STATE_ISECT | DT_MASKS_STATE_WITHIN_MULTIPLY)) return 1;
   if(state & DT_MASKS_STATE_WITHIN_DIFFERENCE) return 2;
   if(state & DT_MASKS_STATE_WITHIN_EXCLUSION) return 3;
-  return 0; // the unions: strongest (no bit), smooth, added
+  return 0; // the unions: maximum (no bit), screen, sum
 }
 
 // commit a group's rename entry: the text is the group's name, held by its

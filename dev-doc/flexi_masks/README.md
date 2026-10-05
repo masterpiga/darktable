@@ -6,9 +6,9 @@ parametric, raster, drawn + parametric) with one mask model and one panel.
 ## The model
 
 - **A mask is a tree of groups.** Each group folds its members in order
-  with one operator: union (strongest), union (smooth), union (added),
-  overlap (weakest), overlap (smooth), subtraction or exclusion. It then
-  applies its own refinement, invert and opacity. Groups nest.
+  with one operator: maximum (union), screen (smooth union), sum (union),
+  minimum (intersection), product (intersection), difference or exclusion.
+  It then applies its own refinement, invert and opacity. Groups nest.
 - **Every member is an element.** Drawn shapes, single parametric channels,
   raster masks, AI objects and groups each yield a 0-1 value per pixel and
   combine the same way.
@@ -72,10 +72,10 @@ can be edited without rebuilding.
       "name": "drawn + parametric (classic)",
       "description": "menu tooltip",
       "mask": {
-        "operator": "overlap (smooth)",
+        "operator": "product (intersection)",
         "notes": ["page 1, shown under the mask's own header", "page 2"],
         "groups": [
-          { "id": "parametric", "name": "parametric", "operator": "overlap (smooth)",
+          { "id": "parametric", "name": "parametric", "operator": "product (intersection)",
             "opacity": 1.0, "notes": ["..."], "groups": [] }
         ]
       }
@@ -84,7 +84,7 @@ can be edited without rebuilding.
       "id": "subtract",
       "name": "drawn + parametric, minus an area",
       "mask": {
-        "operator": "subtraction",
+        "operator": "difference",
         "groups": [
           { "id": "subtract", "name": "to subtract" },
           { "preset": "drawn_parametric", "name": "drawn + parametric" }
@@ -97,11 +97,11 @@ can be edited without rebuilding.
 
 - `mask` is the mask's own group; `groups` lists nested groups top-first, as
   the panel shows them.
-- `operator` is named as the menu names it, untranslated: union (strongest),
-  union (smooth), union (added), overlap (weakest), overlap (smooth),
-  subtraction or exclusion; default union (strongest). The older keys union,
-  screen, sum, intersect, multiply and difference still load, so preset
-  files written with them keep working. `opacity` defaults to 1.
+- `operator` is named as the menu names it, untranslated: maximum (union),
+  screen (smooth union), sum (union), minimum (intersection), product
+  (intersection), difference or exclusion; default maximum (union). The
+  older keys union, screen, sum, intersect and multiply still load, so
+  preset files written with them keep working. `opacity` defaults to 1.
 - A group can be another preset, inserted whole: `{ "preset": "<id>" }`.
   Whatever the group sets itself (`name`, `operator`, `opacity`, `notes`,
   `groups`) replaces that member of the preset's `mask`; everything else,
@@ -127,7 +127,6 @@ can be edited without rebuilding.
 
 ## More
 
-- [User documentation](user_docs.md)
 - [Styling the panel](styling.md): the classes, states and color tokens a
   theme or the CSS tweaks can target
 - Upstreaming: [masks_revamp_upstream_plan.md](../../masks_revamp_upstream_plan.md)

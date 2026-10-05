@@ -10,10 +10,10 @@ You want to darken the sky with the exposure module. But a tree sticks up into t
 
 So you want to mask the *sky*, and then subtract the *tree* from it.
 
-When you start a new flexi mask, it shows you a "whole mask" group. This group has an operator, which by default is **union (strongest)**:
+When you start a new flexi mask, it shows you a "whole mask" group. This group has an operator, which by default is **maximum (union)**:
 
 ```text
-1. group "whole mask": union (strongest)
+1. group "whole mask": maximum (union)
 ```
 
 A group combines its elements from the bottom up (like the pixelpipe) using its operator.
@@ -23,7 +23,7 @@ For simplicity, let's assume that you already have two individual masks that cov
 If you add your two elements (*sky*, then *tree*) to the *whole mask* group, you get something like this:
 
 ```text
-1. group "whole mask": union (strongest)
+1. group "whole mask": maximum (union)
 2. ├ tree
 3. └ sky
 ```
@@ -36,10 +36,10 @@ However, this would not produce the mask that you want. A **union** takes all th
 
 ![the union of sky and tree](sky_tree_union.png)
 
-What you want to do, instead, is to subtract the *tree* from the *sky*. So, change the *whole mask* operator to **subtraction**:
+What you want to do, instead, is to subtract the *tree* from the *sky*. So, change the *whole mask* operator to **difference**:
 
 ```text
-1. group "whole mask": subtraction
+1. group "whole mask": difference
 2. ├ tree
 3. └ sky
 ```
@@ -52,7 +52,7 @@ This is exactly what you wanted:
 
 ![the sky minus the tree](sky_tree_difference.png)
 
-Note that the order matters. A **subtraction** keeps its bottom row and subtracts everything above it. If you swap the two rows, you get the *tree* minus the *sky*, which is just the bit of trunk below the horizon:
+Note that the order matters. A **difference** keeps its bottom row and subtracts everything above it. If you swap the two rows, you get the *tree* minus the *sky*, which is just the bit of trunk below the horizon:
 
 ![the tree minus the sky](sky_tree_swapped.png)
 
@@ -65,7 +65,7 @@ Now the photo also has a lake, and you want to darken it too:
 You could try adding the *lake* to the *whole mask* group:
 
 ```text
-1. group "whole mask": subtraction
+1. group "whole mask": difference
 2. ├ tree
 3. ├ lake
 4. └ sky
@@ -75,7 +75,7 @@ This reads as:
 
 > The whole mask (1) is the *sky* (4) minus the *lake* (3) and the *tree* (2).
 
-This is not what you want: the **subtraction** removes everything above the *sky*, so the *lake* gets subtracted too, not added.
+This is not what you want: the **difference** removes everything above the *sky*, so the *lake* gets subtracted too, not added.
 
 ![the sky minus the lake and the tree](lake_sky_tree_difference.png)
 
@@ -88,9 +88,9 @@ So, you need another group! You need to compute the **union** of the *sky* and *
 It looks like this:
 
 ```text
-1. group "whole mask": subtraction
+1. group "whole mask": difference
 2. ├ tree
-3. └ group "to dim": union (strongest)
+3. └ group "to dim": maximum (union)
 4.   ├ lake
 5.   └ sky
 ```
@@ -109,9 +109,9 @@ This produces exactly the result that you wanted:
 Often, different masks give the same result. Here, the *tree* does not overlap the *lake*, so there is nothing to subtract from the *lake*. You could just as well subtract the *tree* from the *sky* first, and then add the *lake*:
 
 ```text
-1. group "whole mask": union (strongest)
+1. group "whole mask": maximum (union)
 2. ├ lake
-3. └ group "sky without tree": subtraction
+3. └ group "sky without tree": difference
 4.   ├ tree
 5.   └ sky
 ```
@@ -133,13 +133,13 @@ A group holds the rows that its operator applies to. The operator is applied fro
 
 > the **[operator]** of *[bottom element]*, ..., *[top element]*
 
-or, for a **subtraction**:
+or, for a **difference**:
 
 > *[bottom element]* minus *[every element above it]*
 
 You read the whole mask from the outside in and from the bottom up, so in our example:
 
-1. the *whole mask* is a **subtraction**: its bottom row (*to dim*) minus its top row (*tree*)
+1. the *whole mask* is a **difference**: its bottom row (*to dim*) minus its top row (*tree*)
 2. its bottom row, *to dim*, is the **union** of *sky* and *lake*
 3. *tree* is the element that will be **subtracted** from *to dim*
 
@@ -151,17 +151,17 @@ Work from the outside in, starting from the sentence that describes what
 you want.
 
 1. Find the last step. In "*sky* and *lake*, but not *tree*", the final
-   step is "but not": a cut. So *whole mask* is a **subtraction**.
-2. Find what is being cut. In a **subtraction**, that is the bottom row.
+   step is "but not": a cut. So *whole mask* is a **difference**.
+2. Find what is being cut. In a **difference**, that is the bottom row.
    Here it is "*sky* and *lake*". That is more than one thing, so it gets its
-   own group: a **union (strongest)** (to add them), named *to dim*.
+   own group: a **maximum (union)** (to add them), named *to dim*.
 3. Find what cuts: everything above the bottom row. Here, *tree*.
 4. Repeat inside each new group, until every row is a single element.
 
 Then build it in the panel:
 
-1. set *whole mask*'s operator to **subtraction**
-2. add a group with **union (strongest)**, and rename it *to dim*
+1. set *whole mask*'s operator to **difference**
+2. add a group with **maximum (union)**, and rename it *to dim*
    (right-click the group → rename)
 3. with *to dim* selected, draw *sky* and *lake*
 4. click *to dim*'s title again to deselect it, then draw *tree*: with no
@@ -179,21 +179,21 @@ is about picking the operator and putting the rows in the right order.
 
 Once you understand the gist, building more complex masks is just a matter of adding more elements. There is nothing new to understand.
 
-For example, each element in our example could be made of several bits and pieces. The tree may be the **union** of two **parametric** channels (one `hz` channel to select the *leaves*, another one for the *trunk and branches*) and some **subtractive** brush strokes to *clean up* the selection. That's no problem: the *tree* element becomes a **subtraction** group. Within this group, you will put the **union** of the parametric channels at the bottom, because you want to subtract from that union, and the brush strokes above.
+For example, each element in our example could be made of several bits and pieces. The tree may be the **union** of two **parametric** channels (one `hz` channel to select the *leaves*, another one for the *trunk and branches*) and some **subtractive** brush strokes to *clean up* the selection. That's no problem: the *tree* element becomes a **difference** group. Within this group, you will put the **union** of the parametric channels at the bottom, because you want to subtract from that union, and the brush strokes above.
 
 The result will be something like this:
 
 ```text
-1.  group "whole mask": subtraction
-2.  ├ group "tree": subtraction     <-- the tree became a group
-3.  │ ├ group "clean up": union (strongest)
+1.  group "whole mask": difference
+2.  ├ group "tree": difference      <-- the tree became a group
+3.  │ ├ group "clean up": maximum (union)
 4.  │ │ ├ brush stroke N
     │ │ ├ ...
 5.  │ │ └ brush stroke 1
-6.  │ └ group "trunk, branches and leaves": union (strongest)
+6.  │ └ group "trunk, branches and leaves": maximum (union)
 7.  │   ├ hz channel "leaves"
 8.  │   └ hz channel "trunk and branches"
-9.  └ group "to dim": union (strongest)
+9.  └ group "to dim": maximum (union)
 10.   ├ lake
 11.   └ sky
 ```
@@ -205,49 +205,50 @@ The *sky* and *lake* could themselves be a combination of parametric channels an
 Each picture shows what a group with two shapes produces. The blue circle is
 the bottom row, the pink one the row above it; yellow is the mask.
 
-![union (strongest), overlap (weakest), subtraction, exclusion](ops_basic.png)
+![maximum (union), minimum (intersection), difference, exclusion](ops_basic.png)
 
-| operator              | in plain words                                        | order matters? |
-|-----------------------|-------------------------------------------------------|----------------|
-| **union (strongest)** | "add": everything any row covers                      | no             |
-| **overlap (weakest)** | "keep only the overlap": where every row covers       | no             |
-| **subtraction**       | "cut out": the bottom row, minus every row above it   | **yes**        |
-| **exclusion**         | areas covered by an odd number of rows                | rarely*        |
+| operator                   | in plain words                                      | order matters? |
+|----------------------------|-----------------------------------------------------|----------------|
+| **maximum (union)**        | "add": everything any row covers                    | no             |
+| **minimum (intersection)** | "keep only the overlap": where every row covers     | no             |
+| **difference**             | "cut out": the bottom row, minus every row above it | **yes**        |
+| **exclusion**              | areas covered by an odd number of rows              | rarely*        |
 
 With two rows, **exclusion** is "either, but not both": the overlap is
 cleared. A third row brings back the area where all three overlap.
 
 \* only with three or more rows that have soft edges or partial opacity.
 
-### Soft edges: the union and overlap variants
+### Soft edges: the union and intersection variants
 
 Masks aren't just "in" or "out": feathered edges and opacity make them
-partial. That's why **union** and **overlap** come in more than one variant.
+partial. That's why **union** and **intersection** come in more than one
+variant.
 All the variants of a family behave the same on solid shapes; they differ
 only in how partial areas combine (outlines here mark the halfway point of
 each feather):
 
-![union (strongest), union (smooth), union (added), overlap (weakest), overlap (smooth) with feathered shapes](ops_soft.png)
+![maximum (union), screen (smooth union), sum (union), minimum (intersection), product (intersection) with feathered shapes](ops_soft.png)
 
-| operator              | in plain words                                                     |
-|-----------------------|--------------------------------------------------------------------|
-| **union (strongest)** | the stronger row wins; overlapping feathers can leave a crease     |
-| **union (smooth)**    | overlapping feathers blend smoothly, with no crease                |
-| **union (added)**     | partial areas add up, so two half-strength rows give full strength |
-| **overlap (weakest)** | the weaker row wins; overlapping feathers can leave a crease       |
-| **overlap (smooth)**  | strong only where every row is strong; fades quickly, no crease    |
+| operator                   | in plain words                                                     |
+|----------------------------|--------------------------------------------------------------------|
+| **maximum (union)**        | the stronger row wins; overlapping feathers can leave a crease     |
+| **screen (smooth union)**  | overlapping feathers blend smoothly, with no crease                |
+| **sum (union)**            | partial areas add up, so two half-strength rows give full strength |
+| **minimum (intersection)** | the weaker row wins; overlapping feathers can leave a crease       |
+| **product (intersection)** | strong only where every row is strong; fades quickly, no crease    |
 
-When in doubt, use **union (strongest)** to add and **overlap (weakest)** to
-restrict.
+When in doubt, use **maximum (union)** to add and **minimum (intersection)**
+to restrict.
 
-## Order matters for subtraction
+## Order matters in a difference
 
-A **subtraction** keeps the bottom row and cuts away everything above it. Swap
+A **difference** keeps the bottom row and cuts away everything above it. Swap
 the rows and you cut the other way:
 
-![subtraction with rows in both orders](order_subtraction.png)
+![difference with rows in both orders](order_difference.png)
 
-So, to subtract *A* from *B*: make a **subtraction** group with *B* at the
+So, to subtract *A* from *B*: make a **difference** group with *B* at the
 bottom and *A* above it. Say it as a sentence, reading upward: "*B*, minus
 *A*".
 
@@ -260,7 +261,7 @@ finished result then acts like a single shape, the same way brackets work
 in arithmetic.
 
 Not every mask needs nesting. "The bright parts, only inside this gradient"
-is one **overlap (weakest)** group holding a luminance channel and a drawn
+is one **minimum (intersection)** group holding a luminance channel and a drawn
 gradient, in any order.
 
 ### The quick way: compose
@@ -268,7 +269,7 @@ gradient, in any order.
 Right-click a row and choose "compose", then an operator. The row goes into
 a new group with that operator, as its bottom row, with an empty group above
 it to draw into. To cut something out of a finished shape, compose it with
-**subtraction** and draw into the empty group.
+**difference** and draw into the empty group.
 
 ## Inverting
 
@@ -284,18 +285,18 @@ circles.
 
 ## Opacity
 
-Opacity scales a row before it's combined. In a **subtraction** group, an
+Opacity scales a row before it's combined. In a **difference** group, an
 element at 50% opacity cuts only halfway through. A group's own opacity
 scales its finished result.
 
 ## Cheat sheet
 
-| I want...                                   | build                                                                |
-|---------------------------------------------|----------------------------------------------------------------------|
-| *A* and *B* together                        | **union (strongest)**, any order                                     |
-| only where *A* and *B* overlap              | **overlap (weakest)**, any order                                     |
-| *B* without *A*                             | **subtraction**, *B* at the bottom, *A* above                        |
-| *A* or *B*, but not where they overlap      | **exclusion**                                                        |
-| everything except *A*                       | *A*, inverted                                                        |
-| *A* and *B*, without *C*                    | **subtraction**: a **union** group of *A* and *B* at the bottom, *C* above |
-| soft brush strokes that merge without seams | **union (smooth)**                                                   |
+| I want...                                   | build                                                                     |
+|---------------------------------------------|---------------------------------------------------------------------------|
+| *A* and *B* together                        | **maximum (union)**, any order                                            |
+| only where *A* and *B* overlap              | **minimum (intersection)**, any order                                     |
+| *B* without *A*                             | **difference**, *B* at the bottom, *A* above                              |
+| *A* or *B*, but not where they overlap      | **exclusion**                                                             |
+| everything except *A*                       | *A*, inverted                                                             |
+| *A* and *B*, without *C*                    | **difference**: a **union** group of *A* and *B* at the bottom, *C* above |
+| soft brush strokes that merge without seams | **screen (smooth union)**                                                 |

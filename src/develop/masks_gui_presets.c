@@ -359,19 +359,18 @@ static const struct
   const char *name;
   dt_masks_state_t within;
 } _flexi_operators[] = {
-  { "union (strongest)", 0 },
-  { "union (smooth)", DT_MASKS_STATE_SCREEN },
-  { "union (added)", DT_MASKS_STATE_WITHIN_SUM },
-  { "overlap (weakest)", DT_MASKS_STATE_ISECT },
-  { "overlap (smooth)", DT_MASKS_STATE_WITHIN_MULTIPLY },
-  { "subtraction", DT_MASKS_STATE_WITHIN_DIFFERENCE },
+  { "maximum (union)", 0 },
+  { "screen (smooth union)", DT_MASKS_STATE_SCREEN },
+  { "sum (union)", DT_MASKS_STATE_WITHIN_SUM },
+  { "minimum (intersection)", DT_MASKS_STATE_ISECT },
+  { "product (intersection)", DT_MASKS_STATE_WITHIN_MULTIPLY },
+  { "difference", DT_MASKS_STATE_WITHIN_DIFFERENCE },
   { "exclusion", DT_MASKS_STATE_WITHIN_EXCLUSION },
   { "union", 0 },
   { "screen", DT_MASKS_STATE_SCREEN },
   { "sum", DT_MASKS_STATE_WITHIN_SUM },
   { "intersect", DT_MASKS_STATE_ISECT },
   { "multiply", DT_MASKS_STATE_WITHIN_MULTIPLY },
-  { "difference", DT_MASKS_STATE_WITHIN_DIFFERENCE },
 };
 
 static void _flexi_builtin_free(gpointer data)

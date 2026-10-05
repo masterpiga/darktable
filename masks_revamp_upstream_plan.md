@@ -131,8 +131,7 @@ In order, each commit building:
    pre-migration backup (below), and stop turning an unknown newer
    `blendop_version` silently into default params
 6. panel test suites, user documentation, `RELEASE_NOTES.md`. The user
-   documentation is drafted in `dev-doc/flexi_masks/` (`user_docs.md`, with
-   screenshots); it belongs in the user manual, which is a separate
+   documentation belongs in the user manual, which is a separate
    repository, so only a developer-facing page stays in `dev-doc/`
 
 #### Pre-migration backup

@@ -933,8 +933,8 @@ static inline float _masks_op_icon_combine(const _masks_op_icon_t op, const floa
 static void _masks_op_icon(cairo_t *cr, const gint x, const gint y, const gint w, const gint h,
                            const _masks_op_icon_t op)
 {
-  // strongest: a dim square under a bright circle, the stronger one showing
-  // in the overlap. Added: two half-strength shapes, the overlap at full
+  // maximum: a dim square under a bright circle, the stronger one showing
+  // in the overlap. Sum: two half-strength shapes, the overlap at full
   const float opacity_square = op == _MASKS_OP_ICON_UNION ? 0.5f
                                : op == _MASKS_OP_ICON_SUM ? 0.55f : 1.0f;
   const float opacity_circle = op == _MASKS_OP_ICON_SUM ? 0.55f : 1.0f;
