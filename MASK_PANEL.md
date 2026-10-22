@@ -1,8 +1,8 @@
 # The Mask Panel
 
-darktable's mask panel unifies all masking tools into a single hierarchical tree. Instead of choosing between drawn, parametric, or raster mask modes, a module's mask is built by combining any number of elements inside groups using combination operators.
+darktable's mask panel unifies all masking tools into a single hierarchical tree. It subsumes both the previous in-module mask controls and the standalone **mask manager**, which has been removed. All mask creation, shape grouping, combination logic, shape reuse across modules, and unused shape cleanup are now handled directly within this unified panel.
 
-Every element-drawn shapes, parametric channels, raster masks from other modules, and AI objects-produces an opacity value between 0 and 1 at each pixel and can be freely combined, reordered, inverted, and refined.
+Instead of choosing between rigid drawn, parametric, or raster mask modes, a module's mask is built by combining any number of elements inside groups using combination operators. Every element—drawn shapes, parametric channels, raster masks from other modules, and AI objects—produces an opacity value between 0 and 1 at each pixel and can be freely combined, reordered, inverted, and refined.
 
 ---
 
@@ -11,7 +11,7 @@ Every element-drawn shapes, parametric channels, raster masks from other modules
 ### Where the Panel Lives
 The mask panel can be hosted in three locations (configured via the Mask Options popover):
 - **Embedded within each module (default)**: Located inside each processing module under the "blend mask" section. Clicking the header bar folds or unfolds the panel.
-- **Utility module, left panel**: Hosted in the darkroom's left sidebar as a dedicated module labeled **masking** (not "blend mask"). It automatically switches to show and edit the mask of whichever processing module currently has focus.
+- **Utility module, left panel**: Hosted in the darkroom's left sidebar as a dedicated module labeled **masking** (not "blend mask"), occupying the panel position where the old mask manager once lived. It automatically switches to show and edit the mask of whichever processing module currently has focus.
 - **Separate panel, beside the canvas**: Detached as a dockable, resizable panel beside the image canvas.
 
 ### Header Controls
