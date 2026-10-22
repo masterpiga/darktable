@@ -20,7 +20,7 @@ The header bar of the mask panel contains the primary toggles and status indicat
 - <img src="icons/masks_panel.svg" width="18" height="18" align="middle" alt="domino" /> **On/Off Toggle (domino icon)**
   - **Left-click**: Switches the module's mask on (flexi mask) or off (disabled).
   - **Right-click**: Opens the **Mask Options** popover.
-- <img src="icons/masks_eye.svg" width="18" height="18" align="middle" alt="edit on canvas" /> **Edit on Canvas (eye icon)**
+- <img src="icons/masks_eye.svg" width="18" height="18" align="middle" alt="edit on canvas" /> **Edit on Canvas (pointer on shape icon)**
   - **Left-click**: Toggles on-canvas shape outlines, control points, and manipulation handles.
   - **Ctrl+click**: Toggles *restricted edit mode*, allowing control points to be adjusted while preventing shapes from being moved or resized by mistake.
 - <img src="icons/soloedit.svg" width="18" height="18" align="middle" alt="solo edit" /> **Solo Edit (target icon)**
@@ -308,8 +308,8 @@ The **Mask Consumers** section appears at the bottom of the panel only when one 
 |---|:---:|---|---|
 | **Header Domino** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Left-click | Toggle mask on / off |
 | **Header Domino** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Right-click | Open mask options popover |
-| **Header Eye** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Left-click | Toggle canvas shape controls on / off |
-| **Header Eye** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Ctrl + Left-click | Toggle restricted canvas edit mode |
+| **Header Edit on Canvas** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Left-click | Toggle canvas shape controls on / off |
+| **Header Edit on Canvas** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Ctrl + Left-click | Toggle restricted canvas edit mode |
 | **Header Solo** | <img src="icons/soloedit.svg" width="18" height="18" /> | Left-click | Toggle solo edit mode |
 | **Header Overlay** | <img src="icons/showmask.svg" width="18" height="18" /> | Left-click | Toggle mask overlay on image |
 | **Header Suppress** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Temporarily switch off mask in preview |
