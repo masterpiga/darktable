@@ -1,6 +1,6 @@
 # The Mask Panel
 
-darktable's mask panel unifies all masking tools into a single hierarchical tree. It subsumes both the previous in-module mask controls and the standalone **mask manager**, which has been removed. All mask creation, shape grouping, combination logic, shape reuse across modules, and unused shape cleanup are now handled directly within this unified panel.
+darktable's new mask panel (a.k.a., Flexi) unifies all masking tools into a single hierarchical tree. It subsumes both the previous in-module mask controls and the standalone **mask manager**, which has been removed. All mask creation, shape grouping, combination logic, shape reuse across modules, and unused shape cleanup are now handled directly within this unified panel.
 
 Instead of choosing between rigid drawn, parametric, or raster mask modes, a module's mask is built by combining any number of elements inside groups using combination operators. Every element—drawn shapes, parametric channels, raster masks from other modules, and AI objects—produces an opacity value between 0 and 1 at each pixel and can be freely combined, reordered, inverted, and refined.
 
