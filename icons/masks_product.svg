@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="24" height="24" viewBox="0 0 24 24">
+<defs>
+<filter id="filter-remove-color" x="0%" y="0%" width="100%" height="100%">
+<feColorMatrix color-interpolation-filters="sRGB" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0 0 0 1 0" />
+</filter>
+<filter id="filter-color-to-alpha" x="0%" y="0%" width="100%" height="100%">
+<feColorMatrix color-interpolation-filters="sRGB" values="0 0 0 0 1 0 0 0 0 1 0 0 0 0 1 0.2126 0.7152 0.0722 0 0"/>
+</filter>
+<image id="source-161" x="0" y="0" width="18" height="18" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABIAAAASCAAAAABzpdGLAAAAAmJLR0QA/4ePzL8AAAC+SURBVBiVjZBLC4JQEEaPMt5rkYq9cNFDsKD+/99xU4uEIgMpumRXW5jQstl8cBiY8w38M84342go7aOsmh6Fq2QyUrY4FrcaAZhu08UsVE3uvEyHwu1us05ibfW9vFYIsEo3u2w5hvfp4INAnCzW2V4Beh4pcCGazJKl6g4HHrgwHIXxuJcScEGU0r+eLrS2sb/2Ao8i1+9+z4JAeXTup3lHTA0CVfEqD1EAYM6m6+gNfF954mBrc3n+9S34AKb9Npm7Tzi4AAAAAElFTkSuQmCC"/>
+<mask id="mask-0">
+<g filter="url(#filter-remove-color)">
+<use xlink:href="#source-161" filter="url(#filter-color-to-alpha)" transform="matrix(1, 0, 0, 1, 3, 3)"/>
+</g>
+</mask>
+</defs>
+<path fill-rule="nonzero" fill="rgb(16%, 16%, 16%)" fill-opacity="1" stroke-width="1" stroke-linecap="butt" stroke-linejoin="miter" stroke="rgb(28%, 28%, 28%)" stroke-opacity="1" stroke-miterlimit="10" d="M 19.5 1 C 21.433594 1 23 2.566406 23 4.5 L 23 19.5 C 23 21.433594 21.433594 23 19.5 23 L 4.5 23 C 2.566406 23 1 21.433594 1 19.5 L 1 4.5 C 1 2.566406 2.566406 1 4.5 1 Z M 19.5 1 "/>
+<g mask="url(#mask-0)">
+<rect x="-2.4" y="-2.4" width="28.8" height="28.8" fill="rgb(92%, 92%, 92%)" fill-opacity="1"/>
+</g>
+<path fill="none" stroke-width="0.5" stroke-linecap="butt" stroke-linejoin="miter" stroke="rgb(92%, 92%, 92%)" stroke-opacity="1" stroke-miterlimit="10" d="M 3.539062 3.539062 L 17.074219 3.539062 L 17.074219 17.074219 L 3.539062 17.074219 Z M 3.539062 3.539062 "/>
+<path fill="none" stroke-width="0.5" stroke-linecap="butt" stroke-linejoin="miter" stroke="rgb(92%, 92%, 92%)" stroke-opacity="1" stroke-miterlimit="10" d="M 20.460938 13.691406 C 20.460938 17.429688 17.429688 20.460938 13.691406 20.460938 C 9.953125 20.460938 6.925781 17.429688 6.925781 13.691406 C 6.925781 9.953125 9.953125 6.925781 13.691406 6.925781 C 17.429688 6.925781 20.460938 9.953125 20.460938 13.691406 "/>
+</svg>
