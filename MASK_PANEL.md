@@ -13,8 +13,6 @@ The mask panel can be hosted in three locations (configured via the Mask Options
 - **Embedded within each module (default)**: Located inside each processing module under the "blend mask" section. Clicking the header bar folds or unfolds the panel.
 - **Utility module, left panel**: Hosted in the darkroom's left sidebar as a dedicated module labeled **masking** (not "blend mask"). It automatically switches to show and edit the mask of whichever processing module currently has focus.
 - **Separate panel, beside the canvas**: Detached as a dockable, resizable panel beside the image canvas.
-  - **Summoning on either side**: The panel can be summoned on either the left or right side of the canvas. When collapsed, moving the mouse pointer near either edge of the canvas reveals an edge halo overlay spanning the whole height of the canvas, displaying the domino icon (<img src="icons/masks_panel.svg" width="18" height="18" align="middle" alt="domino" />) and an inward-pointing arrow. Clicking the halo summons the panel on that side.
-  - **Switching sides**: While the panel is docked on one side, approaching the opposite edge of the canvas reveals the halo there; clicking it moves the panel across to the opposite side in one click.
 
 ### Header Controls
 The header bar of the mask panel contains the primary toggles and status indicators:
