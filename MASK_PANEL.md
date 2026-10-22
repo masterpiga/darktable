@@ -13,6 +13,8 @@ The mask panel can be hosted in three locations (configured via the Mask Options
 - **Embedded within each module (default)**: Located inside each processing module under the "blend mask" section. Clicking the header bar folds or unfolds the panel.
 - **Utility module, left panel**: Hosted in the darkroom's left sidebar as a dedicated module labeled **masking** (not "blend mask"). It automatically switches to show and edit the mask of whichever processing module currently has focus.
 - **Separate panel, beside the canvas**: Detached as a dockable, resizable panel beside the image canvas.
+  - **Summoning on either side**: The panel can be summoned on either the left or right side of the canvas. When collapsed, moving the mouse pointer near either edge of the canvas reveals an edge halo overlay spanning the whole height of the canvas, displaying the domino icon (<img src="icons/masks_panel.svg" width="18" height="18" align="middle" alt="domino" />) and an inward-pointing arrow. Clicking the halo summons the panel on that side.
+  - **Switching sides**: While the panel is docked on one side, approaching the opposite edge of the canvas reveals the halo there; clicking it moves the panel across to the opposite side in one click.
 
 ### Header Controls
 The header bar of the mask panel contains the primary toggles and status indicators:
@@ -63,7 +65,9 @@ The available color spaces depend on the currently focused module and where it i
 Controls where the mask panel is hosted in the interface:
 - **Embedded within each module (default)**: The mask panel lives directly inside each processing module's expandable body.
 - **Utility module, left panel**: Moves the entire panel into a standalone module labeled **masking** in the left sidebar. Focusing any processing module directs this utility module to display and edit that module's mask.
-- **Separate panel, beside the canvas**: Detaches the mask panel into a floating, dockable panel positioned directly beside the image canvas.
+- **Separate panel, beside the canvas**: Detaches the mask panel into a dockable, resizable panel positioned directly beside the image canvas.
+  - It can be summoned to either side of the canvas: approaching either the left or right canvas edge with the pointer reveals a halo overlay spanning the whole height of the canvas with the domino icon (<img src="icons/masks_panel.svg" width="18" height="18" align="middle" alt="domino" />) and an inward arrow. Clicking the halo opens the panel on that side.
+  - When the panel is already open, approaching the opposite canvas edge reveals the halo on that side; clicking it relocates the panel across to the opposite edge of the canvas.
 
 #### 3. Interface Options
 - **Sticky opacity (enabled by default)**: When enabled, newly created shapes inherit the opacity value last used by any shape. When disabled, every new shape always starts at 100% opacity.
@@ -314,6 +318,7 @@ The **Mask Consumers** section appears at the bottom of the panel only when one 
 | **Header Overlay** | <img src="icons/showmask.svg" width="18" height="18" /> | Left-click | Toggle mask overlay on image |
 | **Header Suppress** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Temporarily switch off mask in preview |
 | **Header Lock** | <img src="icons/mask_lock.svg" width="18" height="18" /> | Left-click | Toggle lock mask |
+| **Canvas Edge Halo** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Left-click | Summon / move beside-canvas panel to that side |
 | **Shape Add Button** | <img src="icons/masks_circle.svg" width="18" height="18" /> | Left-click | Draw a single shape |
 | **Shape Add Button** | <img src="icons/masks_circle.svg" width="18" height="18" /> | Ctrl + Left-click | Continuous shape drawing mode |
 | **Drawing Shape** | | Escape or Right-click | Cancel drawing the current shape |
