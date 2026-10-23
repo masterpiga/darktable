@@ -24,14 +24,14 @@ For users already familiar with the `master` version of Flexi masks, the `flexi-
 - **Dedicated Invert Buttons on Every Row and Header**:
   Every element row and group header now features a dedicated invert button (<img src="icons/invert.svg" width="18" height="18" align="middle" alt="invert" />) directly in its drawer:
   - Element row: Clicking inverts the element.
-  - Group header: Clicking inverts the group's composite output; **Shift+clicking inverts each direct member** inside the group.
-- **Armed Deletion with Visual Hover Feedback (`Ctrl+Shift+Click`)**:
-  Deleting a member is armed by holding `Ctrl+Shift` over the list. While held, the cursor morphs into a trash bin, and hovering over any member row or group header shades it bright red. For a group, its entire vertical tree rail turns red as well, visually indicating every member that will be deleted. Clicking immediately deletes that member (or resets the mask if clicked on the root "whole mask").
+  - Group header: Clicking inverts the group's composite output; **<kbd>Shift</kbd>+clicking inverts each direct member** inside the group.
+- **Armed Deletion with Visual Hover Feedback (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click)**:
+  Deleting a member is armed by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> over the list. While held, the cursor morphs into a trash bin, and hovering over any member row or group header shades it bright red. For a group, its entire vertical tree rail turns red as well, visually indicating every member that will be deleted. Clicking immediately deletes that member (or resets the mask if clicked on the root "whole mask").
 - **Unified Selection Caption with Direct Actions**:
   The selection area beneath the tree features an action caption that displays the selected member's name and hosts direct action buttons:
-  - <img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" /> **Delete button**: Click to delete the selection; **Shift+click on a group to empty it** (removes its members while keeping the group container).
-  - <img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" /> **Compose button**: Click to wrap the selection into a new parent group with a chosen operator; **Shift+click on a group to simplify it** (removes redundant nesting levels).
-  - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Link button**: Visible when a linked shape or raster mask is selected. Click to jump to the other module/instance; **Shift+click to unlink** (creates an independent local copy).
+  - <img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" /> **Delete button**: Click to delete the selection; **<kbd>Shift</kbd>+click on a group to empty it** (removes its members while keeping the group container).
+  - <img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" /> **Compose button**: Click to wrap the selection into a new parent group with a chosen operator; **<kbd>Shift</kbd>+click on a group to simplify it** (removes redundant nesting levels).
+  - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Link button**: Visible when a linked shape or raster mask is selected. Click to jump to the other module/instance; **<kbd>Shift</kbd>+click to unlink** (creates an independent local copy).
   - <img src="icons/presets.svg" width="18" height="18" align="middle" alt="presets" /> **Presets button**: Opens the group layout presets popover targeting the selected group.
 - **Relocated Creation Toolbar**:
   The creation toolbar has moved from the top of the tree to the selection panel beneath the caption. It groups the creation tools logically into:
@@ -43,11 +43,11 @@ For users already familiar with the `master` version of Flexi masks, the `flexi-
   Per-range bypass eye toggles have been removed. Clicking the channel abbreviation icon toggles between showing the input or output slider, and each slider now features its own dedicated color picker button (<img src="icons/colorpicker.svg" width="18" height="18" align="middle" alt="color picker" />) directly at its right edge.
 - **Dedicated Preset Guidance Notes**:
   Preset notes have been moved out of the tree into a collapsible `#masks-help-section` card in the selection panel, keeping the member tree uncluttered.
-- **Streamlined Modifier Standard (Retirement of `Alt`)**:
-  The `Alt` key is no longer used in the mask panel, avoiding conflicts with operating system and desktop window managers. Modifiers follow four clear rules:
-  - `Ctrl`: Rename.
-  - `Shift`: Toggle disclosure/expanded controls, or execute an action variant (Solo on eye, Invert All on group invert, Empty on delete, Simplify on compose, Unlink on link).
-  - `Ctrl+Shift`: Armed deletion with red visual indicator.
+- **Streamlined Modifier Standard (Retirement of <kbd>Alt</kbd>)**:
+  The <kbd>Alt</kbd> key is no longer used in the mask panel, avoiding conflicts with operating system and desktop window managers. Modifiers follow four clear rules:
+  - <kbd>Ctrl</kbd>: Rename.
+  - <kbd>Shift</kbd>: Toggle disclosure/expanded controls, or execute an action variant (Solo on eye, Invert All on group invert, Empty on delete, Simplify on compose, Unlink on link).
+  - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>: Armed deletion with red visual indicator.
   - Plain click: Select or default action.
 
 ---
@@ -68,13 +68,13 @@ For users already familiar with the `master` version of Flexi masks, the `flexi-
 ### 3. Effects on Workflow
 
 - **Accelerated Multi-Shape Grouping**:
-  Wrapping shapes into groups or simplifying redundant layers is now instant: select a member, click the Compose wand (<img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" />), and pick an operator. To flatten unnecessary nesting, simply Shift+click the wand.
+  Wrapping shapes into groups or simplifying redundant layers is now instant: select a member, click the Compose wand (<img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" />), and pick an operator. To flatten unnecessary nesting, simply <kbd>Shift</kbd>+click the wand.
 - **Modular, Non-Destructive Preset Application**:
   Previously, loading a layout preset reset the entire mask. Now you can select any subgroup within an existing mask and apply a preset as an addition or merge, enabling modular mask building (e.g., adding an exclusion or highlights-subgroup inside a complex drawn mask).
 - **Faster Parametric Adjustments**:
   Having independent color pickers beside each slider allows rapid sampling of shadows and highlights without having to switch modes or dig into submenus.
 - **Uncompromised Keyboard Ergonomics**:
-  With `Alt` eliminated, multi-modifier shortcuts (`Ctrl+Shift+Click` to delete, `Shift+Click` on eye to solo, `Ctrl+Click` to rename) function reliably across Linux, macOS, and Windows without window manager interference.
+  With <kbd>Alt</kbd> eliminated, multi-modifier shortcuts (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click to delete, <kbd>Shift</kbd>+Click on eye to solo, <kbd>Ctrl</kbd>+Click to rename) function reliably across Linux, macOS, and Windows without window manager interference.
 
 ---
 
@@ -87,7 +87,7 @@ At the top of every module's mask panel sits the header bar:
   - **Right-click**: Opens the **Mask Options popover** to configure panel behavior, color spaces, and layout presets.
 - <img src="icons/masks_eye.svg" width="18" height="18" align="middle" alt="edit on canvas" /> **Edit Mask on Canvas (eye icon)**
   - **Left-click**: Shows or hides shape control handles on the image canvas.
-  - **Ctrl+Left-click**: Activates restricted edit mode (allows adjusting existing shape handles while preventing accidental creation of new shapes).
+  - **<kbd>Ctrl</kbd>+Left-click**: Activates restricted edit mode (allows adjusting existing shape handles while preventing accidental creation of new shapes).
 - <img src="icons/soloedit.svg" width="18" height="18" align="middle" alt="solo edit" /> **Solo Edit (spotlight icon)**
   - **Left-click**: Displays only the module's own mask shapes on canvas, hiding shape outlines from all other modules.
 - <img src="icons/showmask.svg" width="18" height="18" align="middle" alt="mask overlay" /> **Show Mask (yellow overlay icon)**
@@ -180,14 +180,14 @@ Each group displays a header bar with the following controls:
 - **Group Title**:
   - Displays the group name (defaults to `<operator>-<ordinal>`, e.g., `max-1`, or `whole mask` for root).
   - **Left-click**: Selects the group (click again to deselect).
-  - **Ctrl+Left-click**: Opens an inline text field to rename the group.
+  - **<kbd>Ctrl</kbd>+Left-click**: Opens an inline text field to rename the group.
   - **Drag**: Drag by the title or header to reorder the group or nest it inside another group.
 - <img src="icons/invert.svg" width="18" height="18" align="middle" alt="invert" /> **Invert Button**:
   - **Left-click**: Inverts the group's composite output. When inverted, the button and operator icon display an inverted highlight style (<img src="icons/masks_maximum_inv.svg" width="18" height="18" align="middle" alt="inverted operator" />).
-  - **Shift+Left-click**: Inverts each direct member inside the group in one action.
+  - **<kbd>Shift</kbd>+Left-click**: Inverts each direct member inside the group in one action.
 - <img src="icons/eye_toggle.svg" width="18" height="18" align="middle" alt="visibility" /> **Visibility (eye icon)**:
   - **Left-click**: Disables (bypasses) the group.
-  - **Shift+Left-click**: Solos the group (evaluates only this group, temporarily hiding all other members in the mask).
+  - **<kbd>Shift</kbd>+Left-click**: Solos the group (evaluates only this group, temporarily hiding all other members in the mask).
 - **Expander Chevron**:
   - **Left-click**: Collapses or expands the group's members in the list.
 
@@ -199,8 +199,8 @@ Every element inside a group is displayed as a row:
 - **Member Name**:
   - Displays the member name (e.g., `circle #1`, `L in`, or a custom label).
   - **Left-click**: Selects the member (click again to deselect).
-  - **Ctrl+Left-click**: Opens an inline text field to rename the member.
-  - **Shift+Left-click**: Toggles the row's inline controls (when inline properties are enabled).
+  - **<kbd>Ctrl</kbd>+Left-click**: Opens an inline text field to rename the member.
+  - **<kbd>Shift</kbd>+Left-click**: Toggles the row's inline controls (when inline properties are enabled).
 - **Indicators and Links**:
   - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Linked Shape / Raster Link**: On linked shapes or raster masks, clicking jumps to the other module/instance.
   - **Low-Opacity Warning Badge**: Appears if an element's opacity is below 5%, warning that its contribution is practically invisible.
@@ -208,10 +208,10 @@ Every element inside a group is displayed as a row:
   - **Left-click**: Inverts the element. When inverted, the icon plate displays an inverted highlight (<img src="icons/masks_circle_inv.svg" width="18" height="18" align="middle" alt="inverted circle" />).
 - <img src="icons/eye_toggle.svg" width="18" height="18" align="middle" alt="visibility" /> **Visibility (eye icon)**:
   - **Left-click**: Disables (bypasses) the element.
-  - **Shift+Left-click**: Solos the element (evaluates only this single element).
+  - **<kbd>Shift</kbd>+Left-click**: Solos the element (evaluates only this single element).
 
-### Armed Deletion (`Ctrl+Shift+Click`)
-Holding `Ctrl+Shift` over the list activates armed deletion:
+### Armed Deletion (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click)
+Holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> over the list activates armed deletion:
 - The pointer transforms into a **trash bin icon**.
 - The hovered row or group header turns **red**.
 - For a group, its **vertical rail turns red**, clearly highlighting all descendant members that will be deleted.
@@ -226,20 +226,20 @@ Beneath the tree view sits the **Selection Area** (`#masks-selection-area`), whi
 ### The Selection Caption
 The top row of the selection area names the currently active item and hosts four core actions:
 - <img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" /> **Delete Button (trash icon)**:
-  - **Left-click**: Deletes the selected member (or resets the mask if "whole mask" is selected). Keyboard shortcut: `Delete` or `Backspace`.
-  - **Shift+Left-click**: When a group is selected, **empties the group** (removes all its members while keeping the group container in place).
+  - **Left-click**: Deletes the selected member (or resets the mask if "whole mask" is selected). Keyboard shortcut: <kbd>Delete</kbd> or <kbd>Backspace</kbd>.
+  - **<kbd>Shift</kbd>+Left-click**: When a group is selected, **empties the group** (removes all its members while keeping the group container in place).
 - <img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" /> **Compose Button (wand icon)**:
   - **Left-click**: Opens the operator chooser menu to wrap the selected member into a new parent group using the chosen operator.
-  - **Shift+Left-click**: When a group is selected, **simplifies the group** (removes redundant nesting levels where collapsing them produces the exact same mask output).
+  - **<kbd>Shift</kbd>+Left-click**: When a group is selected, **simplifies the group** (removes redundant nesting levels where collapsing them produces the exact same mask output).
 - **Selection Name Box (center)**:
   - Shows the name of the selected member (or `whole mask`).
   - **Left-click**: Selects or deselects.
-  - **Ctrl+Left-click**: Renames the selected member.
+  - **<kbd>Ctrl</kbd>+Left-click**: Renames the selected member.
   - **Canvas Hover Peek**: When hovering the mouse over a shape on the image canvas, the caption displays that shape's name with `.dt_masks_peek` highlighting.
 - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Link Button (chain icon)**:
   - Appears only when the selected element is a shared shape or raster mask.
   - **Left-click**: Jumps to the linked instance or source module.
-  - **Shift+Left-click**: **Unlinks the shape**, giving this module its own independent local copy so subsequent edits do not affect other modules.
+  - **<kbd>Shift</kbd>+Left-click**: **Unlinks the shape**, giving this module its own independent local copy so subsequent edits do not affect other modules.
 - <img src="icons/presets.svg" width="18" height="18" align="middle" alt="presets" /> **Group Layout Presets Button (presets icon)**:
   - **Left-click**: Opens the interactive **Group Layout Presets Popover** targeting the selected group.
 
@@ -251,13 +251,13 @@ The creation toolbar sits directly under the caption:
 - **Right side: Drawn Shapes & Parametric Channels**:
   - **Drawn Shapes**: <img src="icons/masks_path.svg" width="18" height="18" align="middle" alt="path" /> Path, <img src="icons/masks_brush.svg" width="18" height="18" align="middle" alt="brush" /> Brush, <img src="icons/masks_circle.svg" width="18" height="18" align="middle" alt="circle" /> Circle, <img src="icons/masks_ellipse.svg" width="18" height="18" align="middle" alt="ellipse" /> Ellipse, <img src="icons/masks_gradient.svg" width="18" height="18" align="middle" alt="gradient" /> Gradient, <img src="icons/masks_object.svg" width="18" height="18" align="middle" alt="object" /> AI Object.
     - **Left-click**: Starts drawing a single shape on canvas.
-    - **Ctrl+Left-click**: Activates continuous shape creation mode.
-    - **Escape or Right-click**: Cancels drawing the pending shape.
+    - **<kbd>Ctrl</kbd>+Left-click**: Activates continuous shape creation mode.
+    - **<kbd>Escape</kbd> or Right-click**: Cancels drawing the pending shape.
   - **Parametric Channels**:
     - Flat buttons representing each channel in the module's working color space (e.g., `g`, `R`, `G`, `B` for RGB; `L`, `a`, `b`, `C`, `h` for Lab).
     - **Hover**: Displays a live preview of that channel's mask on the canvas (only when "preview channel under cursor" is enabled in options).
     - **Left-click**: Adds that channel into the active group.
-    - **Shift+Left-click**: Pins a persistent channel preview overlay on canvas.
+    - **<kbd>Shift</kbd>+Left-click**: Pins a persistent channel preview overlay on canvas.
 
 ---
 
@@ -276,15 +276,15 @@ Displays the parameters of the selected member:
   - **Input / Output Toggle**: Clicking the channel abbreviation icon at the top of the card toggles between showing the input slider and output slider.
   - **Dual Gradient Sliders**: Each slider features 4 threshold markers (black point, feather start, feather end, white point).
   - **Right-click on any marker**: Opens a precise numeric input popover for that threshold.
-  - **Dedicated Color Pickers (<img src="icons/colorpicker.svg" width="18" height="18" align="middle" alt="color picker" />)**: Located directly at the right edge of each slider. Left-clicking activates the canvas picker to set thresholds from sampled image regions (Ctrl+click samples GUI color values).
+  - **Dedicated Color Pickers (<img src="icons/colorpicker.svg" width="18" height="18" align="middle" alt="color picker" />)**: Located directly at the right edge of each slider. Left-clicking activates the canvas picker to set thresholds from sampled image regions (<kbd>Ctrl</kbd>+click samples GUI color values).
   - **Boost Factor**: Adjusts the dynamic range for scene-referred channels in EV stops.
 - **Groups**: Group opacity slider.
 - **Active Drawing**: While drawing a shape on canvas, displays creation controls before committing the shape.
 
 #### Opacity Value Adjustments
 - **Scroll wheel**: Adjusts opacity in 5% steps.
-- **Ctrl + Scroll wheel**: Fine adjustment in 1% steps.
-- **Shift + Scroll wheel**: Coarse adjustment.
+- **<kbd>Ctrl</kbd> + Scroll wheel**: Fine adjustment in 1% steps.
+- **<kbd>Shift</kbd> + Scroll wheel**: Coarse adjustment.
 - **Right-click**: Opens a Bauhaus whisker slider popup for quick adjustments.
 - **Double-click**: Resets opacity to 100%.
 
@@ -324,7 +324,7 @@ The popover organizes presets into **built-in presets** and **user-defined prese
 - **Delete Button** (<img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" />): Available on user presets to delete custom layouts.
 
 ### Saving Custom Layouts
-At the bottom of the popover, click **"save this group's layout as preset..."** (or **"save the whole mask's layout as preset..."**). The save dialog takes immediate keyboard focus, confirms with `Enter`, and cancels with `Escape`.
+At the bottom of the popover, click **"save this group's layout as preset..."** (or **"save the whole mask's layout as preset..."**). The save dialog takes immediate keyboard focus, confirms with <kbd>Enter</kbd>, and cancels with <kbd>Escape</kbd>.
 
 ---
 
@@ -343,42 +343,42 @@ The **Mask Consumers** section appears at the bottom of the panel only when one 
 | **Header Domino** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Left-click | Toggle mask on / off |
 | **Header Domino** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Right-click | Open mask options popover |
 | **Header Edit on Canvas** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Left-click | Toggle canvas shape controls on / off |
-| **Header Edit on Canvas** | <img src="icons/masks_eye.svg" width="18" height="18" /> | Ctrl + Left-click | Toggle restricted canvas edit mode |
+| **Header Edit on Canvas** | <img src="icons/masks_eye.svg" width="18" height="18" /> | <kbd>Ctrl</kbd> + Left-click | Toggle restricted canvas edit mode |
 | **Header Solo** | <img src="icons/soloedit.svg" width="18" height="18" /> | Left-click | Toggle solo edit mode |
 | **Header Overlay** | <img src="icons/showmask.svg" width="18" height="18" /> | Left-click | Toggle mask overlay on image |
 | **Header Suppress** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Temporarily switch off mask in preview |
 | **Header Lock** | <img src="icons/mask_lock.svg" width="18" height="18" /> | Left-click | Toggle lock mask against edits/presets |
 | **Canvas Edge Halo** | <img src="icons/masks_panel.svg" width="18" height="18" /> | Left-click | Summon / move beside-canvas panel to that side |
 | **Member Row or Header** | | Left-click | Select member (click again to deselect) |
-| **Member Row or Header** | | Ctrl + Left-click | Inline rename |
-| **Member Row or Header** | | Shift + Left-click | Toggle disclosure (controls or child members) |
-| **Member Row or Header** | | Ctrl + Shift + Hover | Arm deletion (shows trash pointer & turns row red) |
-| **Member Row or Header** | | Ctrl + Shift + Click | Delete member (or reset mask on "whole mask") |
+| **Member Row or Header** | | <kbd>Ctrl</kbd> + Left-click | Inline rename |
+| **Member Row or Header** | | <kbd>Shift</kbd> + Left-click | Toggle disclosure (controls or child members) |
+| **Member Row or Header** | | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + Hover | Arm deletion (shows trash pointer & turns row red) |
+| **Member Row or Header** | | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + Click | Delete member (or reset mask on "whole mask") |
 | **Member Drag Handle** | | Drag & Drop | Rearrange or nest in tree |
 | **Element Invert Button** | <img src="icons/invert.svg" width="18" height="18" /> | Left-click | Invert element |
 | **Group Invert Button** | <img src="icons/invert.svg" width="18" height="18" /> | Left-click | Invert group output |
-| **Group Invert Button** | <img src="icons/invert.svg" width="18" height="18" /> | Shift + Left-click | Invert each direct member in group |
+| **Group Invert Button** | <img src="icons/invert.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Invert each direct member in group |
 | **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Bypass / enable member |
-| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Shift + Left-click | Solo member (hides all other members) |
+| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Solo member (hides all other members) |
 | **Operator Button** | <img src="icons/masks_maximum.svg" width="18" height="18" /> | Left-click | Open combination operator menu |
-| **Operator Button** | <img src="icons/masks_maximum.svg" width="18" height="18" /> | Ctrl + Shift + Click | Delete group and all its members |
-| **Selection Delete** | <img src="icons/trash.svg" width="18" height="18" /> | Left-click / `Delete` | Delete selected member |
-| **Selection Delete** | <img src="icons/trash.svg" width="18" height="18" /> | Shift + Left-click | Empty selected group (keeps container) |
+| **Operator Button** | <img src="icons/masks_maximum.svg" width="18" height="18" /> | <kbd>Ctrl</kbd> + <kbd>Shift</kbd> + Click | Delete group and all its members |
+| **Selection Delete** | <img src="icons/trash.svg" width="18" height="18" /> | Left-click / <kbd>Delete</kbd> | Delete selected member |
+| **Selection Delete** | <img src="icons/trash.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Empty selected group (keeps container) |
 | **Selection Compose** | <img src="icons/wand.svg" width="18" height="18" /> | Left-click | Wrap selection into new parent group |
-| **Selection Compose** | <img src="icons/wand.svg" width="18" height="18" /> | Shift + Left-click | Simplify selected group |
+| **Selection Compose** | <img src="icons/wand.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Simplify selected group |
 | **Selection Link** | <img src="icons/link.svg" width="18" height="18" /> | Left-click | Jump to linked shape usage or raster source module |
-| **Selection Link** | <img src="icons/link.svg" width="18" height="18" /> | Shift + Left-click | Unlink shape (create independent local copy) |
+| **Selection Link** | <img src="icons/link.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Unlink shape (create independent local copy) |
 | **Selection Presets** | <img src="icons/presets.svg" width="18" height="18" /> | Left-click | Open group layout presets popover |
 | **Shape Add Button** | <img src="icons/masks_circle.svg" width="18" height="18" /> | Left-click | Draw a single shape |
-| **Shape Add Button** | <img src="icons/masks_circle.svg" width="18" height="18" /> | Ctrl + Left-click | Continuous shape drawing mode |
-| **Drawing Shape** | | Escape or Right-click | Cancel drawing current shape |
+| **Shape Add Button** | <img src="icons/masks_circle.svg" width="18" height="18" /> | <kbd>Ctrl</kbd> + Left-click | Continuous shape drawing mode |
+| **Drawing Shape** | | <kbd>Escape</kbd> or Right-click | Cancel drawing current shape |
 | **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Hover | Preview channel on image (if option enabled) |
 | **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Left-click | Add channel into active group |
-| **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Shift + Left-click | Pin channel preview overlay on canvas |
+| **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | <kbd>Shift</kbd> + Left-click | Pin channel preview overlay on canvas |
 | **Import Menu Entry** | <img src="icons/import.svg" width="18" height="18" /> | Hover | Preview external shape/mask on canvas |
 | **Channel Icon (Props)** | | Left-click | Toggle input slider vs output slider |
 | **Parametric Marker** | | Right-click | Open precise numeric entry popover |
 | **Parametric Picker** | <img src="icons/colorpicker.svg" width="18" height="18" /> | Left-click | Sample canvas region for threshold |
-| **Opacity Value** | | Scroll wheel | Adjust opacity (Ctrl: 1%, Shift: coarse) |
+| **Opacity Value** | | Scroll wheel | Adjust opacity (<kbd>Ctrl</kbd>: 1%, <kbd>Shift</kbd>: coarse) |
 | **Opacity Value** | | Right-click | Open Bauhaus whisker popup slider |
 | **Opacity Value** | | Double-click | Reset opacity to 100% |
