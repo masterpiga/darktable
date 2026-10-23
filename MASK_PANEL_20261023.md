@@ -2,7 +2,7 @@
 
 darktable's new mask panel (a.k.a., Flexi) completely subsumes both the classic mask panel and the mask manager, which has been retired. All mask operations--creating shapes, setting parametric ranges, grouping, combining with boolean and arithmetic operators, inverting, soloing, refining, and reusing masks across modules--now happen in one place, directly accessible within each processing module or in a dockable side panel beside the canvas.
 
-Before diving into the interface, it helps to understand how a mask is structured in Flexi. A mask is a tree built from three basic concepts:
+The mask panel organizes masks into a tree structure based on three main entities:
 - **Element**: A single mask component--a drawn shape (path, brush, circle, ellipse, gradient), a single-channel parametric threshold, an external raster mask, or an AI-segmented object. An element is always an individual leaf and never a group.
 - **Group**: A container that holds one or more members and combines them using a designated combination operator (such as Maximum, Product, Screen, Difference, or Sum). The top-level group representing the module's complete mask is named **whole mask**.
 - **Member**: Anything held directly inside a group. A member can be a single **element** or another nested **group**.
@@ -13,68 +13,70 @@ Before diving into the interface, it helps to understand how a mask is structure
 
 ## Transitioning from master: What Changed and How Your Workflow Evolves
 
-For users already familiar with the `master` version of Flexi masks, the `flexi-ui-revamp` branch brings major refinements to usability, predictability, and speed.
+This section summarizes the changes in the `flexi-ui-revamp` branch for users familiar with the `master` implementation.
 
 ### 1. Main User-Facing Changes
 
-- **Right-Click Context Menus Removed**:
-  In `master`, secondary actions (such as rename, invert, compose, simplify, empty, unlink, and delete) were tucked away inside right-click context menus. In the revamp, right-click menus have been completely eliminated. Every action is now directly exposed via dedicated on-row buttons, the selection action caption, or clean keyboard modifiers.
-- **Shape Clusters Eliminated**:
-  In `master`, three or more adjacent shapes of the same type automatically collapsed into a cluster row (e.g., `3 circles`). While this saved vertical space, it obscured individual shapes and added an extra click to access or move them. In the revamp, clusters are gone: every member always has its own explicit, distinct row in the tree.
-- **Dedicated Invert Buttons on Every Row and Header**:
-  Every element row and group header now features a dedicated invert button (<img src="icons/invert.svg" width="18" height="18" align="middle" alt="invert" />) directly in its drawer:
+- **Context Menus Removed**:
+  Right-click context menus on rows and group headers have been removed. All actions (such as rename, invert, compose, simplify, empty, unlink, and delete) are now directly accessible on the rows, in the selection caption, or through keyboard modifiers.
+- **Clusters Removed**:
+  The automatic folding of three or more adjacent shapes of the same type into cluster rows (e.g., `3 circles`) has been removed. Every member now has its own distinct row in the tree list.
+- **Invert Buttons on Rows and Headers**:
+  Every element row and group header now includes an invert button (<img src="icons/invert.svg" width="18" height="18" align="middle" alt="invert" />) in its header bar:
   - Element row: Clicking inverts the element.
-  - Group header: Clicking inverts the group's composite output; **<kbd>Shift</kbd>+clicking inverts each direct member** inside the group.
-- **Armed Deletion with Visual Hover Feedback (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click)**:
-  Deleting a member is armed by holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> over the list. While held, the cursor morphs into a trash bin, and hovering over any member row or group header shades it bright red. For a group, its entire vertical tree rail turns red as well, visually indicating every member that will be deleted. Clicking immediately deletes that member (or resets the mask if clicked on the root "whole mask").
-- **Unified Selection Caption with Direct Actions**:
-  The selection area beneath the tree features an action caption that displays the selected member's name and hosts direct action buttons:
-  - <img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" /> **Delete button**: Click to delete the selection; **<kbd>Shift</kbd>+click on a group to empty it** (removes its members while keeping the group container).
-  - <img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" /> **Compose button**: Click to wrap the selection into a new parent group with a chosen operator; **<kbd>Shift</kbd>+click on a group to simplify it** (removes redundant nesting levels).
-  - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Link button**: Visible when a linked shape or raster mask is selected. Click to jump to the other module/instance; **<kbd>Shift</kbd>+click to unlink** (creates an independent local copy).
-  - <img src="icons/presets.svg" width="18" height="18" align="middle" alt="presets" /> **Presets button**: Opens the group layout presets popover targeting the selected group.
-- **Relocated Creation Toolbar**:
-  The creation toolbar has moved from the top of the tree to the selection panel beneath the caption. It groups the creation tools logically into:
+  - Group header: Clicking inverts the group's combined output; **<kbd>Shift</kbd>+clicking inverts each direct member** inside the group.
+- **Armed Deletion (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click)**:
+  Holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> over the list arms deletion. The pointer changes to a trash bin icon, and the hovered row or group header is highlighted in red. For a group, its tree rail also turns red to indicate every child member that will be deleted. Clicking deletes the item (or resets the mask if clicked on the root "whole mask").
+- **Selection Caption Actions**:
+  The selection area beneath the tree features an action caption that displays the selected item's name and four action buttons:
+  - <img src="icons/trash.svg" width="18" height="18" align="middle" alt="delete" /> **Delete**: Deletes the selected item; **<kbd>Shift</kbd>+click on a group empties it** while keeping the group container.
+  - <img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" /> **Compose**: Opens the operator menu to wrap the selected item into a new parent group; **<kbd>Shift</kbd>+click on a group simplifies it** by removing redundant nesting levels.
+  - <img src="icons/link.svg" width="18" height="18" align="middle" alt="link" /> **Link**: Visible when a linked shape or raster mask is selected. Click to jump to the other module or instance; **<kbd>Shift</kbd>+click unlinks** the shape to create an independent local copy.
+  - <img src="icons/presets.svg" width="18" height="18" align="middle" alt="presets" /> **Presets**: Opens the group layout presets popover for the selected group.
+- **Toolbar Location**:
+  The toolbar of creation buttons has moved from above the tree to the selection panel beneath the caption. It contains:
   - Left side: Add Group (`+`) and Import (<img src="icons/import.svg" width="18" height="18" align="middle" alt="import" />).
-  - Right side: Drawn Shapes (Path, Brush, Circle, Ellipse, Gradient, AI Object) and Parametric Channels.
-- **Overhauled Group Layout Presets Popover**:
-  Replacing the former flat menu that unconditionally overwrote the whole mask, presets now open in an interactive popover targeting the **currently selected group**. Each preset provides three distinct application modes: **Replace**, **Merge**, and **Add as subgroup**. Tooltips show a formatted tree outline of the group structure, and new custom layouts can be saved with one click.
-- **Streamlined Parametric Channel Sliders**:
-  Per-range bypass eye toggles have been removed. Clicking the channel abbreviation icon toggles between showing the input or output slider, and each slider now features its own dedicated color picker button (<img src="icons/colorpicker.svg" width="18" height="18" align="middle" alt="color picker" />) directly at its right edge.
-- **Dedicated Preset Guidance Notes**:
-  Preset notes have been moved out of the tree into a collapsible `#masks-help-section` card in the selection panel, keeping the member tree uncluttered.
-- **Streamlined Modifier Standard (Retirement of <kbd>Alt</kbd>)**:
-  The <kbd>Alt</kbd> key is no longer used in the mask panel, avoiding conflicts with operating system and desktop window managers. Modifiers follow four clear rules:
+  - Right side: Drawn shape buttons (Path, Brush, Circle, Ellipse, Gradient, AI Object) and parametric channel buttons.
+- **Group Layout Presets Popover**:
+  The presets menu is now an interactive popover that targets the currently selected group instead of replacing the whole mask. Each preset provides three application buttons: **Replace**, **Merge**, and **Add as subgroup**. Tooltips show an outline of the group tree structure, and the current group or mask layout can be saved as a preset from within the popover.
+- **Parametric Sliders**:
+  Per-range bypass eye toggles have been removed. Clicking the channel abbreviation icon toggles between showing the input slider and output slider. Each slider now has its own color picker button (<img src="icons/colorpicker.svg" width="18" height="18" align="middle" alt="color picker" />) directly at its right edge.
+- **Preset Guidance Notes**:
+  Preset notes have been moved out of the tree into a collapsible `#masks-help-section` card in the selection panel.
+- **Modifier Key Conventions**:
+  The <kbd>Alt</kbd> key is no longer used in the mask panel. Modifiers follow four rules across all rows and buttons:
   - <kbd>Ctrl</kbd>: Rename.
-  - <kbd>Shift</kbd>: Toggle disclosure/expanded controls, or execute an action variant (Solo on eye, Invert All on group invert, Empty on delete, Simplify on compose, Unlink on link).
+  - <kbd>Shift</kbd>: Toggle disclosure, or execute an action variant (Solo on eye, Invert All on group invert, Empty on delete, Simplify on compose, Unlink on link).
   - <kbd>Ctrl</kbd>+<kbd>Shift</kbd>: Armed deletion with red visual indicator.
-  - Plain click: Select or default action.
+  - Plain click: Select or primary action.
 
 ---
 
 ### 2. How the UX Changes
 
-- **Total Discoverability**:
-  You no longer need to right-click rows or guess what actions exist. All operations--inverting, unlinking, composing, deleting, and applying presets--are immediately visible as buttons with explanatory tooltips.
-- **Visual Predictability and Determinism**:
-  Removing shape clusters prevents the layout from collapsing unexpectedly when adding multiple shapes. Dragging and dropping members in the tree is now completely deterministic, with an explicit insertion line showing exactly where an element or group will land.
-- **Error-Free Deletions**:
-  The red armed-deletion feedback gives total clarity before any destructive action takes place. You see exactly which subgroup and descendant branches will be discarded before releasing the click.
-- **Clear Canvas-to-List Synchronization**:
-  Hovering over an element on the canvas instantly peeks its name in the selection caption (`.dt_masks_peek`), making it effortless to identify shapes in dense compositions.
+- **Direct Controls Instead of Menus**:
+  Actions previously located in right-click context menus are now placed directly on member rows (such as the invert button, eye toggle, and expander chevron) or in the selection caption (compose, delete, link, and presets). Right-clicking a row no longer displays a menu.
+- **One Row Per Member**:
+  Because cluster rows have been removed, the list is a direct one-to-one representation of the shapes and channels in the mask. Selecting, reordering, and dragging individual shapes does not require expanding a cluster first.
+- **Deletion Scope Preview**:
+  Holding <kbd>Ctrl</kbd>+<kbd>Shift</kbd> turns the cursor into a trash bin and highlights the target in red before any click is registered. If the target is a group, the group's vertical tree rail turns red as well, indicating that all nested child members will be deleted along with it.
+- **Canvas-to-List Synchronization**:
+  Hovering over a shape on the image canvas highlights that shape's row in the list and displays its name in the selection caption (`.dt_masks_peek`), without changing the active selection.
 
 ---
 
 ### 3. Effects on Workflow
 
-- **Accelerated Multi-Shape Grouping**:
-  Wrapping shapes into groups or simplifying redundant layers is now instant: select a member, click the Compose wand (<img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" />), and pick an operator. To flatten unnecessary nesting, simply <kbd>Shift</kbd>+click the wand.
-- **Modular, Non-Destructive Preset Application**:
-  Previously, loading a layout preset reset the entire mask. Now you can select any subgroup within an existing mask and apply a preset as an addition or merge, enabling modular mask building (e.g., adding an exclusion or highlights-subgroup inside a complex drawn mask).
-- **Faster Parametric Adjustments**:
-  Having independent color pickers beside each slider allows rapid sampling of shadows and highlights without having to switch modes or dig into submenus.
-- **Uncompromised Keyboard Ergonomics**:
-  With <kbd>Alt</kbd> eliminated, multi-modifier shortcuts (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+Click to delete, <kbd>Shift</kbd>+Click on eye to solo, <kbd>Ctrl</kbd>+Click to rename) function reliably across Linux, macOS, and Windows without window manager interference.
+- **Grouping and Hierarchy Operations**:
+  To wrap an element or group in a new parent, select it and click the compose button (<img src="icons/wand.svg" width="18" height="18" align="middle" alt="compose" />) in the caption, then choose the operator. To remove redundant nesting levels without changing the mask output, <kbd>Shift</kbd>+click the compose button.
+- **Targeted Preset Application**:
+  In `master`, choosing a layout preset replaced the entire mask structure from the root. In `flexi-ui-revamp`, presets apply to the currently selected group. You can insert a preset layout as a subgroup or merge it into an existing group, allowing presets to be combined within a single mask.
+- **Sampling Parametric Values**:
+  Because each slider has its own color picker button at its right edge, you can sample input and output thresholds directly from the canvas without opening a menu or switching tools. The channel icon at the top of the card toggles between displaying the input and output sliders.
+- **One-Click Inversions**:
+  Inverting does not require opening a menu or using keyboard modifiers on the operator icon. Click the invert button (<img src="icons/invert.svg" width="18" height="18" align="middle" alt="invert" />) on any element row or group header. To invert every member in a group, <kbd>Shift</kbd>+click the group's invert button.
+- **Modifier Consistency and OS Compatibility**:
+  The removal of <kbd>Alt</kbd> avoids shortcuts being intercepted by window managers (such as on Linux desktop environments where <kbd>Alt</kbd>+click moves windows). The four-modifier convention (<kbd>Ctrl</kbd> for rename, <kbd>Shift</kbd> for disclosures or secondary actions, <kbd>Ctrl</kbd>+<kbd>Shift</kbd> for delete, plain click for primary actions) is shared across all list items and buttons.
 
 ---
 
@@ -316,7 +318,7 @@ Presets apply within the **currently selected group** (or to the whole mask if n
 ### Popover Layout and Application Modes
 The popover organizes presets into **built-in presets** and **user-defined presets**. Each preset row provides:
 - **Preset Name Button**: Clicking the name adds the preset layout as a subgroup inside the active group (the safest method, which loses no existing elements).
-- **Layout Outline Tooltip**: Hovering over the preset name displays a formatted tree outline showing all nested groups, their combination operators, and initial opacities.
+- **Layout Outline Tooltip**: Hovering over the preset name displays an outline showing all nested groups, their combination operators, and initial opacities.
 - **Three Mode Action Buttons (right edge)**:
   1. <img src="icons/reset.svg" width="18" height="18" align="middle" alt="replace" /> **Replace**: Replaces the selected group's structure with the preset. If existing elements would be discarded, darktable prompts for confirmation first.
   2. <img src="icons/plus.svg" width="18" height="18" align="middle" alt="merge" /> **Merge**: Merges the preset structure into the selected group (available when the preset contains multiple groups).
