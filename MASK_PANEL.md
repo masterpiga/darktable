@@ -24,7 +24,7 @@ The header bar of the mask panel contains the primary toggles and status indicat
   - **Left-click**: Toggles on-canvas shape outlines, control points, and manipulation handles.
   - **Ctrl+click**: Toggles *restricted edit mode*, allowing control points to be adjusted while preventing shapes from being moved or resized by mistake.
 - <img src="icons/soloedit.svg" width="18" height="18" align="middle" alt="solo edit" /> **Solo Edit (target icon)**
-  - **Left-click**: Isolates the selected shape or group on the canvas. Only the selected shape's handles remain editable on canvas, while all other shapes continue to be computed in the mask. This prevents accidental selection of neighboring shapes.
+  - **Left-click**: Isolates the selected member on the canvas. Only the selected shape's handles remain editable on canvas, while all other shapes continue to be computed in the mask. This prevents accidental selection of neighboring shapes.
 - <img src="icons/showmask.svg" width="18" height="18" align="middle" alt="show mask" /> **Show Mask Overlay (mask preview icon)**
   - **Left-click**: Toggles the mask visualization overlay on the image (e.g. yellow overlay), showing exactly where the mask is active.
 - <img src="icons/eye_toggle.svg" width="18" height="18" align="middle" alt="suppress mask" /> **Temporarily Switch Off Mask (eye toggle icon)**
@@ -69,7 +69,7 @@ Controls where the mask panel is hosted in the interface:
 
 #### 3. Interface Options
 - **Sticky opacity (enabled by default)**: When enabled, newly created shapes inherit the opacity value last used by any shape. When disabled, every new shape always starts at 100% opacity.
-- **Auto-expand selected (disabled by default)**: When enabled, selecting an element or group in the tree automatically expands it while collapsing the previously active item. When disabled, rows only expand or collapse when clicking their disclosure chevrons.
+- **Auto-expand selected (disabled by default)**: When enabled, selecting a member in the tree automatically expands it while collapsing the previously active member. When disabled, rows only expand or collapse when clicking their disclosure chevrons.
 - **Element properties in subpanel (enabled by default)**: When enabled, parameters for the selected element (e.g., shape radius, feathering, boost factor) are displayed in a clean, dedicated card below the tree. When disabled, parameters expand directly inside each element row in the list.
 - **Show the mask panel's resize handle (enabled by default)**: When using the floating or beside-canvas panel, displays a visible grip handle with an arrow indicating the collapse direction. When disabled, the handle is hidden but the edge can still be clicked or dragged to resize.
 
@@ -139,14 +139,20 @@ Opens a popover menu allowing you to reuse masks from other modules:
 
 ---
 
-## 5. The Mask Layout (Groups and Elements Tree)
+## 5. The Mask Layout (The Member Tree)
 
 The central area displays the hierarchical mask structure.
 
-### Tree Concept and Fold Order
-- The root of the hierarchy is **"whole mask"**. Every element and group lives inside it.
+### Terminology
+- **Element**: A leaf: a drawn shape, parametric channel, raster mask, or AI object (never a group).
+- **Group**: A node that holds members and has an operator; **"whole mask"** is the root group. Groups can be nested inside other groups up to 8 levels deep.
+- **Member**: Anything a group holds—either an element or a nested group (not "item", and not "node").
+- **Shape**: A drawn shape only (one kind of element).
+- **Row** and **Header**: The list line representing a member in the interface (UI words, not part of the model).
+
+### Tree Hierarchy
 - Each group combines its members in order **from the bottom up** using a single combination operator.
-- Groups can be nested inside other groups up to 8 levels deep.
+- The root of the hierarchy is **"whole mask"** (the root group); every member in the tree lives inside it.
 
 ### Available Operators
 - <img src="icons/masks_maximum.svg" width="18" height="18" align="middle" alt="maximum" /> **Maximum**: Takes the highest opacity value at each pixel (additive union, similar to logical OR).
@@ -174,7 +180,7 @@ Each group displays a header bar with the following controls:
   - Appears on groups created from built-in presets. Left-clicking toggles an instructional card explaining how to use the group.
 - <img src="icons/eye_toggle.svg" width="18" height="18" align="middle" alt="visibility" /> **Visibility (eye icon)**
   - **Left-click**: Disables (bypasses) the group. The group remains in the tree, but contributes nothing to the mask.
-  - **Shift+click**: Solos the group. Only this group is evaluated; all other elements in the mask are temporarily disabled.
+  - **Shift+click**: Solos the group. Only this group is evaluated; all other members in the mask are temporarily disabled.
 - **Expander Chevron**
   - Collapses or expands the group's members.
 - **Right-click on Group Header**: Opens the **Group Actions Context Menu**:
@@ -183,7 +189,7 @@ Each group displays a header bar with the following controls:
     - **solo** (checkbox): Evaluates only this group to inspect its isolated contribution. Shift+clicking the eye icon on the header does the same.
   - **Mask Operations Section**:
     - **invert output** (checkbox): Inverts the group's folded mask output. Alt+clicking the operator icon does the same.
-    - **invert all elements**: Inverts every direct member element inside the group in one action.
+    - **invert all elements**: Inverts each element inside the group in one action.
     - **compose**: Submenu offering combination operators (Maximum, Screen, Minimum, Product, Sum, Difference, Exclusion) to wrap this group inside a new parent group.
     - **simplify**: Makes the tree under this group shallower wherever collapsing redundant nesting levels renders the exact same mask.
   - **Edit Section**:
@@ -195,7 +201,7 @@ Each group displays a header bar with the following controls:
 Every element inside a group (shape, parametric channel, raster mask, or AI object) is shown as a row:
 
 - **Kind / Drag Handle (left column)**
-  - Displays the element type icon (e.g. <img src="icons/masks_circle.svg" width="18" height="18" align="middle" alt="circle" /> Circle, <img src="icons/masks_path.svg" width="18" height="18" align="middle" alt="path" /> Path, <img src="icons/masks_brush.svg" width="18" height="18" align="middle" alt="brush" /> Brush, <img src="icons/masks_parametric.svg" width="18" height="18" align="middle" alt="parametric" /> Parametric, <img src="icons/masks_raster.svg" width="18" height="18" align="middle" alt="raster" /> Raster, or <img src="icons/masks_multi.svg" width="18" height="18" align="middle" alt="nested group" /> Nested Group).
+  - Displays the element type icon (e.g. <img src="icons/masks_circle.svg" width="18" height="18" align="middle" alt="circle" /> Circle, <img src="icons/masks_path.svg" width="18" height="18" align="middle" alt="path" /> Path, <img src="icons/masks_brush.svg" width="18" height="18" align="middle" alt="brush" /> Brush, <img src="icons/masks_parametric.svg" width="18" height="18" align="middle" alt="parametric" /> Parametric, or <img src="icons/masks_raster.svg" width="18" height="18" align="middle" alt="raster" /> Raster).
   - When the element is inverted, the icon plate is filled with a contrasting highlight (<img src="icons/masks_circle_inv.svg" width="18" height="18" align="middle" alt="inverted circle" />).
   - **Drag**: Drag by the handle to reorder the element within its group or drop it into another group.
   - **Alt+click**: Inverts the element.
@@ -242,18 +248,18 @@ Beneath the mask tree sits the Selection Area (`#masks-selection-area`). It hous
 
 ### The Selection Header Row
 Displays the target currently being acted upon:
-- **Selection Icon**: Displays the kind icon of the selected element or group.
-- **Selection Name Label**: Names the active item (e.g., `path #1`, `group max-1`, or `whole mask`).
+- **Selection Icon**: Displays the kind icon of the selected member.
+- **Selection Name Label**: Names the active member (e.g., `path #1`, `group max-1`, or `whole mask`).
 - <img src="icons/remove.svg" width="18" height="18" align="middle" alt="delete" /> **Delete Button**:
   - Located on the right edge of the selection row.
-  - **Left-click**: Deletes the selected element or group (if "whole mask" is selected, resets the mask).
+  - **Left-click**: Deletes the selected member (if "whole mask" is selected, resets the mask).
   - Keyboard shortcut: `Delete` or `Backspace`.
 
 ---
 
-## 7. Element Properties Sub-Panel
+## 7. Member Properties Sub-Panel
 
-When "element properties in sub-panel" is enabled (default), the properties of the currently selected element appear in a collapsible card directly inside the selection area:
+When "element properties in subpanel" is enabled (default), the properties of the currently selected member appear in a collapsible card directly inside the selection area:
 
 - **Drawn Shapes**: Sliders for opacity, size, hardness, feather radius, curvature, rotation, and feathering guide.
 - **AI Objects**: Sliders for opacity, boundary smoothing, and cleanup.
@@ -323,13 +329,13 @@ The **Mask Consumers** section appears at the bottom of the panel only when one 
 | **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Hover | Preview channel mask on image (if option enabled) |
 | **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Left-click | Add channel into active group |
 | **Channel Add Button** | <img src="icons/masks_parametric.svg" width="18" height="18" /> | Shift + Left-click | Pin channel preview overlay on canvas |
-| **Import Menu Item** | <img src="icons/import.svg" width="18" height="18" /> | Hover | Preview external shape/mask on canvas |
-| **Group / Element Row** | | Left-click | Select item (click again to deselect) |
-| **Group / Element Row** | | Ctrl + Left-click | Inline rename |
-| **Group / Element Row** | | Alt + Left-click | Invert group output / element |
-| **Group / Element Handle** | | Drag & Drop | Rearrange or nest in tree |
-| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Bypass / enable item |
-| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Shift + Left-click | Solo item (hides all other elements) |
+| **Import Menu Entry** | <img src="icons/import.svg" width="18" height="18" /> | Hover | Preview external shape/mask on canvas |
+| **Member Row or Header** | | Left-click | Select member (click again to deselect) |
+| **Member Row or Header** | | Ctrl + Left-click | Inline rename |
+| **Member Row or Header** | | Alt + Left-click | Invert group output or element |
+| **Member Drag Handle** | | Drag & Drop | Rearrange or nest in tree |
+| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Left-click | Bypass / enable member |
+| **Visibility Eye** | <img src="icons/eye_toggle.svg" width="18" height="18" /> | Shift + Left-click | Solo member (hides all other members) |
 | **Operator Icon** | <img src="icons/masks_maximum.svg" width="18" height="18" /> | Left-click | Open operator chooser menu |
 | **Operator Icon** | <img src="icons/masks_maximum_inv.svg" width="18" height="18" /> | Alt + Left-click | Invert group output |
 | **Element Row** | | Right-click | Open Element Actions context menu |
@@ -338,7 +344,7 @@ The **Mask Consumers** section appears at the bottom of the panel only when one 
 | **Cluster Row** | | Drag & Drop | Move all clustered elements together |
 | **Cluster Row** | | Right-click | Open Cluster Actions menu ("delete all") |
 | **Parametric Marker** | | Right-click | Open precise numeric entry popover |
-| **Selection Delete** | <img src="icons/remove.svg" width="18" height="18" /> | Left-click / `Delete` / `Backspace` | Delete selected element or group |
+| **Selection Delete** | <img src="icons/remove.svg" width="18" height="18" /> | Left-click / `Delete` / `Backspace` | Delete selected member |
 | **Opacity Value** | | Right-click | Open whisker popup slider |
 | **Opacity Value** | | Double-click | Reset opacity to 100% |
 | **Opacity Value** | | Scroll wheel | Adjust opacity (Ctrl: fine, Shift: coarse) |
