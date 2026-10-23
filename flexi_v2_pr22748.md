@@ -11,9 +11,9 @@ The mask panel organizes masks into a tree structure based on three main entitie
 
 ---
 
-## Transitioning from Flexi UI v0.1 (2026-10-20): What Changed and How Your Workflow Evolves
+## Transitioning from Flexi UI v0.1 (PR #22707): What Changed and How Your Workflow Evolves
 
-This section summarizes the changes in Flexi UI v0.2 (2026-10-23) for users familiar with Flexi UI v0.1 (2026-10-20).
+This section summarizes the changes in Flexi UI v0.2 (PR #22748) for users familiar with Flexi UI v0.1 (PR #22707).
 
 ### 1. Main User-Facing Changes
 
