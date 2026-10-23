@@ -2,7 +2,13 @@
 
 darktable's new mask panel (a.k.a., Flexi) unifies all masking tools into a single hierarchical tree. It subsumes both the previous in-module mask controls and the standalone **mask manager**, which has been removed. All mask creation, shape grouping, combination logic, shape reuse across modules, and unused shape cleanup are now handled directly within this unified panel.
 
-Instead of choosing between rigid drawn, parametric, or raster mask modes, a module's mask is built by combining any number of elements inside groups using combination operators. Every element—drawn shapes, parametric channels, raster masks from other modules, and AI objects—produces an opacity value between 0 and 1 at each pixel and can be freely combined, reordered, inverted, and refined.
+### Core Concepts
+Instead of choosing between rigid drawn, parametric, or raster mask modes, a module's mask is built by combining building blocks inside groups:
+- **Elements**: The individual building blocks of a mask—drawn shapes (paths, circles, ellipses, brushes, gradients), parametric channels, raster masks from other modules, or AI objects.
+- **Groups**: Containers that organize and combine their contents using a combination operator (such as Maximum, Product, or Difference). Groups can be nested inside other groups up to 8 levels deep. The entire mask itself is represented by the root group, named **"whole mask"**.
+- **Members**: Anything held inside a group—whether an individual element or another group.
+
+Each member produces an opacity value between 0 and 1 at each pixel and can be freely combined, reordered, inverted, and refined.
 
 ---
 
@@ -141,18 +147,10 @@ Opens a popover menu allowing you to reuse masks from other modules:
 
 ## 5. The Mask Layout (The Member Tree)
 
-The central area displays the hierarchical mask structure.
-
-### Terminology
-- **Element**: A leaf: a drawn shape, parametric channel, raster mask, or AI object (never a group).
-- **Group**: A node that holds members and has an operator; **"whole mask"** is the root group. Groups can be nested inside other groups up to 8 levels deep.
-- **Member**: Anything a group holds—either an element or a nested group (not "item", and not "node").
-- **Shape**: A drawn shape only (one kind of element).
-- **Row** and **Header**: The list line representing a member in the interface (UI words, not part of the model).
-
-### Tree Hierarchy
+The central area displays the hierarchical mask structure:
 - Each group combines its members in order **from the bottom up** using a single combination operator.
-- The root of the hierarchy is **"whole mask"** (the root group); every member in the tree lives inside it.
+- The root of the hierarchy is **"whole mask"**; every member in the tree lives inside it.
+- Groups can be nested inside other groups up to 8 levels deep.
 
 ### Available Operators
 - <img src="icons/masks_maximum.svg" width="18" height="18" align="middle" alt="maximum" /> **Maximum**: Takes the highest opacity value at each pixel (additive union, similar to logical OR).
