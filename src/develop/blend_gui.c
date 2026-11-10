@@ -18312,14 +18312,43 @@ static void _delete_target(dt_iop_module_t *module,
     _group_delete(module, id);
 }
 
+// what to select once the member `id` is deleted: the one shown below it in its
+// list, else the one above, else the group that held it, as a pick id. INVALID_MASKID
+// for the mask's own group, which holds nothing, and where there is no list
+static dt_mask_id_t _selection_after_delete(dt_iop_module_t *module,
+                                            const dt_mask_id_t id,
+                                            const gboolean group)
+{
+  dt_masks_form_t *grp = dt_masks_gui_module_mask_group(module);
+  if(!grp || (group && id == _mask_group_cid(module))) return INVALID_MASKID;
+  dt_masks_point_group_t *pt = group ? _group_reference(grp, id) : _selected_point(module, id);
+  if(!pt) pt = dt_masks_gui_group_point(grp, id);
+  dt_masks_form_t *owner = NULL;
+  GList *node = pt ? _point_node_at(grp, pt, &owner) : NULL;
+  if(!node || !owner || !owner->points) return INVALID_MASKID;
+  // the list shows its members in reverse, the last on top, and its first
+  // point is its group's marker, not a member
+  const GList *near = node->prev != owner->points ? node->prev : node->next;
+  if(near) return dt_masks_model_pick_id(((dt_masks_point_group_t *)near->data)->formid);
+  return ((dt_masks_point_group_t *)owner->points->data)->formid;
+}
+
 // delete what the selection row names (see _selection_target). The whole mask
-// is the selection whenever nothing else is
+// is the selection whenever nothing else is. What is deleted from the list is
+// followed by the selection of its neighbor, so that the next one can be
+// deleted or refined at once
 static void _delete_selection(dt_iop_module_t *module, const gboolean empty)
 {
   dt_mask_id_t id;
   gboolean group;
   if(!_selection_target(module, &id, &group)) return;
+  const dt_mask_id_t next = empty ? INVALID_MASKID : _selection_after_delete(module, id, group);
   _delete_target(module, id, group, group ? NULL : _selected_point(module, id), empty);
+  // a refused delete (the user said no) leaves the member where it was
+  dt_masks_form_t *grp = dt_masks_gui_module_mask_group(module);
+  if(dt_is_valid_maskid(next) && grp && !dt_masks_gui_group_point(grp, id)
+     && dt_masks_gui_group_point(grp, next))
+    _select_member_alone(module, next);
 }
 
 static void _shortcut_delete_selection(dt_action_t *action)
